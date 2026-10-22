@@ -10,6 +10,9 @@ import BotChuCore
 ///   rows (`sidebar.png`), which the window's picture leaves out.
 /// - `BOTCHU_OPEN`: open `editor` (a new bot), `task` (New Task for the selected bot) or `settings` at launch.
 /// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
+/// - `BOTCHU_OPEN=model|effort|inspector-model|inspector-effort`: open a generation picker.
+/// - `BOTCHU_DEFAULT_MODEL`: an OpenRouter default for a throwaway run only.
+/// - `BOTCHU_WINDOW=compact`: review the main window at its minimum width, on throwaway data.
 /// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review.
 /// - `BOTCHU_SEND`: send this message to the selected bot's shown conversation at launch (its Home,
 ///   or the tab `BOTCHU_TAB` shows).
@@ -70,6 +73,14 @@ enum DevHooks {
     }
 
     static func start(model: AppModel, openSettings: () -> Void) {
+        if dataDir != nil, env["BOTCHU_WINDOW"] == "compact" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                guard let window = NSApp.windows.first(where: { $0.styleMask.contains(.titled) }) else { return }
+                // SwiftUI establishes the split view's actual minimum after the first layout.
+                window.setContentSize(NSSize(width: max(820, window.contentMinSize.width),
+                                             height: max(600, window.contentMinSize.height)))
+            }
+        }
         if dataDir != nil, let appearance = env["BOTCHU_APPEARANCE"], ["light", "dark"].contains(appearance) {
             NSApp.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
         }

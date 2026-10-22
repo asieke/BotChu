@@ -5,6 +5,7 @@ import Testing
 import BotChuCore
 @testable import BotChu
 
+// Every AppKit test belongs to this suite: separate suites can steal one another's window focus.
 @Suite(.serialized) @MainActor struct RenderingTests {
     @Test func mathLaysOutAndResizesInsideAReply() async throws {
         _ = NSApplication.shared

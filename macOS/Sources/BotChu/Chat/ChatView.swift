@@ -47,15 +47,16 @@ struct ChatView: View {
                          focused: $composerFocused,
                          placeholder: task.map { "Message \(bot.name) about \($0.title)" } ?? "Message \(bot.name)",
                          running: running, onSend: send, onStop: { model.stop(target) }) {
-                    Label(current.account.name, systemImage: "terminal")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.tail)
-                        .help(task == nil ? "Current account. Change it in Edit Bot." : "This task's account. Change it in the status sidebar.")
-                    Spacer(minLength: 0)
                     ModelMenu(settings: current, disabled: running,
                               onModel: { model.setModel($0, for: target) },
                               onEffort: { model.setReasoningEffort($0, for: target) })
                         .layoutPriority(1)
+                        .id(target)
+                    Spacer(minLength: 0)
+                    Text(current.account.name)
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                        .help(task == nil ? "Current account. Change it in Edit Bot." : "This task's account. Change it in the status sidebar.")
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 10)
@@ -63,6 +64,8 @@ struct ChatView: View {
                 .frame(maxWidth: Theme.chatWidth)
                 .frame(maxWidth: .infinity)
             }
+            // Keep room for the model, effort and send controls when the columns are narrowed.
+            .frame(minWidth: 300)
             .navigationTitle(bot.name)
             .navigationSubtitle(task?.title ?? "")
             .toolbar {

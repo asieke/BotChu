@@ -7,7 +7,7 @@ import BotChuCore
 /// The main window's split view needs more width as its sidebar and status widen (it counts the
 /// sidebar twice). In a window narrower than that, SwiftUI lays the columns out forever and AppKit
 /// aborts, so a regression ends this test run with a crash rather than a failed expectation.
-@Suite(.serialized) @MainActor struct WindowLayoutTests {
+extension RenderingTests {
     @Test func windowIsNeverNarrowerThanItsColumnsNeed() async throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-window-\(UUID().uuidString)", isDirectory: true)
@@ -43,6 +43,12 @@ import BotChuCore
         splits[1].setPosition(splits[1].frame.width - 380, ofDividerAt: 0)
         try await settle(window)
         window.setFrame(NSRect(x: 0, y: 0, width: 820, height: 600), display: true)
+        try await settle(window)
+        #expect(window.frame.width >= window.contentMinSize.width)
+
+        // Changing the model or effort can change the new controls' labels while already narrow.
+        model.setModel("custom-model-with-a-long-account-specific-name", for: .home(bot.id))
+        model.setReasoningEffort(.max, for: .home(bot.id))
         try await settle(window)
         #expect(window.frame.width >= window.contentMinSize.width)
 

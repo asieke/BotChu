@@ -109,12 +109,19 @@ request.
     tasks. The sidebar row counts the bot's conversations with news.
   - **Message box:** a multiline writing area with account, model/effort and send/stop controls in
     its bottom row. Return sends; Option-Return inserts a new line.
-  - **Model controls:** below the writing area, choose a model and reasoning effort for the bot's
-    existing account. Choices are saved and applied on the next turn, including resumed sessions.
-    The menu has starter model choices and a custom model ID field for the current CLI; it cannot
-    switch accounts or CLI providers. Defaults leave the choice to the CLI (or the OpenRouter model
-    in Settings). Effort choices depend on the provider/model, and controls wait until a turn ends.
-    For known Antigravity models, the effort also selects the matching model-ID suffix.
+  - **Model controls:** separate model and reasoning-effort buttons below the writing area and in
+    the status sidebar's **Runs on** card open the same pickers. Both stay in sync for the shown
+    Home or task conversation; choices are saved for its next turn, including resumed sessions.
+    Model search matches names and IDs, with a checkmark on the current selection and a custom-ID
+    option. OpenRouter shows the actual model inherited from Settings (for example **Flint (free)**),
+    and searches its public catalog of text models with tool support, with context sizes. Catalog
+    requests contain no key or conversation data, are cached in memory for an hour, and preserve
+    current/custom choices when unavailable. Other providers offer starter choices and label an
+    unspecified model as the account's default. **Auto** effort leaves the choice to the account;
+    explicit levels include short explanations, and unsupported effort controls are disabled.
+    Search supports arrow keys and Return; Escape dismisses a picker. Controls wait until a turn
+    ends and cannot switch accounts or providers. For known Antigravity models, effort also selects
+    the matching model-ID suffix.
   - **The bot's folder is the bot:** BotChu keeps each bot's settings (`bot.json`), its whole
     conversation (`thread.jsonl`, one message per line), its tasks (`tasks/<id>/`: `task.json` with
     the repository, computer, branch, worktree, session and pull request, and the task's
@@ -172,7 +179,8 @@ request.
 ## Architecture
 - `macOS/` is a Swift package (Swift 6 toolchain, macOS 14+):
   - `Sources/BotChuCore/` — Foundation only, unit-tested: accounts and the command line each CLI
-    runs with (`Accounts.swift`), the bot and message model (`Models.swift`), one stream parser per
+    runs with (`Accounts.swift`), generation choices and public OpenRouter model metadata
+    (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model (`Models.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), the identity, memory and
     recap that open a session (`BotContext.swift`), account allowance parsing and native queries
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
@@ -206,8 +214,9 @@ request.
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
     from a remote task.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
-    fallback and offline restrictions, and the main window's layout at its narrowest, using
-    isolated windows and no real bot data.
+    fallback and offline restrictions, model-picker keyboard interaction and persisted choices,
+    and the main window's layout at its narrowest. These share a serialized suite because AppKit
+    window focus is global; all use isolated windows and no real bot data.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
     `macOS/build/`), signed with the local "Apple Development" certificate when there is one, ad hoc
     otherwise. It records the SDK the app was linked against in the binary (`vtool`), because
@@ -287,6 +296,10 @@ request.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
   querying any account. Usage fixtures are ignored outside throwaway data runs.
+  `BOTCHU_ACCOUNT`, `BOTCHU_MODEL` and `BOTCHU_EFFORT` set the first demo bot's generation choices;
+  `BOTCHU_DEFAULT_MODEL` supplies an isolated OpenRouter default. `BOTCHU_OPEN=model` or `effort`
+  opens the composer's picker, and `inspector-model` or `inspector-effort` opens the sidebar's.
+  `BOTCHU_WINDOW=compact` checks the minimum window width.
 - Account allowance end to end: `swift run --package-path macOS botchu-smoke --usage [account id …]`
   reads each account's usage through the same client as the inspector. It prints only the normalized
   usage fields, never raw CLI output or credentials. Muse makes its brief usage request; OpenRouter

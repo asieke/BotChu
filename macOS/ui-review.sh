@@ -79,6 +79,17 @@ cat > "$tasks/7a0c2d4e-1b3f-4c5d-8e9f-0a1b2c3d4e60/thread.jsonl" <<'JSON'
 {"date":"2026-10-22T03:03:00Z","id":"00000000-0000-4000-8000-000000000021","role":"user","text":"Work on issue #3 “Fix the typo”."}
 {"date":"2026-10-22T03:03:05Z","id":"00000000-0000-4000-8000-000000000022","role":"error","text":"Couldn't make this task's worktree. scripts/worktree.sh feat/3-fix-typo failed."}
 JSON
+# Generation controls can be reviewed on any account, without sending a message or changing live settings.
+python3 - "$data/bots.json" <<'PY'
+import json, os, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+bots = json.loads(path.read_text())
+for env, key in [('BOTCHU_ACCOUNT', 'accountID'), ('BOTCHU_MODEL', 'model'), ('BOTCHU_EFFORT', 'reasoningEffort')]:
+    if env in os.environ:
+        bots[0][key] = os.environ[env]
+path.write_text(json.dumps(bots))
+PY
 "$dir/build.sh" "$data" >/dev/null
 args=(--env "BOTCHU_DATA_DIR=$data" --env "BOTCHU_SNAPSHOT=$data/snapshots")
 [ -n "${BOTCHU_OPEN:-}" ] && args+=(--env "BOTCHU_OPEN=$BOTCHU_OPEN")
@@ -105,6 +116,8 @@ fi
 [ -n "${BOTCHU_DRAW_PET:-}" ] && args+=(--env "BOTCHU_DRAW_PET=$BOTCHU_DRAW_PET")
 [ -n "${BOTCHU_APPEARANCE:-}" ] && args+=(--env "BOTCHU_APPEARANCE=$BOTCHU_APPEARANCE")
 [ -n "${BOTCHU_USAGE:-}" ] && args+=(--env "BOTCHU_USAGE=$BOTCHU_USAGE")
+[ -n "${BOTCHU_DEFAULT_MODEL:-}" ] && args+=(--env "BOTCHU_DEFAULT_MODEL=$BOTCHU_DEFAULT_MODEL")
+[ -n "${BOTCHU_WINDOW:-}" ] && args+=(--env "BOTCHU_WINDOW=$BOTCHU_WINDOW")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
 # Without restoring windows: after any copy of BotChu crashed, macOS would otherwise stop at a
 # dialog asking whether to reopen them.
