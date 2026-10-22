@@ -186,30 +186,27 @@ struct RunsOnCard: View {
     @Environment(AppModel.self) private var model
     let settings: any RunSettings
     let target: ChatTarget
-    var changeAccount: ((String) -> Void)?
 
     var body: some View {
         InspectorCard {
             InspectorRow("Account") {
-                if let changeAccount {
-                    Menu {
-                        Picker("Account", selection: Binding(get: { settings.accountID }, set: changeAccount)) {
-                            ForEach(model.settings.accounts) { account in
-                                Label(account.name, systemImage: account.symbol).tag(account.id)
-                            }
+                Menu {
+                    Picker("Account", selection: Binding(get: { settings.accountID }, set: { model.setAccount($0, for: target) })) {
+                        ForEach(model.settings.accounts) { account in
+                            Label(account.name, systemImage: account.symbol).tag(account.id)
                         }
-                        .pickerStyle(.inline)
-                    } label: {
-                        Label(settings.account.name, systemImage: settings.account.symbol)
-                            .labelStyle(.titleAndIcon)
                     }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                    .help("The account this task runs on; its next message starts a session there")
-                } else {
+                    .pickerStyle(.inline)
+                } label: {
                     Label(settings.account.name, systemImage: settings.account.symbol)
                         .labelStyle(.titleAndIcon)
                 }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.visible)
+                .disabled(model.isRunning(target))
+                .accessibilityLabel("Account: \(settings.account.name)")
+                .help(model.isRunning(target) ? "Account can change when this turn ends"
+                      : "Choose the account for this conversation; its next message starts a session there")
             }
             InspectorRow("Agent", value: settings.account.kind.displayName)
             ModelMenu(settings: settings, disabled: model.isRunning(target),
@@ -570,6 +567,23 @@ struct InspectorRow<Value: View>: View {
 extension InspectorRow where Value == Text {
     init(_ label: String, value: String, last: Bool = false) {
         self.init(label, last: last) { Text(value) }
+    }
+}
+
+/// Compact, plain values for the inspector's selectable rows. The composer keeps its larger pills.
+struct InspectorChoiceLabel: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title).lineLimit(1).truncationMode(.middle)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(Palette.secondaryText)
+        }
+        .font(.system(size: 13))
+        .frame(minHeight: 28)
+        .contentShape(Rectangle())
     }
 }
 

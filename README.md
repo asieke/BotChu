@@ -150,9 +150,9 @@ request.
     errors pause the queue; relaunching restores it
     paused. **Send next** resumes it. Each Home and task has its own queue, saved beside its thread
     in `queued.jsonl`. A worktree being prepared finishes setup before follow-ups can run.
-  - **Model controls:** separate model and reasoning-effort buttons below the writing area and in
-    the status sidebar's **Runs on** card open the same pickers. Both stay in sync for the shown
-    Home or task conversation; choices are saved for its next turn, including resumed sessions.
+  - **Model controls:** separate model and reasoning-effort buttons below the writing area and compact
+    text selectors in the status sidebar's **Runs on** card open the same pickers. Both stay in sync
+    for the shown Home or task conversation; choices are saved for its next turn, including resumed sessions.
     Model search matches names and IDs, with a checkmark on the current selection and a custom-ID
     option. OpenRouter shows the actual model inherited from Settings (for example **Flint (free)**),
     and searches its public catalog of text models with tool support, with context sizes. Catalog
@@ -160,9 +160,11 @@ request.
     current/custom choices when unavailable. Other providers offer starter choices and label an
     unspecified model as the account's default. **Auto** effort leaves the choice to the account;
     explicit levels include short explanations, and unsupported effort controls are disabled.
-    Search supports arrow keys and Return; Escape dismisses a picker. Controls wait until a turn
-    ends and cannot switch accounts or providers. For known Antigravity models, effort also selects
-    the matching model-ID suffix.
+    Search supports arrow keys and Return; Escape dismisses a picker. Controls wait until the shown
+    conversation's turn ends. The card's **Account** selector changes the account for Home or a task,
+    including custom CLI profiles; the next message starts a session on that account. Other tasks
+    keep their accounts. Switching CLI families resets model and effort choices. For known
+    Antigravity models, effort also selects the matching model-ID suffix.
   - **The bot's folder is the bot:** BotChu keeps each bot's settings (`bot.json`), its whole
     conversation (`thread.jsonl`, one message per line), its tasks (`tasks/<id>/`: `task.json` with
     the repository, computer, branch, worktree, session and pull request, and the task's
@@ -199,7 +201,7 @@ request.
     and launches; its data always belongs to the shown Home or task. The character, tabs and bottom
     actions stay visible while the selected area's content scrolls. Home keeps Edit and New Session;
     tasks keep Close Task and New Session. Task Activity includes the repository, computer and
-    linked issue. A task's account can change in Model & Usage; Session keeps Finder, Terminal and
+    linked issue. Home and task accounts can change in Model & Usage; Session keeps Finder, Terminal and
     remote SSH controls. Branch names, review commits, generated pull request metadata and task
     authorship are managed internally and omitted from the task form, cards, headers, tab tooltips
     and new automatic progress notes. Explicitly choosing a pull request to continue or review is

@@ -91,4 +91,59 @@ extension RenderingTests {
         #expect(home.loadTasks().first?.model == "sonnet")
         app.runStates[taskTarget] = nil
     }
+
+    @Test func accountsChangeIndependentlyForHomeAndTasks() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-account-selection-\(UUID().uuidString)")
+        let domain = "BotChu.AccountSelection.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: domain)
+        }
+        let bot = Bot(name: "Test", accountID: "codex-work", model: "gpt-6-astra", reasoningEffort: .xhigh,
+                      workspace: root.appendingPathComponent("bot").path,
+                      sessionID: "home-session", sessionAccountID: "codex-work")
+        let home = BotHome(workspace: bot.workspace)
+        try home.save(bot)
+        var task = BotTask(for: bot, repo: "test/repo", checkout: root.path, work: nil, brief: "Test")
+        task.sessionID = "task-session"
+        task.sessionAccountID = "codex-work"
+        try home.save(task)
+        let store = Store(root: root.appendingPathComponent("index"))
+        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        let settings = AppSettings(defaults: defaults)
+        let custom = Account(id: "custom-research", name: "Research", kind: .codex, defaultCommand: "codex-research", symbol: "terminal")
+        settings.customAccounts = [custom]
+        let app = AppModel(store: store, settings: settings)
+        let homeTarget = ChatTarget.home(bot.id)
+        let taskTarget = ChatTarget.task(task.id, of: bot.id)
+        defer { app.runStates.removeAll() }
+
+        // A busy task does not prevent changing Home. Same-family switches keep generation choices.
+        app.runStates[taskTarget] = RunState()
+        app.setAccount(custom.id, for: homeTarget)
+        #expect(home.loadBot()?.account == custom)
+        #expect(home.loadBot()?.model == "gpt-6-astra")
+        #expect(home.loadBot()?.reasoningEffort == .xhigh)
+        #expect(home.loadBot()?.resumableSessionID == nil)
+        #expect(home.loadTasks().first?.resumableSessionID == "task-session")
+
+        // Both kinds of conversation reject account changes while their own turn is active.
+        app.runStates[homeTarget] = RunState()
+        app.setAccount("claude-dev", for: homeTarget)
+        app.setAccount("claude-dev", for: taskTarget)
+        #expect(app.bot(bot.id)?.account == custom)
+        #expect(app.task(taskTarget)?.accountID == "codex-work")
+
+        // An idle task can switch while Home is busy; a new family clears incompatible choices.
+        app.runStates[taskTarget] = nil
+        app.setAccount("claude-work", for: taskTarget)
+        #expect(home.loadTasks().first?.accountID == "claude-work")
+        #expect(home.loadTasks().first?.model == "")
+        #expect(home.loadTasks().first?.reasoningEffort == nil)
+        #expect(home.loadTasks().first?.resumableSessionID == nil)
+        let restored = AppModel(store: store, settings: AppSettings(defaults: defaults))
+        #expect(restored.bot(bot.id)?.account == custom)
+        #expect(restored.task(taskTarget)?.accountID == "claude-work")
+    }
 }

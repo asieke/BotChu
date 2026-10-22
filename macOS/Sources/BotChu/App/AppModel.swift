@@ -285,10 +285,9 @@ final class AppModel {
         change(target) { $0.reasoningEffort = effort }
     }
 
-    /// Moves a task to another account; its next message starts a session there. (A bot's own
-    /// account changes in Edit Bot.)
+    /// Changes this Home or task conversation's account; its next message starts a session there.
     func setAccount(_ accountID: String, for target: ChatTarget) {
-        guard target.taskID != nil, !isRunning(target) else { return }
+        guard !isRunning(target) else { return }
         let account = settings.account(accountID)
         change(target) { $0.selectAccount(account) }
     }

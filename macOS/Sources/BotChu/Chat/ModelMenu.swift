@@ -54,17 +54,21 @@ struct ModelMenu: View {
 
     private var modelButton: some View {
         Button { showsModels.toggle() } label: {
-            HStack(spacing: 7) {
-                Image(systemName: settings.account.symbol)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Palette.violet)
-                Text(data.title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1).truncationMode(.middle)
-                chevron
+            if inInspector {
+                InspectorChoiceLabel(title: data.title)
+            } else {
+                HStack(spacing: 7) {
+                    Image(systemName: settings.account.symbol)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Palette.violet)
+                    Text(data.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1).truncationMode(.middle)
+                    chevron
+                }
             }
         }
-        .buttonStyle(GenerationButtonStyle(active: showsModels))
+        .buttonStyle(GenerationButtonStyle(active: showsModels, compact: inInspector))
         .accessibilityLabel("Model: \(data.title)")
         .help(disabled ? "Model can change when this turn ends" : modelHelp)
         .popover(isPresented: $showsModels, arrowEdge: .top) {
@@ -76,15 +80,19 @@ struct ModelMenu: View {
 
     private var effortButton: some View {
         Button { showsEffort.toggle() } label: {
-            HStack(spacing: 6) {
-                EffortGlyph(effort: settings.reasoningEffort)
-                Text(efforts.isEmpty ? "No effort" : settings.reasoningEffort?.title ?? "Auto")
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                chevron
+            if inInspector {
+                InspectorChoiceLabel(title: efforts.isEmpty ? "Not supported" : settings.reasoningEffort?.title ?? "Auto")
+            } else {
+                HStack(spacing: 6) {
+                    EffortGlyph(effort: settings.reasoningEffort)
+                    Text(efforts.isEmpty ? "No effort" : settings.reasoningEffort?.title ?? "Auto")
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                    chevron
+                }
             }
         }
-        .buttonStyle(GenerationButtonStyle(active: showsEffort))
+        .buttonStyle(GenerationButtonStyle(active: showsEffort, compact: inInspector))
         .fixedSize()
         .disabled(efforts.isEmpty)
         .accessibilityLabel(efforts.isEmpty ? "Reasoning effort is not supported by this model"
@@ -111,18 +119,19 @@ struct ModelMenu: View {
 
 private struct GenerationButtonStyle: ButtonStyle {
     var active = false
+    var compact = false
     @Environment(\.isEnabled) private var enabled
     @State private var hovered = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(Palette.text)
-            .padding(.horizontal, 10)
-            .frame(height: 30)
+            .padding(.horizontal, compact ? 0 : 10)
+            .frame(height: compact ? 28 : 30)
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(active ? Palette.violet.opacity(0.12) : Palette.text.opacity(hovered || configuration.isPressed ? 0.09 : 0.045)))
+                .fill(compact ? .clear : active ? Palette.violet.opacity(0.12) : Palette.text.opacity(hovered || configuration.isPressed ? 0.09 : 0.045)))
             .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(active ? Palette.violet.opacity(0.4) : Palette.text.opacity(0.055)))
+                .strokeBorder(compact ? .clear : active ? Palette.violet.opacity(0.4) : Palette.text.opacity(0.055)))
             .opacity(enabled ? 1 : 0.45)
             .contentShape(RoundedRectangle(cornerRadius: 9))
             .onHover { hovered = $0 }
