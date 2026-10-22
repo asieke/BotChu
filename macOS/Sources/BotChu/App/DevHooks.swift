@@ -9,6 +9,7 @@ import BotChuCore
 /// - `BOTCHU_SNAPSHOT`: write a PNG of each window into this folder every second, and of the sidebar's
 ///   rows (`sidebar.png`), which the window's picture leaves out.
 /// - `BOTCHU_OPEN`: open `editor` (a new bot) or `settings` at launch.
+/// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
 /// - `BOTCHU_SEND`: send this message to the selected bot at launch.
 /// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
 /// - `BOTCHU_PET`: give the selected bot this Codex pet folder at launch, as Import Codex Pet does.
@@ -21,6 +22,9 @@ enum DevHooks {
     }
 
     static func start(model: AppModel, openSettings: () -> Void) {
+        if dataDir != nil, let appearance = env["BOTCHU_APPEARANCE"], ["light", "dark"].contains(appearance) {
+            NSApp.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+        }
         if let dir = env["BOTCHU_SNAPSHOT"] {
             Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
                 MainActor.assumeIsolated {

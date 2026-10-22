@@ -43,12 +43,13 @@ struct ModelMenu: View {
                 Text(GenerationOptions.name(for: bot.model, kind: bot.account.kind))
                     .lineLimit(1).truncationMode(.middle)
                 if let effort = bot.reasoningEffort {
-                    Text("· \(effort.title)").foregroundStyle(.secondary)
+                    Text(effort.title).foregroundStyle(Color.accentColor)
+                        .lineLimit(1)
                 }
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
             }
             .font(.callout)
-            .padding(.vertical, 3)
+            .padding(.vertical, 6)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)

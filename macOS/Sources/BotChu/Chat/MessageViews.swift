@@ -23,6 +23,16 @@ struct MessageRow: View {
         case .assistant:
             BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
                 MarkdownText(text: message.text)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 13)
+                    .background {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Theme.replyBackground)
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.045))
+                    }
             }
         case .tool:
             BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
@@ -164,7 +174,9 @@ struct TypingIndicator: View {
                         .opacity(0.3 + 0.7 * max(0, sin(phase - Double(i) * 0.8)))
                 }
             }
-            .padding(.vertical, 9)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.replyBackground))
         }
         .onAppear {
             withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = .pi * 2 }
