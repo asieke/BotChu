@@ -54,9 +54,9 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     thread and the CLI's session id are saved, so the next message (also after a relaunch) resumes
     the same CLI session.
   - **Tasks:** besides its Home, a bot can work on tasks, several at once: each in a repository
-    checked out in the repositories folder (`~/Desktop/WORKSPACE` by default, where GitChu puts
-    them), with its own conversation and CLI session, in its own git worktree, so tasks never share
-    files. **New Task** (⌘T) picks the repository, an open issue or pull request there (listed with
+    checked out in the repositories folder (`~/Desktop/WORKSPACE` by default), with its own
+    conversation and CLI session, in its own git worktree, so tasks never share files. BotChu does
+    all of this itself, with no other app. **New Task** (⌘T) picks the repository, an open issue or pull request there (listed with
     `gh`) or something new, the branch and the account. BotChu makes the worktree before the first
     turn, in `.claude/worktrees/<type>-<slug>` of the checkout: with the repository's own
     `scripts/worktree.sh` when it follows the workspace standard (which also links a new
@@ -115,8 +115,8 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     dark mode.
   - **Settings:** the bots folder, the repositories folder, each account's command, the Codex
     account that draws pets, the OpenRouter API key (Keychain) and default OpenRouter model.
-- Does not: run bots or tasks anywhere but this Mac (yet: SSH hosts and handing tasks over from
-  GitChu come later), clone repositories, schedule routines, ask for approval of tool calls (every
+- Does not: run bots or tasks anywhere but this Mac (yet: SSH hosts, set up in BotChu itself, come
+  later in #16), clone repositories, schedule routines, ask for approval of tool calls (every
   CLI runs with its permission prompts bypassed, inside the bot's folder or the task's worktree), or
   keep any secret outside the Keychain and the CLIs' own logins.
 
