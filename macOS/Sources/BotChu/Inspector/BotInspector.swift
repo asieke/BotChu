@@ -131,16 +131,17 @@ struct AvatarCard: View {
                         .help(eyebrow)
                 }
                 Text(title)
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: eyebrow == nil ? 15 : 18, weight: .bold))
                     .kerning(-0.2)
                     .accessibilityLabel("\(title), \(StatusLook(status).label)")
-                    .lineLimit(2, reservesSpace: eyebrow != nil)
+                    .lineLimit(2)
                     .help(title)
                 if !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.system(size: 12))
                         .foregroundStyle(Palette.cardSubtitle)
                         .lineLimit(2)
+                        .help(subtitle)
                 }
                 detail
             }
