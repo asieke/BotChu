@@ -16,9 +16,11 @@ struct TaskInspector: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     let machine = model.machineName(task.hostID, fallback: task.hostName)
-                    AvatarCard(bot: bot, status: status, title: task.title,
+                    InspectorSection("Status") {
+                        AvatarCard(bot: bot, status: status, title: task.title,
                                subtitle: "\(bot.name) · \(task.repo)" + (task.isRemote ? " · on \(machine)" : ""),
-                               account: task.account, faceSize: 72)
+                                   account: task.account, faceSize: 72)
+                    }
                     InspectorSection("Task") {
                         InspectorCard {
                             InspectorRow("Repository", value: task.repo)
@@ -85,6 +87,7 @@ struct TaskInspector: View {
                             StatTile(value: task.createdAt.formatted(.dateTime.month(.abbreviated).day()), label: "Started")
                         }
                     }
+                    MemorySection(botID: target.botID)
                     InspectorSection("Worktree", trailing: task.isRemote ? "on \(machine)" : nil) {
                         InspectorCard(padded: true) {
                             Group {

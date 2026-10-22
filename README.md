@@ -132,13 +132,18 @@ request.
     was made from) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
     is told it can search them for earlier conversations. **History & Logs** in the status sidebar
     opens the folder. Each bot needs its own workspace, and not the bots folder itself; moving a
-    bot's workspace in its editor moves its `.botchu/` with it, and deleting a bot puts only its
-    `.botchu/` in the Trash.
-  - **Memory:** each bot's workspace has a `MEMORY.md` it keeps itself, and the bots folder's
-    `MEMORY.md` (`~/BotChu/MEMORY.md` by default) is shared by every bot. Both, with the bot's identity and instructions, open every new CLI session
-    and are written to the workspace's `AGENTS.md`, `CLAUDE.md` and `GEMINI.md`, so the agent keeps
-    them across its own context compaction. A new session (new bot, account switch, or **New
-    Session**) also gets the recent conversation, so switching accounts keeps the thread's continuity.
+    bot's workspace in its editor moves its `.botchu/`, `MEMORY.md` and `SOUL.md` with it. Moving
+    waits until its turns finish and refuses to overwrite files at the destination. Deleting a bot
+    puts only its `.botchu/` in the Trash.
+  - **Memory and personality:** each bot's workspace has a `MEMORY.md` for facts and notes it keeps
+    itself, and an editable `SOUL.md` for its personality and voice. New bots get a starter soul based
+    on their name and title; existing files are preserved, including intentionally empty ones.
+    The bots folder's `MEMORY.md` (`~/BotChu/MEMORY.md` by default) is shared by every bot. Both
+    memory files and the soul, with the bot's identity and instructions, open every new Home or task
+    CLI session (including tasks over SSH). The workspace's `AGENTS.md`, `CLAUDE.md` and `GEMINI.md`
+    also direct the agent to read them, so it keeps them across its own context compaction. A new
+    session (new bot, account switch, or **New Session**) also gets the recent conversation, so
+    switching accounts keeps the thread's continuity.
   - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I). A card at the top shows
     the selected bot's face (its pet, playing, or its emoji) in a ring that says its state (grey when idle, a
     spinning violet arc while it works, red after a failed turn), its name and title, a pill while
@@ -147,12 +152,18 @@ request.
     error). Grouped cards below give the account, agent and model it runs on, **Usage** (between
     **Runs on** and **Session**), whether the next message continues its CLI session (with its id
     to copy), its open tasks, its message and tool-call counts, last
-    activity and creation date, what its `MEMORY.md` holds, and its workspace, with Edit and New
+    activity and creation date, its memory and personality files, and its workspace, with Edit and New
     Session. On a task's tab it shows the task instead: its repository, the computer it works on,
     issue, branch (or, for a review, the commit it is detached at), pull request (and whether it is
     open, merged or closed), the account (which can change there), that account's usage, session
     and worktree (in Finder or Terminal, or over SSH in Terminal), with Close Task and New Session. Its colors
-    follow light and dark mode. The window is never narrower than the sidebar, chat and status
+    follow light and dark mode. Every section, including Status, collapses from its heading; the
+    app remembers expanded sections across tabs and launches. **Memory** has two cards matching
+    Conversation: **MEMORY.md** and **SOUL.md**. Each opens an in-app Markdown editor at half the
+    parent window's width and height, with Save (⌘S), Cancel (Escape), and Reload. Saving preserves exact
+    Markdown and refuses to overwrite a file changed on disk since it was opened. Saved changes
+    apply at the next new session; **New Session** applies them to an existing conversation. The
+    window is never narrower than the sidebar, chat and status
     need, so it widens when they do.
   - **Account usage:** the selected account's allowance used and reset times, shared by all bots
     on that account. Claude Code and Antigravity use their native `/usage` commands; Codex uses
@@ -200,7 +211,7 @@ request.
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`),
     `Sidebar/` (the bot list), `Chat/` (the tab bar, messages and the composer), `Inspector/` (the
-    status sidebar, a bot's and a task's), `Editor/` (the bot sheet and New Task), `Settings/` (with
+    status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown and New Task sheets), `Settings/` (with
     the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, and the pet's looping video).
     `Resources/ChatRenderer/` bundles pinned Mermaid and KaTeX distributions, their fonts and licenses. Its README records provenance and update steps; no JavaScript package
@@ -215,7 +226,8 @@ request.
     from a remote task.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, model-picker keyboard interaction and persisted choices,
-    and the main window's layout at its narrowest. These share a serialized suite because AppKit
+    Markdown editor sizing and Save/Cancel, collapsing status sections, and the main window's
+    layout at its narrowest. These share a serialized suite because AppKit
     window focus is global; all use isolated windows and no real bot data.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
     `macOS/build/`), signed with the local "Apple Development" certificate when there is one, ad hoc
@@ -279,6 +291,7 @@ request.
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor`, `BOTCHU_OPEN=task` or `BOTCHU_OPEN=settings` opens the bot editor, New
   Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository).
+  `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
   `BOTCHU_TAB=<n>` shows the first bot's nth tab (and the message goes there), and
   `BOTCHU_TASK="hello-world|<task>"` starts a task in the throwaway repository (a real turn).
   Hosts: `BOTCHU_HOST="<nickname>|<ssh host>|<repositories folder>|<machine>|<account>=<command>,…"`

@@ -25,7 +25,8 @@ struct Turn {
 func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage]) async -> Turn {
     let resume = bot.resumableSessionID
     let preamble = resume == nil
-        ? BotContext.sessionPreamble(bot: bot, memory: Workspace.read(bot.workspace + "/MEMORY.md"), sharedMemory: "", history: history)
+        ? BotContext.sessionPreamble(bot: bot, memory: Workspace.read(bot.workspace + "/MEMORY.md"), sharedMemory: "", history: history,
+                                     soul: Workspace.read(bot.workspace + "/SOUL.md"))
         : nil
     let invocation = CommandBuilder.invocation(
         kind: bot.account.kind, prompt: BotContext.prompt(for: prompt, preamble: preamble), model: bot.model, sessionID: resume, reasoningEffort: bot.reasoningEffort,

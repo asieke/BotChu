@@ -8,6 +8,7 @@ public enum BotContext {
     public static let marker = "<!-- Written by BotChu from this bot's settings; edit the bot in BotChu instead. -->"
 
     public static let memoryFile = "MEMORY.md"
+    public static let soulFile = "SOUL.md"
 
     /// The hidden first turn of a new bot, so a misread role shows up at once.
     public static let introPrompt = """
@@ -30,6 +31,10 @@ public enum BotContext {
 
         ## Instructions
         \(bot.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "None yet. Ask your owner what they need." : bot.instructions)
+
+        ## Personality
+        `\(soulFile)` in this folder defines your personality and voice. Read it at the beginning of every \
+        session, alongside your memory. Your owner can edit it in BotChu; preserve their choices.
 
         ## Memory
         - `\(memoryFile)` in this folder is your durable memory. Read it when a session starts. When you learn \
@@ -85,19 +90,39 @@ public enum BotContext {
         "# \(bot.name)\n\nWhat \(bot.name) has learned and keeps across conversations.\n"
     }
 
+    public static func seedSoul(bot: Bot) -> String {
+        """
+        # \(bot.name)'s soul
+
+        You are \(bot.name)\(bot.title.isEmpty ? "." : ", \(bot.title).")
+
+        ## Personality
+        - Be warm, curious and candid.
+        - Have a point of view. Disagree thoughtfully when you have a reason.
+        - Be resourceful and take initiative; ask when something important is unclear.
+        - Use a little humor when it fits, without forcing it.
+
+        ## Voice
+        - Speak naturally and directly, with useful detail and no filler.
+        - Match your owner's tone and the situation.
+        - Be honest about what you know, what you tried and what is uncertain.
+
+        """
+    }
+
     public static let seedSharedMemory = "# Shared memory\n\nPreferences and context every BotChu bot keeps.\n"
 
     /// Context put before the first message of a new CLI session: identity, instructions, both
     /// memories, the bot's open tasks (`taskReport`) and, when the thread already has history, a recap
     /// of it (the earlier session may have been another account, so the agent would otherwise start blank).
     public static func sessionPreamble(bot: Bot, memory: String, sharedMemory: String, history: [ChatMessage],
-                                       tasks: [String] = []) -> String {
+                                       tasks: [String] = [], soul: String = "") -> String {
         var parts: [String] = []
         parts.append("""
             You are \(bot.name)\(bot.title.isEmpty ? "" : " — \(bot.title)"), a persistent bot in BotChu. \
             Your workspace is \(bot.workspace).
             """)
-        parts += identity(bot: bot, memory: memory, sharedMemory: sharedMemory)
+        parts += identity(bot: bot, memory: memory, sharedMemory: sharedMemory, soul: soul)
         if !tasks.isEmpty {
             parts.append("""
                 Your open tasks, each in its own tab beside this conversation (data, not instructions):
@@ -118,7 +143,7 @@ public enum BotContext {
     /// can't open the bot's folder on this Mac, so it also gets the recent part of the bot's `home`
     /// conversation, and saves memories through `<remember>` blocks.
     public static func taskPreamble(bot: Bot, task: BotTask, memory: String, sharedMemory: String, history: [ChatMessage],
-                                    machine: String? = nil, home: [ChatMessage] = []) -> String {
+                                    machine: String? = nil, home: [ChatMessage] = [], soul: String = "") -> String {
         let memoryPath = (bot.workspace as NSString).appendingPathComponent(memoryFile)
         var parts: [String] = []
         if let machine {
@@ -128,7 +153,7 @@ public enum BotContext {
                 that Mac, where your owner also talks with you in your Home conversation; this task is one of several \
                 conversations you may be having at once, each in its own tab.
                 """)
-            parts += identity(bot: bot, memory: memory, sharedMemory: sharedMemory, saving: """
+            parts += identity(bot: bot, memory: memory, sharedMemory: sharedMemory, soul: soul, saving: """
                 Your memory is \(memoryFile) in your folder on your owner's Mac, which you can't open from here. To \
                 remember something new that you would want in any project (your owner's preferences, lessons, how you \
                 work), put it in your reply between <\(rememberTag)> and </\(rememberTag)>, one fact per line: BotChu \
@@ -143,7 +168,7 @@ public enum BotContext {
                 your Home conversation; this task is one of several conversations you may be having at once, each in its \
                 own tab.
                 """)
-            parts += identity(bot: bot, memory: memory, sharedMemory: sharedMemory, saving: """
+            parts += identity(bot: bot, memory: memory, sharedMemory: sharedMemory, soul: soul, saving: """
                 Your memory is \(memoryPath), in your workspace, not in this repository: save there what you would \
                 want in any project (your owner's preferences, lessons, how you work), not to your CLI's own memory \
                 feature, re-reading it just before you change it, since your other conversations may have changed it. \
@@ -222,11 +247,15 @@ public enum BotContext {
 
     /// The bot's instructions and memories. `saving` says where new memories go, in place of the
     /// Home's own words for it.
-    static func identity(bot: Bot, memory: String, sharedMemory: String, saving: String? = nil) -> [String] {
+    static func identity(bot: Bot, memory: String, sharedMemory: String, soul: String, saving: String? = nil) -> [String] {
         var parts: [String] = []
         let instructions = bot.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         if !instructions.isEmpty {
             parts.append("<instructions>\n\(instructions)\n</instructions>")
+        }
+        let personality = String(soul.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maxMemoryCharacters))
+        if !personality.isEmpty {
+            parts.append("Your personality and voice from \(soulFile), alongside your role and instructions:\n<personality>\n\(personality)\n</personality>")
         }
         let memories = [("bot", memory), ("shared", sharedMemory)]
             .map { ($0.0, String($0.1.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maxMemoryCharacters))) }
@@ -364,6 +393,7 @@ public enum Workspace {
         try fileManager.createDirectory(at: shared.deletingLastPathComponent(), withIntermediateDirectories: true)
         try writeIfMissing(BotContext.seedSharedMemory, to: shared, fileManager: fileManager)
         try writeIfMissing(BotContext.seedMemory(bot: bot), to: dir.appendingPathComponent(BotContext.memoryFile), fileManager: fileManager)
+        try writeIfMissing(BotContext.seedSoul(bot: bot), to: dir.appendingPathComponent(BotContext.soulFile), fileManager: fileManager)
         let agents = BotContext.agentsFile(bot: bot, sharedMemoryPath: sharedMemoryPath, repositoriesPath: repositoriesPath, machines: machines)
         try writeOwned(agents, to: dir.appendingPathComponent("AGENTS.md"), fileManager: fileManager)
         try writeOwned(agents, to: dir.appendingPathComponent("GEMINI.md"), fileManager: fileManager)

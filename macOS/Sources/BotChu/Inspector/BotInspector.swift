@@ -7,15 +7,16 @@ import BotChuCore
 struct BotInspector: View {
     @Environment(AppModel.self) private var model
     let botID: UUID
-    @State private var memory = MemorySnapshot.missing
 
     var body: some View {
         if let bot = model.bot(botID) {
             let status = model.status(of: bot)
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    AvatarCard(bot: bot, status: status, title: bot.name, subtitle: bot.title, account: bot.account) { model.edit(botID) }
-                    PetJobStatus(botID: botID)
+                    InspectorSection("Status") {
+                        AvatarCard(bot: bot, status: status, title: bot.name, subtitle: bot.title, account: bot.account) { model.edit(botID) }
+                        PetJobStatus(botID: botID)
+                    }
                     InspectorSection("Runs on") {
                         RunsOnCard(settings: bot, target: .home(botID))
                     }
@@ -35,16 +36,7 @@ struct BotInspector: View {
                             StatTile(value: bot.createdAt.formatted(.dateTime.month(.abbreviated).day()), label: "Created")
                         }
                     }
-                    InspectorSection("Memory", trailing: memorySummary) {
-                        InspectorCard(padded: true) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("MEMORY.md")
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(Palette.secondaryText)
-                                MemoryPreview(memory: memory)
-                            }
-                        }
-                    }
+                    MemorySection(botID: botID)
                     InspectorSection("Workspace") {
                         InspectorCard(padded: true) {
                             Text((bot.workspace as NSString).abbreviatingWithTildeInPath)
@@ -76,10 +68,6 @@ struct BotInspector: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 actions
             }
-            // The bot keeps MEMORY.md itself, so read it again whenever a turn ends.
-            .task(id: "\(bot.workspace)|\(status.phase.isActive)|\(status.messageCount)") {
-                memory = MemorySnapshot.read(bot: bot)
-            }
         }
     }
 
@@ -98,13 +86,6 @@ struct BotInspector: View {
             .padding(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
             .background(Palette.sidebar)
         }
-    }
-
-    private var memorySummary: String {
-        guard memory.exists else { return "Not created yet" }
-        let entries = memory.entryCount == 1 ? "1 entry" : "\(memory.entryCount) entries"
-        guard let modified = memory.modified else { return entries }
-        return "\(entries) · \(Self.ago(modified))"
     }
 
     static func ago(_ date: Date) -> String {
@@ -563,15 +544,19 @@ struct InspectorSection<Content: View>: View {
     let title: String
     var trailing: String?
     @ViewBuilder let content: Content
+    @AppStorage private var expanded: Bool
 
     init(_ title: String, trailing: String? = nil, @ViewBuilder content: () -> Content) {
         self.title = title
         self.trailing = trailing
         self.content = content()
+        _expanded = AppStorage(wrappedValue: true, "inspector.expanded.\(title)")
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        DisclosureGroup(isExpanded: $expanded) {
+            content
+        } label: {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
                     .font(.system(size: 11, weight: .semibold))
@@ -584,7 +569,29 @@ struct InspectorSection<Content: View>: View {
             }
             .foregroundStyle(Palette.secondaryText)
             .padding(.horizontal, 4)
-            content
+        }
+        .disclosureGroupStyle(InspectorDisclosureStyle())
+    }
+}
+
+/// Keeps the cards full-width and makes the entire heading a keyboard-accessible toggle.
+private struct InspectorDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { configuration.isExpanded.toggle() } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                    configuration.label
+                }
+                .foregroundStyle(Palette.secondaryText)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+            if configuration.isExpanded { configuration.content }
         }
     }
 }
@@ -681,30 +688,6 @@ struct InspectorButtonStyle: ButtonStyle {
             .background(RoundedRectangle(cornerRadius: 8).fill(prominent ? Palette.accent : Palette.button))
             .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.45)
             .contentShape(Rectangle())
-    }
-}
-
-/// What the bot's MEMORY.md holds.
-struct MemoryPreview: View {
-    let memory: MemorySnapshot
-
-    var body: some View {
-        Group {
-            if memory.body.isEmpty {
-                Text("Nothing saved yet. The bot adds what it learns here.")
-                    .foregroundStyle(Palette.secondaryText)
-            } else {
-                ScrollView {
-                    MarkdownText(text: memory.body)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 180)
-            }
-        }
-        .font(.system(size: 13))
-        .lineSpacing(2)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
