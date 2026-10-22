@@ -15,6 +15,8 @@ final class AppSettings {
     var commands: [String: String] { didSet { defaults.set(commands, forKey: "commands") } }
     /// The Codex account that draws pets for bots that don't run on Codex themselves.
     var petAccountID: String { didSet { defaults.set(petAccountID, forKey: "petAccountID") } }
+    /// The OpenRouter model that turns a pet's stills into clips.
+    var petModelID: String { didSet { defaults.set(petModelID, forKey: "petModelID") } }
     /// Invalidates allowance readings when the saved OpenRouter key changes, without retaining it.
     var usageCredentialRevision = 0
 
@@ -33,6 +35,7 @@ final class AppSettings {
             ?? defaults.string(forKey: "openRouterModel") ?? CommandBuilder.defaultOpenRouterModel
         commands = defaults.dictionary(forKey: "commands") as? [String: String] ?? [:]
         petAccountID = defaults.string(forKey: "petAccountID") ?? "codex-personal"
+        petModelID = defaults.string(forKey: "petModelID") ?? PetVideo.defaultModel.id
     }
 
     func command(for account: Account) -> String {

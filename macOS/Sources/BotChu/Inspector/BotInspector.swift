@@ -15,7 +15,7 @@ struct BotInspector: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     AvatarCard(bot: bot, status: status, title: bot.name, subtitle: bot.title, account: bot.account) { model.edit(botID) }
-                    PetDrawingStatus(botID: botID)
+                    PetJobStatus(botID: botID)
                     InspectorSection("Runs on") {
                         RunsOnCard(settings: bot, target: .home(botID))
                     }
@@ -520,9 +520,10 @@ struct BotFace: View {
 
     var body: some View {
         GeometryReader { geometry in
-            if let sheet = model.petSheets[bot.id] {
-                PetSpriteView(sheet: sheet, activity: activity, style: .head, animates: animates)
+            if let video = model.pets[bot.id] {
+                PetVideoView(package: video, activity: activity, animates: animates)
                     .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
             } else {
                 Text(bot.emoji)
                     .font(.system(size: geometry.size.width * 0.5))

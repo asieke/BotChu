@@ -47,13 +47,13 @@ final class AppModel {
     var unread: Set<ChatTarget> = []
     /// What is typed in each conversation's message box and not sent yet.
     var drafts: [ChatTarget: String] = [:]
-    /// Decoded pets, by bot; a bot without one shows its emoji.
-    var petSheets: [UUID: PetSheet] = [:]
     /// Short pet reactions after a turn or on selection (`greeting`, `done`), by bot.
     var reactions: [UUID: BotActivity] = [:]
-    /// Pets being drawn, or whose drawing failed, by bot (see `PetDrawing.swift`).
-    var petDrawings: [UUID: PetDrawing] = [:]
+    /// Pets, by bot; a bot without one shows its emoji (see `Pets.swift`).
+    var pets: [UUID: PetVideoPackage] = [:]
+    var petJobs: [UUID: PetJob] = [:]
     @ObservationIgnored var petRuns: [UUID: AgentRun] = [:]
+    @ObservationIgnored var petTasks: [UUID: Task<Void, Never>] = [:]
     var editor: EditorRequest?
     var taskSheet: TaskSheetRequest?
     let settings: AppSettings
@@ -239,6 +239,7 @@ final class AppModel {
     func delete(_ id: UUID) {
         for (target, run) in runs where target.botID == id { run.stop() }
         petRuns[id]?.stop()
+        petTasks.removeValue(forKey: id)?.cancel()
         dispatchTimers.removeValue(forKey: id)?.invalidate()
         if let bot = bot(id) { BotHome(workspace: bot.workspace).trash() }
         bots.removeAll { $0.id == id }
@@ -249,9 +250,9 @@ final class AppModel {
         unread = unread.filter { $0.botID != id }
         drafts = drafts.filter { $0.key.botID != id }
         openTask[id] = nil
-        petSheets[id] = nil
+        pets[id] = nil
+        petJobs[id] = nil
         reactions[id] = nil
-        petDrawings[id] = nil
         saveIndex()
         if selection == id { selection = bots.first?.id }
     }
@@ -571,25 +572,10 @@ final class AppModel {
 
     // MARK: Pets
 
-    /// Reads the bot's pet again, off the main thread (decoding an atlas takes a moment).
+    /// Reads the bot's pet again (its manifest; clips load when they play).
     func reloadPet(_ id: UUID) {
         guard let bot = bot(id) else { return }
-        let home = BotHome(workspace: bot.workspace)
-        Task.detached(priority: .utility) {
-            let sheet = home.loadPet().flatMap(PetSheet.load)
-            await MainActor.run { [weak self] in
-                guard let self, self.bot(id)?.workspace == bot.workspace else { return }
-                self.petSheets[id] = sheet
-            }
-        }
-    }
-
-    /// Copies a Codex pet folder (`pet.json` and its spritesheet) into the bot's folder.
-    func importPet(from folder: URL, for id: UUID) throws {
-        guard let bot = bot(id) else { return }
-        let home = BotHome(workspace: bot.workspace)
-        try PetPackage.importCodexPet(from: folder, into: home.petURL)
-        reloadPet(id)
+        pets[id] = PetVideoPackage.load(from: PetVideo.folder(for: BotHome(workspace: bot.workspace)))
     }
 
     /// Shows a short reaction, unless a turn is running, then goes back to what the bot shows otherwise.
@@ -810,6 +796,7 @@ final class AppModel {
     func stopAll() {
         for run in runs.values { run.stop() }
         for run in petRuns.values { run.stop() }
+        for task in petTasks.values { task.cancel() }
     }
 
     private func recordSession(_ sessionID: String, accountID: String, for target: ChatTarget) {

@@ -7,8 +7,8 @@
 #   macOS/ui-review.sh                     # just open it
 #   macOS/ui-review.sh "Hello"             # and send "Hello" to the first bot (a real turn)
 #   BOTCHU_OPEN=editor macOS/ui-review.sh  # or open the new-bot editor (or settings)
-#   BOTCHU_PET=~/.codex/pets/mochi macOS/ui-review.sh  # and give the first bot this Codex pet
-#   BOTCHU_DRAW_PET="a brass robot" macOS/ui-review.sh # or have Codex draw it one (takes a while)
+#   BOTCHU_PET=<pet folder> macOS/ui-review.sh           # and give the first bot this pet
+#   BOTCHU_DRAW_PET="a brass robot" macOS/ui-review.sh  # or make it one (real runs; costs OpenRouter credit)
 #   BOTCHU_TAB=1 macOS/ui-review.sh        # show the first bot's first task tab (0 is Home)
 #   BOTCHU_TASK="hello-world|Add a line" macOS/ui-review.sh  # start a task (a real turn on Claude Dev)
 # Prints the snapshot folder. Quit the app with `pkill -x BotChu` when done.
