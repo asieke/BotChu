@@ -1,8 +1,8 @@
 import SwiftUI
 import BotChuCore
 
-/// The window: bots on the left; in the middle, the selected bot's conversations as tabs (its Home
-/// and its tasks) over the shown one's chat; its status on the right.
+/// The window: bots and their tasks on the left, the selected conversation in the middle,
+/// and its status on the right.
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openSettings) private var openSettings
@@ -58,9 +58,6 @@ struct ContentView: View {
         } else if let id = model.selection, model.bot(id) != nil {
             let tab = model.tab(of: id)
             VStack(spacing: 0) {
-                if !model.openTasks(of: id).isEmpty {
-                    TaskTabBar(botID: id)
-                }
                 ChatView(target: tab)
                     .id(tab)
             }
