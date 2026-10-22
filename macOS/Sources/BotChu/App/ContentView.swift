@@ -17,6 +17,10 @@ struct ContentView: View {
         } detail: {
             detail
         }
+        // No minimum width of our own: the window's narrowest is what the columns need, which grows
+        // with the sidebar's and the status's widths (the split view counts the sidebar twice). A
+        // window narrower than that, which a fixed minimum allowed, lays out forever and AppKit aborts.
+        .frame(minHeight: 520)
         .sheet(item: $model.editor) { request in
             BotEditor(request: request)
                 .environment(model)
