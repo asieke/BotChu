@@ -63,7 +63,7 @@ final class SubagentRuntime {
         try ipc.writeRoster(roster)
         let data = try SubagentIPC.encode(roster)
         for caller in contexts.values {
-            Task { try? await caller.transport.writeRoster(data) }
+            Task { try? await caller.transport.writeRoster(data: data) }
         }
     }
 
