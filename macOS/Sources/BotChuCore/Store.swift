@@ -76,6 +76,18 @@ public struct BotHome: Sendable {
         try Self.writeThread(messages, to: taskThreadURL(id))
     }
 
+    /// Unsent follow-ups live beside their conversation, including while a task is closed.
+    public func loadQueuedMessages(task id: UUID? = nil) -> [ChatMessage] {
+        Self.readThread((id.map(taskURL) ?? url).appendingPathComponent("queued.jsonl"))
+    }
+
+    public func saveQueuedMessages(_ messages: [ChatMessage], task id: UUID? = nil) throws {
+        try prepare()
+        let folder = id.map(taskURL) ?? url
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Self.writeThread(messages, to: folder.appendingPathComponent("queued.jsonl"))
+    }
+
     /// The task requests waiting in `dispatch/`, oldest first: each file's name and contents. Each
     /// is removed as it is read, so a request is taken once. A file changed in the last `settle`
     /// seconds may still be being written, so it waits for the next look.
