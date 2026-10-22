@@ -351,8 +351,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   --report` posts the `check` status a PR needs before merging. `scripts/verify-pr.sh`, given a PR
   number, tests someone else's PR on this machine and posts its `check` status; with `--no-report`
   first, it posts nothing (for reviews). There is no CI: the checks need a Mac with full Xcode.
-- `macOS/test.sh` rejects explicit failed-target summaries even if SwiftPM returns success after
-  running another test bundle. It also runs the project-loading regression tests in Release. They check every
+- `macOS/test.sh` requires every test bundle to finish and rejects explicit failure summaries,
+  even if SwiftPM returns success. It also runs the project-loading regression tests in Release. They check every
   repository result, the four-request limit, and completion of children when navigating away or
   cancelling a load. Swift 6.4 has an [optimizer bug](https://github.com/swiftlang/swift/issues/93208)
   in task-group children returning String-first tuples from `do`/`catch`; project and pet loading
