@@ -3,6 +3,9 @@ import Foundation
 /// A command run through the login shell (`zsh -l`, so PATH has git, gh and Homebrew as in
 /// Terminal), in a folder, with what it printed. For the short git and gh commands tasks need.
 public enum Shell {
+    /// Printed before the command runs, so what the login shell's own files print is left out.
+    static let marker = "__BOTCHU_COMMAND_OUTPUT__"
+
     public struct Result: Equatable, Sendable {
         public var status: Int32
         public var output: String
@@ -10,7 +13,7 @@ public enum Shell {
 
         public var ok: Bool { status == 0 }
 
-        /// The last line of its output, after anything the login shell printed first.
+        /// The last line of its output.
         public var lastLine: String? {
             output.split(whereSeparator: \.isNewline).last.map { $0.trimmingCharacters(in: .whitespaces) }
         }
@@ -26,7 +29,7 @@ public enum Shell {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-l", "-c", "exec \"$@\"", "botchu"] + arguments
+            process.arguments = ["-l", "-c", "print -r -- \(marker); exec \"$@\"", "botchu"] + arguments
             process.currentDirectoryURL = URL(fileURLWithPath: directory, isDirectory: true)
             var env = AgentRun.childEnvironment(ProcessInfo.processInfo.environment)
             // Never wait for a login or a password: without one, the command just fails.
@@ -62,10 +65,16 @@ public enum Shell {
             }
             group.notify(queue: .global()) {
                 continuation.resume(returning: Result(status: process.terminationStatus,
-                                                      output: String(decoding: printed.output, as: UTF8.self),
+                                                      output: commandOutput(String(decoding: printed.output, as: UTF8.self)),
                                                       errors: String(decoding: printed.errors, as: UTF8.self)))
             }
         }
+    }
+
+    /// What the command printed: everything after the marker.
+    static func commandOutput(_ printed: String) -> String {
+        guard let range = printed.range(of: marker + "\n") else { return printed }
+        return String(printed[range.upperBound...])
     }
 
     /// What a command printed; each half is written by one reader, then read once both are done.
@@ -200,6 +209,8 @@ public enum TaskWorktree {
     /// git: the worktree already on the branch, else a new one on the local branch, on origin's
     /// branch, or on a new branch from origin's default branch. Returns the worktree's folder.
     public static func prepare(branch: String, checkout: String) async -> Result<String, Failure> {
+        // A worktree whose folder was deleted by hand is still registered, and git won't make it again.
+        _ = await Shell.run(["git", "worktree", "prune"], in: checkout)
         let script = (checkout as NSString).appendingPathComponent("scripts/worktree.sh")
         if FileManager.default.isExecutableFile(atPath: script), TaskNaming.isStandardBranch(branch) {
             let run = await Shell.run([script, branch], in: checkout)
@@ -218,7 +229,7 @@ public enum TaskWorktree {
         if FileManager.default.fileExists(atPath: folder) {
             return .failure(Failure(step: "\(folder) exists but isn't a worktree on \(branch)", output: "Move it out of the way, then try again."))
         }
-        let fetched = await Shell.run(["git", "fetch", "--quiet", "origin"], in: checkout).ok
+        _ = await Shell.run(["git", "fetch", "--quiet", "origin"], in: checkout)
         await ignoreWorktrees(in: checkout)
         let has = { (ref: String) async in await Shell.run(["git", "show-ref", "--verify", "--quiet", ref], in: checkout).ok }
         var add = ["git", "worktree", "add", "--quiet"]
@@ -227,18 +238,16 @@ public enum TaskWorktree {
         } else if await has("refs/remotes/origin/\(branch)") {
             add += ["--track", "-b", branch, folder, "origin/\(branch)"]
         } else {
-            // A new branch starts from origin's default branch, as fetched just now; without origin,
-            // from the main checkout's own branch.
+            // A new branch starts from origin's default branch, as last fetched (just now, unless
+            // offline); without origin, from the main checkout's own branch.
             var base = "HEAD"
-            if fetched {
-                let head = await Shell.run(["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], in: checkout)
-                if head.ok, let ref = head.lastLine {
-                    base = ref.replacingOccurrences(of: "refs/remotes/", with: "")
-                } else if await has("refs/remotes/origin/main") {
-                    base = "origin/main"
-                } else if await has("refs/remotes/origin/master") {
-                    base = "origin/master"
-                }
+            let head = await Shell.run(["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], in: checkout)
+            if head.ok, let ref = head.lastLine {
+                base = ref.replacingOccurrences(of: "refs/remotes/", with: "")
+            } else if await has("refs/remotes/origin/main") {
+                base = "origin/main"
+            } else if await has("refs/remotes/origin/master") {
+                base = "origin/master"
             }
             add += ["--no-track", "-b", branch, folder, base]
         }
@@ -328,9 +337,10 @@ public enum GitHubLookup {
                      state: object["state"] as? String ?? "")
     }
 
-    /// The JSON gh printed, after anything the login shell printed first.
+    /// The JSON gh printed, from the first line that starts one.
     static func json(_ output: String) -> Any? {
-        guard let start = output.firstIndex(where: { $0 == "{" || $0 == "[" }) else { return nil }
-        return try? JSONSerialization.jsonObject(with: Data(output[start...].utf8))
+        var lines = output.split(separator: "\n", omittingEmptySubsequences: false)[...]
+        while let first = lines.first, !(first.first == "{" || first.first == "[") { lines = lines.dropFirst() }
+        return try? JSONSerialization.jsonObject(with: Data(lines.joined(separator: "\n").utf8))
     }
 }

@@ -106,7 +106,7 @@ struct TaskInspector: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 actions
             }
-            .task(id: "\(task.pullRequest ?? 0)|\(status.phase.isActive)") {
+            .task(id: "\(task.id)|\(task.pullRequest ?? 0)|\(status.phase.isActive)") {
                 await readPullRequestState(task)
             }
         }
@@ -133,10 +133,8 @@ struct TaskInspector: View {
 
     /// Asks GitHub whether the task's pull request is open, merged or closed.
     private func readPullRequestState(_ task: BotTask) async {
-        guard let number = task.pullRequest, task.repo.contains("/") else {
-            pullRequestState = nil
-            return
-        }
+        pullRequestState = nil
+        guard let number = task.pullRequest, task.repo.contains("/") else { return }
         if case .success(let found) = await GitHubLookup.work(number: number, pullRequest: true, repo: task.repo, in: task.checkout),
            !found.state.isEmpty {
             pullRequestState = found.state.lowercased()

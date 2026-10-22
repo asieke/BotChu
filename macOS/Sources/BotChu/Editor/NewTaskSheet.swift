@@ -138,7 +138,15 @@ struct NewTaskSheet: View {
             return "Say what to do, or choose an issue or pull request"
         }
         if chosen?.fromFork == true { return "A pull request from a fork has no branch on origin to work on" }
-        return branchProblem
+        return branchProblem ?? conflict
+    }
+
+    /// An open task already working on the chosen issue or pull request, or on the branch: this
+    /// one would share its worktree.
+    private var conflict: String? {
+        guard let checkout, let other = model.taskAlreadyWorking(in: checkout.path, on: chosen?.work,
+                                                                 branch: branch.trimmingCharacters(in: .whitespaces)) else { return nil }
+        return "“\(other.title)” already works on this. Send it a message there, or choose another branch."
     }
 
     private var branchProblem: String? {
@@ -167,8 +175,8 @@ struct NewTaskSheet: View {
     @ViewBuilder private var branchFooter: some View {
         let branch = branch.trimmingCharacters(in: .whitespaces)
         Group {
-            if let branchProblem {
-                Text(branchProblem).foregroundStyle(.red)
+            if let problem = branchProblem ?? conflict {
+                Text(problem).foregroundStyle(.red)
             } else if checkout?.hasWorktreeScript == true, !branch.isEmpty, !TaskNaming.isStandardBranch(branch),
                       chosen?.work.isPullRequest != true {
                 Text("The repository's scripts/worktree.sh takes only <feat|fix|chore|docs>/<slug> branches, so BotChu makes this one with git instead.")
@@ -186,6 +194,7 @@ struct NewTaskSheet: View {
         openWork = []
         workKey = ""
         lookupError = nil
+        loading = false
         guard let checkout, let repo = checkout.nameWithOwner else { return }
         loading = true
         Task {

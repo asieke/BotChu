@@ -45,7 +45,9 @@ struct ContentView: View {
             .inspector(isPresented: $showsStatus) {
                 Group {
                     if tab.taskID != nil {
+                        // A view of its own per task, so nothing it read about one task shows on another.
                         TaskInspector(target: tab)
+                            .id(tab)
                     } else {
                         BotInspector(botID: id)
                     }

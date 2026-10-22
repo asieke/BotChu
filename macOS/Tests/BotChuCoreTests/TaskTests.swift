@@ -36,8 +36,18 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
         #expect(TaskNaming.branch(issue: nil, text: "Café menü", fallback: "x") == "feat/cafe-menu")
         #expect(TaskNaming.branch(issue: 7, text: "🎉", fallback: "x") == "feat/7-issue")
         #expect(TaskNaming.branch(issue: nil, text: "", fallback: "task-1a2b3c") == "feat/task-1a2b3c")
+        // Not feat/2-…, which scripts/worktree.sh would link to issue #2.
+        #expect(TaskNaming.branch(issue: nil, text: "2 small fixes in 3 docs", fallback: "x") == "feat/small-fixes-3-docs")
         let long = TaskNaming.branch(issue: 12345, text: "internationalization localization accessibility responsiveness", fallback: "x")
         #expect(long.count <= 50 && TaskNaming.isStandardBranch(long))
+    }
+
+    @Test func numberedBranchesStayValid() {
+        #expect(TaskNaming.numbered("feat/fix-login", 2) == "feat/fix-login-2")
+        let long = "feat/" + String(repeating: "a", count: 45)
+        let numbered = TaskNaming.numbered(long, 12)
+        #expect(numbered.count == 50 && numbered.hasSuffix("a-12") && TaskNaming.isStandardBranch(numbered))
+        #expect(TaskNaming.numbered("feat/fix-" + String(repeating: "b", count: 40), 3).count <= 50)
     }
 
     @Test func branchChecks() {
@@ -187,10 +197,22 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
         #expect(pr?.state == "MERGED")
     }
 
-    @Test func readsAListAfterWhatTheShellPrinted() {
-        let list = GitHubLookup.parseList("Welcome back!\n[\(pull),{\"number\":10,\"title\":\"x\"}]\n", pullRequest: true)
+    @Test func readsAListFromTheLineThatStartsIt() {
+        let list = GitHubLookup.parseList("A warning [with brackets]\n[\(pull),{\"number\":10,\"title\":\"x\"}]\n", pullRequest: true)
         #expect(list.map(\.work.number) == [12])
         #expect(GitHubLookup.parseList("not json", pullRequest: false).isEmpty)
+    }
+}
+
+@Suite struct ShellTests {
+    @Test func outputIsTheCommandsOwn() async {
+        // What the login shell's own files print comes before the marker and is left out.
+        #expect(Shell.commandOutput("Welcome [back]\n\(Shell.marker)\n[1]\n") == "[1]\n")
+        #expect(Shell.commandOutput("no marker") == "no marker")
+        let run = await Shell.run(["printf", "a\\nb"], in: FileManager.default.temporaryDirectory.path)
+        #expect(run.ok)
+        #expect(run.output == "a\nb")
+        #expect(run.lastLine == "b")
     }
 }
 
@@ -233,6 +255,30 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
         // Reopened where git lists it (its real path, /private/var for /var).
         let reopened = try await TaskWorktree.prepare(branch: "feat/new-thing", checkout: checkout.path).get()
         #expect(URL(fileURLWithPath: reopened).resolvingSymlinksInPath() == URL(fileURLWithPath: folder).resolvingSymlinksInPath())
+    }
+
+    @Test func remakesAWorktreeDeletedByHand() async throws {
+        let root = tempDir("botchu-worktree")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checkout = try await checkout(in: root)
+        let folder = try await TaskWorktree.prepare(branch: "feat/again", checkout: checkout.path).get()
+        try FileManager.default.removeItem(atPath: folder)
+        let again = try await TaskWorktree.prepare(branch: "feat/again", checkout: checkout.path).get()
+        #expect(FileManager.default.fileExists(atPath: again + "/README.md"))
+    }
+
+    @Test func newBranchStartsFromOriginEvenOffline() async throws {
+        let root = tempDir("botchu-worktree")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checkout = try await checkout(in: root)
+        // A commit only the main checkout has, and an origin that can't be reached.
+        try "local\n".write(to: checkout.appendingPathComponent("LOCAL.md"), atomically: true, encoding: .utf8)
+        try await git("add", ".", in: checkout)
+        try await git("commit", "--quiet", "-m", "Local", in: checkout)
+        try await git("remote", "set-url", "origin", root.appendingPathComponent("gone.git").path, in: checkout)
+        let folder = try await TaskWorktree.prepare(branch: "feat/offline", checkout: checkout.path).get()
+        #expect(FileManager.default.fileExists(atPath: folder + "/README.md"))
+        #expect(!FileManager.default.fileExists(atPath: folder + "/LOCAL.md"))
     }
 
     @Test func usesTheRepositorysOwnScript() async throws {
@@ -334,7 +380,9 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
         try #"{"repo": "a/b", "task": "one"}"#.write(to: home.dispatchURL.appendingPathComponent("one.json"), atomically: true, encoding: .utf8)
         try "notes".write(to: home.dispatchURL.appendingPathComponent("README.txt"), atomically: true, encoding: .utf8)
         // Still being written, perhaps.
+        #expect(!home.hasDispatches(now: Date(), settle: 30))
         #expect(home.takeDispatches(now: Date(), settle: 30).isEmpty)
+        #expect(home.hasDispatches(now: Date().addingTimeInterval(60)))
         let taken = home.takeDispatches(now: Date().addingTimeInterval(60), settle: 1)
         #expect(taken.map(\.name) == ["one.json"])
         #expect(try TaskRequest.parse(taken[0].data).task == "one")

@@ -81,15 +81,23 @@ public struct BotHome: Sendable {
     /// is removed as it is read, so a request is taken once. A file changed in the last `settle`
     /// seconds may still be being written, so it waits for the next look.
     public func takeDispatches(now: Date = Date(), settle: TimeInterval = 1) -> [(name: String, data: Data)] {
+        dispatchFiles(now: now, settle: settle).compactMap { file in
+            guard let data = try? Data(contentsOf: file), (try? FileManager.default.removeItem(at: file)) != nil else { return nil }
+            return (file.lastPathComponent, data)
+        }
+    }
+
+    /// Whether a request is waiting, without taking it.
+    public func hasDispatches(now: Date = Date(), settle: TimeInterval = 1) -> Bool {
+        !dispatchFiles(now: now, settle: settle).isEmpty
+    }
+
+    private func dispatchFiles(now: Date, settle: TimeInterval) -> [URL] {
         let files = (try? FileManager.default.contentsOfDirectory(at: dispatchURL, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         let modified = { (url: URL) in (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast }
         return files.filter { $0.pathExtension.lowercased() == "json" && !$0.lastPathComponent.hasPrefix(".") }
             .filter { now.timeIntervalSince(modified($0)) >= settle }
             .sorted { (modified($0), $0.lastPathComponent) < (modified($1), $1.lastPathComponent) }
-            .compactMap { file in
-                guard let data = try? Data(contentsOf: file), (try? FileManager.default.removeItem(at: file)) != nil else { return nil }
-                return (file.lastPathComponent, data)
-            }
     }
 
     /// Creates `dispatch/`, so a bot finds where its requests go.

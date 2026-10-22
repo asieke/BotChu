@@ -64,6 +64,15 @@ final class AppModel {
     @ObservationIgnored private var runs: [ChatTarget: AgentRun] = [:]
     /// While a bot's Home turn runs, BotChu looks for the tasks it asks for (`.botchu/dispatch/`).
     @ObservationIgnored private var dispatchTimers: [UUID: Timer] = [:]
+    /// Bots whose dispatch requests are being started.
+    @ObservationIgnored private var dispatching: Set<UUID> = []
+    /// Worktrees being made, by task: one at a time, so a message sent meanwhile waits for it.
+    @ObservationIgnored private var makings: [ChatTarget: Task<TaskWorktree.Failure?, Never>] = [:]
+    /// The turn waiting for its task's worktree, by task; Stop withdraws it.
+    @ObservationIgnored private var waiting: [ChatTarget: UUID] = [:]
+    /// The last git work queued in each checkout: worktrees are made one at a time per repository,
+    /// since git locks its refs and config.
+    @ObservationIgnored private var checkoutWork: [String: Task<Void, Never>] = [:]
 
     init(store: Store? = nil, settings: AppSettings? = nil) {
         self.store = store ?? DevHooks.dataDir.map { Store(root: $0) } ?? .applicationSupport
@@ -231,6 +240,7 @@ final class AppModel {
         tasks[id] = nil
         threads = threads.filter { $0.key.botID != id }
         runStates = runStates.filter { $0.key.botID != id }
+        waiting = waiting.filter { $0.key.botID != id }
         unread = unread.filter { $0.botID != id }
         drafts = drafts.filter { $0.key.botID != id }
         openTask[id] = nil
@@ -327,14 +337,16 @@ final class AppModel {
 
     /// Starts the tasks a bot asked for from its Home: the requests in its `.botchu/dispatch/`.
     func takeDispatches(for botID: UUID) {
-        guard let bot = bot(botID) else { return }
-        let requests = BotHome(workspace: bot.workspace).takeDispatches()
-        guard !requests.isEmpty else { return }
+        guard let bot = bot(botID), !dispatching.contains(botID), BotHome(workspace: bot.workspace).hasDispatches() else { return }
+        dispatching.insert(botID)
         let root = settings.expandedReposRoot
         Task {
             // Off the main thread: the first look into ~/Desktop or ~/Documents waits on macOS's question.
             let checkouts = await Task.detached { Repositories.scan(root: root) }.value
-            startTasks(requests, from: checkouts, for: botID)
+            dispatching.remove(botID)
+            // Taken only now, and recorded at once, so a request is never lost in between.
+            guard let bot = self.bot(botID) else { return }
+            startTasks(BotHome(workspace: bot.workspace).takeDispatches(), from: checkouts, for: botID)
         }
     }
 
@@ -348,8 +360,13 @@ final class AppModel {
                 }
                 let work = wanted.issue.map { BotTask.Work(number: $0, isPullRequest: false, repo: checkout.repo) }
                     ?? wanted.pullRequest.map { BotTask.Work(number: $0, isPullRequest: true, repo: checkout.repo) }
+                // A pull request's task works on the pull request's own branch.
+                let branch = work?.isPullRequest == true ? "" : wanted.branch ?? ""
+                if let other = taskAlreadyWorking(in: checkout.path, on: work, branch: branch) {
+                    throw TaskRequest.Problem(message: "“\(other.title)” already works on it; send it a message instead")
+                }
                 let task = BotTask(for: bot, repo: checkout.repo, checkout: checkout.path, work: work, brief: wanted.task,
-                                   branch: wanted.branch ?? "", title: wanted.title, origin: .home)
+                                   branch: branch, title: wanted.title, origin: .home)
                 startTask(task, for: botID, show: false)
             } catch {
                 let reason = (error as? TaskRequest.Problem)?.message ?? error.localizedDescription
@@ -387,9 +404,19 @@ final class AppModel {
     }
 
     /// The task updates for a Home turn: a report on each task the thread has receipts about since
-    /// the owner's last message, and each request BotChu couldn't start.
+    /// the owner's last message that reached the CLI (one that got an answer), and each request
+    /// BotChu couldn't start. Updates a turn that never ran carried are told again.
     private func taskUpdates(for botID: UUID, in history: [ChatMessage]) -> String? {
-        let since = history.lastIndex(where: { $0.role == .user }).map { $0 + 1 } ?? 0
+        var since = 0
+        var answered = false
+        for i in history.indices.reversed() {
+            if history[i].role == .assistant || history[i].role == .tool {
+                answered = true
+            } else if history[i].role == .user, answered {
+                since = i + 1
+                break
+            }
+        }
         var reported: Set<UUID> = []
         var reports: [String] = []
         for message in history[since...] where message.role == .receipt {
@@ -405,6 +432,10 @@ final class AppModel {
     /// A task as its bot's Home hears of it; `replyLimit` keeps an overview of many tasks short.
     private func report(on task: BotTask, of botID: UUID, replyLimit: Int = BotContext.maxReportReply) -> String {
         let target = ChatTarget.task(task.id, of: botID)
+        // A closed task's thread isn't read at launch.
+        if threads[target] == nil, let bot = bot(botID) {
+            threads[target] = BotHome(workspace: bot.workspace).loadThread(task: task.id)
+        }
         return BotContext.taskReport(task, status: BotStatus.make(task: task, messages: thread(target), run: runStates[target]),
                                      pullRequest: task.pullRequest, lastReply: thread(target).last(where: { $0.role == .assistant })?.text,
                                      replyLimit: replyLimit)
@@ -415,28 +446,62 @@ final class AppModel {
         task.folder.map { FileManager.default.fileExists(atPath: $0) } ?? false
     }
 
+    /// The open task, of any bot, that already works on this issue or pull request, or on this
+    /// branch, in the checkout: a second task there would share its worktree.
+    func taskAlreadyWorking(in checkout: String, on work: BotTask.Work?, branch: String, except id: UUID? = nil) -> BotTask? {
+        let path = Self.standardized(checkout)
+        return tasks.values.joined().first { other in
+            guard other.id != id, !other.isArchived, Self.standardized(other.checkout) == path else { return false }
+            if !branch.isEmpty, other.branch == branch { return true }
+            guard let work, let theirs = other.work else { return false }
+            return theirs.number == work.number && theirs.isPullRequest == work.isPullRequest
+        }
+    }
+
+    /// Makes (or reopens) the task's worktree, or waits for the making already under way. Returns
+    /// why it couldn't, or nil when the worktree is ready.
+    private func worktree(for target: ChatTarget) async -> TaskWorktree.Failure? {
+        if let underway = makings[target] { return await underway.value }
+        guard let task = task(target) else { return TaskWorktree.Failure(step: "The task is gone", output: "") }
+        if hasWorktree(task) { return nil }
+        let making = Task { await makeWorktree(for: task, of: target.botID) }
+        makings[target] = making
+        let failure = await making.value
+        makings[target] = nil
+        return failure
+    }
+
     /// Looks up the task's issue or pull request, names its branch and makes (or reopens) its
-    /// worktree, then calls `done` with whether it is ready.
-    private func prepareWorktree(for task: BotTask, of botID: UUID, then done: @escaping (Bool) -> Void) {
-        let target = ChatTarget.task(task.id, of: botID)
-        Task {
-            var task = task
-            var failure: TaskWorktree.Failure?
-            if let work = task.work, work.title.isEmpty || (work.isPullRequest && task.branch.isEmpty) {
-                switch await GitHubLookup.work(number: work.number, pullRequest: work.isPullRequest, repo: task.repo, in: task.checkout) {
-                case .success(let found) where found.fromFork:
-                    failure = TaskWorktree.Failure(step: "Pull request #\(work.number) comes from a fork, so its branch isn't on origin", output: "")
-                case .success(let found):
-                    task.work = found.work
-                    if task.branch.isEmpty, let branch = found.branch { task.branch = branch }
-                case .failure(let error):
-                    failure = error
-                }
+    /// worktree, after any other git work in the same checkout. The task's thread says how it went.
+    private func makeWorktree(for task: BotTask, of botID: UUID) async -> TaskWorktree.Failure? {
+        var task = task
+        var failure: TaskWorktree.Failure?
+        if let work = task.work, work.title.isEmpty || (work.isPullRequest && task.branch.isEmpty) {
+            switch await GitHubLookup.work(number: work.number, pullRequest: work.isPullRequest, repo: task.repo, in: task.checkout) {
+            case .success(let found) where found.fromFork:
+                failure = TaskWorktree.Failure(step: "Pull request #\(work.number) comes from a fork, so its branch isn't on origin", output: "")
+            case .success(let found):
+                task.work = found.work
+                if found.work.isPullRequest, let head = found.branch { task.branch = head }
+            case .failure(let error):
+                failure = error
             }
+        }
+        let looked = task
+        let lookupFailure = failure
+        return await inCheckout(task.checkout) { [self] in
+            var task = looked
+            var failure = lookupFailure
             if failure == nil, task.branch.isEmpty {
                 let issue = task.work.flatMap { $0.isPullRequest ? nil : $0.number }
                 task.branch = TaskNaming.branch(issue: issue, text: task.work?.title ?? task.brief,
                                                 fallback: "task-" + task.id.uuidString.prefix(6).lowercased())
+                // A name made from a brief may be another task's, or an older branch of the repository's.
+                if task.work == nil { task.branch = await unusedBranch(task.branch, for: task) }
+            }
+            if failure == nil, let other = taskAlreadyWorking(in: task.checkout, on: nil, branch: task.branch, except: task.id) {
+                failure = TaskWorktree.Failure(step: "“\(other.title)” already works on \(task.branch) in this repository",
+                                               output: "Continue there, or start this task on another branch.")
             }
             if failure == nil {
                 switch await TaskWorktree.prepare(branch: task.branch, checkout: task.checkout) {
@@ -444,23 +509,59 @@ final class AppModel {
                 case .failure(let error): failure = error
                 }
             }
-            guard let i = taskIndex(target) else { return done(false) }
-            tasks[botID]?[i].work = task.work
-            tasks[botID]?[i].branch = task.branch
-            tasks[botID]?[i].folder = task.folder
-            saveTask(tasks[botID]![i], of: botID)
-            if let failure {
-                append(ChatMessage(role: .error, text: "Couldn't make this task's worktree. " + failure.message), to: target)
-                saveThread(target)
-                postReceipt(TaskReceipt.failed(task, error: failure.step), task: task.id, for: botID)
-                done(false)
-            } else {
-                let folder = ((task.folder ?? "") as NSString).abbreviatingWithTildeInPath
-                append(ChatMessage(role: .note, text: "Working in \(folder), on \(task.branch)"), to: target)
-                saveThread(target)
-                done(true)
-            }
+            return recordWorktree(task, of: botID, failure: failure)
         }
+    }
+
+    /// Saves what making the worktree found (the folder only when it was made), and says so in the
+    /// task's thread.
+    private func recordWorktree(_ task: BotTask, of botID: UUID, failure: TaskWorktree.Failure?) -> TaskWorktree.Failure? {
+        let target = ChatTarget.task(task.id, of: botID)
+        guard let i = taskIndex(target) else { return failure ?? TaskWorktree.Failure(step: "The task is gone", output: "") }
+        tasks[botID]?[i].work = task.work
+        tasks[botID]?[i].branch = task.branch
+        if failure == nil { tasks[botID]?[i].folder = task.folder }
+        saveTask(tasks[botID]![i], of: botID)
+        if let failure {
+            append(ChatMessage(role: .error, text: "Couldn't make this task's worktree. " + failure.message), to: target)
+        } else {
+            let folder = ((task.folder ?? "") as NSString).abbreviatingWithTildeInPath
+            append(ChatMessage(role: .note, text: "Working in \(folder), on \(task.branch)"), to: target)
+        }
+        saveThread(target)
+        return failure
+    }
+
+    /// The branch, numbered when another task in the checkout has the name, or the repository has
+    /// a branch of that name already.
+    private func unusedBranch(_ branch: String, for task: BotTask) async -> String {
+        let path = Self.standardized(task.checkout)
+        let taken = Set(tasks.values.joined().filter { $0.id != task.id && Self.standardized($0.checkout) == path }.map(\.branch))
+        for n in 1...50 {
+            let candidate = n == 1 ? branch : TaskNaming.numbered(branch, n)
+            if taken.contains(candidate) { continue }
+            var exists = false
+            for ref in ["refs/heads/\(candidate)", "refs/remotes/origin/\(candidate)"] where !exists {
+                exists = await Shell.run(["git", "show-ref", "--verify", "--quiet", ref], in: task.checkout).ok
+            }
+            if !exists { return candidate }
+        }
+        return TaskNaming.numbered(branch, 51)
+    }
+
+    /// Runs `work` after the git work already queued in `checkout`.
+    private func inCheckout<T: Sendable>(_ checkout: String, _ work: @escaping () async -> T) async -> T {
+        let before = checkoutWork[checkout]
+        let mine = Task { () -> T in
+            await before?.value
+            return await work()
+        }
+        checkoutWork[checkout] = Task { _ = await mine.value }
+        return await mine.value
+    }
+
+    static func standardized(_ path: String) -> String {
+        URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.path
     }
 
     // MARK: Pets
@@ -519,12 +620,22 @@ final class AppModel {
         saveThread(target)
 
         if let task = task(target), !hasWorktree(task) {
+            let ticket = UUID()
+            waiting[target] = ticket
             runStates[target] = RunState(preparing: true)
-            prepareWorktree(for: task, of: bot.id) { [weak self] ready in
-                // Stopped meanwhile: the worktree is kept for the next message.
-                guard let self, self.runStates[target]?.preparing == true else { return }
-                self.runStates[target] = nil
-                if ready { self.startTurn(text, for: target, history: history, updates: nil) }
+            Task {
+                let failure = await worktree(for: target)
+                // Stopped meanwhile: the turn doesn't start, and the worktree stays for the next message.
+                guard waiting[target] == ticket else { return }
+                waiting[target] = nil
+                runStates[target] = nil
+                if let failure {
+                    if let task = self.task(target) {
+                        postReceipt(TaskReceipt.failed(task, error: failure.step), task: task.id, for: target.botID)
+                    }
+                } else {
+                    startTurn(text, for: target, history: history, updates: nil)
+                }
             }
         } else {
             startTurn(text, for: target, history: history, updates: updates)
@@ -684,6 +795,7 @@ final class AppModel {
             run.stop()
         } else if runStates[target]?.preparing == true {
             // The worktree is still being made; the turn just won't start.
+            waiting[target] = nil
             runStates[target] = nil
             append(ChatMessage(role: .note, text: "Stopped"), to: target)
             saveThread(target)

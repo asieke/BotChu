@@ -146,13 +146,15 @@ public enum TaskNaming {
 
     /// `feat/<number>-<slug>` for an issue, `feat/<slug>` for a brief: up to four plain words, in
     /// ASCII letters and digits (accents dropped), at most 50 characters, as the workspace standard's
-    /// `scripts/worktree.sh` insists. `fallback` names a branch whose text has no usable words.
+    /// `scripts/worktree.sh` insists. A brief's slug never starts with a number, which the script
+    /// would take for an issue's. `fallback` names a branch whose text has no usable words.
     public static func branch(issue: Int?, text: String, fallback: String) -> String {
         let stop: Set<String> = ["a", "an", "the", "and", "or", "of", "to", "in", "on", "for", "with", "it", "its", "is",
                                  "as", "at", "by", "from", "into", "please", "this", "that"]
         let words = text.folding(options: .diacriticInsensitive, locale: nil).lowercased()
             .components(separatedBy: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789").inverted)
             .filter { !$0.isEmpty && !stop.contains($0) }
+            .drop { issue == nil && $0.allSatisfy(\.isNumber) }
             .prefix(4)
         let base = issue.map { "feat/\($0)" } ?? "feat"
         var branch = base
@@ -161,6 +163,16 @@ public enum TaskNaming {
         }
         if branch == base { branch += issue == nil ? "/\(fallback)" : "-issue" }
         return branch
+    }
+
+    /// The branch with `-<n>` added, for a name that is taken, its slug shortened to stay within 50
+    /// characters.
+    public static func numbered(_ branch: String, _ n: Int) -> String {
+        let suffix = "-\(n)"
+        var base = branch
+        while base.count + suffix.count > 50, base.last != "/" { base.removeLast() }
+        while base.hasSuffix("-") { base.removeLast() }
+        return base + suffix
     }
 
     /// Whether the workspace standard's `scripts/worktree.sh` takes the branch:
