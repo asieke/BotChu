@@ -70,7 +70,6 @@ private struct PetVideoPlayer: NSViewRepresentable {
 final class PetVideoLayerView: NSView {
     private struct Playing {
         let clipID: String
-        let folder: URL
         let player: AVQueuePlayer
         let layer: AVPlayerLayer
         var looper: AVPlayerLooper?
@@ -79,6 +78,8 @@ final class PetVideoLayerView: NSView {
 
     private var current: Playing?
     private var package: PetVideoPackage?
+    /// The requested activity can still be a reaction after its player has returned to idle.
+    private var requestedClipID: String?
     static let fade: CFTimeInterval = 0.35
 
     override init(frame: NSRect) {
@@ -98,14 +99,21 @@ final class PetVideoLayerView: NSView {
     }
 
     func show(package: PetVideoPackage, clipID: String) {
+        let samePackage = self.package?.folder == package.folder
         self.package = package
-        guard current?.clipID != clipID || current?.folder != package.folder else { return }
+        guard !samePackage || requestedClipID != clipID else { return }
+        requestedClipID = clipID
+        guard !samePackage || current?.clipID != clipID else { return }
+        // Let a one-shot reaction finish before idle, including time spent loading the video.
+        // A new activity or a different pet can still take over immediately.
+        if samePackage, clipID == "idle", let current, package.clip(current.clipID)?.loops == false { return }
         play(clipID)
     }
 
     func stop() {
         if let current { release(current) }
         current = nil
+        requestedClipID = nil
     }
 
     /// The clip playing and its player's state, for review snapshots.
@@ -141,7 +149,7 @@ final class PetVideoLayerView: NSView {
         layer.videoGravity = .resizeAspectFill
         layer.frame = bounds
         layer.opacity = 0
-        var playing = Playing(clipID: clipID, folder: package.folder, player: player, layer: layer)
+        var playing = Playing(clipID: clipID, player: player, layer: layer)
         if clip.loops {
             playing.looper = AVPlayerLooper(player: player, templateItem: item)
         } else {
@@ -149,9 +157,9 @@ final class PetVideoLayerView: NSView {
             // A reaction plays once, then idle loops.
             playing.observer = NotificationCenter.default.addObserver(
                 forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main
-            ) { [weak self] _ in
+            ) { [weak self, weak player] _ in
                 MainActor.assumeIsolated {
-                    guard let self, self.current?.clipID == clipID else { return }
+                    guard let self, let player, self.current?.player === player else { return }
                     self.play("idle")
                 }
             }
