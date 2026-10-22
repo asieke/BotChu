@@ -92,6 +92,17 @@ public struct BotHome: Sendable {
         !dispatchFiles(now: now, settle: settle).isEmpty
     }
 
+    /// The requests waiting, oldest first, without taking them: each is taken with `take(dispatch:)`
+    /// once its task is ready to record.
+    public func peekDispatches(now: Date = Date(), settle: TimeInterval = 1) -> [(file: URL, data: Data)] {
+        dispatchFiles(now: now, settle: settle).compactMap { file in (try? Data(contentsOf: file)).map { (file, $0) } }
+    }
+
+    /// Removes a request, so it is taken once; false when it was taken already.
+    public func take(dispatch file: URL) -> Bool {
+        (try? FileManager.default.removeItem(at: file)) != nil
+    }
+
     private func dispatchFiles(now: Date, settle: TimeInterval) -> [URL] {
         let files = (try? FileManager.default.contentsOfDirectory(at: dispatchURL, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         let modified = { (url: URL) in (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast }

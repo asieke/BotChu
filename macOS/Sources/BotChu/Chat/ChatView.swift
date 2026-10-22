@@ -20,7 +20,7 @@ struct ChatView: View {
                         // replies stream in.
                         VStack(alignment: .leading, spacing: 12) {
                             if let task {
-                                TaskIntro(bot: bot, task: task)
+                                TaskIntro(bot: bot, task: task, machine: task.isRemote ? model.machineName(task.hostID, fallback: task.hostName) : nil)
                             } else {
                                 BotIntro(bot: bot)
                             }
@@ -29,7 +29,7 @@ struct ChatView: View {
                                            startsBotTurn: !Self.isBotTurn(messages[safe: index - 1]))
                             }
                             if model.runStates[target]?.preparing == true {
-                                PreparingRow(bot: bot)
+                                PreparingRow(bot: bot, place: task.flatMap { $0.isRemote ? model.machineName($0.hostID, fallback: $0.hostName) : nil })
                             } else if running, messages.last?.role != .assistant {
                                 TypingIndicator(bot: bot, showsAvatar: !Self.isBotTurn(messages.last))
                             }
@@ -116,6 +116,8 @@ struct BotIntro: View {
 struct TaskIntro: View {
     let bot: Bot
     let task: BotTask
+    /// The host it works on; nil on this Mac.
+    let machine: String?
 
     var body: some View {
         VStack(spacing: 6) {
@@ -124,6 +126,11 @@ struct TaskIntro: View {
                 .multilineTextAlignment(.center)
             HStack(spacing: 4) {
                 Text(task.repo)
+                if let machine {
+                    Text("·")
+                    Label("on \(machine)", systemImage: "network")
+                        .help("Works on \(machine) over SSH, with \(bot.name)'s context from this Mac")
+                }
                 if let work = task.work {
                     Text("·")
                     Link(work.title.isEmpty ? "#\(work.number)" : "#\(work.number) \(work.title)", destination: work.url)
@@ -132,7 +139,11 @@ struct TaskIntro: View {
                 }
             }
             .foregroundStyle(.secondary)
-            if !task.branch.isEmpty {
+            if task.review != nil {
+                Label(task.review == .comment ? "Review, posted on GitHub" : "Review, here only", systemImage: "eye")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if !task.branch.isEmpty {
                 Label(task.branch, systemImage: "arrow.triangle.branch")
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -145,15 +156,17 @@ struct TaskIntro: View {
     }
 }
 
-/// While BotChu makes a task's worktree, before its first turn.
+/// While BotChu makes a task's worktree, before its first turn, or on a host, connects there.
 struct PreparingRow: View {
     let bot: Bot
+    /// The host the task works on; nil on this Mac.
+    let place: String?
 
     var body: some View {
         BotTurnRow(bot: bot, showsAvatar: true) {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("Making the task's worktree…").foregroundStyle(.secondary)
+                Text(place.map { "Connecting to \($0)…" } ?? "Making the task's worktree…").foregroundStyle(.secondary)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 11)

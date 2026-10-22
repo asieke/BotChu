@@ -35,9 +35,12 @@ struct SettingsView: View {
             } header: {
                 Text("Tasks")
             } footer: {
-                Text("Tasks start from the git checkouts here, one folder each, and run in worktrees BotChu makes in them. A bot's Home can ask for tasks in these repositories too.")
+                Text("Tasks work on your GitHub repositories, in worktrees of their checkouts. On this Mac, checkouts are here, one folder each, and BotChu clones a repository here that isn't yet.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+
+            HostsSection()
+            RepoLocationsSection()
 
             Section {
                 ForEach(Accounts.all) { account in

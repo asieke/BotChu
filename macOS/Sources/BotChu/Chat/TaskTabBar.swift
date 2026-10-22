@@ -125,7 +125,8 @@ struct ConversationTab: View {
     private func help(task: BotTask?, status: BotStatus?) -> String {
         var lines: [String] = []
         if let task {
-            lines.append(task.repo + (task.branch.isEmpty ? "" : " · \(task.branch)"))
+            lines.append(task.repo + (task.isRemote ? " on \(model.machineName(task.hostID, fallback: task.hostName))" : "")
+                         + (task.branch.isEmpty ? "" : " · \(task.branch)"))
             if let pullRequest = task.pullRequest { lines.append("Pull request #\(pullRequest)") }
         } else {
             lines.append("Home: your conversation with the bot")
@@ -143,8 +144,10 @@ struct ConversationTab: View {
             if let work = task.work, !work.isPullRequest {
                 Link("Open Issue #\(work.number)", destination: work.url)
             }
-            Button("Show Worktree in Finder") { model.revealWorktree(target) }
-                .disabled(task.folder == nil)
+            if !task.isRemote {
+                Button("Show Worktree in Finder") { model.revealWorktree(target) }
+                    .disabled(task.folder == nil)
+            }
             Button("Open Worktree in Terminal") { model.openWorktreeInTerminal(target) }
                 .disabled(task.folder == nil)
             Divider()
