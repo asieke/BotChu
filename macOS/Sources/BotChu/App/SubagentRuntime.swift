@@ -61,6 +61,10 @@ final class SubagentRuntime {
         let ipc = SubagentIPC(root: root)
         try ipc.prepare()
         try ipc.writeRoster(roster)
+        let data = try SubagentIPC.encode(roster)
+        for caller in contexts.values {
+            Task { try? await caller.transport.writeRoster(data) }
+        }
     }
 
     func prepareCaller(target: ChatTarget, parent: UUID? = nil, directory: String,
@@ -137,8 +141,12 @@ final class SubagentRuntime {
                     now: caller.transport.machine.isRemote ? request.createdAt : Date())
             if let existing = run(request.id) {
                 guard existing.callerInvocationID == caller.id else { throw DelegationFailure("This request ID belongs to a different invocation.") }
-                if !existing.phase.isActive { try await caller.transport.writeResult(id: existing.id, data: SubagentIPC.encode(result(existing))) }
-                try await caller.transport.acknowledge(filename: filename)
+                if !existing.phase.isActive {
+                    deliveries[existing.id] = caller.transport
+                    queueDelivery(existing)
+                }
+                do { try await caller.transport.acknowledge(filename: filename) }
+                catch { self.error = "Couldn't acknowledge a sub-agent request: \(error.localizedDescription)" }
                 return
             }
             guard caller.depth < SubagentLimits.maxDepth else { throw DelegationFailure("Maximum sub-agent depth reached.") }
