@@ -7,6 +7,9 @@ import BotChuCore
 final class AppSettings {
     private let defaults: UserDefaults
 
+    var customAccounts: [Account] { didSet { save(customAccounts, forKey: "customAccounts") } }
+    var accounts: [Account] { Accounts.all + customAccounts }
+
     var botsRoot: String { didSet { defaults.set(botsRoot, forKey: "botsRoot") } }
     /// Where repositories are checked out on this Mac, one folder each, and where BotChu clones one
     /// a task needs.
@@ -31,6 +34,7 @@ final class AppSettings {
         // Throwaway runs (DevHooks) keep their settings apart from the real ones.
         let defaults = defaults ?? (DevHooks.dataDir == nil ? .standard : UserDefaults(suiteName: "local.BotChu.dev")!)
         self.defaults = defaults
+        customAccounts = DevHooks.dataDir == nil ? Self.load([Account].self, from: defaults, forKey: "customAccounts") ?? [] : []
         if let dev = DevHooks.dataDir {
             botsRoot = dev.appendingPathComponent("bots").path
             reposRoot = dev.appendingPathComponent("repos").path
@@ -48,6 +52,8 @@ final class AppSettings {
         petAccountID = defaults.string(forKey: "petAccountID") ?? "codex-personal"
         petModelID = defaults.string(forKey: "petModelID") ?? PetVideo.defaultModel.id
     }
+
+    func account(_ id: String) -> Account { accounts.first { $0.id == id } ?? Accounts.account(id: id) }
 
     func command(for account: Account) -> String {
         let override = commands[account.id]?.trimmingCharacters(in: .whitespaces) ?? ""

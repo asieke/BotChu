@@ -100,7 +100,7 @@ public enum Locations {
         let lines = projectFile.split(separator: "\n", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
         guard lines.first == "---", let end = lines.dropFirst().firstIndex(of: "---") else { return [] }
         guard let deploy = lines[1..<end].first(where: { $0.hasPrefix("deploy:") }) else { return [] }
-        let value = deploy.dropFirst("deploy:".count).split(separator: "#", maxSplits: 1).first.map(String.init) ?? ""
+        guard let value = try? ProjectRecord.scalar(String(deploy.dropFirst("deploy:".count))) else { return [] }
         return value.split(separator: ",").compactMap { target in
             let parts = target.trimmingCharacters(in: .whitespaces).split(separator: ":", maxSplits: 2).map(String.init)
             guard parts.count == 3, parts[0] == "local", !parts[1].isEmpty, !parts[2].isEmpty else { return nil }

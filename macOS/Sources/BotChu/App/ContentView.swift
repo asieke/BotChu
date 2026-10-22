@@ -34,7 +34,7 @@ struct ContentView: View {
                 .environment(model)
         }
         .sheet(item: $model.taskSheet) { request in
-            NewTaskSheet(botID: request.botID)
+            NewTaskSheet(botID: request.botID, initialRepo: request.repo)
                 .environment(model)
         }
         .sheet(item: $model.documentEditor) { request in
@@ -49,7 +49,13 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var detail: some View {
-        if let id = model.selection, model.bot(id) != nil {
+        if let destination = model.destination {
+            switch destination {
+            case .projects: ProjectsView()
+            case .agents: AgentsView()
+            case .providers: ProvidersView()
+            }
+        } else if let id = model.selection, model.bot(id) != nil {
             let tab = model.tab(of: id)
             VStack(spacing: 0) {
                 if !model.openTasks(of: id).isEmpty {

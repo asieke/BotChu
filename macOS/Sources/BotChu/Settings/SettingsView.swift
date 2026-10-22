@@ -39,11 +39,12 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            GitHubSettings()
             HostsSection()
             RepoLocationsSection()
 
             Section {
-                ForEach(Accounts.all) { account in
+                ForEach(model.settings.accounts) { account in
                     LabeledContent {
                         HStack(spacing: 8) {
                             TextField("Command", text: Binding(
@@ -70,7 +71,7 @@ struct SettingsView: View {
 
             Section {
                 Picker("Draw stills with", selection: $settings.petAccountID) {
-                    ForEach(Accounts.all.filter { $0.kind == .codex }) { account in
+                    ForEach(model.settings.accounts.filter { $0.kind == .codex }) { account in
                         Text(account.name).tag(account.id)
                     }
                 }
@@ -111,7 +112,7 @@ struct SettingsView: View {
         .frame(width: 600, height: 840)
         .task {
             await withTaskGroup(of: Void.self) { group in
-                for account in Accounts.all { group.addTask { await check(account) } }
+                for account in model.settings.accounts { group.addTask { await check(account) } }
             }
         }
     }

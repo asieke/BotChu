@@ -93,6 +93,12 @@ Task {
         let word = "ZEBRA\(Int.random(in: 100...999))"
         var bot = Bot(name: "Smoke", title: "A test bot", instructions: "Answer in as few words as possible.",
                       accountID: account.id, workspace: root.appendingPathComponent(account.id).path)
+        if ProcessInfo.processInfo.environment["BOTCHU_SMOKE_CUSTOM_PROFILE"] == "1" {
+            bot.selectAccount(Account(id: "custom-" + account.id, name: account.name + " profile", kind: account.kind,
+                                      defaultCommand: account.defaultCommand, symbol: account.symbol))
+            // A custom profile must work after the same persistence round trip used by a bot.
+            if let data = try? JSONEncoder().encode(bot), let restored = try? JSONDecoder().decode(Bot.self, from: data) { bot = restored }
+        }
         bot.selectModel(ProcessInfo.processInfo.environment["BOTCHU_SMOKE_MODEL"] ?? "")
         bot.reasoningEffort = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_EFFORT"].flatMap(ReasoningEffort.init(rawValue:))
         try? Workspace.prepare(bot: bot, sharedMemoryPath: root.appendingPathComponent("MEMORY.md").path)
@@ -107,7 +113,8 @@ Task {
             continue
         }
         bot.sessionID = session
-        bot.sessionAccountID = account.id
+        bot.sessionAccountID = bot.accountID
+        precondition(bot.resumableSessionID == session, "The second smoke turn must resume its profile’s session")
         let second = await runTurn(bot, prompt: "What is the code word? Reply with just the word.", history: first.messages)
         show(second.messages)
         let reply = second.messages.filter { $0.role == .assistant }.map(\.text).joined()

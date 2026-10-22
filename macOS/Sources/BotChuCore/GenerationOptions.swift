@@ -102,8 +102,13 @@ extension RunSettings {
     }
 
     public mutating func selectAccount(_ accountID: String) {
+        selectAccount(Accounts.account(id: accountID))
+    }
+
+    public mutating func selectAccount(_ selected: Account) {
         let oldKind = account.kind
-        self.accountID = accountID
+        self.accountID = selected.id
+        self.accountProfile = Accounts.all.contains(where: { $0.id == selected.id }) ? nil : selected
         if account.kind != oldKind {
             model = ""
             reasoningEffort = nil

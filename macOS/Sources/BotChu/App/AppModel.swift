@@ -13,6 +13,7 @@ struct EditorRequest: Identifiable {
 struct TaskSheetRequest: Identifiable {
     let id = UUID()
     var botID: UUID
+    var repo: String?
 }
 
 struct DocumentEditorRequest: Identifiable {
@@ -31,6 +32,12 @@ struct ChatTarget: Hashable {
     static func task(_ taskID: UUID, of botID: UUID) -> ChatTarget { ChatTarget(botID: botID, taskID: taskID) }
 }
 
+enum LibraryDestination: String, CaseIterable {
+    case projects, agents, providers
+    var title: String { rawValue.capitalized }
+    var symbol: String { switch self { case .projects: "square.grid.2x2"; case .agents: "person.2"; case .providers: "terminal" } }
+}
+
 @MainActor @Observable
 final class AppModel {
     var bots: [Bot] = []
@@ -40,9 +47,12 @@ final class AppModel {
     var threads: [ChatTarget: [ChatMessage]] = [:]
     /// Turns in progress, by conversation.
     var runStates: [ChatTarget: RunState] = [:]
+    /// Nil shows the remembered conversation; galleries never discard that conversation.
+    var destination: LibraryDestination?
+    var visibleBotID: UUID? { destination == nil ? selection : nil }
     var selection: UUID? {
         didSet {
-            guard let selection, selection != oldValue else { return }
+            guard destination == nil, let selection, selection != oldValue else { return }
             react(.greeting, for: tab(of: selection), seconds: 5)
             unread.remove(tab(of: selection))
         }
@@ -87,11 +97,20 @@ final class AppModel {
     /// The owner's GitHub repositories, which tasks start from, once read (`loadRepositories`).
     var repositories: [GitHubLookup.Repo]?
     var repositoriesError: String?
+    var repositoriesLoading = false
+    @ObservationIgnored var repositoriesTask: Task<Void, Never>?
+    var projectRecords: [String: ProjectRecord] = [:]
+    var projectErrors: [String: String] = [:]
+    var projectsLoading = false
+    var githubConnection: ProjectGitHub.Connection?
+    var githubChecking = false
+    let projectGitHub: ProjectGitHub
     @ObservationIgnored var repositoriesReadAt: Date?
     /// PROJECT.md's `local:` deploy targets, by repository, once read.
     @ObservationIgnored var deployTargetCache: [String: [(machine: String, path: String)]] = [:]
 
-    init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil) {
+    init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil, projectGitHub: ProjectGitHub = ProjectGitHub()) {
+        self.projectGitHub = projectGitHub
         DevHooks.configure()
         self.store = store ?? DevHooks.dataDir.map { Store(root: $0) } ?? .applicationSupport
         self.settings = settings ?? AppSettings()
@@ -142,6 +161,9 @@ final class AppModel {
     }
 
     func show(_ target: ChatTarget) {
+        let wasHidden = destination != nil
+        destination = nil
+        if wasHidden, selection == target.botID { react(.greeting, for: target, seconds: 5) }
         openTask[target.botID] = target.taskID
         unread.remove(target)
         if selection != target.botID { selection = target.botID }
@@ -220,6 +242,7 @@ final class AppModel {
         threads[.home(bot.id)] = []
         tasks[bot.id] = []
         save(bot)
+        destination = nil
         selection = bot.id
         prepareWorkspace(bot)
         send(BotContext.introPrompt, to: .home(bot.id), visible: false)
@@ -266,7 +289,8 @@ final class AppModel {
     /// account changes in Edit Bot.)
     func setAccount(_ accountID: String, for target: ChatTarget) {
         guard target.taskID != nil, !isRunning(target) else { return }
-        change(target) { $0.selectAccount(accountID) }
+        let account = settings.account(accountID)
+        change(target) { $0.selectAccount(account) }
     }
 
     func delete(_ id: UUID) {
@@ -319,9 +343,9 @@ final class AppModel {
 
     // MARK: Tasks
 
-    func newTask(for botID: UUID) {
+    func newTask(for botID: UUID, repo: String? = nil) {
         guard bot(botID) != nil else { return }
-        taskSheet = TaskSheetRequest(botID: botID)
+        taskSheet = TaskSheetRequest(botID: botID, repo: repo)
     }
 
     /// Records a task, opens its tab (when `show`), says so in its bot's Home, then makes its
@@ -919,7 +943,7 @@ final class AppModel {
             let saved = self.saveThread(target)
             let failure = reportedFailure ?? messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil }
             if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
-            if self.selection != id || self.tab(of: id) != target { self.unread.insert(target) }
+            if self.visibleBotID != id || self.tab(of: id) != target { self.unread.insert(target) }
             let turn = messages.suffix(from: min(turnStart, messages.count))
             if target.taskID != nil { self.finishTaskTurn(target, stopped: stopped, failure: failure, turn: Array(turn)) }
             try? home.appendLog(TurnLog.ended(

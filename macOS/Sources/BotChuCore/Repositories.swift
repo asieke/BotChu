@@ -428,6 +428,9 @@ public enum GitHubLookup {
         public var pushedAt: Date?
         public var isPrivate: Bool
 
+        public init(nameWithOwner: String, description: String = "", pushedAt: Date? = nil, isPrivate: Bool = false) {
+            self.nameWithOwner = nameWithOwner; self.description = description; self.pushedAt = pushedAt; self.isPrivate = isPrivate
+        }
         public var id: String { nameWithOwner }
         public var name: String { TaskNaming.repoName(nameWithOwner) }
     }

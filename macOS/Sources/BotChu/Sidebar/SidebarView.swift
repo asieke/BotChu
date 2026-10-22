@@ -1,17 +1,32 @@
 import SwiftUI
 import BotChuCore
 
+private enum SidebarDestination: Hashable { case library(LibraryDestination), bot(UUID) }
+
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
     @State private var pendingDelete: Bot?
 
     var body: some View {
-        @Bindable var model = model
-        List(selection: $model.selection) {
+        List(selection: Binding<SidebarDestination?>(
+            get: { model.destination.map(SidebarDestination.library) ?? model.selection.map(SidebarDestination.bot) },
+            set: { value in
+                switch value {
+                case .library(let destination): model.destination = destination
+                case .bot(let id): model.show(model.tab(of: id))
+                case nil: break
+                }
+            })) {
+            Section("Workspace") {
+                ForEach(LibraryDestination.allCases, id: \.self) { destination in
+                    Label(destination.title, systemImage: destination.symbol).tag(SidebarDestination.library(destination))
+                }
+            }
+            Section("Conversations") {
             ForEach(model.bots) { bot in
-                BotRow(bot: bot, status: model.status(of: bot), selected: model.selection == bot.id,
-                       unread: model.selection == bot.id ? 0 : model.unreadCount(of: bot.id))
-                    .tag(bot.id)
+                BotRow(bot: bot, status: model.status(of: bot), selected: model.visibleBotID == bot.id,
+                       unread: model.visibleBotID == bot.id ? 0 : model.unreadCount(of: bot.id))
+                    .tag(SidebarDestination.bot(bot.id))
                     .contextMenu {
                         Button("Edit…") { model.edit(bot.id) }
                         Button("New Task…") { model.newTask(for: bot.id) }
@@ -22,13 +37,9 @@ struct SidebarView: View {
                         Button("Delete…", role: .destructive) { pendingDelete = bot }
                     }
             }
-        }
-        .listStyle(.sidebar)
-        .overlay {
-            if model.bots.isEmpty {
-                ContentUnavailableView("No Bots", systemImage: "person.2", description: Text("Create one below."))
             }
         }
+        .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack {
                 Button { model.newBot() } label: {

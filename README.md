@@ -10,6 +10,39 @@ request.
 
 ## Scope
 - Does:
+  - **Workspace:** the left sidebar has **Projects**, **Agents**, and **Providers**, followed by
+    the bots’ conversations. Opening a gallery keeps the selected bot’s task tab and unsent draft;
+    turns that finish while a gallery is shown still get an unread badge.
+  - **Projects:** searchable gallery and table views, one project per non-archived GitHub repository
+    returned by `gh` for your account and organizations. Cards show the description and visibility
+    from GitHub, and the name, type and status from `PROJECT.md` on the default branch. **Docs** is
+    non-code; **Library**, **Local app**, and **Hosted app** are code. Unclassified repositories can
+    get a minimal project record, without claiming the repository meets the workspace standard.
+    Open a card for deployment and resolved workspace details, GitHub, or **Start Task with…** to
+    choose an agent and open New Task with that project selected. **Workspace options** in New Task
+    reveals computer/folder overrides; the project’s deployment and saved location choose them by
+    default. An unconfigured deployment host needs connection in Settings or an explicit override.
+  - **Project metadata:** **Edit Metadata…** edits the name, type, status, deployment, and merge
+    policy in `PROJECT.md`. **Create Metadata PR** uses `gh api` to create a documentation branch,
+    commit only that file, and open a PR; it never clones the repo or runs its test suite. Repository
+    checks and merge requirements still apply. Other frontmatter and the Markdown body are preserved;
+    ambiguous YAML and a file changed since editing began are refused. Interrupted saves can retry
+    the same branch without duplicate commits or PRs. The project and task placement update only
+    after the metadata PR merges and **Refresh** reads the default branch again. BotChu needs write
+    access for this flow; forks can be used through GitHub. The editor creates no commits directly
+    on the default branch and never merges metadata PRs.
+  - **Agents:** a searchable gallery of the existing bots, showing their personality summary,
+    provider, activity and task count, with **Open Chat**, **Edit…** and **New Agent**. A bot’s own
+    conversation continues to work without a project.
+  - **Providers:** gallery/list views of CLI profiles with their command, availability and usage,
+    sharing the same allowance cache and refresh limits as the conversation inspector. **Add CLI**
+    adds a named profile of Claude Code, Codex, Antigravity, Muse or Pi, with an installed command or
+    wrapper and **Test Command**. Sign in through that CLI in Terminal; BotChu does not create its
+    login. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
+    Codex profiles can also draw pets. Bots and tasks retain a copy of their custom profile’s CLI
+    family and command across relaunches. Command overrides remain editable in Settings. Pi profiles
+    use the shared OpenRouter key. Provider usage refreshes while visible, with Muse’s existing
+    brief request and hourly automatic limit.
   - **Bots:** create, edit and delete bots. A bot has a name, an emoji, a one-line title, private
     instructions, an account, an optional model and a workspace folder (default `~/BotChu/<name>`).
     A new bot introduces itself in one reply, so a misread role shows up at once.
@@ -193,7 +226,9 @@ request.
     clears its previous readout. Failed checks retain the last successful reading marked stale;
     an expired window hides its old percentage until a new reading arrives. CLI output,
     credentials and usage readings are not written to disk by BotChu.
-  - **Settings:** the bots folder, the repositories folder, the hosts and where you chose to work
+  - **Settings:** **GitHub ▸ Test Connection** checks that `gh` is available and can authenticate to
+    github.com, then shows its version and signed-in username. Connection failures give install/login
+    guidance without displaying credentials. Settings also contains the bots folder, the repositories folder, the hosts and where you chose to work
     on repositories, each account's command, the Codex account that draws pets' stills, the
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
     and default OpenRouter model.
@@ -220,13 +255,14 @@ request.
     where a repository is worked on, from a `PROJECT.md`'s deploy targets (`Hosts.swift`), running
     a command on this Mac or a host, the checkouts in the repositories folder, cloning, task and
     review worktrees, and what `gh` says about your repositories, issues and pull requests
-    (`Repositories.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
+    (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
+    or proposing it through GitHub with retryable, metadata-only PRs (`ProjectGitHub.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh` (`AgentRun.swift`).
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
     in standard system materials: `App/` (the app, window, model, settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`),
-    `Sidebar/` (the bot list), `Chat/` (the tab bar, messages and the composer), `Inspector/` (the
+    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (the tab bar, messages and the composer), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown and New Task sheets), `Settings/` (with
     the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, and the pet's looping video).
@@ -243,8 +279,12 @@ request.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, model-picker keyboard interaction and persisted choices,
     Markdown editor sizing and Save/Cancel, collapsing status sections, inspector tab navigation and
-    restored selection, conversation-scoped allowance reads, automatic task branch creation, and
-    the main window's layout at its narrowest. These share a serialized suite because AppKit
+    restored selection, conversation-scoped allowance reads, automatic task branch creation, the
+    main window's layout at its narrowest, galleries that preserve conversation state, and custom
+    profile persistence. Set `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
+    `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
+    to render isolated gallery/table screenshots with sample project metadata and usage. These
+    share a serialized suite because AppKit
     window focus is global; all use isolated windows and no real bot data.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
     `macOS/build/`), signed with the local "Apple Development" certificate when there is one, ad hoc
@@ -257,7 +297,8 @@ request.
   `~/Library/Application Support/BotChu/`, which only lists the bots' workspaces in sidebar order.
   Versions before bot folders kept everything in `bots.json` and `threads/` there; the first launch
   moves them into the bots' folders and keeps the old files in `backup-before-bot-folders/`.
-  Settings, with the hosts and where you chose to work on repositories, are in the `defaults` domain
+  Project metadata stays in each repository’s `PROJECT.md` on GitHub; its fetched catalog is cached
+  in memory. Settings, with added CLI profiles, the hosts and where you chose to work on repositories, are in the `defaults` domain
   `local.BotChu`; the OpenRouter key is in the Keychain (service `local.BotChu`). Bot workspaces are
   under `~/BotChu/` by default; tasks run in worktrees of checkouts on this Mac or on a host. No
   database and no port.
@@ -308,6 +349,7 @@ request.
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor`, `BOTCHU_OPEN=task` or `BOTCHU_OPEN=settings` opens the bot editor, New
   Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository).
+  `BOTCHU_OPEN=projects`, `agents` or `providers` opens the corresponding workspace gallery.
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
   `BOTCHU_TAB=<n>` shows the first bot's nth tab (and the message goes there), and
   `BOTCHU_TASK="hello-world|<task>"` starts a task in the throwaway repository (a real turn).

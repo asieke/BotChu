@@ -112,7 +112,7 @@ struct HostEditor: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
-                    ForEach(Accounts.all) { account in
+                    ForEach(model.settings.accounts) { account in
                         LabeledContent {
                             TextField("Command", text: Binding(get: { host.commands?[account.id] ?? "" },
                                                                set: { host.commands = (host.commands ?? [:]).merging([account.id: $0]) { $1 } }),

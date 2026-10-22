@@ -101,6 +101,8 @@ enum DevHooks {
             }
         }
         switch env["BOTCHU_OPEN"] {
+        case "projects", "agents", "providers":
+            model.destination = env["BOTCHU_OPEN"].flatMap(LibraryDestination.init(rawValue:))
         case "editor": model.newBot()
         case "task": if let id = model.selection { model.newTask(for: id) }
         case "memory": if let id = model.selection { model.editDocument(.memory, for: id) }
@@ -150,9 +152,16 @@ enum DevHooks {
     /// The sidebar's rows as `sidebar.png`; the sidebar's material isn't in the window's picture.
     static func snapshotSidebar(model: AppModel, into dir: URL) {
         let rows = VStack(alignment: .leading, spacing: 4) {
+            Text("Workspace").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.vertical, 6)
+            ForEach(LibraryDestination.allCases, id: \.self) { destination in
+                Label(destination.title, systemImage: destination.symbol)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                    .background(model.destination == destination ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            }
+            Text("Conversations").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.vertical, 6)
             ForEach(model.bots) { bot in
-                BotRow(bot: bot, status: model.status(of: bot), selected: model.selection == bot.id,
-                       unread: model.selection == bot.id ? 0 : model.unreadCount(of: bot.id))
+                BotRow(bot: bot, status: model.status(of: bot), selected: model.visibleBotID == bot.id,
+                       unread: model.visibleBotID == bot.id ? 0 : model.unreadCount(of: bot.id))
             }
         }
         .padding(10)
