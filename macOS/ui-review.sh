@@ -10,6 +10,9 @@
 #   BOTCHU_PET=<pet folder> macOS/ui-review.sh           # and give the first bot this pet
 #   BOTCHU_DRAW_PET="a brass robot" macOS/ui-review.sh  # or make it one (real runs; costs OpenRouter credit)
 #   BOTCHU_TAB=1 macOS/ui-review.sh        # show the first bot's first task tab (0 is Home)
+#   BOTCHU_FAKE_HOST=1 BOTCHU_TASK="hello-world|<task>|Far Mac" macOS/ui-review.sh
+#                                          # a task on a host, "Far Mac", whose ssh is a stand-in that
+#                                          # runs the command here, in $data/far (a real turn)
 #   BOTCHU_TASK="hello-world|Add a line" macOS/ui-review.sh  # start a task (a real turn on Claude Dev)
 # Prints the snapshot folder. Quit the app with `pkill -x BotChu` when done.
 set -euo pipefail
@@ -92,6 +95,23 @@ args=(--env "BOTCHU_DATA_DIR=$data" --env "BOTCHU_SNAPSHOT=$data/snapshots")
 [ -n "${BOTCHU_OPEN:-}" ] && args+=(--env "BOTCHU_OPEN=$BOTCHU_OPEN")
 [ -n "${BOTCHU_TASK:-}" ] && args+=(--env "BOTCHU_TASK=$BOTCHU_TASK")
 [ -n "${BOTCHU_TAB:-}" ] && args+=(--env "BOTCHU_TAB=$BOTCHU_TAB")
+[ -n "${BOTCHU_TASK_REPO:-}" ] && args+=(--env "BOTCHU_TASK_REPO=$BOTCHU_TASK_REPO")
+[ -n "${BOTCHU_HOST:-}" ] && args+=(--env "BOTCHU_HOST=$BOTCHU_HOST")
+if [ -n "${BOTCHU_FAKE_HOST:-}" ]; then
+  # A host whose ssh skips its options and the host, then runs the command here, as the host would.
+  mkdir -p "$data/far"
+  git clone -q "$data/origin/hello-world.git" "$data/far/hello-world"
+  cat > "$data/fake-ssh" <<'SH'
+#!/bin/sh
+while [ $# -gt 0 ]; do
+  case $1 in -o|-p|-i|-l|-F) shift 2 ;; -*) shift ;; *) break ;; esac
+done
+shift
+exec /bin/sh -c "$*"
+SH
+  chmod +x "$data/fake-ssh"
+  args+=(--env "BOTCHU_SSH=$data/fake-ssh" --env "BOTCHU_HOST=Far Mac|far-mac|$data/far|far-mac")
+fi
 [ -n "${BOTCHU_PET:-}" ] && args+=(--env "BOTCHU_PET=$BOTCHU_PET")
 [ -n "${BOTCHU_DRAW_PET:-}" ] && args+=(--env "BOTCHU_DRAW_PET=$BOTCHU_DRAW_PET")
 [ -n "${BOTCHU_APPEARANCE:-}" ] && args+=(--env "BOTCHU_APPEARANCE=$BOTCHU_APPEARANCE")
@@ -99,6 +119,7 @@ args=(--env "BOTCHU_DATA_DIR=$data" --env "BOTCHU_SNAPSHOT=$data/snapshots")
 [ -n "${BOTCHU_DEFAULT_MODEL:-}" ] && args+=(--env "BOTCHU_DEFAULT_MODEL=$BOTCHU_DEFAULT_MODEL")
 [ -n "${BOTCHU_WINDOW:-}" ] && args+=(--env "BOTCHU_WINDOW=$BOTCHU_WINDOW")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
-# Keep throwaway runs independent of the installed app's restored windows and crash recovery.
+# Without restoring windows: after any copy of BotChu crashed, macOS would otherwise stop at a
+# dialog asking whether to reopen them.
 open -g -n "$data/BotChu.app" "${args[@]}" --args -ApplePersistenceIgnoreState YES
 echo "$data/snapshots"

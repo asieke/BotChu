@@ -15,11 +15,12 @@ public enum BotContext {
         title and instructions, and ask for anything you need to get started.
         """
 
-    /// `AGENTS.md` (read by Codex, Pi, Muse and Antigravity; `CLAUDE.md` imports it). Tasks start
-    /// from repositories checked out in `repositoriesPath`.
-    public static func agentsFile(bot: Bot, sharedMemoryPath: String, repositoriesPath: String? = nil) -> String {
-        let checkedOut = repositoriesPath.map { "a repository checked out in `\(($0 as NSString).abbreviatingWithTildeInPath)`" }
-            ?? "a repository checked out on this Mac"
+    /// `AGENTS.md` (read by Codex, Pi, Muse and Antigravity; `CLAUDE.md` imports it). Tasks work on
+    /// the owner's GitHub repositories, cloned into `repositoriesPath` on this Mac when they aren't
+    /// checked out, or on one of the `machines` (Settings ▸ Hosts).
+    public static func agentsFile(bot: Bot, sharedMemoryPath: String, repositoriesPath: String? = nil, machines: [String] = []) -> String {
+        let clonedInto = repositoriesPath.map { " (into `\(($0 as NSString).abbreviatingWithTildeInPath)` on this Mac)" } ?? ""
+        let names = (["This Mac"] + machines).joined(separator: ", ")
         return """
         \(marker)
         # \(bot.emoji) \(bot.name)\(bot.title.isEmpty ? "" : "\n\n" + bot.title)
@@ -57,15 +58,20 @@ public enum BotContext {
 
             {"repo": "octocat/hello-world", "issue": 12, "task": "Fix the crash on launch, then open a pull request."}
 
-        - `repo` (required): `owner/name` of \(checkedOut), or the folder of its checkout.
+        - `repo` (required): `owner/name` of one of your owner's GitHub repositories (`gh repo list`, and their \
+        organizations').
         - `issue` or `pullRequest`: the number to work on, if any.
+        - `review`: a pull request's number, to review it rather than continue it; add `"comment": true` to post the \
+        review on GitHub as well.
         - `task`: what to do, in your words; required without an issue or pull request.
+        - `machine` (optional): the computer to work on: \(names). Otherwise BotChu works where the repository \
+        lives: where your owner chose, else where its PROJECT.md deploys it, else on this Mac.
         - `branch` and `title` (optional): otherwise BotChu names the branch from the issue's title or the task.
 
-        BotChu takes the file within seconds, makes the task's worktree, opens its tab and starts it with your \
-        identity and memory, and tells you how your tasks are doing at the start of your next turn here. \
-        `.botchu/tasks/<id>/` holds each task's settings (`task.json`) and conversation (`thread.jsonl`): read \
-        them, never edit them.
+        BotChu takes the file within seconds, clones the repository if it isn't checked out there yet\(clonedInto), \
+        makes the task's worktree (over SSH on another computer), opens its tab and starts it with your identity and \
+        memory, and tells you how your tasks are doing at the start of your next turn here. `.botchu/tasks/<id>/` \
+        holds each task's settings (`task.json`) and conversation (`thread.jsonl`): read them, never edit them.
 
         ## Replies
         Reply conversationally and concisely, in Markdown. You may use your tools whenever they help.
@@ -108,34 +114,68 @@ public enum BotContext {
     /// repository, whose own `AGENTS.md`, `CLAUDE.md` and README the CLI reads, so BotChu writes
     /// nothing there: this carries the bot's identity, instructions and memories, where the task runs
     /// and what it is (as the workspace standard hands work to an agent), and when the task already
-    /// has history, a recap of it.
-    public static func taskPreamble(bot: Bot, task: BotTask, memory: String, sharedMemory: String, history: [ChatMessage]) -> String {
+    /// has history, a recap of it. A task on a host (`machine`, such as "Omarchy (asieke@omarchy)")
+    /// can't open the bot's folder on this Mac, so it also gets the recent part of the bot's `home`
+    /// conversation, and saves memories through `<remember>` blocks.
+    public static func taskPreamble(bot: Bot, task: BotTask, memory: String, sharedMemory: String, history: [ChatMessage],
+                                    machine: String? = nil, home: [ChatMessage] = []) -> String {
         let memoryPath = (bot.workspace as NSString).appendingPathComponent(memoryFile)
         var parts: [String] = []
-        parts.append("""
-            You are \(bot.name)\(bot.title.isEmpty ? "" : " — \(bot.title)"), a persistent bot in BotChu, working on a \
-            task for your owner. Your own workspace is \(bot.workspace), where your owner also talks with you in \
-            your Home conversation; this task is one of several conversations you may be having at once, each in its \
-            own tab.
-            """)
-        parts += identity(bot: bot, memory: memory, sharedMemory: sharedMemory, saving: """
-            Your memory is \(memoryPath), in your workspace, not in this repository: save there what you would \
-            want in any project (your owner's preferences, lessons, how you work), not to your CLI's own memory \
-            feature, re-reading it just before you change it, since your other conversations may have changed it. \
-            Never commit it, or any other file of yours, to this repository; what belongs to the repository (its \
-            rules, decisions and documents) goes in the repository, through a pull request.
-            """)
-        if let folder = task.folder {
+        if let machine {
             parts.append("""
-                You are in a worktree of \(task.repo) at \(folder), on branch \(task.branch), which BotChu made (or \
-                reopened) for this task from the repository's main checkout at \(task.checkout), so the branch and its \
-                worktree are ready: don't make another. Work only here: the main checkout stays on its default branch, \
-                so never switch, edit or commit in it. Read PROJECT.md, README.md and AGENTS.md (those it has) before \
-                you change anything, and follow AGENTS.md.
+                You are \(bot.name)\(bot.title.isEmpty ? "" : " — \(bot.title)"), a persistent bot in BotChu, working on a \
+                task for your owner on \(machine), over SSH from your owner's Mac. Your own folder is \(bot.workspace) on \
+                that Mac, where your owner also talks with you in your Home conversation; this task is one of several \
+                conversations you may be having at once, each in its own tab.
+                """)
+            parts += identity(bot: bot, memory: memory, sharedMemory: sharedMemory, saving: """
+                Your memory is \(memoryFile) in your folder on your owner's Mac, which you can't open from here. To \
+                remember something new that you would want in any project (your owner's preferences, lessons, how you \
+                work), put it in your reply between <\(rememberTag)> and </\(rememberTag)>, one fact per line: BotChu \
+                adds it to your \(memoryFile). Never save memories to your CLI's own memory feature, or commit them to \
+                this repository; what belongs to the repository (its rules, decisions and documents) goes in the \
+                repository, through a pull request.
+                """)
+        } else {
+            parts.append("""
+                You are \(bot.name)\(bot.title.isEmpty ? "" : " — \(bot.title)"), a persistent bot in BotChu, working on a \
+                task for your owner. Your own workspace is \(bot.workspace), where your owner also talks with you in \
+                your Home conversation; this task is one of several conversations you may be having at once, each in its \
+                own tab.
+                """)
+            parts += identity(bot: bot, memory: memory, sharedMemory: sharedMemory, saving: """
+                Your memory is \(memoryPath), in your workspace, not in this repository: save there what you would \
+                want in any project (your owner's preferences, lessons, how you work), not to your CLI's own memory \
+                feature, re-reading it just before you change it, since your other conversations may have changed it. \
+                Never commit it, or any other file of yours, to this repository; what belongs to the repository (its \
+                rules, decisions and documents) goes in the repository, through a pull request.
+                """)
+        }
+        let on = machine.map { "on \($0), " } ?? ""
+        let there = machine == nil ? "" : " there"
+        if let folder = task.folder, task.review != nil {
+            let head = task.head ?? "the pull request's head"
+            parts.append("""
+                You are \(on)in a review worktree of \(task.repo) at \(folder), detached at \(head), which BotChu made for \
+                this review from the repository's main checkout\(there) at \(task.checkout). It is only for this review: \
+                switch no branch in it, commit nothing, and leave the main checkout as it is. Read PROJECT.md, README.md \
+                and AGENTS.md (those it has) first.
+                """)
+        } else if let folder = task.folder {
+            parts.append("""
+                You are \(on)in a worktree of \(task.repo) at \(folder), on branch \(task.branch), which BotChu made (or \
+                reopened) for this task from the repository's main checkout\(there) at \(task.checkout), so the branch and \
+                its worktree are ready: don't make another. Work only here: the main checkout stays on its default \
+                branch, so never switch, edit or commit in it. Read PROJECT.md, README.md and AGENTS.md (those it has) \
+                before you change anything, and follow AGENTS.md.
                 """)
         }
         var brief: String
-        if let work = task.work, work.isPullRequest {
+        if let work = task.work, let review = task.review {
+            brief = review == .comment
+                ? "Your task is to review and comment on \(work.reference) (\(work.url.absoluteString)) in \(task.repo), as “Reviewing a pull request” in AGENTS.md says: this request is the workspace standard's “Review and comment on this PR”, so post your review there, as one review, without asking again."
+                : "Your task is to review \(work.reference) (\(work.url.absoluteString)) in \(task.repo), as “Reviewing a pull request” in AGENTS.md says, and give your review here, in your reply. Post nothing to GitHub."
+        } else if let work = task.work, work.isPullRequest {
             brief = "Your task is to continue \(work.reference) (\(work.url.absoluteString)), whose branch this is: read its description, review comments and checks, and carry on."
         } else if let work = task.work {
             brief = "Your task is \(work.reference) in \(task.repo) (\(work.url.absoluteString); gh issue view \(work.number) --repo \(task.repo) --comments)."
@@ -149,16 +189,36 @@ public enum BotContext {
             brief += " You started this task yourself, from your Home conversation, so the message below is your own brief."
         }
         parts.append(brief)
-        let botchu = (bot.workspace as NSString).appendingPathComponent(BotHome.folderName)
-        parts.append("""
-            This task's conversation is kept in \(botchu)/tasks/\(task.id.uuidString.lowercased())/thread.jsonl, and \
-            your Home conversation in \(botchu)/thread.jsonl; search them when you need earlier context. BotChu writes \
-            them: read them, never edit them. End each turn with a short summary of what you did and what is next: \
-            BotChu passes it on to your Home conversation.
-            """)
+        if machine != nil {
+            parts.append("""
+                Your conversations are kept on your owner's Mac, which you can't open from here. End each turn with a \
+                short summary of what you did and what is next: BotChu passes it on to your Home conversation.
+                """)
+            let homeRecap = recap(home, limit: maxHomeRecapCharacters)
+            if !homeRecap.isEmpty {
+                parts.append("""
+                    The most recent part of your Home conversation with your owner, for context:
+                    <home_conversation>
+                    \(homeRecap)
+                    </home_conversation>
+                    """)
+            }
+        } else {
+            let botchu = (bot.workspace as NSString).appendingPathComponent(BotHome.folderName)
+            parts.append("""
+                This task's conversation is kept in \(botchu)/tasks/\(task.id.uuidString.lowercased())/thread.jsonl, and \
+                your Home conversation in \(botchu)/thread.jsonl; search them when you need earlier context. BotChu writes \
+                them: read them, never edit them. End each turn with a short summary of what you did and what is next: \
+                BotChu passes it on to your Home conversation.
+                """)
+        }
         parts += continuity(history)
         return "<botchu_context>\n\(parts.joined(separator: "\n\n"))\n</botchu_context>"
     }
+
+    /// The tag a task on a host puts what it wants remembered in (`MemoryNotes`).
+    public static let rememberTag = "remember"
+    static let maxHomeRecapCharacters = 4_000
 
     /// The bot's instructions and memories. `saving` says where new memories go, in place of the
     /// Home's own words for it.
@@ -238,8 +298,8 @@ public enum BotContext {
     public static let maxRecapCharacters = 12_000
     static let maxRecapMessageCharacters = 1_500
 
-    /// The newest user and assistant messages, oldest first, within `maxRecapCharacters`.
-    static func recap(_ history: [ChatMessage]) -> String {
+    /// The newest user and assistant messages, oldest first, within `limit` characters.
+    static func recap(_ history: [ChatMessage], limit: Int = maxRecapCharacters) -> String {
         var lines: [String] = []
         var total = 0
         for message in history.reversed() where message.role == .user || message.role == .assistant {
@@ -247,7 +307,7 @@ public enum BotContext {
             guard !text.isEmpty else { continue }
             if text.count > maxRecapMessageCharacters { text = String(text.prefix(maxRecapMessageCharacters)) + " […]" }
             let line = "\(message.role == .user ? "Owner" : "You"): \(text)"
-            if total + line.count > maxRecapCharacters { break }
+            if total + line.count > limit { break }
             total += line.count
             lines.append(line)
         }
@@ -261,11 +321,42 @@ public enum BotContext {
     }
 }
 
+/// What a task on another computer asks to remember: the lines of the `<remember>` blocks in its
+/// replies, which BotChu adds to the bot's MEMORY.md on this Mac, since the task can't open it.
+public enum MemoryNotes {
+    public static func remembered(in messages: [ChatMessage]) -> [String] {
+        let tag = BotContext.rememberTag
+        guard let regex = try? NSRegularExpression(pattern: "<\(tag)>(.*?)</\(tag)>", options: [.dotMatchesLineSeparators, .caseInsensitive]) else { return [] }
+        return messages.filter { $0.role == .assistant }.flatMap { message -> [String] in
+            let text = message.text
+            return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).flatMap { match -> [String] in
+                guard let range = Range(match.range(at: 1), in: text) else { return [] }
+                return text[range].split(whereSeparator: \.isNewline).map { line in
+                    var note = line.trimmingCharacters(in: .whitespaces)
+                    for bullet in ["- ", "* ", "• "] where note.hasPrefix(bullet) { note = String(note.dropFirst(bullet.count)) }
+                    return note.trimmingCharacters(in: .whitespaces)
+                }
+                .filter { !$0.isEmpty }
+            }
+        }
+    }
+
+    /// Adds the notes to the memory file as list items, after what it holds.
+    public static func append(_ notes: [String], toMemoryAt path: String, fileManager: FileManager = .default) throws {
+        guard !notes.isEmpty else { return }
+        var text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        if !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
+        if !text.isEmpty, !text.hasSuffix("\n\n"), !(text.split(separator: "\n").last?.hasPrefix("- ") ?? false) { text += "\n" }
+        text += notes.map { "- \($0)\n" }.joined()
+        try text.write(toFile: path, atomically: true, encoding: .utf8)
+    }
+}
+
 /// Creates a bot's workspace and keeps its instruction files in step with its settings.
 public enum Workspace {
     /// Creates the folder, seeds `MEMORY.md` (and the shared one) when missing, and writes
     /// `AGENTS.md`, `CLAUDE.md` and `GEMINI.md` unless a file of that name was not written by BotChu.
-    public static func prepare(bot: Bot, sharedMemoryPath: String, repositoriesPath: String? = nil,
+    public static func prepare(bot: Bot, sharedMemoryPath: String, repositoriesPath: String? = nil, machines: [String] = [],
                                fileManager: FileManager = .default) throws {
         let dir = URL(fileURLWithPath: bot.workspace, isDirectory: true)
         try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -273,7 +364,7 @@ public enum Workspace {
         try fileManager.createDirectory(at: shared.deletingLastPathComponent(), withIntermediateDirectories: true)
         try writeIfMissing(BotContext.seedSharedMemory, to: shared, fileManager: fileManager)
         try writeIfMissing(BotContext.seedMemory(bot: bot), to: dir.appendingPathComponent(BotContext.memoryFile), fileManager: fileManager)
-        let agents = BotContext.agentsFile(bot: bot, sharedMemoryPath: sharedMemoryPath, repositoriesPath: repositoriesPath)
+        let agents = BotContext.agentsFile(bot: bot, sharedMemoryPath: sharedMemoryPath, repositoriesPath: repositoriesPath, machines: machines)
         try writeOwned(agents, to: dir.appendingPathComponent("AGENTS.md"), fileManager: fileManager)
         try writeOwned(agents, to: dir.appendingPathComponent("GEMINI.md"), fileManager: fileManager)
         try writeOwned(BotContext.claudeFile, to: dir.appendingPathComponent("CLAUDE.md"), fileManager: fileManager)

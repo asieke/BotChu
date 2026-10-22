@@ -3,8 +3,10 @@
 A minimal, open-source, native macOS app for persistent AI bots, in the spirit of Grok Bot and
 [rakazo](https://github.com/elie222/rakazo). Bots are listed down the left; the selected bot's chat
 fills the window. Each bot is driven by a coding-agent CLI that is already installed and signed in on
-the Mac, and runs in its own workspace folder on this Mac. A bot can also work on tasks in
-repositories, in parallel, each in its own git worktree and in a tab beside its own conversation.
+the Mac, and runs in its own workspace folder on this Mac. A bot can also work on tasks in your
+GitHub repositories, in parallel, each in its own git worktree and in a tab beside its own
+conversation: on this Mac, or on another computer it reaches over SSH. A task can also review a pull
+request.
 
 ## Scope
 - Does:
@@ -57,11 +59,16 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     A turn can be stopped. The
     thread and the CLI's session id are saved, so the next message (also after a relaunch) resumes
     the same CLI session.
-  - **Tasks:** besides its Home, a bot can work on tasks, several at once: each in a repository
-    checked out in the repositories folder (`~/Desktop/WORKSPACE` by default), with its own
-    conversation and CLI session, in its own git worktree, so tasks never share files. BotChu does
-    all of this itself, with no other app. **New Task** (⌘T) picks the repository, an open issue or pull request there (listed with
-    `gh`) or something new, the branch and the account. BotChu makes the worktree before the first
+  - **Tasks:** besides its Home, a bot can work on tasks, several at once: each in one of your
+    GitHub repositories, with its own conversation and CLI session, in its own git worktree, so
+    tasks never share files. BotChu does all of this itself, with no other app. **New Task** (⌘T)
+    picks the repository (from the ones `gh` lists for your account and your organizations, newest
+    push first), the computer and folder it is worked on, an open issue or pull request there or
+    something new, the branch and the account. A repository is worked on where you last chose for it
+    (Settings lists those choices), else where its `PROJECT.md` deploys it (`local:<machine>:<path>`,
+    on this Mac or a host of that machine name), else in the repositories folder on this Mac
+    (`~/Desktop/WORKSPACE` by default); BotChu clones it there if it isn't yet (`gh repo clone`, or
+    `git clone` over HTTPS). BotChu makes the worktree before the first
     turn, in `.claude/worktrees/<type>-<slug>` of the checkout: with the repository's own
     `scripts/worktree.sh` when it follows the workspace standard (which also links a new
     `<type>/<number>-<slug>` branch to its issue on GitHub), else with git; a pull request's task
@@ -75,8 +82,26 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     Closing a tab keeps the task's record, conversation and worktree; Home's status lists closed
     tasks to open again. A worktree goes once its pull request merges, with the repository's
     `scripts/worktree.sh --tidy`; if it is gone, the task's next message makes it again.
+  - **Pull request reviews:** for a pull request, New Task can also **Review it** or **Review and
+    comment**. The review works in a temporary worktree detached at the pull request's head (also
+    from a fork), records that commit, and follows the workspace standard's review steps: the first
+    gives the review in the task's conversation and posts nothing; the second also posts it on the
+    pull request as one review, without asking again. Closing a review task removes its worktree.
+  - **Hosts:** Settings ▸ Hosts lists other computers tasks can work on, reached with `ssh` and
+    your keys, never a password: a nickname, the SSH host (an alias from `~/.ssh/config`, a host
+    name or `user@host`), the folder repositories are checked out in there (`~/apps` by default),
+    the machine name a `PROJECT.md` deploy target calls it (**Test Connection** reads it), and each
+    account's command there when it isn't the same as on this Mac. A task on a host makes its
+    worktree there and runs its CLI there, in that user's login shell; its output streams back, and
+    Stop interrupts the CLI there. The bot's folder stays on this Mac: the task's first message
+    brings the bot's identity, instructions and memory and a recap of its Home conversation, and
+    notes the bot writes in `<remember>…</remember>` in a reply are added to its `MEMORY.md` here.
+    The tab and the status sidebar name the computer, and **Terminal** opens a shell in the
+    worktree there. The OpenRouter key never leaves this Mac, so Pi on a host needs that host's own
+    `OPENROUTER_API_KEY`.
   - **Home coordinates:** a bot asks for a task itself by writing a JSON request into
-    `.botchu/dispatch/` in its folder (`{"repo": "owner/name", "issue": 48, "task": "…"}`), as its
+    `.botchu/dispatch/` in its folder (`{"repo": "owner/name", "issue": 48, "task": "…"}`, or
+    `"review": 12` with `"comment": true` to post it, and `"machine"` for a host), as its
     `AGENTS.md` explains. While a Home turn runs, BotChu takes requests within seconds and starts
     each in its own tab. Home gets a receipt when a task starts, ends a turn or fails (with an Open
     link to its tab), or can't start, and its next turn opens with a report on those tasks: their
@@ -99,7 +124,8 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     the matching model-ID suffix.
   - **The bot's folder is the bot:** BotChu keeps each bot's settings (`bot.json`), its whole
     conversation (`thread.jsonl`, one message per line), its tasks (`tasks/<id>/`: `task.json` with
-    the repository, branch, worktree, session and pull request, and the task's `thread.jsonl`), the
+    the repository, computer, branch, worktree, session and pull request, and the task's
+    `thread.jsonl`), the
     task requests it writes (`dispatch/`), a log of every turn (`logs/<date>.log`:
     the command, where it ran, how long it took, the exit status, any error and the CLI's error output) and its
     pet (`pet/`: `video.json`, `stills/<pose>.png`, `clips/<activity>.mp4` and the appearance it
@@ -122,9 +148,10 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     **Runs on** and **Session**), whether the next message continues its CLI session (with its id
     to copy), its open tasks, its message and tool-call counts, last
     activity and creation date, what its `MEMORY.md` holds, and its workspace, with Edit and New
-    Session. On a task's tab it shows the task instead: its repository, issue, branch, pull request
-    (and whether it is open, merged or closed), the account (which can change there), that account's
-    usage, session and worktree (in Finder or Terminal), with Close Task and New Session. Its colors
+    Session. On a task's tab it shows the task instead: its repository, the computer it works on,
+    issue, branch (or, for a review, the commit it is detached at), pull request (and whether it is
+    open, merged or closed), the account (which can change there), that account's usage, session
+    and worktree (in Finder or Terminal, or over SSH in Terminal), with Close Task and New Session. Its colors
     follow light and dark mode. The window is never narrower than the sidebar, chat and status
     need, so it widens when they do.
   - **Account usage:** the selected account's allowance used and reset times, shared by all bots
@@ -140,13 +167,14 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     clears its previous readout. Failed checks retain the last successful reading marked stale;
     an expired window hides its old percentage until a new reading arrives. CLI output,
     credentials and usage readings are not written to disk by BotChu.
-  - **Settings:** the bots folder, the repositories folder, each account's command, the Codex
-    account that draws pets' stills, the OpenRouter model that animates them (with its cost per
-    pet), the OpenRouter API key (Keychain) and default OpenRouter model.
-- Does not: run bots or tasks anywhere but this Mac (yet: SSH hosts, set up in BotChu itself, come
-  later in #16), clone repositories, schedule routines, ask for approval of tool calls (every
-  CLI runs with its permission prompts bypassed, inside the bot's folder or the task's worktree), or
-  keep any secret outside the Keychain and the CLIs' own logins.
+  - **Settings:** the bots folder, the repositories folder, the hosts and where you chose to work
+    on repositories, each account's command, the Codex account that draws pets' stills, the
+    OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
+    and default OpenRouter model.
+- Does not: run a bot's Home anywhere but this Mac, or tasks anywhere but this Mac and SSH hosts
+  (no containers or cloud), schedule routines, ask for approval of tool calls (every CLI runs with
+  its permission prompts bypassed, inside the bot's folder or the task's worktree), or keep any
+  secret outside the Keychain and the CLIs' own logins.
 
 ## Architecture
 - `macOS/` is a Swift package (Swift 6 toolchain, macOS 14+):
@@ -161,15 +189,19 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     and the clips that show it (`Pet.swift`), making a pet: its poses and clips, the Codex prompt
     for the stills, the OpenRouter request and job, the cost estimate, the manifest and install
     (`PetVideo.swift`), tasks: the task, its title
-    and branch names, its pull request, receipts and dispatch requests (`Tasks.swift`), the
-    checkouts in the repositories folder, task worktrees and what `gh` says about issues and pull
-    requests (`Repositories.swift`), the JSON store (`Store.swift`), and the `Process` runner
-    that launches a CLI through the login shell, `zsh -l` (`AgentRun.swift`).
+    and branch names, its pull request, receipts and dispatch requests (`Tasks.swift`), hosts and
+    where a repository is worked on, from a `PROJECT.md`'s deploy targets (`Hosts.swift`), running
+    a command on this Mac or a host, the checkouts in the repositories folder, cloning, task and
+    review worktrees, and what `gh` says about your repositories, issues and pull requests
+    (`Repositories.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
+    a CLI through the login shell, `zsh -l`, or on a host over `ssh` (`AgentRun.swift`).
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
     in standard system materials: `App/` (the app, window, model, settings, Keychain, dev hooks, making
-    pets and the OpenRouter video client),
+    pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
+    computers, `TaskPlaces.swift`),
     `Sidebar/` (the bot list), `Chat/` (the tab bar, messages and the composer), `Inspector/` (the
-    status sidebar, a bot's and a task's), `Editor/` (the bot sheet and New Task), `Settings/`, and
+    status sidebar, a bot's and a task's), `Editor/` (the bot sheet and New Task), `Settings/` (with
+    the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, and the pet's looping video).
     `Resources/ChatRenderer/` bundles pinned Mermaid and KaTeX distributions, their fonts and licenses. Its README records provenance and update steps; no JavaScript package
     install or network access is needed at runtime. The rendering document blocks remote resources
@@ -178,7 +210,9 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     turns on each account named the way the app does (see **Test**).
   - `Tests/BotChuCoreTests/` — parser tests against captured output of every CLI, command lines,
     context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
-    made in throwaway repositories.
+    made in throwaway repositories; and hosts: their `ssh` command lines, deploy targets, clones,
+    worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
+    from a remote task.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, model-picker keyboard interaction and persisted choices,
     and the main window's layout at its narrowest. These share a serialized suite because AppKit
@@ -194,10 +228,13 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
   `~/Library/Application Support/BotChu/`, which only lists the bots' workspaces in sidebar order.
   Versions before bot folders kept everything in `bots.json` and `threads/` there; the first launch
   moves them into the bots' folders and keeps the old files in `backup-before-bot-folders/`.
-  Settings are in the `defaults` domain `local.BotChu`; the OpenRouter key is in the Keychain
-  (service `local.BotChu`). Bot workspaces are under `~/BotChu/` by default; tasks run in worktrees
-  of the checkouts in the repositories folder. No database and no port.
-- Each turn runs one headless CLI process in the bot's folder, or a task's worktree:
+  Settings, with the hosts and where you chose to work on repositories, are in the `defaults` domain
+  `local.BotChu`; the OpenRouter key is in the Keychain (service `local.BotChu`). Bot workspaces are
+  under `~/BotChu/` by default; tasks run in worktrees of checkouts on this Mac or on a host. No
+  database and no port.
+- Each turn runs one headless CLI process in the bot's folder, or a task's worktree. On a host,
+  BotChu runs it as `ssh -T <host> 'cd <worktree> && exec "${SHELL:-/bin/sh}" -lc …'`, with
+  `BatchMode` (no password prompts) and one shared connection per host (`~/.ssh/botchu-*`):
   - Claude: `claude -p … --output-format stream-json --verbose --include-partial-messages --dangerously-skip-permissions`, `--session-id` then `--resume`.
   - Codex: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`, then `codex exec resume <thread id>`.
   - Antigravity: `agy -p … --output-format stream-json --dangerously-skip-permissions`, then `--conversation <id>`.
@@ -241,9 +278,16 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
   Claude Dev); the app writes a PNG of each of its windows into the printed folder every second
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor`, `BOTCHU_OPEN=task` or `BOTCHU_OPEN=settings` opens the bot editor, New
-  Task or Settings instead. `BOTCHU_TAB=<n>` shows the first bot's nth tab (and the message goes
-  there), and `BOTCHU_TASK="hello-world|<task>"` starts a task in the throwaway repository (a real
-  turn).
+  Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository).
+  `BOTCHU_TAB=<n>` shows the first bot's nth tab (and the message goes there), and
+  `BOTCHU_TASK="hello-world|<task>"` starts a task in the throwaway repository (a real turn).
+  Hosts: `BOTCHU_HOST="<nickname>|<ssh host>|<repositories folder>|<machine>|<account>=<command>,…"`
+  (several separated by `;`) sets Settings ▸ Hosts, and `BOTCHU_TASK="<owner/name>|<task>|<nickname>"`
+  starts a task there, cloning the repository into that folder: a real turn on a real host.
+  `BOTCHU_FAKE_HOST=1` adds a host, "Far Mac", whose `ssh` is a stand-in that runs the command here
+  (`BOTCHU_SSH`), with a clone of the throwaway repository in its folder, so
+  `BOTCHU_TASK="hello-world|<task>|Far Mac"` exercises a task on a host without one (a real turn
+  here).
   `BOTCHU_PET=<pet folder>` gives the first bot that pet (`video.json`, `stills/`, `clips/`), and
   `BOTCHU_DRAW_PET="<appearance>"` makes it one (a real Codex run and real OpenRouter clips, which
   cost credit). The window's picture leaves out the sidebar's rows and video layers, so the rows

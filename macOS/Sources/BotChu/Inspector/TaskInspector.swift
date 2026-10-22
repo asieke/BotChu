@@ -3,8 +3,8 @@ import SwiftUI
 import BotChuCore
 
 /// The status sidebar for a task: its bot's face and the task's state in a card, then the task
-/// (repository, issue, branch and pull request), what it runs on, its account usage, session, conversation and
-/// worktree, and the actions on it.
+/// (repository, machine, issue, branch and pull request), what it runs on, its account usage, session,
+/// conversation and worktree, and the actions on it.
 struct TaskInspector: View {
     @Environment(AppModel.self) private var model
     let target: ChatTarget
@@ -15,11 +15,18 @@ struct TaskInspector: View {
         if let bot = model.bot(target.botID), let task = model.task(target), let status = model.status(of: target) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    AvatarCard(bot: bot, status: status, title: task.title, subtitle: "\(bot.name) · \(task.repo)",
+                    let machine = model.machineName(task.hostID, fallback: task.hostName)
+                    AvatarCard(bot: bot, status: status, title: task.title,
+                               subtitle: "\(bot.name) · \(task.repo)" + (task.isRemote ? " · on \(machine)" : ""),
                                account: task.account, faceSize: 72)
                     InspectorSection("Task") {
                         InspectorCard {
                             InspectorRow("Repository", value: task.repo)
+                            InspectorRow("Machine") {
+                                Label(machine, systemImage: task.isRemote ? "network" : "laptopcomputer")
+                                    .labelStyle(.titleAndIcon)
+                                    .help(task.isRemote ? "Works on \(machine) over SSH: the CLI runs there, with \(bot.name)'s context from this Mac" : "Works on this Mac")
+                            }
                             if let work = task.work, !work.isPullRequest {
                                 InspectorRow("Issue") {
                                     Link(work.title.isEmpty ? "#\(work.number)" : "#\(work.number) \(work.title)", destination: work.url)
@@ -28,8 +35,12 @@ struct TaskInspector: View {
                                         .help(work.title)
                                 }
                             }
-                            InspectorRow("Branch") {
-                                if task.branch.isEmpty {
+                            InspectorRow(task.review == nil ? "Branch" : "Head") {
+                                if task.review != nil {
+                                    Text(task.head.map { "Detached at \($0.prefix(7))" } ?? "Not fetched yet")
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundStyle(task.head == nil ? Palette.secondaryText : Palette.text)
+                                } else if task.branch.isEmpty {
                                     Text("Not made yet").foregroundStyle(Palette.secondaryText)
                                 } else {
                                     HStack(spacing: 2) {
@@ -49,6 +60,9 @@ struct TaskInspector: View {
                                 } else {
                                     Text("None yet").foregroundStyle(Palette.secondaryText)
                                 }
+                            }
+                            if let review = task.review {
+                                InspectorRow("Review", value: review == .comment ? "Posted on GitHub" : "In this conversation")
                             }
                             InspectorRow("Started by", value: task.origin == .home ? "\(bot.name), from Home" : "You", last: true)
                         }
@@ -71,15 +85,16 @@ struct TaskInspector: View {
                             StatTile(value: task.createdAt.formatted(.dateTime.month(.abbreviated).day()), label: "Started")
                         }
                     }
-                    InspectorSection("Worktree") {
+                    InspectorSection("Worktree", trailing: task.isRemote ? "on \(machine)" : nil) {
                         InspectorCard(padded: true) {
                             Group {
                                 if let folder = task.folder {
-                                    Text((folder as NSString).abbreviatingWithTildeInPath)
+                                    Text(task.isRemote ? folder : (folder as NSString).abbreviatingWithTildeInPath)
                                         .foregroundStyle(Palette.pathText)
                                         .help(folder)
                                 } else {
-                                    Text("BotChu makes it from \((task.checkout as NSString).abbreviatingWithTildeInPath) when the task starts.")
+                                    let checkout = task.isRemote ? task.checkout : (task.checkout as NSString).abbreviatingWithTildeInPath
+                                    Text("BotChu makes it from \(checkout) when the task starts\(task.isRemote ? ", on \(machine)" : "").")
                                         .foregroundStyle(Palette.secondaryText)
                                 }
                             }
@@ -89,13 +104,25 @@ struct TaskInspector: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         HStack(spacing: 8) {
-                            Button { model.revealWorktree(target) } label: {
-                                Label("Show in Finder", systemImage: "folder")
+                            if task.isRemote {
+                                Button {
+                                    if let command = model.sshCommand(for: task) {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(command, forType: .string)
+                                    }
+                                } label: {
+                                    Label("Copy SSH", systemImage: "doc.on.doc")
+                                }
+                                .help("Copy the ssh command that opens a shell in the worktree on \(machine)")
+                            } else {
+                                Button { model.revealWorktree(target) } label: {
+                                    Label("Show in Finder", systemImage: "folder")
+                                }
                             }
                             Button { model.openWorktreeInTerminal(target) } label: {
                                 Label("Terminal", systemImage: "terminal")
                             }
-                            .help("Open the worktree in Terminal")
+                            .help(task.isRemote ? "Open a shell in the worktree on \(machine), over SSH, in Terminal" : "Open the worktree in Terminal")
                         }
                         .buttonStyle(InspectorButtonStyle(fill: true))
                         .disabled(task.folder == nil)
@@ -139,7 +166,7 @@ struct TaskInspector: View {
     private func readPullRequestState(_ task: BotTask) async {
         pullRequestState = nil
         guard let number = task.pullRequest, task.repo.contains("/") else { return }
-        if case .success(let found) = await GitHubLookup.work(number: number, pullRequest: true, repo: task.repo, in: task.checkout),
+        if case .success(let found) = await GitHubLookup.work(number: number, pullRequest: true, repo: task.repo),
            !found.state.isEmpty {
             pullRequestState = found.state.lowercased()
         }

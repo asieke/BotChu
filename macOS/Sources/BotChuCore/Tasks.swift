@@ -37,13 +37,24 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
         case owner, home
     }
 
+    /// A review of the task's pull request, in a worktree detached at its head: in the
+    /// conversation only (`review`), or also posted on GitHub as one review (`comment`, the
+    /// workspace standard's "Review and comment on this PR").
+    public enum Review: String, Codable, Sendable {
+        case review, comment
+    }
+
     public var id: UUID
     /// The tab's title, such as "GitChu #48".
     public var title: String
     /// `owner/name` on GitHub, or the checkout's folder name when its origin isn't on GitHub.
     public var repo: String
-    /// The repository's main checkout, which stays on its default branch.
+    /// The repository's main checkout, which stays on its default branch, on the task's machine.
     public var checkout: String
+    /// The host the task works on, over SSH; nil for this Mac. A task stays on its machine.
+    public var hostID: UUID?
+    /// The host's nickname when the task started, shown if it leaves Settings.
+    public var hostName: String?
     /// Empty until BotChu names it, from the issue's title or the brief.
     public var branch: String
     /// The task's worktree, where its CLI runs; nil until BotChu has made it.
@@ -63,17 +74,25 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var archivedAt: Date?
     /// The pull request the task opened (or works on), once its conversation has linked to it.
     public var pullRequest: Int?
+    /// Set for a review of the task's pull request, which works in a detached worktree.
+    public var review: Review?
+    /// The commit a review's worktree is detached at.
+    public var head: String?
 
     public init(
         id: UUID = UUID(), title: String? = nil, repo: String, checkout: String, branch: String = "", folder: String? = nil,
         work: Work? = nil, brief: String = "", origin: Origin = .owner, accountID: String = Accounts.defaultID,
         model: String = "", reasoningEffort: ReasoningEffort? = nil, sessionID: String? = nil, sessionAccountID: String? = nil,
-        createdAt: Date = Date(), archivedAt: Date? = nil, pullRequest: Int? = nil
+        createdAt: Date = Date(), archivedAt: Date? = nil, pullRequest: Int? = nil, hostID: UUID? = nil, hostName: String? = nil,
+        review: Review? = nil
     ) {
         self.id = id
-        self.title = title ?? TaskNaming.title(repo: repo, work: work, brief: brief)
+        self.title = title ?? TaskNaming.title(repo: repo, work: work, brief: brief, review: review != nil)
         self.repo = repo
         self.checkout = checkout
+        self.hostID = hostID
+        self.hostName = hostName
+        self.review = review
         self.branch = branch
         self.folder = folder
         self.work = work
@@ -89,12 +108,16 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
         self.pullRequest = pullRequest ?? (work?.isPullRequest == true ? work?.number : nil)
     }
 
-    /// A new task for `bot`, on the bot's account, model and effort.
+    /// A new task for `bot`, on the bot's account, model and effort, in the repository's checkout on
+    /// this Mac or a host.
     public init(for bot: Bot, repo: String, checkout: String, work: Work?, brief: String, branch: String = "",
-                title: String? = nil, origin: Origin = .owner) {
+                title: String? = nil, origin: Origin = .owner, host: SSHHost? = nil, review: Review? = nil) {
         self.init(title: title, repo: repo, checkout: checkout, branch: branch, work: work, brief: brief, origin: origin,
-                  accountID: bot.accountID, model: bot.model, reasoningEffort: bot.reasoningEffort)
+                  accountID: bot.accountID, model: bot.model, reasoningEffort: bot.reasoningEffort,
+                  hostID: host?.id, hostName: host?.nickname, review: review)
     }
+
+    public var isRemote: Bool { hostID != nil }
 
     public var isArchived: Bool { archivedAt != nil }
 
@@ -113,7 +136,11 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
         let brief = brief.trimmingCharacters(in: .whitespacesAndNewlines)
         if !brief.isEmpty { return brief }
         guard let work else { return "Start." }
-        return work.isPullRequest ? "Continue \(work.reference)." : "Work on \(work.reference)."
+        switch review {
+        case .review: return "Review \(work.reference)."
+        case .comment: return "Review and comment on \(work.reference)."
+        case nil: return work.isPullRequest ? "Continue \(work.reference)." : "Work on \(work.reference)."
+        }
     }
 }
 
@@ -123,11 +150,11 @@ public enum TaskNaming {
         repo.split(separator: "/").last.map(String.init) ?? repo
     }
 
-    /// "GitChu #48" for an issue or a pull request, else the repository and the brief's first words:
-    /// "GitChu · Speed up the sync".
-    public static func title(repo: String, work: BotTask.Work?, brief: String) -> String {
+    /// "GitChu #48" for an issue or a pull request ("GitChu #12 review" for a review), else the
+    /// repository and the brief's first words: "GitChu · Speed up the sync".
+    public static func title(repo: String, work: BotTask.Work?, brief: String, review: Bool = false) -> String {
         let name = repoName(repo)
-        if let work { return "\(name) #\(work.number)" }
+        if let work { return "\(name) #\(work.number)" + (review ? " review" : "") }
         let words = shortened(brief, limit: 28)
         return words.isEmpty ? name : "\(name) · \(words)"
     }
@@ -239,14 +266,23 @@ public struct TaskRequest: Equatable, Sendable {
     public var task: String
     public var branch: String?
     public var title: String?
+    /// The computer to work on, by its nickname in Settings ▸ Hosts (or "This Mac"); where the
+    /// repository lives when not given.
+    public var machine: String?
+    /// For a pull request: review it instead of continuing it, posting the review on GitHub too
+    /// when `.comment`.
+    public var review: BotTask.Review?
 
-    public init(repo: String, issue: Int? = nil, pullRequest: Int? = nil, task: String = "", branch: String? = nil, title: String? = nil) {
+    public init(repo: String, issue: Int? = nil, pullRequest: Int? = nil, task: String = "", branch: String? = nil, title: String? = nil,
+                machine: String? = nil, review: BotTask.Review? = nil) {
         self.repo = repo
         self.issue = issue
         self.pullRequest = pullRequest
         self.task = task
         self.branch = branch
         self.title = title
+        self.machine = machine
+        self.review = review
     }
 
     public struct Problem: Error, Equatable, Sendable {
@@ -258,7 +294,8 @@ public struct TaskRequest: Equatable, Sendable {
     }
 
     /// Reads a request file, forgivingly: numbers may be written as `48`, `"48"` or `"#48"`; `pr` and
-    /// `pull_request` name a pull request, `brief` and `description` the task.
+    /// `pull_request` name a pull request, `brief` and `description` the task, `host` the machine.
+    /// `"review": 12` asks for a review of pull request 12, and `"comment": true` posts it.
     public static func parse(_ data: Data) throws -> TaskRequest {
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             throw Problem(message: "it isn't a JSON object")
@@ -284,10 +321,16 @@ public struct TaskRequest: Equatable, Sendable {
             return nil
         }
         guard let repo = string("repo", "repository") else { throw Problem(message: "it names no “repo”") }
-        let request = TaskRequest(repo: repo, issue: try number("issue"),
-                                  pullRequest: try number("pullRequest", "pull_request", "pr"),
+        let reviewed = try number("review")
+        let pullRequest = try number("pullRequest", "pull_request", "pr")
+        if reviewed != nil, pullRequest != nil, reviewed != pullRequest {
+            throw Problem(message: "“review” and “pullRequest” name different pull requests")
+        }
+        let comment = (object["comment"] as? Bool) ?? false
+        let request = TaskRequest(repo: repo, issue: try number("issue"), pullRequest: reviewed ?? pullRequest,
                                   task: string("task", "brief", "description", "prompt") ?? "",
-                                  branch: string("branch"), title: string("title"))
+                                  branch: string("branch"), title: string("title"), machine: string("machine", "host"),
+                                  review: reviewed == nil ? nil : comment ? .comment : .review)
         if request.issue != nil, request.pullRequest != nil {
             throw Problem(message: "give an issue or a pull request, not both")
         }
