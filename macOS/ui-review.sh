@@ -29,12 +29,13 @@ cat > "$data/threads/8C1F6A2E-5B7D-4E8A-9C3B-2A1D0F4E6B71.json" <<'JSON'
  {"id":"00000000-0000-4000-8000-000000000004","role":"tool","text":"","date":"2026-10-22T03:01:03Z","toolID":"t1",
   "toolName":"Bash","toolInput":"ls","toolOutput":"AGENTS.md\nCLAUDE.md\nGEMINI.md\nMEMORY.md\n","toolState":"done"},
  {"id":"00000000-0000-4000-8000-000000000005","role":"assistant","date":"2026-10-22T03:01:06Z",
-  "text":"## Workspace notes\n\nI found **four files**. See the [project guide](https://example.com) for details.\n\n1. Read `AGENTS.md`\n   - It describes who I am.\n2. Keep `MEMORY.md` current.\n\n> Noted that you like short answers.\n\n| File | Purpose |\n| :--- | :--- |\n| `AGENTS.md` | Instructions |\n| `MEMORY.md` | Persistent notes |\n\n```swift\nlet answer = 42\nprint(answer)\n```"}]
+  "text":"## All three workers reported back\n\nThe ranges are $p_1 \\dots p_{1000}$, $p_{1001} \\dots p_{2000}$ and $p_{2001} \\dots p_{3000}$.\n\n| Subagent | First prime | Last prime | Sum |\n| :--- | ---: | ---: | ---: |\n| [Worker 1](https://example.com/1) | $2$ | $7,919$ | **3,682,913** |\n| Worker 2 | $7,927$ | $17,389$ | **12,591,714** |\n| Worker 3 | $17,393$ | $27,449$ | **22,370,584** |\n| **Total** | $2$ | $27,449$ | **38,645,211** |\n\n$$3,682,913 + 12,591,714 + 22,370,584 = \\mathbf{38,645,211}$$\n\n1. Each worker checked its range.\n   - No primes overlap.\n2. Added their results.\n\n> All results are ready.\n\n```swift\nlet answer = 38_645_211\nprint(answer)\n```\n\n```mermaid\nflowchart LR\n  subgraph BotChu[BotChu]\n    Chat[Chat stream]\n  end\n  subgraph Local[This Mac]\n    Worktree[Git worktree]\n  end\n  subgraph GitHub[GitHub]\n    PR[Pull request]\n  end\n  Chat -->|Spawn work| Worktree\n  Worktree -->|Push and check| PR\n  PR -->|Review| Chat\n```"}]
 JSON
 printf '# Scout\n\nWhat Scout has learned and keeps across conversations.\n\n- Prefers short answers.\n- Works on BotChu, a macOS app.\n' > "$data/bots/scout/MEMORY.md"
 "$dir/build.sh" "$data" >/dev/null
 args=(--env "BOTCHU_DATA_DIR=$data" --env "BOTCHU_SNAPSHOT=$data/snapshots")
 [ -n "${BOTCHU_OPEN:-}" ] && args+=(--env "BOTCHU_OPEN=$BOTCHU_OPEN")
+[ -n "${BOTCHU_APPEARANCE:-}" ] && args+=(--env "BOTCHU_APPEARANCE=$BOTCHU_APPEARANCE")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
-open -n "$data/BotChu.app" "${args[@]}"
+open -g -n "$data/BotChu.app" "${args[@]}"
 echo "$data/snapshots"

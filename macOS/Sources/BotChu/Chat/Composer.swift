@@ -1,45 +1,56 @@
 import SwiftUI
 
-/// The message field, with Send (or Stop while the bot works) inside it.
-struct Composer: View {
+/// A roomy writing area above the current account, generation controls and Send/Stop.
+struct Composer<Controls: View>: View {
     @Binding var draft: String
     var focused: FocusState<Bool>.Binding
     let botName: String
     let running: Bool
     let onSend: () -> Void
     let onStop: () -> Void
+    @ViewBuilder let controls: Controls
 
     private var isEmpty: Bool { draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             TextField("Message \(botName)", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
-                .lineLimit(1...10)
+                .font(.body)
+                .lineLimit(2...10)
                 .focused(focused)
                 .onSubmit(onSend)
-                .padding(.vertical, 5)
-            if running {
-                button("stop.circle.fill", help: "Stop (⌘.)", action: onStop)
-                    .foregroundStyle(.secondary)
-            } else {
-                button("arrow.up.circle.fill", help: "Send (Return; Option-Return for a new line)", action: onSend)
-                    .foregroundStyle(isEmpty ? AnyShapeStyle(.quaternary) : AnyShapeStyle(Color.accentColor))
-                    .disabled(isEmpty)
+                .padding(.horizontal, 4)
+                .accessibilityLabel("Message \(botName)")
+            HStack(spacing: 12) {
+                controls
+                if running {
+                    button("stop.fill", label: "Stop", help: "Stop (⌘.)", action: onStop)
+                } else {
+                    button("arrow.up", label: "Send", help: "Send (Return; Option-Return for a new line)", action: onSend)
+                        .disabled(isEmpty)
+                }
             }
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 6)
-        .padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 20).fill(Color.primary.opacity(0.04)))
-        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.12)))
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color(nsColor: .controlBackgroundColor)))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(focused.wrappedValue ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.15))
+        }
+        .shadow(color: .black.opacity(0.05), radius: 12, y: 3)
     }
 
-    private func button(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+    private func button(_ symbol: String, label: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 24))
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: 32, height: 32)
+                .foregroundStyle(isEmpty && !running ? Color.secondary : Color(nsColor: .controlBackgroundColor))
+                .background(Circle().fill(isEmpty && !running ? Color.primary.opacity(0.08) : Color.primary))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
         .help(help)
     }
 }

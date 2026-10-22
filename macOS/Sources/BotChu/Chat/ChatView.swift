@@ -36,21 +36,21 @@ struct ChatView: View {
                     .followsNewestMessage()
                     .onChange(of: messages.count) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    Composer(draft: $draft, focused: $composerFocused, botName: bot.name, running: running,
-                             onSend: send, onStop: { model.stop(botID) })
-                    HStack {
-                        ModelMenu(bot: bot, disabled: running,
-                                  onModel: { model.setModel($0, for: botID) },
-                                  onEffort: { model.setReasoningEffort($0, for: botID) })
-                        Spacer(minLength: 8)
-                        Text(bot.account.name).font(.caption).foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 8)
+                Composer(draft: $draft, focused: $composerFocused, botName: bot.name, running: running,
+                         onSend: send, onStop: { model.stop(botID) }) {
+                    Label(bot.account.name, systemImage: "terminal")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                        .help("Current account. Change it in Edit Bot.")
+                    Spacer(minLength: 0)
+                    ModelMenu(bot: bot, disabled: running,
+                              onModel: { model.setModel($0, for: botID) },
+                              onEffort: { model.setReasoningEffort($0, for: botID) })
+                        .layoutPriority(1)
                 }
                 .padding(.horizontal, 24)
-                .padding(.top, 4)
-                .padding(.bottom, 12)
+                .padding(.top, 10)
+                .padding(.bottom, 16)
                 .frame(maxWidth: Theme.chatWidth)
                 .frame(maxWidth: .infinity)
             }

@@ -17,13 +17,19 @@ the Mac, and runs in its own workspace folder on this Mac.
     and any OpenRouter model). Each account's command can be changed in Settings.
   - **Chat:** one continuous thread per bot. Replies stream in, rendered as Markdown; each tool the
     agent runs shows as a collapsible card with its input and output. Headings, nested lists, quotes,
-    tables and fenced code use native block layouts; code has a Copy button. Antigravity subagent
+    tables and fenced code use native block layouts; code has a Copy button. Replies have soft rounded
+    bubbles. Inline and display math use bundled KaTeX; Mermaid code fences display diagrams with
+    source/copy and fit/actual-size controls. Both render offline in system WebKit, including inside
+    tables and lists. Unsupported or incomplete expressions and diagrams stay readable as source.
+    Antigravity subagent
     launch cards finish when the CLI acknowledges the launch; the bot reports the workers' results
     in its replies. A missing completion record shows a neutral question mark, not a tool failure.
     A turn can be stopped. The
     thread and the CLI's session id are saved, so the next message (also after a relaunch) resumes
     the same CLI session.
-  - **Model controls:** below the message field, choose a model and reasoning effort for the bot's
+  - **Message box:** a multiline writing area with account, model/effort and send/stop controls in
+    its bottom row. Return sends; Option-Return inserts a new line.
+  - **Model controls:** below the writing area, choose a model and reasoning effort for the bot's
     existing account. Choices are saved and applied on the next turn, including resumed sessions.
     The menu has starter model choices and a custom model ID field for the current CLI; it cannot
     switch accounts or CLI providers. Defaults leave the choice to the CLI (or the OpenRouter model
@@ -54,7 +60,7 @@ the Mac, and runs in its own workspace folder on this Mac.
   outside the Keychain and the CLIs' own logins.
 
 ## Architecture
-- `macOS/` is a Swift package (Swift 6 toolchain, macOS 14+, no third-party dependencies):
+- `macOS/` is a Swift package (Swift 6 toolchain, macOS 14+):
   - `Sources/BotChuCore/` — Foundation only, unit-tested: accounts and the command line each CLI
     runs with (`Accounts.swift`), the bot and message model (`Models.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), the identity, memory and
@@ -65,11 +71,16 @@ the Mac, and runs in its own workspace folder on this Mac.
     in standard system materials: `App/` (the app, window, model, settings, Keychain, dev hooks),
     `Sidebar/` (the bot list), `Chat/` (messages and the composer), `Inspector/` (the status
     sidebar), `Editor/` (the bot sheet), `Settings/`, and `Shared/` (layout constants, the avatar
-    and the status badge).
+    and the status badge). `Resources/ChatRenderer/` bundles pinned Mermaid and KaTeX distributions,
+    their fonts and licenses. Its README records provenance and update steps; no JavaScript package
+    install or network access is needed at runtime. The rendering document blocks remote resources
+    and model-supplied scripts, uses Mermaid's strict mode and disables trusted TeX commands.
   - `Sources/botchu-smoke/` — a command-line check, not shipped in the app, that runs two real
     turns on each account named the way the app does (see **Test**).
   - `Tests/BotChuCoreTests/` — parser tests against captured output of every CLI, command lines,
     context and store.
+  - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
+    fallback and offline restrictions, using isolated windows and no bot data.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
     `macOS/build/`), signed with the local "Apple Development" certificate when there is one, ad hoc
     otherwise. It records the SDK the app was linked against in the binary (`vtool`), because
@@ -99,7 +110,7 @@ the Mac, and runs in its own workspace folder on this Mac.
   BotChu may access that folder, and the turn waits until you answer. A bot that has printed nothing
   after 20 seconds says so in its chat. Because the app is signed with the same certificate every
   build, the answer survives reinstalls.
-- Install: nothing to install; the package has no dependencies.
+- Install: no dependency installation is needed; the renderer assets are included in the repository.
 - Configure: nothing in `.env`. The OpenRouter key goes in BotChu ▸ Settings.
 - Run from a checkout without touching the installed copy:
   ```sh
@@ -126,6 +137,7 @@ the Mac, and runs in its own workspace folder on this Mac.
   Claude Dev); the app writes a PNG of each of its windows into the printed folder every second
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor` or `BOTCHU_OPEN=settings` opens the bot editor or Settings instead.
+  `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
 - Smoke test after deploy: `macOS/install.sh` fails unless the installed app starts (launched hidden,
   checked with `pgrep -x BotChu`, and quit again unless it was already open).
 

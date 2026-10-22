@@ -1,0 +1,43 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="katex.min.css">
+<style>
+:root { color-scheme: light dark; --ink: #242424; --muted: #737373; --line: #00000018; --wash: #00000009; --link: #0868d4; --bubble: #f7f7f7; }
+:root[data-appearance="dark"] { --ink: #ededed; --muted: #aaa; --line: #ffffff22; --wash: #ffffff0b; --link: #6aafff; --bubble: #292929; }
+html, body { margin: 0; padding: 0; background: var(--bubble); color: var(--ink); overflow: hidden; }
+body { font: 13px/1.5 -apple-system, sans-serif; overflow-wrap: anywhere; }
+#content { display: flow-root; }
+#content > :first-child { margin-top: 0; } #content > :last-child { margin-bottom: 0; }
+p, ul, ol, blockquote, .table-scroll, .code-block { margin: 0 0 10px; }
+h1, h2, h3, h4, h5, h6 { margin: 12px 0 8px; line-height: 1.3; }
+h1 { font-size: 20px; } h2 { font-size: 17px; } h3, h4, h5, h6 { font-size: 14px; }
+a { color: var(--link); text-decoration: none; } a:hover { text-decoration: underline; }
+li { margin: 4px 0; } li > p:last-child, li > ul:last-child, li > ol:last-child { margin-bottom: 0; }
+ul, ol { padding-left: 24px; } li::marker { color: var(--muted); }
+blockquote { padding-left: 14px; border-left: 3px solid var(--line); color: var(--muted); }
+code { font: 12px ui-monospace, monospace; background: var(--wash); border-radius: 4px; padding: 1px 3px; }
+.math-source { white-space: pre-wrap; }
+.code-block { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--wash); }
+header { padding: 7px 12px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line); }
+button { float: right; font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+pre { margin: 0; padding: 12px; overflow-x: auto; } pre code { padding: 0; background: none; }
+.table-scroll { overflow-x: auto; } table { border-collapse: separate; border-spacing: 0; border: 1px solid var(--line); border-radius: 6px; }
+th, td { padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { background: var(--wash); font-weight: 600; } tr:last-child td { border-bottom: 0; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+.tex[data-display="true"] { display: block; overflow-x: auto; padding: 6px 0; }
+.katex-display { margin: 4px 0; } .katex-display > .katex { white-space: nowrap; }
+.tex.math-source { font: 12px ui-monospace, monospace; }
+.diagram-block { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 10px 0; }
+.diagram { overflow-x: auto; padding: 12px; }
+.diagram:empty { display: none; }
+.diagram svg { display: block; max-width: 100%; height: auto; margin: auto; }
+.diagram.actual-size svg { max-width: none; width: var(--diagram-width); }
+.diagram-block details { border-top: 1px solid var(--line); }
+summary { cursor: pointer; color: var(--muted); font-size: 11px; padding: 8px 12px; }
+button + button { margin-right: 12px; }
+button:focus-visible, summary:focus-visible { outline: 2px solid var(--link); }
+li > p { margin: 0; }
+</style></head><body><main id="content"></main></body></html>
+
