@@ -56,7 +56,7 @@ struct ChatView: View {
                     Text(current.account.name)
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.tail)
-                    .help(task == nil ? "Current account. Change it in Edit Bot." : "This task's account. Change it in the status sidebar.")
+                        .help(task == nil ? "Current account. Change it in Edit Bot." : "This task's account. Change it in the status sidebar.")
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 10)
@@ -64,8 +64,7 @@ struct ChatView: View {
                 .frame(maxWidth: Theme.chatWidth)
                 .frame(maxWidth: .infinity)
             }
-            // A stable minimum keeps the split view from renegotiating its column size as the
-            // model label truncates beside the fixed-size effort and send controls.
+            // Keep room for the model, effort and send controls when the columns are narrowed.
             .frame(minWidth: 300)
             .navigationTitle(bot.name)
             .navigationSubtitle(task?.title ?? "")

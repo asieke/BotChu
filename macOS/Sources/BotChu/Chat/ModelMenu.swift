@@ -35,7 +35,10 @@ struct ModelMenu: View {
         .disabled(disabled)
         .task(id: settings.account.kind) {
             if settings.account.kind == .pi { await app.modelCatalog.load() }
-            if DevHooks.dataDir != nil {
+            if DevHooks.dataDir != nil, DevHooks.env["BOTCHU_OPEN"] != nil {
+                // Let the review window finish opening/resizing before anchoring its popover.
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
                 showsModels = DevHooks.env["BOTCHU_OPEN"] == (inInspector ? "inspector-model" : "model")
                 showsEffort = DevHooks.env["BOTCHU_OPEN"] == (inInspector ? "inspector-effort" : "effort")
             }

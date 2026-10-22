@@ -4,7 +4,7 @@ import Testing
 import BotChuCore
 @testable import BotChu
 
-@Suite(.serialized) @MainActor struct ModelControlsTests {
+extension RenderingTests {
     @Test func modelSearchAndEffortCanBeSelectedWithTheKeyboard() async throws {
         _ = NSApplication.shared
         var pickedModel: String?

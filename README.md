@@ -149,7 +149,8 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
 ## Architecture
 - `macOS/` is a Swift package (Swift 6 toolchain, macOS 14+):
   - `Sources/BotChuCore/` — Foundation only, unit-tested: accounts and the command line each CLI
-    runs with (`Accounts.swift`), the bot and message model (`Models.swift`), one stream parser per
+    runs with (`Accounts.swift`), generation choices and public OpenRouter model metadata
+    (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model (`Models.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), the identity, memory and
     recap that open a session (`BotContext.swift`), account allowance parsing and native queries
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
@@ -177,8 +178,9 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
     made in throwaway repositories.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
-    fallback and offline restrictions, and the main window's layout at its narrowest, using
-    isolated windows and no real bot data.
+    fallback and offline restrictions, model-picker keyboard interaction and persisted choices,
+    and the main window's layout at its narrowest. These share a serialized suite because AppKit
+    window focus is global; all use isolated windows and no real bot data.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
     `macOS/build/`), signed with the local "Apple Development" certificate when there is one, ad hoc
     otherwise. It records the SDK the app was linked against in the binary (`vtool`), because
