@@ -11,31 +11,33 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
   - **Bots:** create, edit and delete bots. A bot has a name, an emoji, a one-line title, private
     instructions, an account, an optional model and a workspace folder (default `~/BotChu/<name>`).
     A new bot introduces itself in one reply, so a misread role shows up at once.
-  - **Pets:** a bot can have an animated character in place of its emoji: its head in the sidebar
-    and the chat, and its whole figure at the top of the status sidebar. It acts out what the bot is
-    doing in a turn, judged from each tool call the CLI reports: thinking, researching (reading and
-    searching files), browsing (web search and fetch), coding (editing files, commits), testing
-    (builds, tests, linters), working (anything else); it celebrates when a turn ends, looks
-    deflated after a failed one, and waves when its bot is selected. A pet is a Codex pet (the
-    `hatch-pet` skill's 8 × 9 or 8 × 11 atlas of 192 × 208 cells), plus optional extra animations
-    BotChu adds for these activities; missing ones fall back to the closest atlas row. **Import
-    Codex Pet…** in **Edit Bot** copies one in (for example from `~/.codex/pets/<name>`). Frames
-    blend into each other and a change of activity cross-fades, so the motion is smooth. Reduce
-    Motion shows a still frame. Only the selected bot and busy bots move in the sidebar.
-  - **Drawing a pet:** describe the bot's look in **Appearance** in **Edit Bot** and choose **Draw
-    Pet** (or create a bot with an appearance). One `codex exec` on a Codex account follows Codex's
-    `hatch-pet` skill to draw the base and the nine atlas rows, then draws BotChu's six extra
-    animations (thinking, reading a book, browsing a tablet, coding at a laptop, testing, working
-    with a wrench) with the same skill's layout guides and frame extraction. It works in
-    `.botchu/pet-drawing/` and replaces the pet only once a valid atlas exists, so chat goes on and
-    the old pet stays meanwhile; a failed drawing stays there to inspect, and the bot's log records
-    the run. Once installed, the run's working files are removed; its prompts, contact sheet and
-    QA previews stay in `pet/run/`. Progress shows in the editor and the status sidebar, with
-    Cancel. A bot on a Codex account draws with its own; others use the account in Settings. It
-    needs the skill in that account's Codex home (or `~/.agents/skills`, `~/.codex/skills`) and
-    Python with Pillow (Xcode's `/usr/bin/python3` with `pip install --user pillow`, or
-    Homebrew's), and BotChu says which is missing. A drawing makes about 16 images on that
-    account's allowance and takes about half an hour.
+  - **Pets:** a bot can have an animated character in place of its emoji, shown in a circle: its
+    face in the sidebar and the chat, and larger at the top of the status sidebar. It is a set of
+    short looping videos, one per activity, like the character in Meta's Muse: idle; thinking;
+    researching (reading and searching files); browsing (web search and fetch); coding (editing
+    files, commits: at a laptop, with headphones on); testing (builds, tests, linters); working
+    (anything else); a wave when its bot is selected and a cheer when a turn ends, which play once;
+    and a deflated loop after a failed turn. The activity comes from each tool call the CLI reports,
+    and a tool's clip shows for at least 2.5 seconds. Clips loop without a seam, cross-fade when the
+    activity changes, and play muted. A missing clip falls back to a close one, then idle. Only the
+    selected bot and busy bots move in the sidebar, the chat shows still frames, and Reduce Motion
+    shows stills everywhere.
+  - **Making a pet:** describe the bot's look in **Appearance** in **Edit Bot** and choose **Make
+    Pet…** (or **Create and Make Pet** when creating a bot with an appearance); BotChu asks first,
+    with the estimated cost. One `codex exec` on a Codex account draws eight square stills of the
+    character, one per pose, with its built-in image generation (on that account's ChatGPT
+    allowance). BotChu then sends each still to an image-to-video model on OpenRouter, as both the
+    first and last frame of a 4 or 5 second clip, so it loops; all ten clips at once. Each clip is
+    scaled down to 256 × 256 pixels after downloading. The default model, Seedance 1.5 Pro at
+    480p, costs about $0.06 a clip, about $0.56 a pet; Kling 3.0 Standard at 720p is about $4. It
+    takes about 10 minutes. A remake with the same appearance keeps the character: the current
+    pet's idle still (or, for a bot whose pet was drawn before video pets, its base image) goes to
+    Codex as the reference. It works in `.botchu/pet-making/` and replaces the pet only once its idle
+    clip exists, so chat goes on and the old pet stays meanwhile; the bot's log records the Codex
+    run, each clip and its cost. Progress shows in the editor and the status sidebar, with Cancel
+    (clips already started on OpenRouter still finish and are charged; drawn stills are kept for
+    the next try). A bot on a Codex account draws with its own account; others use the one in
+    Settings. It needs the OpenRouter key in Settings.
   - **Accounts:** any bot can run on any account, switchable in **Edit Bot**:
     Claude Personal, Claude Dev and Claude Work (`claude-personal`, `claude-dev`, `claude-work`),
     Codex Personal, Codex Dev and Codex Work (`codex-personal`, `codex-dev`, `codex-work`), Google
@@ -91,8 +93,8 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     the repository, branch, worktree, session and pull request, and the task's `thread.jsonl`), the
     task requests it writes (`dispatch/`), a log of every turn (`logs/<date>.log`:
     the command, where it ran, how long it took, the exit status, any error and the CLI's error output) and its
-    pet (`pet/`: `pet.json`, the spritesheet, and `activities.json` with `activities/<id>/NN.png`
-    for extra animations) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
+    pet (`pet/`: `video.json`, `stills/<pose>.png`, `clips/<activity>.mp4` and the appearance it
+    was made from) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
     is told it can search them for earlier conversations. **History & Logs** in the status sidebar
     opens the folder. Each bot needs its own workspace, and not the bots folder itself; moving a
     bot's workspace in its editor moves its `.botchu/` with it, and deleting a bot puts only its
@@ -103,7 +105,7 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     them across its own context compaction. A new session (new bot, account switch, or **New
     Session**) also gets the recent conversation, so switching accounts keeps the thread's continuity.
   - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I). A card at the top shows
-    the selected bot's face (its pet or emoji) in a ring that says its state (grey when idle, a
+    the selected bot's face (its pet, playing, or its emoji) in a ring that says its state (grey when idle, a
     spinning violet arc while it works, red after a failed turn), its name and title, a pill while
     working or after an error, and a line on what it is doing with the turn's running time
     (or when it was last active, or the
@@ -129,7 +131,8 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     an expired window hides its old percentage until a new reading arrives. CLI output,
     credentials and usage readings are not written to disk by BotChu.
   - **Settings:** the bots folder, the repositories folder, each account's command, the Codex
-    account that draws pets, the OpenRouter API key (Keychain) and default OpenRouter model.
+    account that draws pets' stills, the OpenRouter model that animates them (with its cost per
+    pet), the OpenRouter API key (Keychain) and default OpenRouter model.
 - Does not: run bots or tasks anywhere but this Mac (yet: SSH hosts, set up in BotChu itself, come
   later in #16), clone repositories, schedule routines, ask for approval of tool calls (every
   CLI runs with its permission prompts bypassed, inside the bot's folder or the task's worktree), or
@@ -143,19 +146,20 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     recap that open a session (`BotContext.swift`), account allowance parsing and native queries
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
     (`UsageCache.swift`), what the status sidebar shows about a bot and
-    its `MEMORY.md` (`BotStatus.swift`), pets: the atlas rows, BotChu's extra animations, the
-    activity a tool call means and the pet folder (`Pet.swift`), drawing a pet with Codex: the
-    prompt, prerequisites, progress and install (`PetHatching.swift`), tasks: the task, its title
+    its `MEMORY.md` (`BotStatus.swift`), pets: the activity a tool call means
+    and the clips that show it (`Pet.swift`), making a pet: its poses and clips, the Codex prompt
+    for the stills, the OpenRouter request and job, the cost estimate, the manifest and install
+    (`PetVideo.swift`), tasks: the task, its title
     and branch names, its pull request, receipts and dispatch requests (`Tasks.swift`), the
     checkouts in the repositories folder, task worktrees and what `gh` says about issues and pull
     requests (`Repositories.swift`), the JSON store (`Store.swift`), and the `Process` runner
     that launches a CLI through the login shell, `zsh -l` (`AgentRun.swift`).
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
-    in standard system materials: `App/` (the app, window, model, settings, Keychain, dev hooks),
+    in standard system materials: `App/` (the app, window, model, settings, Keychain, dev hooks, making
+    pets and the OpenRouter video client),
     `Sidebar/` (the bot list), `Chat/` (the tab bar, messages and the composer), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot sheet and New Task), `Settings/`, and
-    `Shared/` (layout constants, the avatar, the status badge, and the pet sprite: atlas decoding
-    and the animated view).
+    `Shared/` (layout constants, the avatar, the status badge, and the pet's looping video).
     `Resources/ChatRenderer/` bundles pinned Mermaid and KaTeX distributions, their fonts and licenses. Its README records provenance and update steps; no JavaScript package
     install or network access is needed at runtime. The rendering document blocks remote resources
     and model-supplied scripts, uses Mermaid's strict mode and disables trusted TeX commands.
@@ -227,9 +231,11 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
   Task or Settings instead. `BOTCHU_TAB=<n>` shows the first bot's nth tab (and the message goes
   there), and `BOTCHU_TASK="hello-world|<task>"` starts a task in the throwaway repository (a real
   turn).
-  `BOTCHU_PET=~/.codex/pets/<name>` gives the first bot that Codex pet, and
-  `BOTCHU_DRAW_PET="<appearance>"` has Codex draw it one (a real run on the pet account). The window's picture leaves
-  out the sidebar's rows, so they are drawn on their own into `sidebar.png`.
+  `BOTCHU_PET=<pet folder>` gives the first bot that pet (`video.json`, `stills/`, `clips/`), and
+  `BOTCHU_DRAW_PET="<appearance>"` makes it one (a real Codex run and real OpenRouter clips, which
+  cost credit). The window's picture leaves out the sidebar's rows and video layers, so the rows
+  are drawn on their own into `sidebar.png`, each pet's current frame is drawn into its circle, and
+  `pets.txt` lists each pet player's clip, state and time.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
   querying any account. Usage fixtures are ignored outside throwaway data runs.
