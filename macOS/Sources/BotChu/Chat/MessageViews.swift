@@ -4,6 +4,8 @@ import BotChuCore
 struct MessageRow: View {
     let message: ChatMessage
     let bot: Bot
+    /// The first reply or tool call after the owner's message carries the bot's avatar.
+    let startsBotTurn: Bool
 
     var body: some View {
         switch message.role {
@@ -15,17 +17,17 @@ struct MessageRow: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
                     .foregroundStyle(.white)
-                    .background(RoundedRectangle(cornerRadius: 16).fill(Color.accentColor))
+                    .background(RoundedRectangle(cornerRadius: Theme.bubbleRadius).fill(Color.accentColor))
             }
+            .padding(.top, 6)
         case .assistant:
-            HStack(alignment: .top, spacing: 10) {
-                BotAvatar(bot: bot, size: 26)
+            BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
                 MarkdownText(text: message.text)
-                Spacer(minLength: 40)
             }
         case .tool:
-            ToolCard(message: message)
-                .padding(.leading, 36)
+            BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
+                ToolCard(message: message)
+            }
         case .error:
             Label {
                 Text(message.text).textSelection(.enabled)
@@ -36,14 +38,35 @@ struct MessageRow: View {
             .foregroundStyle(.red)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.red.opacity(0.08)))
+            .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Color.red.opacity(0.08)))
         case .note:
             Text(message.text)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 2)
         }
+    }
+}
+
+/// A row of the bot's turn: its avatar (or the avatar's space) and the content beside it.
+struct BotTurnRow<Content: View>: View {
+    let bot: Bot
+    let showsAvatar: Bool
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            if showsAvatar {
+                BotAvatar(bot: bot, size: Theme.messageAvatar)
+            } else {
+                Color.clear.frame(width: Theme.messageAvatar, height: 1)
+            }
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.top, showsAvatar ? 6 : 0)
     }
 }
 
@@ -70,6 +93,7 @@ struct MarkdownText: View {
                 }
             }
         }
+        .padding(.top, 3)
     }
 
     static func attributed(_ prose: String) -> AttributedString {
@@ -104,7 +128,7 @@ struct ToolCard: View {
                 }
                 .contentShape(Rectangle())
                 .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .padding(.vertical, 6)
             }
             .buttonStyle(.plain)
 
@@ -125,8 +149,8 @@ struct ToolCard: View {
                 .padding(.bottom, 9)
             }
         }
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.primary.opacity(0.04)))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.primary.opacity(0.07)))
+        .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Color.primary.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius).strokeBorder(Color.primary.opacity(0.07)))
     }
 
     @ViewBuilder private var status: some View {
@@ -146,5 +170,29 @@ struct ToolCard: View {
 
     private func firstLine(_ text: String) -> String {
         text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? ""
+    }
+}
+
+struct TypingIndicator: View {
+    let bot: Bot
+    let showsAvatar: Bool
+    @State private var phase = 0.0
+
+    var body: some View {
+        BotTurnRow(bot: bot, showsAvatar: showsAvatar) {
+            HStack(spacing: 5) {
+                ForEach(0..<3) { i in
+                    Circle()
+                        .fill(Color.secondary)
+                        .frame(width: 7, height: 7)
+                        .opacity(0.3 + 0.7 * max(0, sin(phase - Double(i) * 0.8)))
+                }
+            }
+            .padding(.vertical, 9)
+        }
+        .onAppear {
+            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = .pi * 2 }
+        }
+        .accessibilityLabel("Working")
     }
 }
