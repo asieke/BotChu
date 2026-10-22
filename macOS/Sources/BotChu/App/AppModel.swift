@@ -275,8 +275,12 @@ final class AppModel {
                         ended = true
                     default: break
                     }
-                    if let activity = BotActivity.next(after: event), self.runStates[id]?.activity != activity {
-                        self.runStates[id]?.activity = activity
+                    if let activity = BotActivity.next(after: event),
+                       activity != self.runStates[id]?.activity || self.runStates[id]?.pending != nil,
+                       let wait = self.runStates[id]?.move(to: activity) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+                            self?.runStates[id]?.settle()
+                        }
                     }
                     assembler.apply(event, to: &messages)
                 }

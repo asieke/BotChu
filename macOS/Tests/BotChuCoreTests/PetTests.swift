@@ -83,6 +83,30 @@ import Testing
         }
     }
 
+    @Test func toolActivityShowsLongEnoughToSee() {
+        let start = Date(timeIntervalSinceReferenceDate: 0)
+        var run = RunState(startedAt: start)
+        #expect(run.move(to: .coding, at: start.addingTimeInterval(1)) == nil)
+        #expect(run.activity == .coding)
+        // The edit finished at once: thinking waits.
+        let wait = run.move(to: .thinking, at: start.addingTimeInterval(1.5))
+        #expect(wait == RunState.minimumShow - 0.5)
+        #expect(run.activity == .coding)
+        run.settle(at: start.addingTimeInterval(2))
+        #expect(run.activity == .coding)
+        run.settle(at: start.addingTimeInterval(3.5))
+        #expect(run.activity == .thinking)
+        // Another tool before the wait is over takes over at once.
+        _ = run.move(to: .researching, at: start.addingTimeInterval(4))
+        _ = run.move(to: .thinking, at: start.addingTimeInterval(4.2))
+        #expect(run.move(to: .testing, at: start.addingTimeInterval(4.4)) == nil)
+        #expect(run.activity == .testing)
+        #expect(run.pending == nil)
+        // A tool that ran long goes back to thinking at once.
+        #expect(run.move(to: .thinking, at: start.addingTimeInterval(9)) == nil)
+        #expect(run.activity == .thinking)
+    }
+
     @Test func statusShowsTheActivity() {
         let bot = Bot(name: "B", workspace: "/tmp/b")
         #expect(BotStatus.make(bot: bot, messages: [], run: nil).activity == .idle)
