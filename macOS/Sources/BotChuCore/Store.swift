@@ -1,8 +1,10 @@
 import Foundation
 
 /// A bot's own files, in `.botchu/` inside its workspace, so the folder is the whole bot: its
-/// settings (`bot.json`), its conversation (`thread.jsonl`, one message per line), a log of each
-/// turn (`logs/<date>.log`) and its animated pet (`pet/`). A `.gitignore` keeps them out of a workspace that is a git repository.
+/// settings (`bot.json`), its conversation (`thread.jsonl`, one message per line), its tasks
+/// (`tasks/<id>/`, each with `task.json` and its own `thread.jsonl`), the tasks it asks for
+/// (`dispatch/`), a log of each turn (`logs/<date>.log`) and its animated pet (`pet/`). A
+/// `.gitignore` keeps them out of a workspace that is a git repository.
 public struct BotHome: Sendable {
     public static let folderName = ".botchu"
 
@@ -17,6 +19,13 @@ public struct BotHome: Sendable {
     public var logsURL: URL { url.appendingPathComponent("logs", isDirectory: true) }
     /// The bot's animated pet, when it has one (see `PetPackage`).
     public var petURL: URL { url.appendingPathComponent("pet", isDirectory: true) }
+    public var tasksURL: URL { url.appendingPathComponent("tasks", isDirectory: true) }
+    /// Where the bot puts requests for tasks from its Home conversation (`TaskRequest`), which
+    /// BotChu takes and removes.
+    public var dispatchURL: URL { url.appendingPathComponent("dispatch", isDirectory: true) }
+
+    public func taskURL(_ id: UUID) -> URL { tasksURL.appendingPathComponent(id.uuidString.lowercased(), isDirectory: true) }
+    public func taskThreadURL(_ id: UUID) -> URL { taskURL(id).appendingPathComponent("thread.jsonl") }
 
     public func loadPet() -> PetPackage? { PetPackage.load(from: petURL) }
 
@@ -33,16 +42,70 @@ public struct BotHome: Sendable {
     }
 
     public func loadThread() -> [ChatMessage] {
-        guard let text = try? String(contentsOf: threadURL, encoding: .utf8) else { return [] }
-        return text.split(separator: "\n").compactMap { try? Store.decoder.decode(ChatMessage.self, from: Data($0.utf8)) }
+        Self.readThread(threadURL)
     }
 
     /// Rewrites the whole thread, atomically (a temporary file, then a rename), so a crash never
     /// leaves it half written.
     public func saveThread(_ messages: [ChatMessage]) throws {
         try prepare()
+        try Self.writeThread(messages, to: threadURL)
+    }
+
+    /// The bot's tasks, open and closed, oldest first. A task whose `task.json` can't be read is left out.
+    public func loadTasks() -> [BotTask] {
+        let folders = (try? FileManager.default.contentsOfDirectory(at: tasksURL, includingPropertiesForKeys: nil)) ?? []
+        return folders.compactMap { folder in
+            (try? Data(contentsOf: folder.appendingPathComponent("task.json"))).flatMap { try? Store.decoder.decode(BotTask.self, from: $0) }
+        }
+        .sorted { ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString) }
+    }
+
+    public func save(_ task: BotTask) throws {
+        try prepare()
+        try FileManager.default.createDirectory(at: taskURL(task.id), withIntermediateDirectories: true)
+        try Store.encoder.encode(task).write(to: taskURL(task.id).appendingPathComponent("task.json"), options: .atomic)
+    }
+
+    public func loadThread(task id: UUID) -> [ChatMessage] {
+        Self.readThread(taskThreadURL(id))
+    }
+
+    public func saveThread(_ messages: [ChatMessage], task id: UUID) throws {
+        try prepare()
+        try FileManager.default.createDirectory(at: taskURL(id), withIntermediateDirectories: true)
+        try Self.writeThread(messages, to: taskThreadURL(id))
+    }
+
+    /// The task requests waiting in `dispatch/`, oldest first: each file's name and contents. Each
+    /// is removed as it is read, so a request is taken once. A file changed in the last `settle`
+    /// seconds may still be being written, so it waits for the next look.
+    public func takeDispatches(now: Date = Date(), settle: TimeInterval = 1) -> [(name: String, data: Data)] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: dispatchURL, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        let modified = { (url: URL) in (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast }
+        return files.filter { $0.pathExtension.lowercased() == "json" && !$0.lastPathComponent.hasPrefix(".") }
+            .filter { now.timeIntervalSince(modified($0)) >= settle }
+            .sorted { (modified($0), $0.lastPathComponent) < (modified($1), $1.lastPathComponent) }
+            .compactMap { file in
+                guard let data = try? Data(contentsOf: file), (try? FileManager.default.removeItem(at: file)) != nil else { return nil }
+                return (file.lastPathComponent, data)
+            }
+    }
+
+    /// Creates `dispatch/`, so a bot finds where its requests go.
+    public func prepareDispatch() throws {
+        try prepare()
+        try FileManager.default.createDirectory(at: dispatchURL, withIntermediateDirectories: true)
+    }
+
+    static func readThread(_ url: URL) -> [ChatMessage] {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return text.split(separator: "\n").compactMap { try? Store.decoder.decode(ChatMessage.self, from: Data($0.utf8)) }
+    }
+
+    static func writeThread(_ messages: [ChatMessage], to url: URL) throws {
         let lines = try messages.map { String(decoding: try Store.lineEncoder.encode($0), as: UTF8.self) }
-        try Data((lines.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")).utf8).write(to: threadURL, options: .atomic)
+        try Data((lines.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")).utf8).write(to: url, options: .atomic)
     }
 
     /// Appends to the day's log, `logs/yyyy-MM-dd.log` in local time.

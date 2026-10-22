@@ -1,7 +1,8 @@
 import SwiftUI
 import BotChuCore
 
-/// The window: bots on the left, the selected bot's chat in the middle, its status on the right.
+/// The window: bots on the left; in the middle, the selected bot's conversations as tabs (its Home
+/// and its tasks) over the shown one's chat; its status on the right.
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openSettings) private var openSettings
@@ -20,6 +21,10 @@ struct ContentView: View {
             BotEditor(request: request)
                 .environment(model)
         }
+        .sheet(item: $model.taskSheet) { request in
+            NewTaskSheet(botID: request.botID)
+                .environment(model)
+        }
         .task {
             guard !hooksStarted else { return }
             hooksStarted = true
@@ -29,12 +34,24 @@ struct ContentView: View {
 
     @ViewBuilder private var detail: some View {
         if let id = model.selection, model.bot(id) != nil {
-            ChatView(botID: id)
-                .id(id)
-                .inspector(isPresented: $showsStatus) {
-                    BotInspector(botID: id)
-                        .inspectorColumnWidth(min: 280, ideal: 320, max: 380)
+            let tab = model.tab(of: id)
+            VStack(spacing: 0) {
+                if !model.openTasks(of: id).isEmpty {
+                    TaskTabBar(botID: id)
                 }
+                ChatView(target: tab)
+                    .id(tab)
+            }
+            .inspector(isPresented: $showsStatus) {
+                Group {
+                    if tab.taskID != nil {
+                        TaskInspector(target: tab)
+                    } else {
+                        BotInspector(botID: id)
+                    }
+                }
+                .inspectorColumnWidth(min: 280, ideal: 320, max: 380)
+            }
         } else {
             ContentUnavailableView {
                 Label("No Bot Selected", systemImage: "bubble.left.and.text.bubble.right")

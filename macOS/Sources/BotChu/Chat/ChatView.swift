@@ -1,29 +1,36 @@
 import SwiftUI
 import BotChuCore
 
+/// One conversation: a bot's Home, or one of its tasks.
 struct ChatView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("showsStatus") private var showsStatus = true
-    let botID: UUID
-    @State private var draft = ""
+    let target: ChatTarget
     @FocusState private var composerFocused: Bool
 
     var body: some View {
-        if let bot = model.bot(botID) {
-            let messages = model.thread(botID)
-            let running = model.isRunning(botID)
+        if let bot = model.bot(target.botID), let current = model.runSettings(of: target) {
+            let task = model.task(target)
+            let messages = model.thread(target)
+            let running = model.isRunning(target)
             VStack(spacing: 0) {
                 ScrollViewReader { proxy in
                     ScrollView {
                         // Eager, not lazy: threads are short, and a lazy stack blanks and jumps while
                         // replies stream in.
                         VStack(alignment: .leading, spacing: 12) {
-                            BotIntro(bot: bot)
+                            if let task {
+                                TaskIntro(bot: bot, task: task)
+                            } else {
+                                BotIntro(bot: bot)
+                            }
                             ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
-                                MessageRow(message: message, bot: bot,
+                                MessageRow(message: message, bot: bot, kind: current.account.kind,
                                            startsBotTurn: !Self.isBotTurn(messages[safe: index - 1]))
                             }
-                            if running, messages.last?.role != .assistant {
+                            if model.runStates[target]?.preparing == true {
+                                PreparingRow(bot: bot)
+                            } else if running, messages.last?.role != .assistant {
                                 TypingIndicator(bot: bot, showsAvatar: !Self.isBotTurn(messages.last))
                             }
                             Color.clear.frame(height: 1).id("bottom")
@@ -36,16 +43,18 @@ struct ChatView: View {
                     .followsNewestMessage()
                     .onChange(of: messages.count) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
-                Composer(draft: $draft, focused: $composerFocused, botName: bot.name, running: running,
-                         onSend: send, onStop: { model.stop(botID) }) {
-                    Label(bot.account.name, systemImage: "terminal")
+                Composer(draft: Binding(get: { model.drafts[target] ?? "" }, set: { model.drafts[target] = $0 }),
+                         focused: $composerFocused,
+                         placeholder: task.map { "Message \(bot.name) about \($0.title)" } ?? "Message \(bot.name)",
+                         running: running, onSend: send, onStop: { model.stop(target) }) {
+                    Label(current.account.name, systemImage: "terminal")
                         .font(.caption).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.tail)
-                        .help("Current account. Change it in Edit Bot.")
+                        .help(task == nil ? "Current account. Change it in Edit Bot." : "This task's account. Change it in the status sidebar.")
                     Spacer(minLength: 0)
-                    ModelMenu(bot: bot, disabled: running,
-                              onModel: { model.setModel($0, for: botID) },
-                              onEffort: { model.setReasoningEffort($0, for: botID) })
+                    ModelMenu(settings: current, disabled: running,
+                              onModel: { model.setModel($0, for: target) },
+                              onEffort: { model.setReasoningEffort($0, for: target) })
                         .layoutPriority(1)
                 }
                 .padding(.horizontal, 24)
@@ -55,12 +64,17 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity)
             }
             .navigationTitle(bot.name)
+            .navigationSubtitle(task?.title ?? "")
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
+                    Button { model.newTask(for: bot.id) } label: {
+                        Label("New Task", systemImage: "plus.rectangle.on.rectangle")
+                    }
+                    .help("Start a task for \(bot.name) in a repository (⌘T)")
                     Button { showsStatus.toggle() } label: {
                         Label(showsStatus ? "Hide Status" : "Show Status", systemImage: "sidebar.right")
                     }
-                    .help("Show or hide the bot's status (⌥⌘I)")
+                    .help("Show or hide the status sidebar (⌥⌘I)")
                 }
             }
             .onAppear { composerFocused = true }
@@ -68,10 +82,10 @@ struct ChatView: View {
     }
 
     private func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !model.isRunning(botID) else { return }
-        draft = ""
-        model.send(text, to: botID)
+        let text = (model.drafts[target] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !model.isRunning(target) else { return }
+        model.drafts[target] = nil
+        model.send(text, to: target)
     }
 
     /// Replies and tool calls belong to the bot's turn; its avatar shows once at the turn's start.
@@ -95,6 +109,57 @@ struct BotIntro: View {
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
         .padding(.bottom, 12)
+    }
+}
+
+/// The top of a task's chat: the bot, and what and where the task is.
+struct TaskIntro: View {
+    let bot: Bot
+    let task: BotTask
+
+    var body: some View {
+        VStack(spacing: 6) {
+            BotAvatar(bot: bot, size: 44)
+            Text(task.title).font(.title2.weight(.semibold))
+                .multilineTextAlignment(.center)
+            HStack(spacing: 4) {
+                Text(task.repo)
+                if let work = task.work {
+                    Text("·")
+                    Link(work.title.isEmpty ? "#\(work.number)" : "#\(work.number) \(work.title)", destination: work.url)
+                        .lineLimit(1)
+                        .help("Open \(work.isPullRequest ? "the pull request" : "the issue") on GitHub")
+                }
+            }
+            .foregroundStyle(.secondary)
+            if !task.branch.isEmpty {
+                Label(task.branch, systemImage: "arrow.triangle.branch")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+    }
+}
+
+/// While BotChu makes a task's worktree, before its first turn.
+struct PreparingRow: View {
+    let bot: Bot
+
+    var body: some View {
+        BotTurnRow(bot: bot, showsAvatar: true) {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Making the task's worktree…").foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.replyBackground))
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 

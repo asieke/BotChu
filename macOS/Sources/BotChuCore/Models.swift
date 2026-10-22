@@ -1,6 +1,29 @@
 import Foundation
 
-public struct Bot: Identifiable, Codable, Hashable, Sendable {
+/// What a conversation runs on: an account, a model and reasoning effort, and the CLI session it
+/// continues. A bot's own conversation (its Home) has its own, and so does each of its tasks.
+public protocol RunSettings {
+    var accountID: String { get set }
+    /// Empty means the CLI's own default model.
+    var model: String { get set }
+    /// Nil leaves reasoning effort to the CLI.
+    var reasoningEffort: ReasoningEffort? { get set }
+    /// The CLI session the conversation continues, and the account it belongs to.
+    var sessionID: String? { get set }
+    var sessionAccountID: String? { get set }
+}
+
+extension RunSettings {
+    public var account: Account { Accounts.account(id: accountID) }
+
+    /// The session to resume for the next turn, or nil when the next turn starts a new one. A
+    /// session only resumes on the account that made it.
+    public var resumableSessionID: String? {
+        sessionAccountID == accountID ? sessionID : nil
+    }
+}
+
+public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var id: UUID
     public var name: String
     public var emoji: String
@@ -44,13 +67,6 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable {
         self.createdAt = createdAt
     }
 
-    public var account: Account { Accounts.account(id: accountID) }
-
-    /// The session to resume for the next turn, or nil when the next turn starts a new one.
-    public var resumableSessionID: String? {
-        sessionAccountID == accountID ? sessionID : nil
-    }
-
     /// A folder name made from the bot's name: lowercase letters, digits and hyphens.
     public static func slug(_ name: String) -> String {
         let folded = name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil).lowercased()
@@ -72,6 +88,12 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         case user, assistant, tool, error
         /// A line from BotChu itself, such as "New session".
         case note
+        /// A line from BotChu in a bot's Home thread about one of its tasks (`TaskReceipt`), which
+        /// its next Home turn hears about.
+        case receipt
+
+        /// BotChu's own lines, which aren't part of the conversation.
+        public var isNote: Bool { self == .note || self == .receipt }
     }
 
     public enum ToolState: String, Codable, Sendable {
@@ -87,10 +109,13 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     public var toolInput: String?
     public var toolOutput: String?
     public var toolState: ToolState?
+    /// On a receipt, the task it reports on; nil for a task BotChu couldn't start.
+    public var taskID: UUID?
 
     public init(
         id: UUID = UUID(), role: Role, text: String = "", date: Date = Date(), toolID: String? = nil,
-        toolName: String? = nil, toolInput: String? = nil, toolOutput: String? = nil, toolState: ToolState? = nil
+        toolName: String? = nil, toolInput: String? = nil, toolOutput: String? = nil, toolState: ToolState? = nil,
+        taskID: UUID? = nil
     ) {
         self.id = id
         self.role = role
@@ -101,6 +126,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.toolInput = toolInput
         self.toolOutput = toolOutput
         self.toolState = toolState
+        self.taskID = taskID
     }
     /// Older versions missed AGY's subagent terminal events and saved them as failures.
     /// No result was recorded, so show an unknown completion instead of inventing success or failure.

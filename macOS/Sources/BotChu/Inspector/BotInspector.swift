@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 import BotChuCore
 
-/// The right-hand sidebar: the selected bot's face and state in a card, then what it runs on, its
-/// session, conversation, memory and workspace in grouped cards, and the actions on it.
+/// The right-hand sidebar for a bot's Home: its face and state in a card, then what it runs on, its
+/// session, tasks, conversation, memory and workspace in grouped cards, and the actions on it.
 struct BotInspector: View {
     @Environment(AppModel.self) private var model
     let botID: UUID
@@ -14,48 +14,15 @@ struct BotInspector: View {
             let status = model.status(of: bot)
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    AvatarCard(bot: bot, status: status) { model.edit(botID) }
+                    AvatarCard(bot: bot, status: status, title: bot.name, subtitle: bot.title, account: bot.account) { model.edit(botID) }
                     PetDrawingStatus(botID: botID)
                     InspectorSection("Runs on") {
-                        InspectorCard {
-                            InspectorRow("Account") {
-                                Label(bot.account.name, systemImage: bot.account.symbol)
-                                    .labelStyle(.titleAndIcon)
-                            }
-                            InspectorRow("Agent", value: bot.account.kind.displayName)
-                            InspectorRow("Model", value: modelName(bot))
-                            InspectorRow("Reasoning", value: bot.reasoningEffort?.title ?? "Default", last: true)
-                        }
+                        RunsOnCard(settings: bot)
                     }
                     InspectorSection("Session") {
-                        InspectorCard {
-                            if case .continuing(let id) = status.session {
-                                InspectorRow("Next message", value: sessionSummary(status.session))
-                                InspectorRow("ID", last: true) {
-                                    HStack(spacing: 2) {
-                                        Text(id)
-                                            .font(.system(size: 12, design: .monospaced))
-                                            .lineLimit(1)
-                                            .truncationMode(.middle)
-                                            .help(id)
-                                        Button {
-                                            NSPasteboard.general.clearContents()
-                                            NSPasteboard.general.setString(id, forType: .string)
-                                        } label: {
-                                            Image(systemName: "doc.on.doc")
-                                                .frame(width: 28, height: 28)
-                                                .contentShape(Rectangle())
-                                        }
-                                        .buttonStyle(.plain)
-                                        .foregroundStyle(Palette.secondaryText)
-                                        .help("Copy session ID")
-                                    }
-                                }
-                            } else {
-                                InspectorRow("Next message", value: sessionSummary(status.session), last: true)
-                            }
-                        }
+                        SessionCard(session: status.session)
                     }
+                    TasksSection(botID: botID)
                     InspectorSection("Conversation") {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                             StatTile(value: "\(status.messageCount)", label: "Messages", tabular: true)
@@ -103,7 +70,7 @@ struct BotInspector: View {
             }
             .background(Palette.sidebar)
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                actions(bot, running: status.phase.isActive)
+                actions
             }
             // The bot keeps MEMORY.md itself, so read it again whenever a turn ends.
             .task(id: "\(bot.workspace)|\(status.phase.isActive)|\(status.messageCount)") {
@@ -112,35 +79,20 @@ struct BotInspector: View {
         }
     }
 
-    private func actions(_ bot: Bot, running: Bool) -> some View {
+    private var actions: some View {
         VStack(spacing: 0) {
             Rectangle().fill(Palette.hairline).frame(height: 1)
             HStack(spacing: 8) {
                 Button("Edit…") { model.edit(botID) }
                     .buttonStyle(InspectorButtonStyle())
                 Spacer()
-                Button("New Session") { model.newSession(botID) }
+                Button("New Session") { model.newSession(.home(botID)) }
                     .buttonStyle(InspectorButtonStyle(prominent: true))
-                    .disabled(running)
+                    .disabled(model.isRunning(.home(botID)))
                     .help("Start the next message in a fresh session (⌘K)")
             }
             .padding(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
             .background(Palette.sidebar)
-        }
-    }
-
-    private func modelName(_ bot: Bot) -> String {
-        if !bot.model.isEmpty {
-            return GenerationOptions.modelArgument(bot.model, kind: bot.account.kind, effort: bot.reasoningEffort)
-        }
-        return bot.account.kind == .pi ? model.settings.openRouterModel : "CLI default"
-    }
-
-    private func sessionSummary(_ session: BotStatus.Session) -> String {
-        switch session {
-        case .continuing: "Continues session"
-        case .startsNew(accountChanged: true): "New session (account changed)"
-        case .startsNew(accountChanged: false): "Starts a new session"
         }
     }
 
@@ -156,22 +108,30 @@ struct BotInspector: View {
     }
 }
 
-/// The card at the top: the bot's face in a ring that shows its state, its name and title, a
-/// status pill, and a line on what it is doing.
+/// The card at the top: the bot's face in a ring that shows its state, the name and one line
+/// under it (the bot's title, or for a task, its repository), a status pill, and a line on what it
+/// is doing.
 struct AvatarCard: View {
     let bot: Bot
     let status: BotStatus
-    let edit: () -> Void
+    let title: String
+    let subtitle: String
+    /// The account the turn starts on.
+    let account: Account
+    var faceSize: CGFloat = 96
+    /// The pencil in the corner; none without.
+    var edit: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 10) {
-            StatusAvatar(bot: bot, status: status, size: 96)
+            StatusAvatar(bot: bot, status: status, size: faceSize)
             VStack(spacing: 1) {
-                Text(bot.name)
+                Text(title)
                     .font(.system(size: 17, weight: .bold))
                     .kerning(-0.2)
-                if !bot.title.isEmpty {
-                    Text(bot.title)
+                    .multilineTextAlignment(.center)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
                         .font(.system(size: 13))
                         .foregroundStyle(Palette.cardSubtitle)
                         .multilineTextAlignment(.center)
@@ -190,43 +150,247 @@ struct AvatarCard: View {
         .background(RoundedRectangle(cornerRadius: 10).fill(Palette.card))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Palette.cardEdge))
         .overlay(alignment: .topTrailing) {
-            Button(action: edit) {
-                Image(systemName: "pencil")
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(width: 30, height: 30)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Palette.button))
-                    .contentShape(Rectangle())
+            if let edit {
+                Button(action: edit) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 30, height: 30)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.button))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Palette.buttonText)
+                .padding(6)
+                .help("Edit \(bot.name), including its appearance")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(Palette.buttonText)
-            .padding(6)
-            .help("Edit \(bot.name), including its appearance")
         }
     }
 
     @ViewBuilder private var detail: some View {
         Group {
-            switch status.phase {
-            case .starting:
-                Text("Starting \(bot.account.name)…")
-            case .working:
+            if let workingOn = status.workingOn, status.phase.isActive {
+                // Home is idle; its tasks work.
                 if let started = status.runStartedAt {
-                    Text("\(status.activity.doing) · \(Text(started, style: .timer))")
+                    Text("Working on \(workingOn) · \(Text(started, style: .timer))")
                 } else {
-                    Text(status.activity.doing)
+                    Text("Working on \(workingOn)")
                 }
-            case .failed:
-                Text(status.lastError ?? "The last turn failed")
-                    .lineLimit(4)
-                    .textSelection(.enabled)
-            case .idle:
-                Text(status.lastActivity.map { "Last active \(BotInspector.ago($0))" } ?? "No messages yet")
+            } else {
+                switch status.phase {
+                case .preparing:
+                    Text("Making the task's worktree…")
+                case .starting:
+                    Text("Starting \(account.name)…")
+                case .working:
+                    if let started = status.runStartedAt {
+                        Text("\(status.activity.doing) · \(Text(started, style: .timer))")
+                    } else {
+                        Text(status.activity.doing)
+                    }
+                case .failed:
+                    Text(status.lastError ?? "The last turn failed")
+                        .lineLimit(4)
+                        .textSelection(.enabled)
+                case .idle:
+                    Text(status.lastActivity.map { "Last active \(BotInspector.ago($0))" } ?? "No messages yet")
+                }
             }
         }
         .font(.system(size: 12))
         .monospacedDigit()
         .foregroundStyle(Palette.cardSubtitle)
         .multilineTextAlignment(.center)
+    }
+}
+
+/// What a conversation runs on: account, agent, model and reasoning. A task's account can change
+/// here (`changeAccount`); a bot's changes in Edit Bot.
+struct RunsOnCard: View {
+    @Environment(AppModel.self) private var model
+    let settings: any RunSettings
+    var changeAccount: ((String) -> Void)?
+
+    var body: some View {
+        InspectorCard {
+            InspectorRow("Account") {
+                if let changeAccount {
+                    Menu {
+                        Picker("Account", selection: Binding(get: { settings.accountID }, set: changeAccount)) {
+                            ForEach(Accounts.all) { account in
+                                Label(account.name, systemImage: account.symbol).tag(account.id)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    } label: {
+                        Label(settings.account.name, systemImage: settings.account.symbol)
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("The account this task runs on; its next message starts a session there")
+                } else {
+                    Label(settings.account.name, systemImage: settings.account.symbol)
+                        .labelStyle(.titleAndIcon)
+                }
+            }
+            InspectorRow("Agent", value: settings.account.kind.displayName)
+            InspectorRow("Model", value: modelName)
+            InspectorRow("Reasoning", value: settings.reasoningEffort?.title ?? "Default", last: true)
+        }
+    }
+
+    private var modelName: String {
+        if !settings.model.isEmpty {
+            return GenerationOptions.modelArgument(settings.model, kind: settings.account.kind, effort: settings.reasoningEffort)
+        }
+        return settings.account.kind == .pi ? model.settings.openRouterModel : "CLI default"
+    }
+}
+
+/// Whether the next message continues the conversation's CLI session, with its id to copy.
+struct SessionCard: View {
+    let session: BotStatus.Session
+
+    var body: some View {
+        InspectorCard {
+            if case .continuing(let id) = session {
+                InspectorRow("Next message", value: summary)
+                InspectorRow("ID", last: true) {
+                    HStack(spacing: 2) {
+                        Text(id)
+                            .font(.system(size: 12, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(id)
+                        CopyButton(text: id, help: "Copy session ID")
+                    }
+                }
+            } else {
+                InspectorRow("Next message", value: summary, last: true)
+            }
+        }
+    }
+
+    private var summary: String {
+        switch session {
+        case .continuing: "Continues session"
+        case .startsNew(accountChanged: true): "New session (account changed)"
+        case .startsNew(accountChanged: false): "Starts a new session"
+        }
+    }
+}
+
+/// A small button that copies `text`.
+struct CopyButton: View {
+    let text: String
+    let help: String
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        } label: {
+            Image(systemName: "doc.on.doc")
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Palette.secondaryText)
+        .help(help)
+    }
+}
+
+/// Home's list of the bot's tasks: each open one, to show its tab, and the closed ones to reopen.
+struct TasksSection: View {
+    @Environment(AppModel.self) private var model
+    let botID: UUID
+
+    var body: some View {
+        let open = model.openTasks(of: botID)
+        let closed = model.closedTasks(of: botID)
+        InspectorSection("Tasks", trailing: open.isEmpty ? nil : "\(open.count) open") {
+            if !open.isEmpty {
+                InspectorCard {
+                    ForEach(Array(open.enumerated()), id: \.element.id) { index, task in
+                        TaskRow(target: .task(task.id, of: botID), task: task, last: index == open.count - 1)
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                Button { model.newTask(for: botID) } label: {
+                    Label("New Task…", systemImage: "plus")
+                }
+                .help("Start a task in a repository, in its own worktree and tab (⌘T)")
+                if !closed.isEmpty {
+                    Menu {
+                        ForEach(closed.reversed()) { task in
+                            Button(task.title) { model.reopenTask(.task(task.id, of: botID)) }
+                        }
+                    } label: {
+                        Label("Closed (\(closed.count))", systemImage: "archivebox")
+                    }
+                    .menuIndicator(.hidden)
+                    .help("Open a closed task again")
+                }
+            }
+            .buttonStyle(InspectorButtonStyle(fill: true))
+        }
+    }
+}
+
+/// An open task in Home's list: its light, title, and repository and branch.
+struct TaskRow: View {
+    @Environment(AppModel.self) private var model
+    let target: ChatTarget
+    let task: BotTask
+    let last: Bool
+
+    var body: some View {
+        let status = model.status(of: target)
+        Button { model.show(target) } label: {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(color(status))
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(task.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                    Text(detail(status))
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.secondaryText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Palette.secondaryText)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .bottom) {
+            if !last { Rectangle().fill(Palette.rowDivider).frame(height: 1) }
+        }
+        .help("Show \(task.title)")
+    }
+
+    private func color(_ status: BotStatus?) -> Color {
+        if status?.phase.isActive == true { return StatusLook.working.dot }
+        if status?.phase == .failed { return StatusLook.error.dot }
+        if model.unread.contains(target) { return .accentColor }
+        if task.pullRequest != nil { return Palette.dynamic(0x2E9E4F, 0x4CC46F) }
+        return StatusLook.idle.dot
+    }
+
+    /// The repository, then how the task is doing, else its pull request, else its branch.
+    private func detail(_ status: BotStatus?) -> String {
+        if let status, status.phase != .idle { return "\(task.repoName) · \(status.label)" }
+        if let pullRequest = task.pullRequest { return "\(task.repoName) · PR #\(pullRequest)" }
+        return task.branch.isEmpty ? task.repoName : "\(task.repoName) · \(task.branch)"
     }
 }
 
@@ -237,7 +401,7 @@ enum StatusLook {
     init(_ status: BotStatus) {
         switch status.phase {
         case .idle: self = .idle
-        case .starting, .working: self = .working
+        case .preparing, .starting, .working: self = .working
         case .failed: self = .error
         }
     }
