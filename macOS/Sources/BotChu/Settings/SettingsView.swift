@@ -66,15 +66,20 @@ struct SettingsView: View {
             }
 
             Section {
-                Picker("Draw pets with", selection: $settings.petAccountID) {
+                Picker("Draw stills with", selection: $settings.petAccountID) {
                     ForEach(Accounts.all.filter { $0.kind == .codex }) { account in
                         Text(account.name).tag(account.id)
+                    }
+                }
+                Picker("Animate on", selection: $settings.petModelID) {
+                    ForEach(PetVideo.models) { video in
+                        Text(String(format: "%@ (about $%.2f a pet)", video.name, PetVideo.estimatedCost(video))).tag(video.id)
                     }
                 }
             } header: {
                 Text("Pets")
             } footer: {
-                Text("A bot on a Codex account draws its own pet; every other bot's is drawn by this account, with its hatch-pet skill and image generation allowance. The skill's scripts need Python with Pillow.")
+                Text("A pet's stills are drawn by Codex: a bot on a Codex account draws its own, and every other bot's are drawn by this account, on its image generation allowance. OpenRouter then turns each still into a short looping clip with the key below, which costs OpenRouter credit.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
