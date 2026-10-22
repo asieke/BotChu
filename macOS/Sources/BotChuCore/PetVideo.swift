@@ -278,10 +278,13 @@ extension CommandBuilder {
     /// A one-off Codex run that isn't a chat turn (drawing a pet's stills): no session to resume,
     /// the last message written to `outputFile`, `images` attached to the prompt.
     public static func codexJob(prompt: String, outputFile: String, model: String? = nil, images: [String] = []) -> Invocation {
-        var args = ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox",
-                    "-o", outputFile]
-        if let model, !model.trimmingCharacters(in: .whitespaces).isEmpty { args += ["-m", model] }
+        // `-i` takes any number of files, so the images go before the other options: right before
+        // the prompt, they would take the prompt as one more image, and Codex would wait for one on
+        // stdin.
+        var args = ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"]
         for image in images { args += ["-i", image] }
+        args += ["-o", outputFile]
+        if let model, !model.trimmingCharacters(in: .whitespaces).isEmpty { args += ["-m", model] }
         args.append(prompt.hasPrefix("-") ? " " + prompt : prompt)
         return Invocation(arguments: args, environment: [:], sessionID: nil)
     }

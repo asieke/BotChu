@@ -133,9 +133,13 @@ import Testing
     }
 
     @Test func codexJobAttachesTheReference() {
-        let job = CommandBuilder.codexJob(prompt: "draw", outputFile: "/p/last.txt", images: ["/p/reference.png"])
+        // `-i` takes any number of files: an option has to follow the images, or Codex reads the
+        // prompt as one more image (a real run failed with "No prompt provided via stdin").
+        let job = CommandBuilder.codexJob(prompt: "draw", outputFile: "/p/last.txt", model: "gpt-5.5", images: ["/p/reference.png"])
         #expect(job.arguments == ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox",
-                                  "-o", "/p/last.txt", "-i", "/p/reference.png", "draw"])
+                                  "-i", "/p/reference.png", "-o", "/p/last.txt", "-m", "gpt-5.5", "draw"])
+        let index = job.arguments.firstIndex(of: "-i")!
+        #expect(job.arguments[index + 2].hasPrefix("-"))
         #expect(CommandBuilder.codexJob(prompt: "-x", outputFile: "o").arguments.last == " -x")
     }
 
