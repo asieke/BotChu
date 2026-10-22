@@ -33,7 +33,7 @@ struct ContentView: View {
                 .id(id)
                 .inspector(isPresented: $showsStatus) {
                     BotInspector(botID: id)
-                        .inspectorColumnWidth(min: 250, ideal: 280, max: 360)
+                        .inspectorColumnWidth(min: 280, ideal: 320, max: 380)
                 }
         } else {
             ContentUnavailableView {

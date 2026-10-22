@@ -60,11 +60,14 @@ the Mac, and runs in its own workspace folder on this Mac.
     and are written to the workspace's `AGENTS.md`, `CLAUDE.md` and `GEMINI.md`, so the agent keeps
     them across its own context compaction. A new session (new bot, account switch, or **New
     Session**) also gets the recent conversation, so switching accounts keeps the thread's continuity.
-  - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I), the selected bot's
-    state (idle, starting, working with the turn's running time, or the last turn's error), the
-    account, agent and model it runs on, whether the next message continues its CLI session, its
-    message and tool-call counts and last activity, what its `MEMORY.md` holds, and its workspace,
-    with Edit and New Session.
+  - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I). A card at the top shows
+    the selected bot's face (its pet or emoji) in a ring that says its state (grey when idle, a
+    spinning violet arc while it works, red after a failed turn), its name and title, a status pill,
+    and a line on what it is doing with the turn's running time (or when it was last active, or the
+    error). Grouped cards below give the account, agent and model it runs on, whether the next
+    message continues its CLI session (with its id to copy), its message and tool-call counts, last
+    activity and creation date, what its `MEMORY.md` holds, and its workspace, with Edit and New
+    Session. Its colors follow light and dark mode.
   - **Settings:** the bots folder, each account's command, the OpenRouter API key (Keychain) and
     default OpenRouter model.
 - Does not: run bots anywhere but this Mac (yet), schedule routines, ask for approval of tool calls

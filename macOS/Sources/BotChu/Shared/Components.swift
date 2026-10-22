@@ -92,26 +92,3 @@ extension BotActivity {
         }
     }
 }
-
-/// The bot's phase as a colored capsule, with the turn's running time while it works.
-struct StatusBadge: View {
-    let status: BotStatus
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(status.phase.color)
-                .frame(width: 7, height: 7)
-            Text(status.label)
-            if status.phase.isActive, let started = status.runStartedAt {
-                Text(started, style: .timer)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .font(.caption.weight(.medium))
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(Capsule().fill(status.phase.color.opacity(0.12)))
-    }
-}

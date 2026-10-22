@@ -77,13 +77,13 @@ final class PetSheet: @unchecked Sendable {
         return PetSheet(name: pet.manifest.displayName, animations: animations)
     }
 
-    /// A square over the top of the body: the head, for most pets.
+    /// A portrait square: the whole head and most of the body, with a little room above.
     static func headRect(bodyBounds b: CGRect, cell: CGSize) -> CGRect {
-        let side = min(b.width, b.height * 0.68) * 1.08
-        let x = b.midX - side / 2
-        let y = b.minY - side * 0.06
+        let side = min(min(cell.width, cell.height), max(b.width, b.height * 0.82) * 1.08)
+        // Kept whole inside the cell, so it stays square.
+        let x = min(max(0, b.midX - side / 2), cell.width - side)
+        let y = min(max(0, b.minY - side * 0.06), cell.height - side)
         return CGRect(x: x, y: y, width: side, height: side)
-            .intersection(CGRect(origin: .zero, size: cell))
     }
 
     private static func make(_ cells: [CGImage], durations: [Int], head: CGRect) -> Animation {
