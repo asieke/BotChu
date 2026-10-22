@@ -20,13 +20,18 @@ final class AppModel {
     let settings: AppSettings
 
     private let store: Store
+    /// Index entries whose folders don't hold their bot right now; kept so the bot returns with it.
+    @ObservationIgnored private var missing: [Store.Entry] = []
     @ObservationIgnored private var runs: [UUID: AgentRun] = [:]
 
     init(store: Store? = nil, settings: AppSettings? = nil) {
         self.store = store ?? DevHooks.dataDir.map { Store(root: $0) } ?? .applicationSupport
         self.settings = settings ?? AppSettings()
-        bots = self.store.loadBots()
-        for bot in bots { threads[bot.id] = self.store.loadThread(bot.id) }
+        self.store.migrateIfNeeded()
+        let loaded = self.store.loadBots()
+        bots = loaded.bots
+        missing = loaded.missing
+        for bot in bots { threads[bot.id] = self.store.loadThread(for: bot) }
         selection = bots.first?.id
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stopAll() }
@@ -53,6 +58,11 @@ final class AppModel {
         editor = EditorRequest(bot: bot, isNew: false)
     }
 
+    /// Why a bot can't use `path` as its workspace, or nil when it can.
+    func workspaceProblem(_ path: String, for id: UUID) -> String? {
+        Workspace.problem(with: path, for: id, among: bots, botsRoot: settings.expandedBotsRoot)
+    }
+
     /// The default workspace for a new bot named `name`: its slug under the bots folder, numbered
     /// when another bot already uses that folder.
     func defaultWorkspace(for name: String) -> String {
@@ -74,7 +84,7 @@ final class AppModel {
         if bot.emoji.isEmpty { bot.emoji = "🤖" }
         bots.append(bot)
         threads[bot.id] = []
-        saveBots()
+        save(bot)
         selection = bot.id
         prepareWorkspace(bot)
         send(BotContext.introPrompt, to: bot.id, visible: false)
@@ -85,29 +95,37 @@ final class AppModel {
         var bot = edited
         bot.workspace = (bot.workspace as NSString).expandingTildeInPath
         if bot.emoji.isEmpty { bot.emoji = "🤖" }
+        if bot.workspace != bots[i].workspace {
+            // The bot's history and logs move with it.
+            do {
+                try BotHome(workspace: bots[i].workspace).move(toWorkspace: bot.workspace)
+            } catch {
+                append(ChatMessage(role: .error, text: "Couldn't move this bot's history to \(bot.workspace): \(error.localizedDescription)"), to: bot.id)
+            }
+        }
         bots[i] = bot
-        saveBots()
+        save(bot)
         prepareWorkspace(bot)
     }
 
     func setModel(_ selected: String, for id: UUID) {
         guard let i = bots.firstIndex(where: { $0.id == id }), !isRunning(id) else { return }
         bots[i].selectModel(selected)
-        saveBots()
+        save(bots[i])
     }
 
     func setReasoningEffort(_ effort: ReasoningEffort?, for id: UUID) {
         guard let i = bots.firstIndex(where: { $0.id == id }), !isRunning(id) else { return }
         bots[i].reasoningEffort = effort
-        saveBots()
+        save(bots[i])
     }
 
     func delete(_ id: UUID) {
         runs[id]?.stop()
+        if let bot = bot(id) { BotHome(workspace: bot.workspace).trash() }
         bots.removeAll { $0.id == id }
         threads[id] = nil
-        store.deleteThread(id)
-        saveBots()
+        saveIndex()
         if selection == id { selection = bots.first?.id }
     }
 
@@ -125,6 +143,14 @@ final class AppModel {
         guard let bot = bot(id) else { return }
         prepareWorkspace(bot)
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: bot.workspace)])
+    }
+
+    /// Opens the bot's `.botchu` folder (its settings, thread and logs) in Finder.
+    func revealHistory(_ id: UUID) {
+        guard let bot = bot(id) else { return }
+        let home = BotHome(workspace: bot.workspace)
+        try? FileManager.default.createDirectory(at: home.logsURL, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(home.url)
     }
 
     // MARK: Turns
@@ -174,8 +200,12 @@ final class AppModel {
             return
         }
 
-        let run = AgentRun(command: settings.command(for: account), invocation: invocation,
+        let command = settings.command(for: account)
+        let run = AgentRun(command: command, invocation: invocation,
                            directory: URL(fileURLWithPath: bot.workspace, isDirectory: true))
+        let home = BotHome(workspace: bot.workspace)
+        let startedAt = Date()
+        let turnStart = thread(id).count
         var parser = StreamParsers.make(for: account.kind)
         var assembler = ThreadAssembler()
         var ended = false
@@ -220,9 +250,17 @@ final class AppModel {
             }
             self.threads[id] = messages
             self.saveThread(id)
+            let turn = messages.suffix(from: min(turnStart, messages.count))
+            try? home.appendLog(TurnLog.ended(
+                at: Date(), startedAt: startedAt, status: status, stopped: run?.stopped == true,
+                toolCalls: turn.filter { $0.role == .tool }.count,
+                error: turn.last(where: { $0.role == .error })?.text, stderr: stderr))
         }
 
         do {
+            try? home.appendLog(TurnLog.started(at: startedAt, account: account, command: command,
+                                                arguments: invocation.arguments,
+                                                prompt: BotContext.prompt(for: text, preamble: preamble), resuming: resume))
             try run.start()
             runs[id] = run
             runStates[id] = RunState()
@@ -252,7 +290,7 @@ final class AppModel {
               bots[i].sessionID != sessionID || bots[i].sessionAccountID != accountID else { return }
         bots[i].sessionID = sessionID
         bots[i].sessionAccountID = accountID
-        saveBots()
+        save(bots[i])
     }
 
     // MARK: Storage
@@ -269,12 +307,23 @@ final class AppModel {
         }
     }
 
-    private func saveBots() {
-        try? store.saveBots(bots)
+    /// Writes the bot's `.botchu/bot.json`, and the index of bot folders.
+    private func save(_ bot: Bot) {
+        do {
+            try BotHome(workspace: bot.workspace).save(bot)
+        } catch {
+            append(ChatMessage(role: .error, text: "Couldn't save this bot in \(bot.workspace): \(error.localizedDescription)"), to: bot.id)
+        }
+        saveIndex()
+    }
+
+    private func saveIndex() {
+        try? store.saveIndex(bots.map { Store.Entry(id: $0.id, workspace: $0.workspace) } + missing)
     }
 
     private func saveThread(_ id: UUID) {
-        try? store.saveThread(thread(id), for: id)
+        guard let bot = bot(id) else { return }
+        try? BotHome(workspace: bot.workspace).saveThread(thread(id))
     }
 
     /// The last few meaningful lines of a CLI's stderr, for an error message.

@@ -4,7 +4,8 @@ import BotChuCore
 
 /// Environment variables for checking the app without touching real data or needing screen-recording
 /// permission (see `macOS/ui-review.sh`):
-/// - `BOTCHU_DATA_DIR`: keep bots, threads and bot folders under this folder instead.
+/// - `BOTCHU_DATA_DIR`: keep the bot index and bot folders under this folder instead, with settings in
+///   their own `defaults` domain (`local.BotChu.dev`), so a throwaway run never changes the real ones.
 /// - `BOTCHU_SNAPSHOT`: write a PNG of each window into this folder every second.
 /// - `BOTCHU_OPEN`: open `editor` (a new bot) or `settings` at launch.
 /// - `BOTCHU_SEND`: send this message to the selected bot at launch.
