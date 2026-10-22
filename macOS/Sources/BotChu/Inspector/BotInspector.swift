@@ -114,7 +114,9 @@ struct BotInspector: View {
     }
 
     private func modelName(_ bot: Bot) -> String {
-        if !bot.model.isEmpty { return bot.model }
+        if !bot.model.isEmpty {
+            return GenerationOptions.modelArgument(bot.model, kind: bot.account.kind, effort: bot.reasoningEffort)
+        }
         return bot.account.kind == .pi ? model.settings.openRouterModel : "CLI default"
     }
 

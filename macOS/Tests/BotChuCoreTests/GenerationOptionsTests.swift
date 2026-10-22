@@ -24,6 +24,17 @@ import Testing
         }
     }
 
+    @Test(arguments: [ReasoningEffort.low, .medium, .high])
+    func antigravityModelVariantMatchesEffort(effort: ReasoningEffort) {
+        for session in [nil, "saved-session"] {
+            let invocation = CommandBuilder.invocation(kind: .antigravity, prompt: "hello",
+                model: "gemini-4-argon-medium", sessionID: session, reasoningEffort: effort)
+            #expect(invocation.arguments.contains("gemini-4-argon-" + effort.rawValue))
+        }
+        #expect(GenerationOptions.efforts(for: .antigravity, model: "gemini-4-argon-high") == [.low, .medium, .high])
+        #expect(GenerationOptions.modelArgument("custom", kind: .antigravity, effort: effort) == "custom")
+    }
+
     @Test func changingModelPreservesSessionAndClearsUnsupportedEffort() {
         var bot = Bot(name: "Test", accountID: "claude-dev", model: "opus", reasoningEffort: .high,
                       workspace: "/tmp/test", sessionID: "s", sessionAccountID: "claude-dev")

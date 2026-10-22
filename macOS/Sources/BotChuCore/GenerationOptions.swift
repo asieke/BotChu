@@ -48,7 +48,7 @@ public enum GenerationOptions {
     }
 
     public static func efforts(for kind: AgentKind, model: String) -> [ReasoningEffort] {
-        if let option = models(for: kind).first(where: { $0.id == model }) { return option.efforts }
+        if let option = option(for: model, kind: kind) { return option.efforts }
         switch kind {
         case .claude, .antigravity: return [.low, .medium, .high, .xhigh, .max]
         case .codex: return [.low, .medium, .high, .xhigh, .max, .ultra]
@@ -57,8 +57,30 @@ public enum GenerationOptions {
         }
     }
 
+    private static func option(for model: String, kind: AgentKind) -> ModelOption? {
+        let options = models(for: kind)
+        if let exact = options.first(where: { $0.id == model }) { return exact }
+        guard kind == .antigravity else { return nil }
+        return options.first { antigravityFamily($0.id) == antigravityFamily(model) }
+    }
+
+    private static func antigravityFamily(_ model: String) -> String {
+        for suffix in ["-low", "-medium", "-high"] where model.hasSuffix(suffix) {
+            return String(model.dropLast(suffix.count))
+        }
+        return model
+    }
+
+    /// AGY rejects a suffixed model id that disagrees with --effort. Resolve known model
+    /// families to the matching variant; preserve custom ids and the default verbatim.
+    public static func modelArgument(_ model: String, kind: AgentKind, effort: ReasoningEffort?) -> String {
+        guard kind == .antigravity, let effort, let option = option(for: model, kind: kind),
+              option.efforts.contains(effort) else { return model }
+        return antigravityFamily(option.id) + "-" + effort.rawValue
+    }
+
     public static func name(for model: String, kind: AgentKind) -> String {
-        models(for: kind).first { $0.id == model }?.name ?? (model.isEmpty ? "Default model" : model)
+        option(for: model, kind: kind)?.name ?? (model.isEmpty ? "Default model" : model)
     }
 }
 

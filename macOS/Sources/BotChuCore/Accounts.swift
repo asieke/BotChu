@@ -79,7 +79,10 @@ public enum CommandBuilder {
     ) -> Invocation {
         // A prompt that starts with "-" would be read as an option.
         let prompt = prompt.hasPrefix("-") ? " " + prompt : prompt
-        let model = model.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0.trimmingCharacters(in: .whitespaces) }
+        let model = model.flatMap { value -> String? in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : GenerationOptions.modelArgument(trimmed, kind: kind, effort: reasoningEffort)
+        }
         let effort = reasoningEffort.flatMap {
             GenerationOptions.efforts(for: kind, model: model ?? "").contains($0) ? $0.rawValue : nil
         }

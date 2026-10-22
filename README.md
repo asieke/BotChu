@@ -28,6 +28,7 @@ the Mac, and runs in its own workspace folder on this Mac.
     The menu has starter model choices and a custom model ID field for the current CLI; it cannot
     switch accounts or CLI providers. Defaults leave the choice to the CLI (or the OpenRouter model
     in Settings). Effort choices depend on the provider/model, and controls wait until a turn ends.
+    For known Antigravity models, the effort also selects the matching model-ID suffix.
   - **The bot's folder is the bot:** BotChu keeps each bot's settings (`bot.json`), its whole
     conversation (`thread.jsonl`, one message per line) and a log of every turn (`logs/<date>.log`:
     the command, how long it took, the exit status, any error and the CLI's error output) in
