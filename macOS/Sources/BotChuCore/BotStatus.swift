@@ -121,6 +121,16 @@ public struct BotStatus: Equatable, Sendable {
             activity: run?.activity ?? reaction ?? (phase == .failed ? .failed : .idle))
     }
 
+    /// A compact elapsed timer, clamped at zero if the clock moves backwards.
+    public static func formatElapsed(from start: Date, to now: Date = Date()) -> String {
+        let total = max(0, Int(now.timeIntervalSince(start)))
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
+            : String(format: "%d:%02d", minutes, seconds)
+    }
+
     /// The bot as its sidebar row shows it: its Home's status, but while Home is idle and
     /// tasks work, working on them, with the newest turn's activity.
     public func working(on tasks: [(title: String, run: RunState)]) -> BotStatus {
