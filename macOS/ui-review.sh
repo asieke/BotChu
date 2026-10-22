@@ -2,7 +2,7 @@
 # Open a freshly built BotChu on throwaway data, so its screens can be checked without touching real
 # bots or needing screen-recording permission: the app writes a PNG of each of its windows into the
 # snapshot folder every second (DevHooks.swift). Two demo bots are seeded, the first (selected) with a short
-# sample conversation and memory.
+# sample conversation and memory, in the layout before bot folders, so each run also migrates them.
 #   macOS/ui-review.sh                     # just open it
 #   macOS/ui-review.sh "Hello"             # and send "Hello" to the first bot (a real turn)
 #   BOTCHU_OPEN=editor macOS/ui-review.sh  # or open the new-bot editor (or settings)
