@@ -7,14 +7,21 @@ extension AppModel {
     /// Reads the owner's GitHub repositories again, unless they were read in the last ten minutes.
     func loadRepositories(force: Bool = false) async {
         if !force, repositories != nil, let read = repositoriesReadAt, Date().timeIntervalSince(read) < 600 { return }
-        switch await GitHubLookup.repositories() {
-        case .success(let found):
-            repositories = found
-            repositoriesError = nil
-            repositoriesReadAt = Date()
-        case .failure(let failure):
-            repositoriesError = "\(failure.step). Is gh installed and signed in?"
+        if let task = repositoriesTask { await task.value; return }
+        repositoriesLoading = true
+        let task = Task { @MainActor in
+            defer { repositoriesLoading = false; repositoriesTask = nil }
+            switch await GitHubLookup.repositories() {
+            case .success(let found):
+                repositories = found
+                repositoriesError = nil
+                repositoriesReadAt = Date()
+            case .failure(let failure):
+                repositoriesError = "\(failure.step). Is gh installed and signed in?"
+            }
         }
+        repositoriesTask = task
+        await task.value
     }
 
     /// Where a repository is worked on: where the owner chose, else where its PROJECT.md deploys it

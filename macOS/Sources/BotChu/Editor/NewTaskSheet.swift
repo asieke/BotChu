@@ -21,8 +21,12 @@ struct NewTaskSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let botID: UUID
+    var initialRepo: String? = nil
     /// The repository a task started in last time, chosen again first.
     @AppStorage("newTaskRepo") private var lastRepo = ""
+    @State private var showsLocation = false
+    @State private var overridesPlacement = false
+    @State private var placementProblem: String?
     @State private var query = ""
     @State private var repo: String?
     @State private var hostID: UUID?
@@ -48,12 +52,12 @@ struct NewTaskSheet: View {
                 .padding(.top, 16)
             Form {
                 Section {
-                    TextField("Search", text: $query, prompt: Text("Search your repositories"))
+                    TextField("Search", text: $query, prompt: Text("Search your projects"))
                         .textFieldStyle(.roundedBorder)
                         .labelsHidden()
                     repositoryList
                 } header: {
-                    Text("Repository")
+                    Text("Project")
                 } footer: {
                     Group {
                         if let error = model.repositoriesError, model.repositories == nil {
@@ -66,7 +70,22 @@ struct NewTaskSheet: View {
                 }
                 if repo != nil {
                     Section {
-                        Picker("Computer", selection: $hostID) {
+                        LabeledContent("Works on", value: model.machineName(hostID))
+                        Text(folder).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        if let placementProblem, !overridesPlacement {
+                            Text(placementProblem).font(.caption).foregroundStyle(.orange)
+                            Button("Use selected workspace instead") { overridesPlacement = true; showsLocation = true }
+                        }
+                        DisclosureGroup("Workspace options", isExpanded: $showsLocation) {
+                        Picker("Computer", selection: Binding(get: { hostID }, set: { nextHost in
+                            hostID = nextHost
+                            guard let selectedRepo = repo else { return }
+                            Task {
+                                let path = await model.folder(of: selectedRepo, on: nextHost)
+                                guard repo == selectedRepo, hostID == nextHost else { return }
+                                folder = displayed(path, on: nextHost)
+                            }
+                        })) {
                             Label("This Mac", systemImage: "laptopcomputer").tag(UUID?.none)
                             ForEach(model.settings.hosts) { host in
                                 Label(host.nickname, systemImage: "network").tag(UUID?.some(host.id))
@@ -77,8 +96,9 @@ struct NewTaskSheet: View {
                                 .labelsHidden()
                                 .font(.system(.body, design: .monospaced))
                         }
+                        }
                     } header: {
-                        Text("Works on")
+                        Text("Project workspace")
                     } footer: {
                         locationFooter
                     }
@@ -144,7 +164,7 @@ struct NewTaskSheet: View {
                             }
                         }
                         Picker("Account", selection: $accountID) {
-                            ForEach(Accounts.all) { account in
+                            ForEach(model.settings.accounts) { account in
                                 Label(account.name, systemImage: account.symbol).tag(account.id)
                             }
                         }
@@ -173,12 +193,8 @@ struct NewTaskSheet: View {
         .task {
             accountID = model.bot(botID)?.accountID ?? Accounts.defaultID
             await model.loadRepositories()
-            let wanted = DevHooks.dataDir == nil ? lastRepo : DevHooks.env["BOTCHU_TASK_REPO"] ?? ""
+            let wanted = initialRepo ?? (DevHooks.dataDir == nil ? lastRepo : DevHooks.env["BOTCHU_TASK_REPO"] ?? "")
             if repo == nil, let last = model.repositories?.first(where: { $0.nameWithOwner == wanted }) { choose(last.nameWithOwner) }
-        }
-        .onChange(of: hostID) { _, _ in
-            guard let repo else { return }
-            Task { folder = displayed(await model.folder(of: repo, on: hostID), on: hostID) }
         }
         .onChange(of: workKey) {
             if chosen?.work.isPullRequest != true { purpose = .work }
@@ -252,6 +268,8 @@ struct NewTaskSheet: View {
     private func choose(_ nameWithOwner: String) {
         guard nameWithOwner != repo else { return }
         repo = nameWithOwner
+        overridesPlacement = false
+        placementProblem = nil
         openWork = []
         workKey = ""
         purpose = .work
@@ -261,6 +279,7 @@ struct NewTaskSheet: View {
             let location = await model.location(of: nameWithOwner)
             usual = await model.defaultLocation(of: nameWithOwner)
             guard repo == nameWithOwner else { return }
+            placementProblem = model.projectPlacementProblem(nameWithOwner)
             hostID = location.hostID
             folder = displayed(location.path, on: location.hostID)
             let result = await GitHubLookup.openWork(repo: nameWithOwner)
@@ -338,7 +357,9 @@ struct NewTaskSheet: View {
 
     /// Why the task can't start yet, or nil when it can.
     private var problem: String? {
-        guard repo != nil else { return "Choose a repository" }
+        guard repo != nil else { return "Choose a project" }
+        if let placementProblem, !overridesPlacement { return placementProblem }
+        if loading { return "Reading the project workspace and open work…" }
         if chosen == nil, brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Say what to do, or choose an issue or pull request"
         }
@@ -384,12 +405,12 @@ struct NewTaskSheet: View {
         if hostID == nil { path = (path as NSString).expandingTildeInPath }
         let location = RepoLocation(hostID: hostID, path: path)
         // A computer or folder other than the usual one is remembered for this repository.
-        model.settings.repoLocations[repo] = location == usual ? nil : location
+        model.settings.repoLocations[repo] = !overridesPlacement && location == usual ? nil : location
         var task = BotTask(for: bot, repo: repo, checkout: location.path, work: chosen?.work,
                            brief: brief.trimmingCharacters(in: .whitespacesAndNewlines),
                            branch: purpose.review == nil ? branch.trimmingCharacters(in: .whitespaces) : "",
                            host: model.settings.host(hostID), review: purpose.review)
-        if accountID != bot.accountID { task.selectAccount(accountID) }
+        if accountID != bot.accountID { task.selectAccount(model.settings.account(accountID)) }
         lastRepo = repo
         model.startTask(task, for: botID, show: true)
         dismiss()

@@ -4,6 +4,7 @@ import Foundation
 /// continues. A bot's own conversation (its Home) has its own, and so does each of its tasks.
 public protocol RunSettings {
     var accountID: String { get set }
+    var accountProfile: Account? { get set }
     /// Empty means the CLI's own default model.
     var model: String { get set }
     /// Nil leaves reasoning effort to the CLI.
@@ -14,7 +15,7 @@ public protocol RunSettings {
 }
 
 extension RunSettings {
-    public var account: Account { Accounts.account(id: accountID) }
+    public var account: Account { accountProfile.flatMap { $0.id == accountID ? $0 : nil } ?? Accounts.account(id: accountID) }
 
     /// The session to resume for the next turn, or nil when the next turn starts a new one. A
     /// session only resumes on the account that made it.
@@ -32,6 +33,8 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     /// Private instructions, given to the agent at the start of every session.
     public var instructions: String
     public var accountID: String
+    /// Custom profiles travel with the bot so its CLI family survives relaunch and workspace moves.
+    public var accountProfile: Account?
     /// Empty means the CLI's own default model.
     public var model: String
     /// Nil leaves reasoning effort to the CLI. Optional for compatibility with saved bots.

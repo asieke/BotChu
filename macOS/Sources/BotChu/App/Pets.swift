@@ -37,7 +37,7 @@ struct PetJob: Equatable {
 extension AppModel {
     /// The Codex account that draws a bot's stills: its own when it runs on Codex, else the one in Settings.
     func petAccount(for bot: Bot) -> Account {
-        bot.account.kind == .codex ? bot.account : Accounts.account(id: settings.petAccountID)
+        bot.account.kind == .codex ? bot.account : settings.account(settings.petAccountID)
     }
 
     /// Saves a bot's appearance (the editor's text) without the rest of the editor's changes.

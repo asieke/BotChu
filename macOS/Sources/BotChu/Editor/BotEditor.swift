@@ -83,8 +83,8 @@ struct BotEditor: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
-                    Picker("Account", selection: Binding(get: { bot.accountID }, set: { bot.selectAccount($0) })) {
-                        ForEach(Accounts.all) { account in
+                    Picker("Account", selection: Binding(get: { bot.accountID }, set: { bot.selectAccount(model.settings.account($0)) })) {
+                        ForEach(model.settings.accounts) { account in
                             Label(account.name, systemImage: account.symbol).tag(account.id)
                         }
                     }

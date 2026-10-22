@@ -189,7 +189,7 @@ struct RunsOnCard: View {
                 if let changeAccount {
                     Menu {
                         Picker("Account", selection: Binding(get: { settings.accountID }, set: changeAccount)) {
-                            ForEach(Accounts.all) { account in
+                            ForEach(model.settings.accounts) { account in
                                 Label(account.name, systemImage: account.symbol).tag(account.id)
                             }
                         }

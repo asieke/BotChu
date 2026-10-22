@@ -18,7 +18,7 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
 
 /// A signed-in CLI profile a bot can run on. The command is run through the login shell, so it may
 /// start with `~` or be a bare name on the login PATH.
-public struct Account: Identifiable, Hashable, Sendable {
+public struct Account: Identifiable, Codable, Hashable, Sendable {
     public let id: String
     public let name: String
     public let kind: AgentKind
