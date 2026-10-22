@@ -391,11 +391,12 @@ struct TaskRow: View {
         return StatusLook.idle.dot
     }
 
-    /// The repository, then how the task is doing, else its pull request, else its branch.
+    /// The repository (and its host), then how the task is doing, else its pull request, else its branch.
     private func detail(_ status: BotStatus?) -> String {
-        if let status, status.phase != .idle { return "\(task.repoName) · \(status.label)" }
-        if let pullRequest = task.pullRequest { return "\(task.repoName) · PR #\(pullRequest)" }
-        return task.branch.isEmpty ? task.repoName : "\(task.repoName) · \(task.branch)"
+        let repo = task.repoName + (task.isRemote ? " on \(model.machineName(task.hostID, fallback: task.hostName))" : "")
+        if let status, status.phase != .idle { return "\(repo) · \(status.label)" }
+        if let pullRequest = task.pullRequest { return "\(repo) · PR #\(pullRequest)" }
+        return task.branch.isEmpty ? repo : "\(repo) · \(task.branch)"
     }
 }
 

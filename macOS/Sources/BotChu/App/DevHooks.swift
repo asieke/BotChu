@@ -13,9 +13,16 @@ import BotChuCore
 /// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review.
 /// - `BOTCHU_SEND`: send this message to the selected bot's shown conversation at launch (its Home,
 ///   or the tab `BOTCHU_TAB` shows).
-/// - `BOTCHU_TASK`: start a task for the selected bot at launch from `repo|task`, as New Task does
-///   (`repo` is `owner/name` or a checkout's folder in the repositories folder; a real turn).
+/// - `BOTCHU_TASK`: start a task for the selected bot at launch from `repo|task|host`, as New Task does
+///   (`repo` is `owner/name` or a checkout's folder in the repositories folder, `host` an optional
+///   host's nickname, where the checkout is in its repositories folder; a real turn).
 /// - `BOTCHU_TAB`: show the selected bot's tab with this number at launch (0 is Home, 1 its first task).
+/// - `BOTCHU_HOST`: with `BOTCHU_DATA_DIR`, the hosts in Settings ▸ Hosts, from
+///   `nickname|ssh destination|repositories folder|machine name|account=command,…`, several
+///   separated by `;`.
+/// - `BOTCHU_SSH`: with `BOTCHU_DATA_DIR`, the program BotChu runs as `ssh` (a stand-in that runs the
+///   command here lets a review exercise tasks on a host without one).
+/// - `BOTCHU_TASK_REPO`: with `BOTCHU_OPEN=task`, the repository (`owner/name`) New Task chooses.
 /// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
 /// - `BOTCHU_PET`: give the selected bot this pet folder at launch (`video.json`, `stills/`, `clips/`).
 /// - `BOTCHU_DRAW_PET`: give the selected bot this appearance and make its pet at launch (a real Codex
@@ -26,6 +33,26 @@ enum DevHooks {
 
     static var dataDir: URL? {
         env["BOTCHU_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    /// The hosts a throwaway run starts with (`BOTCHU_HOST`).
+    static var hosts: [SSHHost] {
+        guard dataDir != nil, let spec = env["BOTCHU_HOST"] else { return [] }
+        return spec.split(separator: ";").compactMap { entry in
+            let parts = entry.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 2 else { return nil }
+            let commands = parts.count > 4 ? Dictionary(parts[4].split(separator: ",").compactMap { pair -> (String, String)? in
+                let kv = pair.split(separator: "=", maxSplits: 1).map(String.init)
+                return kv.count == 2 ? (kv[0], kv[1]) : nil
+            }, uniquingKeysWith: { $1 }) : nil
+            return SSHHost(nickname: parts[0], destination: parts[1], machine: parts.count > 3 ? parts[3] : SSHHost.machineName(destination: parts[1]),
+                           reposFolder: parts.count > 2 ? parts[2] : "~/apps", commands: commands)
+        }
+    }
+
+    /// Settings a throwaway run needs before the model loads: the stand-in `ssh` (`BOTCHU_SSH`).
+    static func configure() {
+        if dataDir != nil, let ssh = env["BOTCHU_SSH"] { Machine.ssh = ssh }
     }
 
     static var usageFetch: UsageCache.Fetch? {
@@ -86,12 +113,17 @@ enum DevHooks {
             model.send(text, to: model.tab(of: id))
         }
         if let spec = env["BOTCHU_TASK"], let id = model.selection, let bot = model.bot(id) {
-            let parts = spec.split(separator: "|", maxSplits: 1).map(String.init)
-            if let checkout = Repositories.find(parts[0], in: model.checkouts()) {
-                let task = BotTask(for: bot, repo: checkout.repo, checkout: checkout.path, work: nil,
-                                   brief: parts.count > 1 ? parts[1] : "Look around and say what this repository is.")
-                model.startTask(task, for: id, show: true)
-            }
+            let parts = spec.split(separator: "|", maxSplits: 2).map(String.init)
+            let host = parts.count > 2 ? model.settings.hosts.first { $0.nickname == parts[2] } : nil
+            // A checkout here (the throwaway repository), or a GitHub repository cloned where it works.
+            let checkout = Repositories.find(parts[0], in: model.checkouts())
+            let repo = checkout?.repo ?? parts[0]
+            let name = TaskNaming.repoName(repo)
+            let folder = host.map { ($0.reposFolder as NSString).appendingPathComponent(name) }
+                ?? checkout?.path ?? (model.settings.expandedReposRoot as NSString).appendingPathComponent(name)
+            let task = BotTask(for: bot, repo: repo, checkout: folder, work: nil,
+                               brief: parts.count > 1 ? parts[1] : "Look around and say what this repository is.", host: host)
+            model.startTask(task, for: id, show: true)
         }
     }
 

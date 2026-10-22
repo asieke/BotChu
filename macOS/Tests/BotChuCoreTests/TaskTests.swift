@@ -245,7 +245,9 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
 
         let made = await TaskWorktree.prepare(branch: "feat/new-thing", checkout: checkout.path)
         let folder = try made.get()
-        #expect(folder == checkout.appendingPathComponent(".claude/worktrees/feat-new-thing").path)
+        // Where git lists it: the real path (/private/var for /var).
+        #expect(URL(fileURLWithPath: folder).resolvingSymlinksInPath()
+                == checkout.appendingPathComponent(".claude/worktrees/feat-new-thing").resolvingSymlinksInPath())
         #expect(FileManager.default.fileExists(atPath: folder + "/README.md"))
         let head = await Shell.run(["git", "symbolic-ref", "--short", "HEAD"], in: folder)
         #expect(head.lastLine == "feat/new-thing")
@@ -309,26 +311,6 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
         #expect(failure.step.contains("isn't a worktree on feat/taken"))
         let notGit = await TaskWorktree.prepare(branch: "feat/x", checkout: root.path)
         guard case .failure = notGit else { Issue.record("expected a failure outside a checkout"); return }
-    }
-
-    @Test func listsLinkedWorktrees() {
-        let porcelain = """
-            worktree /w/repo
-            HEAD 1111
-            branch refs/heads/main
-
-            worktree /w/repo/.claude/worktrees/feat-a
-            HEAD 2222
-            branch refs/heads/feat/a
-
-            worktree /tmp/pr-3
-            HEAD 3333
-            detached
-
-            """
-        let entries = TaskWorktree.entries(porcelain: porcelain)
-        #expect(entries.map(\.path) == ["/w/repo/.claude/worktrees/feat-a", "/tmp/pr-3"])
-        #expect(entries.map(\.branch) == ["feat/a", nil])
     }
 }
 
@@ -430,7 +412,7 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
         #expect(agents.contains("## Tasks"))
         #expect(agents.contains("`.botchu/dispatch/`"))
         #expect(agents.contains("    {\"repo\": \"octocat/hello-world\", \"issue\": 12"))
-        #expect(agents.contains("a repository checked out in `/Users/a/WORKSPACE`"))
+        #expect(agents.contains("clones the repository if it isn't checked out there yet (into `/Users/a/WORKSPACE` on this Mac)"))
 
         let report = BotContext.taskReport(task(), status: BotStatus.make(task: task(), messages: [ChatMessage(role: .assistant, text: "Opened it.")], run: nil),
                                            pullRequest: 49, lastReply: "Opened it.")

@@ -1,7 +1,8 @@
 import Foundation
 
 /// One headless CLI process for one turn. It runs the account's command through the login shell
-/// (`zsh -l`, so PATH and Homebrew are the user's), in the bot's workspace, with stdin closed.
+/// (`zsh -l`, so PATH and Homebrew are the user's), in the bot's workspace, with stdin closed. On a
+/// host it runs there over SSH, through that user's login shell, and only its output comes back.
 /// Complete stdout lines and the exit are delivered on the main queue.
 public final class AgentRun: @unchecked Sendable {
     private let process = Process()
@@ -11,11 +12,18 @@ public final class AgentRun: @unchecked Sendable {
     private var buffer = Data()
     private var errorTail = Data()
     public private(set) var stopped = false
+    /// The host it runs on, and the CLI's process there, once it has said which.
+    private let remote: Machine?
+    private var remotePID: String?
 
     public var onLines: ([String]) -> Void = { _ in }
     public var onExit: (_ status: Int32, _ stderr: String) -> Void = { _, _ in }
 
+    /// The line a run on a host prints first, with the CLI's process id there.
+    static let pidMarker = "__BOTCHU_PID__"
+
     public init(command: String, invocation: Invocation, directory: URL) {
+        remote = nil
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-l", "-c", CommandBuilder.shellScript(command: command), "botchu"] + invocation.arguments
         process.currentDirectoryURL = directory
@@ -24,6 +32,22 @@ public final class AgentRun: @unchecked Sendable {
         env["TERM"] = "dumb"
         for (key, value) in invocation.environment { env[key] = value }
         process.environment = env
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = stdout
+        process.standardError = stderr
+    }
+
+    /// A run in `folder` on a host. The invocation's environment stays on this Mac (it holds the
+    /// OpenRouter key), so a CLI there uses that machine's own.
+    public init(command: String, invocation: Invocation, on machine: Machine, folder: String) {
+        remote = machine
+        process.executableURL = URL(fileURLWithPath: Machine.ssh)
+        let script = "export NO_COLOR=1 TERM=dumb; printf '%s %s\\n' \(Self.pidMarker) \"$$\"; "
+            + CommandBuilder.shellScript(command: command)
+        process.arguments = Machine.sshOptions + [machine.destination ?? "",
+                                                  Machine.remoteCommand(script: script, arguments: invocation.arguments, in: folder)]
+        process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        process.environment = Self.childEnvironment(ProcessInfo.processInfo.environment)
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = stdout
         process.standardError = stderr
@@ -81,12 +105,23 @@ public final class AgentRun: @unchecked Sendable {
         }
     }
 
-    /// Interrupts the CLI as Ctrl-C would, then terminates it if it is still running.
+    /// Interrupts the CLI as Ctrl-C would, then terminates it if it is still running. On a host,
+    /// the CLI there is interrupted too: closing the connection alone would leave it running.
     public func stop() {
         stopped = true
         guard process.isRunning else { return }
+        lock.lock()
+        let pid = remotePID
+        lock.unlock()
+        if let remote, let pid {
+            Task.detached {
+                _ = await remote.run(["kill", "-INT", pid], in: "~")
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                _ = await remote.run(["kill", "-TERM", pid], in: "~")
+            }
+        }
         process.interrupt()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [process] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + (remote == nil ? 3 : 5)) { [process] in
             if process.isRunning { process.terminate() }
         }
     }
@@ -97,9 +132,13 @@ public final class AgentRun: @unchecked Sendable {
         buffer.append(data)
         var lines: [String] = []
         while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-            let line = buffer[buffer.startIndex..<newline]
+            let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
             buffer.removeSubrange(buffer.startIndex...newline)
-            if !line.isEmpty { lines.append(String(decoding: line, as: UTF8.self)) }
+            if remote != nil, remotePID == nil, line.hasPrefix(Self.pidMarker + " ") {
+                remotePID = String(line.dropFirst(Self.pidMarker.count + 1)).trimmingCharacters(in: .whitespaces)
+            } else if !line.isEmpty {
+                lines.append(line)
+            }
         }
         return lines
     }
