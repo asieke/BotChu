@@ -71,6 +71,18 @@ import Testing
         #expect(PetVideo.Job.parse(Data("not json".utf8)) == nil)
     }
 
+    @Test func onlyPassingFailuresAreRetried() {
+        // The researching clip of a real pet came back "status 500: Internal Server Error".
+        #expect(PetVideo.isTransient(status: 500))
+        #expect(PetVideo.isTransient(status: 503))
+        #expect(PetVideo.isTransient(status: 429))
+        // A bad model (a real 400) or a missing key (a real 401) fails the same way every time.
+        #expect(!PetVideo.isTransient(status: 400))
+        #expect(!PetVideo.isTransient(status: 401))
+        #expect(!PetVideo.isTransient(status: 0))
+        #expect(PetVideo.retryDelays.count == 2)
+    }
+
     @Test func stillsPromptKeepsTheCharacter() {
         let prompt = PetVideo.stillsPrompt(petName: "10x Bot", appearance: "A plush monkey\n", folder: "/w/v",
                                            reference: "/w/v/reference.png")
@@ -133,9 +145,13 @@ import Testing
     }
 
     @Test func codexJobAttachesTheReference() {
-        let job = CommandBuilder.codexJob(prompt: "draw", outputFile: "/p/last.txt", images: ["/p/reference.png"])
+        // `-i` takes any number of files: an option has to follow the images, or Codex reads the
+        // prompt as one more image (a real run failed with "No prompt provided via stdin").
+        let job = CommandBuilder.codexJob(prompt: "draw", outputFile: "/p/last.txt", model: "gpt-5.5", images: ["/p/reference.png"])
         #expect(job.arguments == ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox",
-                                  "-o", "/p/last.txt", "-i", "/p/reference.png", "draw"])
+                                  "-i", "/p/reference.png", "-o", "/p/last.txt", "-m", "gpt-5.5", "draw"])
+        let index = job.arguments.firstIndex(of: "-i")!
+        #expect(job.arguments[index + 2].hasPrefix("-"))
         #expect(CommandBuilder.codexJob(prompt: "-x", outputFile: "o").arguments.last == " -x")
     }
 
