@@ -84,7 +84,7 @@ public enum GenerationOptions {
     }
 }
 
-extension Bot {
+extension RunSettings {
     public mutating func selectModel(_ model: String) {
         self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
         if let reasoningEffort, !GenerationOptions.efforts(for: account.kind, model: self.model).contains(reasoningEffort) {

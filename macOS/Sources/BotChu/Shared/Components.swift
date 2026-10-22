@@ -53,6 +53,7 @@ extension BotStatus.Phase {
     var label: String {
         switch self {
         case .idle: "Idle"
+        case .preparing: "Preparing…"
         case .starting: "Starting…"
         case .working: "Working"
         case .failed: "Last turn failed"
@@ -62,18 +63,20 @@ extension BotStatus.Phase {
     var color: Color {
         switch self {
         case .idle: .secondary
-        case .starting: .orange
+        case .preparing, .starting: .orange
         case .working: .green
         case .failed: .red
         }
     }
-
-    var isActive: Bool { self == .starting || self == .working }
 }
 
 extension BotStatus {
-    /// The phase, or while a turn works, what the bot is doing in it.
-    var label: String { phase == .working ? activity.label : phase.label }
+    /// The phase, or while a turn works, what the bot is doing in it; for a bot whose tasks work
+    /// while its Home is idle, which task.
+    var label: String {
+        if let workingOn, phase.isActive { return "Working on \(workingOn)" }
+        return phase == .working ? activity.label : phase.label
+    }
 }
 
 extension BotActivity {

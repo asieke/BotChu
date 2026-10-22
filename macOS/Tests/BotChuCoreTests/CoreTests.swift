@@ -273,6 +273,12 @@ import Testing
         #expect(!text.contains("long"))
     }
 
+    @Test func taskTurnSaysWhereItRan() {
+        let text = TurnLog.started(at: start, account: Accounts.account(id: "codex-dev"), command: "codex-dev", arguments: ["exec", "hi"],
+                                   prompt: "hi", resuming: nil, what: "GitChu #48 turn", directory: "/w/GitChu/.claude/worktrees/feat-48-x")
+        #expect(text.contains("GitChu #48 turn started · Codex Dev · new session\n   in /w/GitChu/.claude/worktrees/feat-48-x\n   codex-dev exec <prompt: 2 characters>\n"))
+    }
+
     @Test func endIncludesErrorAndStderr() {
         let text = TurnLog.ended(at: start.addingTimeInterval(12.34), startedAt: start, status: 1, stopped: false,
                                  toolCalls: 1, error: "usage limit", stderr: "warn: a\nwarn: b\n")

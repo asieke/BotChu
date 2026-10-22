@@ -9,12 +9,14 @@ struct SidebarView: View {
         @Bindable var model = model
         List(selection: $model.selection) {
             ForEach(model.bots) { bot in
-                BotRow(bot: bot, status: model.status(of: bot), selected: model.selection == bot.id)
+                BotRow(bot: bot, status: model.status(of: bot), selected: model.selection == bot.id,
+                       unread: model.selection == bot.id ? 0 : model.unreadCount(of: bot.id))
                     .tag(bot.id)
                     .contextMenu {
                         Button("Edit…") { model.edit(bot.id) }
-                        Button("New Session") { model.newSession(bot.id) }
-                            .disabled(model.isRunning(bot.id))
+                        Button("New Task…") { model.newTask(for: bot.id) }
+                        Button("New Session") { model.newSession(.home(bot.id)) }
+                            .disabled(model.isRunning(.home(bot.id)))
                         Button("Show Workspace in Finder") { model.revealWorkspace(bot.id) }
                         Divider()
                         Button("Delete…", role: .destructive) { pendingDelete = bot }
@@ -48,7 +50,7 @@ struct SidebarView: View {
             get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { bot in
             Button("Delete", role: .destructive) { model.delete(bot.id) }
         } message: { bot in
-            Text("Its conversation is deleted. Its workspace folder, \(bot.workspace), is kept.")
+            Text("Its conversation and tasks are deleted. Its workspace folder, \(bot.workspace), and its tasks' worktrees are kept.")
         }
     }
 }
@@ -57,6 +59,8 @@ struct BotRow: View {
     let bot: Bot
     let status: BotStatus
     let selected: Bool
+    /// Conversations (Home or tasks) that finished a turn since they were last shown.
+    var unread = 0
 
     private var phase: BotStatus.Phase { status.phase }
 
@@ -75,6 +79,16 @@ struct BotRow: View {
             Spacer(minLength: 0)
             if phase.isActive {
                 ProgressView().controlSize(.small)
+            }
+            if unread > 0 {
+                Text("\(unread)")
+                    .font(.caption2.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .frame(minWidth: 18, minHeight: 18)
+                    .background(Capsule().fill(Color.accentColor))
+                    .help(unread == 1 ? "1 conversation has news" : "\(unread) conversations have news")
             }
         }
         .padding(.vertical, 3)
