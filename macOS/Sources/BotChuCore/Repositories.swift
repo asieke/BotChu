@@ -25,13 +25,13 @@ public enum Shell {
         }
     }
 
-    public static func run(_ arguments: [String], in directory: String) async -> Result {
+    public static func run(_ arguments: [String], in directory: String, input: Data? = nil) async -> Result {
         await execute("/bin/zsh", ["-l", "-c", "print -r -- \(marker); exec \"$@\"", "botchu"] + arguments,
-                      in: (directory as NSString).expandingTildeInPath)
+                      in: (directory as NSString).expandingTildeInPath, input: input)
     }
 
     /// Runs a program and collects what it printed after the marker.
-    static func execute(_ executable: String, _ arguments: [String], in directory: String) async -> Result {
+    static func execute(_ executable: String, _ arguments: [String], in directory: String, input: Data? = nil) async -> Result {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
@@ -52,6 +52,9 @@ public enum Shell {
             group.enter()
             process.terminationHandler = { _ in group.leave() }
             do {
+                let inputFile = try ProcessInput.file(input)
+                defer { try? inputFile?.close() }
+                process.standardInput = inputFile ?? FileHandle.nullDevice
                 try process.run()
             } catch {
                 continuation.resume(returning: Result(status: -1, output: "", errors: error.localizedDescription))
@@ -120,11 +123,11 @@ public struct Machine: Hashable, Sendable {
                                     "-o", "ControlPath=~/.ssh/botchu-%C", "-o", "ControlPersist=120", "-T"]
 
     /// Runs `arguments` in `folder` (which may start with `~`), here or there.
-    public func run(_ arguments: [String], in folder: String) async -> Shell.Result {
-        guard let destination else { return await Shell.run(arguments, in: folder) }
+    public func run(_ arguments: [String], in folder: String, input: Data? = nil) async -> Shell.Result {
+        guard let destination else { return await Shell.run(arguments, in: folder, input: input) }
         let script = "printf '%s\\n' \(Shell.marker); exec \"$@\""
         return await Shell.execute(Self.ssh, Self.sshOptions + [destination, Self.remoteCommand(script: script, arguments: arguments, in: folder)],
-                                   in: NSHomeDirectory())
+                                   in: NSHomeDirectory(), input: input)
     }
 
     /// Runs a POSIX `sh` script with arguments (`$1`…) in `folder`.

@@ -63,11 +63,13 @@ public struct Invocation: Equatable, Sendable {
     public var arguments: [String]
     public var environment: [String: String]
     public var sessionID: String?
+    public var standardInput: Data?
 
-    public init(arguments: [String], environment: [String: String] = [:], sessionID: String? = nil) {
+    public init(arguments: [String], environment: [String: String] = [:], sessionID: String? = nil, standardInput: Data? = nil) {
         self.arguments = arguments
         self.environment = environment
         self.sessionID = sessionID
+        self.standardInput = standardInput
     }
 }
 

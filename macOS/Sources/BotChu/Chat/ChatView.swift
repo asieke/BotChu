@@ -6,7 +6,7 @@ struct ChatView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("showsStatus") private var showsStatus = true
     let target: ChatTarget
-    @FocusState private var composerFocused: Bool
+    @State private var composerFocused = false
 
     var body: some View {
         if let bot = model.bot(target.botID), let current = model.runSettings(of: target) {
@@ -52,6 +52,12 @@ struct ChatView: View {
                     }
                     Composer(draft: Binding(get: { model.drafts[target] ?? "" }, set: { model.drafts[target] = $0 }),
                          focused: $composerFocused,
+                         images: model.draftImages[target] ?? [],
+                         imageURL: { model.imageURL($0, for: target) },
+                         onRemoveImage: { id in model.draftImages[target]?.removeAll { $0.id == id } },
+                         onAddImages: { model.addImages($0, to: target) },
+                         onPasteImages: { model.pasteImages($0, to: target) },
+                         attachmentError: model.attachmentErrors[target],
                          placeholder: task.map { "Message \(bot.name) about \($0.title)" } ?? "Message \(bot.name)",
                          running: running, onSend: send, onStop: { model.stop(target) }) {
                         ModelMenu(settings: current, disabled: running,
@@ -66,6 +72,7 @@ struct ChatView: View {
                             .help(task == nil ? "Current account. Change it in Edit Bot." : "This task's account. Change it in the status sidebar.")
                     }
                 }
+                .id(target)
                 .padding(.horizontal, 24)
                 .padding(.top, 10)
                 .padding(.bottom, 16)
@@ -94,8 +101,13 @@ struct ChatView: View {
 
     private func send() {
         let text = (model.drafts[target] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        if model.send(text, to: target) { model.drafts[target] = nil }
+        let images = model.draftImages[target] ?? []
+        guard !text.isEmpty || !images.isEmpty else { return }
+        if model.send(text, to: target, images: images) {
+            model.drafts[target] = nil
+            model.draftImages[target] = nil
+            model.attachmentErrors[target] = nil
+        }
     }
 
     /// Replies and tool calls belong to the bot's turn; its avatar shows once at the turn's start.

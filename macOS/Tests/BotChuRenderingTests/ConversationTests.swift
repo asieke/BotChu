@@ -53,6 +53,96 @@ extension RenderingTests {
         }
     }
 
+    @Test func composerGrowsWithShiftReturnAndPastesQueuedImages() async throws {
+        _ = NSApplication.shared
+        let fixture = try ConversationFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app, target = fixture.taskTarget
+        app.runStates[target] = RunState(hasOutput: true)
+        app.show(target)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 850), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close(); app.runStates.removeAll() }
+        window.contentView = NSHostingView(rootView: ChatView(target: target).environment(app))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(200))
+        let editor = try #require(window.firstResponder as? ComposerTextView)
+        let scroll = try #require(editor.enclosingScrollView)
+        let initialHeight = scroll.frame.height
+        editor.insertText("first", replacementRange: NSRange(location: NSNotFound, length: 0))
+        for _ in 0..<6 {
+            let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .shift, timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+            window.sendEvent(enter)
+        }
+        editor.insertText("last", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await Task.sleep(for: .milliseconds(100))
+        window.layoutIfNeeded()
+        #expect(app.drafts[target] == "first" + String(repeating: "\n", count: 6) + "last")
+        #expect(app.messageQueues[target]?.messages.isEmpty != false)
+        #expect(scroll.frame.height > initialHeight)
+        editor.insertText(String(repeating: "\nmore", count: 30), replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await Task.sleep(for: .milliseconds(100))
+        window.layoutIfNeeded()
+        #expect(scroll.frame.height <= 200)
+        #expect(scroll.hasVerticalScroller)
+        let image = NSImage(size: NSSize(width: 40, height: 20))
+        image.lockFocus(); NSColor.systemRed.setFill(); NSRect(x: 0, y: 0, width: 40, height: 20).fill(); image.unlockFocus()
+        let bytes = try #require(image.tiffRepresentation)
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        board.setData(bytes, forType: .tiff)
+        #expect(editor.onPasteImages(board))
+        let attachment = try #require(app.draftImages[target]?.first)
+        #expect(app.draftImages[.home(fixture.bot.id)] == nil)
+        let copy = try Data(contentsOf: fixture.home.imageURL(attachment))
+        #expect(NSImage(data: copy) != nil)
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            try await Task.sleep(for: .milliseconds(100))
+            DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("composer-images"))
+        }
+        let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        window.sendEvent(enter)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(app.messageQueues[target]?.messages.first?.images == [attachment])
+        #expect(app.draftImages[target] == nil)
+        #expect((app.drafts[target] ?? "").isEmpty)
+        #expect(scroll.frame.height == initialHeight)
+        let recovered = AppModel(store: fixture.store, settings: fixture.settings)
+        let queued = try #require(recovered.messageQueues[target]?.messages.first)
+        recovered.editQueuedMessage(queued.id, in: target)
+        #expect(recovered.draftImages[target] == [attachment])
+        #expect(recovered.drafts[target]?.hasPrefix("first\n") == true)
+    }
+
+    @Test func stoppingBeforeImageDeliveryDoesNotLaunchTheCLI() async throws {
+        let fixture = try ConversationFixture()
+        defer { fixture.cleanUp() }
+        let image = try fixture.home.saveImage(Data([1, 2, 3]), name: "fixture.png")
+        #expect(fixture.app.send("Inspect", to: fixture.taskTarget, images: [image]))
+        fixture.app.stop(fixture.taskTarget)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(!fixture.app.isRunning(fixture.taskTarget))
+        #expect(!FileManager.default.fileExists(atPath: fixture.folder(fixture.taskTarget).appendingPathComponent("calls.jsonl").path))
+    }
+
+    @Test func imageOnlyMessagesReachTheCLIAndPreserveTheirTranscript() async throws {
+        let fixture = try ConversationFixture()
+        defer { fixture.cleanUp() }
+        let image = NSImage(size: NSSize(width: 10, height: 10))
+        image.lockFocus(); NSColor.blue.setFill(); NSRect(x: 0, y: 0, width: 10, height: 10).fill(); image.unlockFocus()
+        try fixture.app.addImage(try #require(image.tiffRepresentation), name: "screen.png", to: fixture.taskTarget)
+        let images = try #require(fixture.app.draftImages[fixture.taskTarget])
+        #expect(fixture.app.send("", to: fixture.taskTarget, images: images))
+        try await fixture.wait { !fixture.app.isRunning(fixture.taskTarget) }
+        let call = try #require(fixture.calls(fixture.taskTarget).first)
+        #expect(call.contains("--image"))
+        #expect(call.contains(fixture.home.imageURL(images[0]).path))
+        #expect(fixture.home.loadThread(task: fixture.taskTarget.taskID!).first { $0.role == .user }?.images == images)
+        #expect(fixture.app.messageQueues[fixture.taskTarget]?.messages.isEmpty == true)
+    }
+
     @Test func followUpsDrainInOrderOnTheirOwnTaskAndResumeItsSession() async throws {
         let fixture = try ConversationFixture()
         defer { fixture.cleanUp() }

@@ -1,13 +1,14 @@
 import Foundation
 
 /// One headless CLI process for one turn. It runs the account's command through the login shell
-/// (`zsh -l`, so PATH and Homebrew are the user's), in the bot's workspace, with stdin closed. On a
+/// (`zsh -l`, so PATH and Homebrew are the user's), in the bot's workspace, with optional image input on stdin. On a
 /// host it runs there over SSH, through that user's login shell, and only its output comes back.
 /// Complete stdout lines and the exit are delivered on the main queue.
 public final class AgentRun: @unchecked Sendable {
     private let process = Process()
     private let stdout = Pipe()
     private let stderr = Pipe()
+    private let input: Data?
     private let lock = NSLock()
     private var buffer = Data()
     private var errorTail = Data()
@@ -23,6 +24,7 @@ public final class AgentRun: @unchecked Sendable {
     static let pidMarker = "__BOTCHU_PID__"
 
     public init(command: String, invocation: Invocation, directory: URL) {
+        input = invocation.standardInput
         remote = nil
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-l", "-c", CommandBuilder.shellScript(command: command), "botchu"] + invocation.arguments
@@ -40,6 +42,7 @@ public final class AgentRun: @unchecked Sendable {
     /// A run in `folder` on a host. The invocation's environment stays on this Mac (it holds the
     /// OpenRouter key), so a CLI there uses that machine's own.
     public init(command: String, invocation: Invocation, on machine: Machine, folder: String) {
+        input = invocation.standardInput
         remote = machine
         process.executableURL = URL(fileURLWithPath: Machine.ssh)
         let script = "export NO_COLOR=1 TERM=dumb; printf '%s %s\\n' \(Self.pidMarker) \"$$\"; "
@@ -94,6 +97,9 @@ public final class AgentRun: @unchecked Sendable {
         }
         group.enter()
         process.terminationHandler = { _ in group.leave() }
+        let inputFile = try ProcessInput.file(input)
+        defer { try? inputFile?.close() }
+        process.standardInput = inputFile ?? FileHandle.nullDevice
         try process.run()
         group.notify(queue: .main) { [self] in
             let rest = takeLines(appending: Data("\n".utf8))
