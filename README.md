@@ -52,7 +52,8 @@ request.
     researching (reading and searching files); browsing (web search and fetch); coding (editing
     files, commits: at a laptop, with headphones on); testing (builds, tests, linters); working
     (anything else); a wave when its bot is selected and a cheer when a turn ends, which play once;
-    and a deflated loop after a failed turn. The activity comes from each tool call the CLI reports,
+    and a deflated loop after a failed turn. Selection gives the wave five seconds, and reactions
+    finish their full clip before returning to idle. The activity comes from each tool call the CLI reports,
     and a tool's clip shows for at least 2.5 seconds. Clips loop without a seam, cross-fade when the
     activity changes, and play muted. A missing clip falls back to a close one, then idle. Only the
     selected bot and busy bots move in the sidebar, the chat shows still frames, and Reduce Motion

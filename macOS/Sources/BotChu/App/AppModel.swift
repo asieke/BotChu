@@ -53,7 +53,7 @@ final class AppModel {
     var selection: UUID? {
         didSet {
             guard destination == nil, let selection, selection != oldValue else { return }
-            react(.greeting, for: tab(of: selection), seconds: 2)
+            react(.greeting, for: tab(of: selection), seconds: 5)
             unread.remove(tab(of: selection))
         }
     }
