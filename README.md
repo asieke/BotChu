@@ -35,15 +35,19 @@ the Mac, and runs in its own workspace folder on this Mac.
   - `Sources/BotChuCore/` — Foundation only, unit-tested: accounts and the command line each CLI
     runs with (`Accounts.swift`), the bot and message model (`Models.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), the identity, memory and
-    recap that open a session (`BotContext.swift`), and the JSON store (`Store.swift`).
+    recap that open a session (`BotContext.swift`), the JSON store (`Store.swift`), and the
+    `Process` runner that launches a CLI through the login shell, `zsh -l` (`AgentRun.swift`).
   - `Sources/BotChu/` — the SwiftUI app: the window (sidebar and chat), the bot editor, Settings,
-    the `Process` runner that launches a CLI through the login shell (`zsh -l`), and the Keychain.
+    and the Keychain.
+  - `Sources/botchu-smoke/` — a command-line check, not shipped in the app, that runs two real
+    turns on each account named the way the app does (see **Test**).
   - `Tests/BotChuCoreTests/` — parser tests against captured output of every CLI, command lines,
     context and store.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
     `macOS/build/`), signed with the local "Apple Development" certificate when there is one, ad hoc
     otherwise. `install.sh` builds into `~/Applications`, restarts BotChu if it was running, and
-    smoke-tests that it starts. `test.sh` runs the unit tests.
+    smoke-tests that it starts. `test.sh` runs the unit tests. `ui-review.sh` opens a build on
+    throwaway data for checking its screens (see **Test**).
 - Data: `~/Library/Application Support/BotChu/` holds `bots.json` and one `threads/<bot id>.json` per
   bot. Settings are in the `defaults` domain `local.BotChu`; the OpenRouter key is in the Keychain
   (service `local.BotChu`). Bot workspaces are under `~/BotChu/` by default. No database and no port.
@@ -71,6 +75,16 @@ the Mac, and runs in its own workspace folder on this Mac.
   --report` posts the `check` status a PR needs before merging. `scripts/verify-pr.sh`, given a PR
   number, tests someone else's PR on this machine and posts its `check` status; with `--no-report`
   first, it posts nothing (for reviews). There is no CI: the checks need a Mac with full Xcode.
+- Accounts end to end: `swift run --package-path macOS botchu-smoke [account id …]` runs, for each
+  account (all of them when none is named), a new session that opens with the bot's context and
+  runs a shell command, then a resumed session that must recall a code word from the first, and
+  prints both threads. It spends the accounts' own allowance, so it is not part of `check`;
+  OpenRouter needs `OPENROUTER_API_KEY` in its environment.
+- Screens: `macOS/ui-review.sh ["message"]` builds the app into a temporary folder and opens it on
+  throwaway data (`BOTCHU_DATA_DIR`) with two demo bots, optionally sending the first one a
+  message; the app writes a PNG of each of its windows into the printed folder every second
+  (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
+  `BOTCHU_OPEN=editor` or `BOTCHU_OPEN=settings` opens the bot editor or Settings instead.
 - Smoke test after deploy: `macOS/install.sh` fails unless the installed app starts (launched hidden,
   checked with `pgrep -x BotChu`, and quit again unless it was already open).
 

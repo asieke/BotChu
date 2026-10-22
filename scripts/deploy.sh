@@ -7,11 +7,9 @@
 # when someone runs this script, never at a sync or from cron, add the line DEPLOY_ON_REQUEST=1 before
 # sourcing live.sh. live.sh records every attempt in .git/deploys.
 set -euo pipefail
+# Installing restarts BotChu, which stops any bot mid-turn, so only a direct run deploys.
+DEPLOY_ON_REQUEST=1
 . "$(dirname "$0")/live.sh" "$@"
-# Replace with the exact install, restart, and smoke-test commands for this host, for example:
-#   npm ci --omit=dev
-#   systemctl --user restart my-app
-#   curl -fsS http://127.0.0.1:8080/health >/dev/null
-# On several hosts, give each host its own branch of case "$HOST" (STANDARD.md, Deploy).
-echo "deploy: no commands yet. Add this host's install, restart, and smoke test to scripts/deploy.sh." >&2
-exit 1
+# Test, then build into ~/Applications, restart BotChu if it was open, and smoke-test that it starts.
+"$CANONICAL_PATH/macOS/test.sh"
+"$CANONICAL_PATH/macOS/install.sh"
