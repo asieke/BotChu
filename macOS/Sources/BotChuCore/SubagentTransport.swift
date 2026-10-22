@@ -25,6 +25,7 @@ public struct SubagentTransport: Sendable {
     public let machine: Machine
     private let directory: String
     private let timeout: TimeInterval
+    private let sshExecutable: String
 
     /// A separate app namespace prevents two coordinators using the same SSH host from taking
     /// each other's requests. Local tests can supply a temporary root, including their helper.
@@ -32,6 +33,7 @@ public struct SubagentTransport: Sendable {
                 localRoot: URL? = nil, timeout: TimeInterval = 15) {
         self.machine = machine
         self.timeout = timeout
+        sshExecutable = Machine.ssh
         let id = invocationID.uuidString.lowercased()
         directory = machine.isRemote
             ? "~/.botchu/ipc/subagents/\(namespace.uuidString.lowercased())/\(id)"
@@ -116,6 +118,10 @@ public struct SubagentTransport: Sendable {
         try await write(data, relativePath: "status/\(id.uuidString.lowercased()).status.json")
     }
 
+    public func writeRoster(data: Data) async throws {
+        try await write(data, relativePath: "roster.json")
+    }
+
     public func heartbeat() async throws {
         if machine.isRemote { _ = try await remote("heartbeat"); return }
         try await write(Self.heartbeatData(closed: false), relativePath: "heartbeat.json")
@@ -149,7 +155,7 @@ public struct SubagentTransport: Sendable {
         let input = try JSONEncoder().encode(arguments)
         let run = TransportCommand()
         let result = await withTaskCancellationHandler {
-            await run.execute(executable: Machine.ssh, arguments: Machine.sshOptions + [machine.destination ?? "", command], input: input, timeout: timeout)
+            await run.execute(executable: sshExecutable, arguments: Machine.sshOptions + [machine.destination ?? "", command], input: input, timeout: timeout)
         } onCancel: { run.cancel() }
         try Task.checkCancellation()
         guard result.status == 0 else {

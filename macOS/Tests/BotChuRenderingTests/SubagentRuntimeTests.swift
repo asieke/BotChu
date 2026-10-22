@@ -23,6 +23,115 @@ extension RenderingTests {
         #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("HANDOFF-REAL-OK") == true)
     }
 
+    @Test func sshDelegationUsesHostCommandsForSharedWorkAndLocalCommandsForBotHome() async throws {
+        let fixture = try SubagentFixture(remote: true)
+        defer { fixture.cleanUp() }
+        fixture.app.send("REMOTE_WORKSPACES", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        let records = fixture.app.delegation.records[fixture.target] ?? []
+        #expect(records.count == 2)
+        #expect(records.allSatisfy { $0.phase == .completed })
+        let shared = try #require(records.first { $0.workspaceMode == .sharedCallerWorkspace })
+        let ownHome = try #require(records.first { $0.workspaceMode == .subagentHomeWorkspace })
+        #expect(shared.hostID == fixture.host?.id)
+        #expect(shared.workingDirectory == fixture.folder.path)
+        let sharedLocation = try #require(shared.handoffOutput).split(separator: "|").map(String.init)
+        try #require(sharedLocation.count == 4)
+        #expect(URL(fileURLWithPath: sharedLocation[1]).resolvingSymlinksInPath().path == fixture.folder.resolvingSymlinksInPath().path)
+        #expect(sharedLocation[2] == "remote")
+        #expect(shared.handoffOutput?.contains(fixture.root.appendingPathComponent("remote-home").path) == true)
+        #expect(ownHome.hostID == nil)
+        #expect(ownHome.workingDirectory == fixture.worker.workspace)
+        let homeLocation = try #require(ownHome.handoffOutput).split(separator: "|").map(String.init)
+        try #require(homeLocation.count == 4)
+        #expect(URL(fileURLWithPath: homeLocation[1]).resolvingSymlinksInPath().path == URL(fileURLWithPath: fixture.worker.workspace).resolvingSymlinksInPath().path)
+        #expect(homeLocation[2] == "local")
+        #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("LOCATION|") == true)
+        #expect(fixture.app.bot(fixture.worker.id)?.sessionID == "worker-home-session")
+    }
+
+    @Test func sshHandoffRetriesAResultWriteThatLosesItsConnection() async throws {
+        let fixture = try SubagentFixture(remote: true)
+        defer { fixture.cleanUp() }
+        try Data().write(to: fixture.root.appendingPathComponent("fail-result-once"))
+        fixture.app.send("NEST", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("fail-result-once").path))
+        #expect(fixture.app.delegation.all.count == 1)
+        #expect(fixture.app.delegation.all.first?.phase == .completed)
+        #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("HANDOFF-LEAF") == true)
+    }
+
+    @Test func sshHelperPreparationFailureDoesNotStartOrStrandAConversation() async throws {
+        let fixture = try SubagentFixture(remote: true)
+        defer { fixture.cleanUp() }
+        try Data().write(to: fixture.root.appendingPathComponent("fail-transport"))
+        fixture.app.send("NEST", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        #expect(fixture.app.delegation.all.isEmpty)
+        #expect(fixture.app.thread(fixture.target).last?.role == .error)
+        #expect(fixture.app.thread(fixture.target).last?.text.contains("python3 unavailable") == true)
+    }
+
+    @Test func stoppingAnSSHParentStopsItsNestedWorkersAndSavesTheirTerminalState() async throws {
+        let fixture = try SubagentFixture(remote: true)
+        defer { fixture.cleanUp() }
+        fixture.app.send("STOP_TREE", to: fixture.target)
+        try await fixture.wait { fixture.app.delegation.all.filter { $0.phase == .running }.count == 2 }
+        fixture.app.stop(fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) && fixture.app.delegation.all.allSatisfy { !$0.phase.isActive } }
+        #expect(fixture.app.delegation.all.count == 2)
+        #expect(fixture.app.delegation.all.allSatisfy { $0.phase == .stopped })
+        #expect(fixture.home.loadSubagents(taskID: fixture.target.taskID).allSatisfy { $0.phase == .stopped })
+    }
+
+    @Test func sshSubagentSavesRememberedNotesToItsOwnBotOnTheMac() async throws {
+        let fixture = try SubagentFixture(remote: true)
+        defer { fixture.cleanUp() }
+        fixture.app.send("REMOTE_MEMORY", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        #expect(fixture.app.delegation.all.first?.phase == .completed)
+        #expect(Workspace.read(fixture.worker.workspace + "/MEMORY.md").contains("REMOTE-LESSON"))
+        #expect(!Workspace.read(fixture.parent.workspace + "/MEMORY.md").contains("REMOTE-LESSON"))
+    }
+
+    @Test func restartRedeliversCompletedAndInterruptedHandoffsToTheRemoteMailbox() async throws {
+        let fixture = try SubagentFixture(remote: true)
+        defer { fixture.cleanUp() }
+        let invocation = UUID(), host = try #require(fixture.host)
+        let transport = SubagentTransport(machine: Machine(destination: host.destination), namespace: fixture.app.delegation.namespace,
+                                         invocationID: invocation, localRoot: fixture.app.delegation.root)
+        let endpoint = try await transport.prepare(script: SubagentHookInstaller.script, roster: SubagentIPC.encode([] as [BotRosterEntry]))
+        var completed = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID, depth: 1, targetBot: fixture.worker,
+                                   title: "Saved handoff", brief: "Already completed", workingDirectory: fixture.folder.path,
+                                   hostID: host.id, phase: .completed)
+        completed.callerInvocationID = invocation
+        completed.callerHostID = host.id
+        completed.handoffOutput = "DURABLE-REMOTE-HANDOFF"
+        completed.finishedAt = .now
+        var interrupted = completed
+        interrupted.id = UUID()
+        interrupted.phase = .running
+        interrupted.handoffOutput = nil
+        interrupted.finishedAt = nil
+        try fixture.home.saveSubagent(completed)
+        try fixture.home.saveSubagent(interrupted)
+        let restored = AppModel(store: fixture.store, settings: fixture.settings)
+        defer { restored.stopAll() }
+        let results = URL(fileURLWithPath: endpoint.ipcDirectory).appendingPathComponent("results")
+        let completedFile = results.appendingPathComponent("\(completed.id.uuidString.lowercased()).result.json")
+        let interruptedFile = results.appendingPathComponent("\(interrupted.id.uuidString.lowercased()).result.json")
+        try await fixture.wait {
+            FileManager.default.fileExists(atPath: completedFile.path) && FileManager.default.fileExists(atPath: interruptedFile.path)
+        }
+        let final = try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: completedFile))
+        let stopped = try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: interruptedFile))
+        #expect(final.phase == .completed)
+        #expect(final.handoffOutput == "DURABLE-REMOTE-HANDOFF")
+        #expect(stopped.phase == .stopped)
+        #expect(restored.delegation.all.allSatisfy { !$0.phase.isActive })
+    }
+
     @Test func subagentFanoutReturnsNestedHandoffsToTheCallingTask() async throws {
         let fixture = try SubagentFixture()
         defer { fixture.cleanUp() }
@@ -137,8 +246,11 @@ extension RenderingTests {
     let app: AppModel
     let target: ChatTarget
     let folder: URL
+    let host: SSHHost?
+    let originalSSH: String
 
-    init() throws {
+    init(remote: Bool = false) throws {
+        originalSSH = Machine.ssh
         store = Store(root: root.appendingPathComponent("index"))
         settings = AppSettings(defaults: UserDefaults(suiteName: domain)!)
         settings.botsRoot = root.appendingPathComponent("bots").path
@@ -152,8 +264,45 @@ extension RenderingTests {
         try "WORKER-SOUL".write(toFile: worker.workspace + "/SOUL.md", atomically: true, encoding: .utf8)
         let script = root.appendingPathComponent("cli.py")
         try Self.script.write(to: script, atomically: true, encoding: .utf8)
-        for account in [parent.accountID, worker.accountID] { settings.commands[account] = "/usr/bin/python3 \(Shell.quote(script.path))" }
-        var task = BotTask(for: parent, repo: "fixture/repo", checkout: root.path, work: nil, brief: "Test delegation")
+        for account in [parent.accountID, worker.accountID] { settings.commands[account] = "/usr/bin/python3 \(Shell.quote(script.path)) --machine local" }
+        if remote {
+            let remoteHome = root.appendingPathComponent("remote-home")
+            try FileManager.default.createDirectory(at: remoteHome, withIntermediateDirectories: true)
+            let ssh = root.appendingPathComponent("ssh")
+            // Its HOME, helper, mailbox and captured stdin all belong to this isolated fixture.
+            try """
+                #!/bin/sh
+                while [ $# -gt 0 ]; do
+                  case $1 in -o|-p|-i|-l|-F) shift 2 ;; -*) shift ;; *) break ;; esac
+                done
+                shift
+                export HOME=\(Shell.quote(remoteHome.path))
+                incoming=$(/usr/bin/mktemp \(Shell.quote(root.appendingPathComponent("ssh-input.XXXXXX").path)))
+                /bin/cat > "$incoming"
+                if [ -f \(Shell.quote(root.appendingPathComponent("fail-result-once").path)) ] && /usr/bin/grep -q 'results' "$incoming"; then
+                  /bin/rm \(Shell.quote(root.appendingPathComponent("fail-result-once").path))
+                  echo 'Connection dropped during result delivery' >&2
+                  exit 255
+                fi
+                case "$*" in
+                  *'exec python3 -c'*)
+                    if [ -f \(Shell.quote(root.appendingPathComponent("fail-transport").path)) ]; then
+                      echo 'python3 unavailable on test host' >&2
+                      exit 127
+                    fi ;;
+                esac
+                exec /bin/sh -c "$*" < "$incoming"
+
+                """.write(to: ssh, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+            Machine.ssh = ssh.path
+            let commands = Dictionary(uniqueKeysWithValues: [parent.accountID, worker.accountID].map {
+                ($0, "/usr/bin/python3 \(Shell.quote(script.path)) --machine remote")
+            })
+            host = SSHHost(nickname: "Isolated test host", destination: "fixture-host", reposFolder: root.path, commands: commands)
+            settings.hosts = [host!]
+        } else { host = nil }
+        var task = BotTask(for: parent, repo: "fixture/repo", checkout: root.path, work: nil, brief: "Test delegation", host: host)
         folder = root.appendingPathComponent("worktree")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         task.folder = folder.path
@@ -173,6 +322,7 @@ extension RenderingTests {
     }
     func cleanUp() {
         app.stopAll()
+        Machine.ssh = originalSSH
         UserDefaults(suiteName: domain)?.removePersistentDomain(forName: domain)
         try? FileManager.default.removeItem(at: root)
     }
@@ -191,7 +341,18 @@ extension RenderingTests {
         brief = re.search(r"<handoff_brief>\s*(.*?)\s*</handoff_brief>", prompt, re.S).group(1)
     else:
         brief = prompt.splitlines()[-1]
-    if brief == "FANOUT":
+    if brief == "REMOTE_WORKSPACES":
+        shared = helper("call", "--agent", "Worker", "--workspace", "shared", "--brief", "LOCATION")
+        own = helper("call", "--agent", "Worker", "--workspace", "bot_home", "--brief", "LOCATION")
+        answer = shared + "\n" + own
+    elif brief == "REMOTE_MEMORY":
+        answer = helper("call", "--agent", "Worker", "--brief", "REMEMBER")
+    elif brief == "REMEMBER":
+        answer = "Handoff Report: complete. <remember>REMOTE-LESSON</remember>"
+    elif brief == "LOCATION":
+        machine = sys.argv[sys.argv.index("--machine") + 1]
+        answer = "LOCATION|" + os.getcwd() + "|" + machine + "|" + os.environ["HOME"]
+    elif brief == "FANOUT":
         one = helper("spawn", "--agent", "Worker", "--brief", "NEST").strip()
         two = helper("spawn", "--agent", "Worker", "--brief", "LEAF").strip()
         answer = helper("wait", one, two)
