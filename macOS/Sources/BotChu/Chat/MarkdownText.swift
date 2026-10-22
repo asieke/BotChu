@@ -5,9 +5,12 @@ struct MarkdownText: View {
     let text: String
 
     var body: some View {
-        MarkdownBlocks(blocks: MarkdownBlock.split(text))
-            .textSelection(.enabled)
-            .padding(.top, 3)
+        if let html = RichMarkdown.html(text) {
+            RichMarkdownText(html: html)
+        } else {
+            MarkdownBlocks(blocks: MarkdownBlock.split(text))
+                .textSelection(.enabled)
+        }
     }
 }
 

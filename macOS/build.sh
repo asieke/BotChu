@@ -20,6 +20,9 @@ minos=$(vtool -show-build "$bin" | awk '$1 == "minos" { print $2 }')
 vtool -set-build-version macos "$minos" "$(xcrun --sdk macosx --show-sdk-version)" -replace \
   -output "$out/Contents/MacOS/BotChu" "$bin"
 
+# SwiftPM's bundled, offline chat renderers must travel with the installed app.
+cp -R "$(dirname "$bin")/BotChu_BotChu.bundle" "$out/Contents/Resources/"
+
 # The icon is drawn in code (icon.swift) rather than committed as a binary.
 swiftc "$dir/icon.swift" -o "$tmp/icon"
 "$tmp/icon" "$tmp/AppIcon.iconset"

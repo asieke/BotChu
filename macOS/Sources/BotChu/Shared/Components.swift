@@ -8,6 +8,13 @@ enum Theme {
     static let messageAvatar: CGFloat = 26
     static let bubbleRadius: CGFloat = 16
     static let cardRadius: CGFloat = 9
+    /// Matches ChatRenderer/index.html so rich replies blend into the same bubble as native text.
+    static let replyBackground = Color(nsColor: NSColor(name: nil) { appearance in
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return NSColor(srgbRed: dark ? 41 / 255 : 247 / 255,
+                       green: dark ? 41 / 255 : 247 / 255,
+                       blue: dark ? 41 / 255 : 247 / 255, alpha: 1)
+    })
 }
 
 struct BotAvatar: View {

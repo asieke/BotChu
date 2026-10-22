@@ -8,6 +8,7 @@ import BotChuCore
 ///   their own `defaults` domain (`local.BotChu.dev`), so a throwaway run never changes the real ones.
 /// - `BOTCHU_SNAPSHOT`: write a PNG of each window into this folder every second.
 /// - `BOTCHU_OPEN`: open `editor` (a new bot) or `settings` at launch.
+/// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
 /// - `BOTCHU_SEND`: send this message to the selected bot at launch.
 /// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
 @MainActor
@@ -19,6 +20,9 @@ enum DevHooks {
     }
 
     static func start(model: AppModel, openSettings: () -> Void) {
+        if dataDir != nil, let appearance = env["BOTCHU_APPEARANCE"], ["light", "dark"].contains(appearance) {
+            NSApp.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+        }
         if let dir = env["BOTCHU_SNAPSHOT"] {
             Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
                 MainActor.assumeIsolated { snapshot(into: URL(fileURLWithPath: dir, isDirectory: true)) }
