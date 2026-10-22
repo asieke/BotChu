@@ -45,6 +45,10 @@ private func tempDir(_ name: String) -> URL {
         #expect(SSHHost.folderProblem("~/apps") == nil)
         #expect(SSHHost(nickname: " A ", destination: " h ", reposFolder: "/root/workspace/ ").reposFolder == "/root/workspace")
         #expect(SSHHost.machineName(destination: "root@srv1902831.example.net") == "srv1902831")
+        let host = SSHHost(nickname: "Omarchy", destination: "omarchy", commands: ["claude-dev": " claude ", "codex-dev": ""])
+        #expect(host.command(for: Accounts.account(id: "claude-dev")) == "claude")
+        #expect(host.command(for: Accounts.account(id: "codex-dev")) == nil)
+        #expect(host.command(for: Accounts.account(id: "muse")) == nil)
     }
 
     @Test func deployTargets() {

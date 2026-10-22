@@ -14,13 +14,24 @@ public struct SSHHost: Codable, Hashable, Identifiable, Sendable {
     public var machine: String
     /// Where repositories are checked out there, and where BotChu clones one that isn't yet.
     public var reposFolder: String
+    /// Each account's command there, by account id, when it isn't the same as on this Mac (where the
+    /// profile wrappers in `~/.local/bin` may not exist). Optional for hosts saved without it.
+    public var commands: [String: String]?
 
-    public init(id: UUID = UUID(), nickname: String, destination: String, machine: String = "", reposFolder: String = "~/apps") {
+    public init(id: UUID = UUID(), nickname: String, destination: String, machine: String = "", reposFolder: String = "~/apps",
+                commands: [String: String]? = nil) {
         self.id = id
         self.nickname = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
         self.destination = destination.trimmingCharacters(in: .whitespacesAndNewlines)
         self.machine = machine.trimmingCharacters(in: .whitespacesAndNewlines)
         self.reposFolder = Self.trimmedFolder(reposFolder)
+        self.commands = commands
+    }
+
+    /// The account's command there, or nil to use this Mac's.
+    public func command(for account: Account) -> String? {
+        let command = commands?[account.id]?.trimmingCharacters(in: .whitespaces) ?? ""
+        return command.isEmpty ? nil : command
     }
 
     /// Why BotChu can't use it, or nil when it can.

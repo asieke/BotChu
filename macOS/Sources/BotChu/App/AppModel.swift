@@ -759,7 +759,8 @@ final class AppModel {
             return
         }
 
-        let command = settings.command(for: account)
+        // On a host, its own command for the account when it has one.
+        let command = task.flatMap { settings.host($0.hostID)?.command(for: account) } ?? settings.command(for: account)
         let run = machine.isRemote
             ? AgentRun(command: command, invocation: invocation, on: machine, folder: directory)
             : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: directory, isDirectory: true))

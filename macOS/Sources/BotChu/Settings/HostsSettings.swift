@@ -112,6 +112,24 @@ struct HostEditor: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
+                    ForEach(Accounts.all) { account in
+                        LabeledContent {
+                            TextField("Command", text: Binding(get: { host.commands?[account.id] ?? "" },
+                                                               set: { host.commands = (host.commands ?? [:]).merging([account.id: $0]) { $1 } }),
+                                      prompt: Text(model.settings.command(for: account)))
+                                .labelsHidden()
+                                .font(.system(.body, design: .monospaced))
+                        } label: {
+                            Label(account.name, systemImage: account.symbol)
+                        }
+                    }
+                } header: {
+                    Text("Commands there")
+                } footer: {
+                    Text("Each account's CLI on this host, run through its user's login shell. Leave one empty to use the same command as on this Mac.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section {
                     HStack {
                         Button("Test Connection", action: test)
                             .disabled(SSHHost.destinationProblem(host.destination) != nil || testing)
@@ -141,12 +159,12 @@ struct HostEditor: View {
             }
             .padding(16)
         }
-        .frame(width: 460, height: 440)
+        .frame(width: 520, height: 680)
     }
 
     private var problem: String? {
         let trimmed = SSHHost(id: host.id, nickname: host.nickname, destination: host.destination, machine: host.machine,
-                              reposFolder: host.reposFolder)
+                              reposFolder: host.reposFolder, commands: host.commands)
         if let problem = trimmed.problem { return problem }
         if model.settings.hosts.contains(where: { $0.id != host.id && $0.nickname.caseInsensitiveCompare(trimmed.nickname) == .orderedSame }) {
             return "Another host is called \(trimmed.nickname)."
@@ -168,7 +186,7 @@ struct HostEditor: View {
 
     private func save() {
         var saved = SSHHost(id: host.id, nickname: host.nickname, destination: host.destination, machine: host.machine,
-                            reposFolder: host.reposFolder)
+                            reposFolder: host.reposFolder, commands: host.commands?.filter { !$0.value.trimmingCharacters(in: .whitespaces).isEmpty })
         if saved.machine.isEmpty { saved.machine = SSHHost.machineName(destination: saved.destination) }
         if let i = model.settings.hosts.firstIndex(where: { $0.id == saved.id }) {
             model.settings.hosts[i] = saved
