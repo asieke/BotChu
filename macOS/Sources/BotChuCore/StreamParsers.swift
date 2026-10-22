@@ -224,14 +224,26 @@ public struct AntigravityParser: StreamParser {
                 if let delta = step["text_delta"] as? String { events.append(.textDelta(delta)) }
                 if state == "DONE" { events.append(.textEnd) }
                 return events
-            case "tool":
+            case "tool", "subagent":
                 let id = "step-\(index)"
                 let info = step["tool_info"] as? JSON
+                let subagents = (step["subagent_info"] as? JSON)?["subagents"] as? [JSON]
                 let name = step["tool_name"] as? String ?? info?["name"] as? String ?? "Tool"
-                let input = summarizeToolInput(info?["parameters"])
+                // A launch starts as `tool` but completes as `subagent`, without tool_info.
+                // DONE acknowledges the launch; the child replies arrive later in the parent's text.
+                let roles = subagents?.compactMap { $0["role"] as? String }.joined(separator: "\n")
+                let parameters = info?["parameters"] as? JSON
+                let input = roles ?? parameters?["Role"] as? String ?? summarizeToolInput(info?["parameters"])
                 if state == "ACTIVE" { return [.toolStarted(id: id, name: name, input: input)] }
                 if state == "DONE" || state == "ERROR" || state == "CANCELED" {
-                    let output = info?["output"] as? String ?? ""
+                    let launched = subagents?.map { child in
+                        let role = child["role"] as? String ?? "Subagent"
+                        let conversation = child["conversation_id"] as? String ?? ""
+                        return "Launched \(role)" + (conversation.isEmpty ? "" : "\nConversation: \(conversation)")
+                    }.joined(separator: "\n\n")
+                    let output = state == "DONE"
+                        ? (info?["output"] as? String ?? launched ?? "")
+                        : (info?["output"] as? String ?? "Antigravity reported \(state).")
                     let failed = state != "DONE" || output.hasPrefix("Command failed")
                     return [.toolStarted(id: id, name: name, input: input),
                             .toolFinished(id: id, name: name, output: output, isError: failed)]

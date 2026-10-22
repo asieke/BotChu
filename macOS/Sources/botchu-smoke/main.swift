@@ -27,7 +27,7 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage]) async -> Turn {
         ? BotContext.sessionPreamble(bot: bot, memory: Workspace.read(bot.workspace + "/MEMORY.md"), sharedMemory: "", history: history)
         : nil
     let invocation = CommandBuilder.invocation(
-        kind: bot.account.kind, prompt: BotContext.prompt(for: prompt, preamble: preamble), model: nil, sessionID: resume,
+        kind: bot.account.kind, prompt: BotContext.prompt(for: prompt, preamble: preamble), model: bot.model, sessionID: resume, reasoningEffort: bot.reasoningEffort,
         openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"])
     return await withCheckedContinuation { continuation in
         var turn = Turn()
@@ -45,6 +45,8 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage]) async -> Turn {
             }
         }
         run.onExit = { status, stderr in
+            assembler.apply(.textEnd, to: &turn.messages)
+            ThreadAssembler.closeRunningTools(&turn.messages)
             turn.status = status
             turn.stderr = stderr
             continuation.resume(returning: turn)
@@ -71,6 +73,8 @@ Task {
         let word = "ZEBRA\(Int.random(in: 100...999))"
         var bot = Bot(name: "Smoke", title: "A test bot", instructions: "Answer in as few words as possible.",
                       accountID: account.id, workspace: root.appendingPathComponent(account.id).path)
+        bot.selectModel(ProcessInfo.processInfo.environment["BOTCHU_SMOKE_MODEL"] ?? "")
+        bot.reasoningEffort = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_EFFORT"].flatMap(ReasoningEffort.init(rawValue:))
         try? Workspace.prepare(bot: bot, sharedMemoryPath: root.appendingPathComponent("MEMORY.md").path)
         print("== \(account.name)")
         let started = Date()

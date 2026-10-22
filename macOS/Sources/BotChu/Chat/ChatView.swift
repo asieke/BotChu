@@ -36,13 +36,27 @@ struct ChatView: View {
                     .followsNewestMessage()
                     .onChange(of: messages.count) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
-                Composer(draft: $draft, focused: $composerFocused, botName: bot.name, running: running,
-                         onSend: send, onStop: { model.stop(botID) })
+                VStack(alignment: .leading, spacing: 8) {
+                    Composer(draft: $draft, focused: $composerFocused, botName: bot.name, running: running,
+                             onSend: send, onStop: { model.stop(botID) })
+                    HStack {
+                        ModelMenu(bot: bot, disabled: running,
+                                  onModel: { model.setModel($0, for: botID) },
+                                  onEffort: { model.setReasoningEffort($0, for: botID) })
+                        Spacer(minLength: 8)
+                        Text(bot.account.name).font(.caption).foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 8)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 4)
+                .padding(.bottom, 12)
+                .frame(maxWidth: Theme.chatWidth)
+                .frame(maxWidth: .infinity)
             }
             .navigationTitle(bot.name)
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    AccountMenu(bot: bot, disabled: running) { model.setAccount($0, for: botID) }
                     Button { showsStatus.toggle() } label: {
                         Label(showsStatus ? "Hide Status" : "Show Status", systemImage: "sidebar.right")
                     }
@@ -63,29 +77,6 @@ struct ChatView: View {
     /// Replies and tool calls belong to the bot's turn; its avatar shows once at the turn's start.
     static func isBotTurn(_ message: ChatMessage?) -> Bool {
         message?.role == .assistant || message?.role == .tool
-    }
-}
-
-/// The account a bot runs on, as a toolbar menu that switches it.
-struct AccountMenu: View {
-    let bot: Bot
-    let disabled: Bool
-    let onSelect: (String) -> Void
-
-    var body: some View {
-        Menu {
-            Picker("Account", selection: Binding(get: { bot.accountID }, set: onSelect)) {
-                ForEach(Accounts.all) { account in
-                    Label(account.name, systemImage: account.symbol).tag(account.id)
-                }
-            }
-            .pickerStyle(.inline)
-        } label: {
-            Label(bot.account.name, systemImage: bot.account.symbol)
-                .labelStyle(.titleAndIcon)
-        }
-        .help(disabled ? "The account can change once this turn ends" : "The account this bot runs on")
-        .disabled(disabled)
     }
 }
 

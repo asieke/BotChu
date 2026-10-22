@@ -33,11 +33,6 @@ struct Composer: View {
         .padding(.vertical, 5)
         .background(RoundedRectangle(cornerRadius: 20).fill(Color.primary.opacity(0.04)))
         .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.12)))
-        .padding(.horizontal, 24)
-        .padding(.top, 4)
-        .padding(.bottom, 16)
-        .frame(maxWidth: Theme.chatWidth)
-        .frame(maxWidth: .infinity)
     }
 
     private func button(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {

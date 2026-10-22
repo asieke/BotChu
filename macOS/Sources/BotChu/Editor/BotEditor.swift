@@ -45,12 +45,12 @@ struct BotEditor: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
-                    Picker("Account", selection: $bot.accountID) {
+                    Picker("Account", selection: Binding(get: { bot.accountID }, set: { bot.selectAccount($0) })) {
                         ForEach(Accounts.all) { account in
                             Label(account.name, systemImage: account.symbol).tag(account.id)
                         }
                     }
-                    TextField("Model", text: $bot.model, prompt: Text(modelPrompt))
+                    TextField("Model", text: Binding(get: { bot.model }, set: { bot.selectModel($0) }), prompt: Text(modelPrompt))
                     LabeledContent("Workspace") {
                         HStack {
                             TextField("Workspace", text: $bot.workspace, prompt: Text("~/BotChu/…"))

@@ -108,12 +108,16 @@ final class AppModel {
         prepareWorkspace(bot)
     }
 
-    func setAccount(_ accountID: String, for id: UUID) {
-        guard var bot = bot(id), bot.accountID != accountID else { return }
-        bot.accountID = accountID
-        // A model name belongs to one provider; the new account starts on its own default.
-        if Accounts.account(id: accountID).kind != bot.account.kind { bot.model = "" }
-        update(bot)
+    func setModel(_ selected: String, for id: UUID) {
+        guard let i = bots.firstIndex(where: { $0.id == id }), !isRunning(id) else { return }
+        bots[i].selectModel(selected)
+        save(bots[i])
+    }
+
+    func setReasoningEffort(_ effort: ReasoningEffort?, for id: UUID) {
+        guard let i = bots.firstIndex(where: { $0.id == id }), !isRunning(id) else { return }
+        bots[i].reasoningEffort = effort
+        save(bots[i])
     }
 
     func delete(_ id: UUID) {
@@ -187,6 +191,7 @@ final class AppModel {
             prompt: BotContext.prompt(for: text, preamble: preamble),
             model: model,
             sessionID: resume,
+            reasoningEffort: bot.reasoningEffort,
             openRouterKey: account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil)
 
         if account.kind == .pi, Keychain.get(Keychain.openRouterAccount)?.isEmpty ?? true {

@@ -10,15 +10,25 @@ the Mac, and runs in its own workspace folder on this Mac.
   - **Bots:** create, edit and delete bots. A bot has a name, an emoji, a one-line title, private
     instructions, an account, an optional model and a workspace folder (default `~/BotChu/<name>`).
     A new bot introduces itself in one reply, so a misread role shows up at once.
-  - **Accounts:** any bot can run on any account, switchable at any time from the chat header:
+  - **Accounts:** any bot can run on any account, switchable in **Edit Bot**:
     Claude Personal, Claude Dev and Claude Work (`claude-personal`, `claude-dev`, `claude-work`),
     Codex Personal, Codex Dev and Codex Work (`codex-personal`, `codex-dev`, `codex-work`), Google
     (Antigravity, `agy`), Muse (`muse`), and OpenRouter (the Pi agent, `pi`, with an OpenRouter key
     and any OpenRouter model). Each account's command can be changed in Settings.
   - **Chat:** one continuous thread per bot. Replies stream in, rendered as Markdown; each tool the
-    agent runs shows as a collapsible card with its input and output. A turn can be stopped. The
+    agent runs shows as a collapsible card with its input and output. Headings, nested lists, quotes,
+    tables and fenced code use native block layouts; code has a Copy button. Antigravity subagent
+    launch cards finish when the CLI acknowledges the launch; the bot reports the workers' results
+    in its replies. A missing completion record shows a neutral question mark, not a tool failure.
+    A turn can be stopped. The
     thread and the CLI's session id are saved, so the next message (also after a relaunch) resumes
     the same CLI session.
+  - **Model controls:** below the message field, choose a model and reasoning effort for the bot's
+    existing account. Choices are saved and applied on the next turn, including resumed sessions.
+    The menu has starter model choices and a custom model ID field for the current CLI; it cannot
+    switch accounts or CLI providers. Defaults leave the choice to the CLI (or the OpenRouter model
+    in Settings). Effort choices depend on the provider/model, and controls wait until a turn ends.
+    For known Antigravity models, the effort also selects the matching model-ID suffix.
   - **The bot's folder is the bot:** BotChu keeps each bot's settings (`bot.json`), its whole
     conversation (`thread.jsonl`, one message per line) and a log of every turn (`logs/<date>.log`:
     the command, how long it took, the exit status, any error and the CLI's error output) in
@@ -106,7 +116,9 @@ the Mac, and runs in its own workspace folder on this Mac.
   account (all of them when none is named), a new session that opens with the bot's context and
   runs a shell command, then a resumed session that must recall a code word from the first, and
   prints both threads. It spends the accounts' own allowance, so it is not part of `check`;
-  OpenRouter needs `OPENROUTER_API_KEY` in its environment.
+  OpenRouter needs `OPENROUTER_API_KEY` in its environment. To exercise explicit generation
+  settings, prefix the command with `BOTCHU_SMOKE_EFFORT=low` and optionally
+  `BOTCHU_SMOKE_MODEL=<model id>`; both settings apply to the new and resumed turns.
 - Screens: `macOS/ui-review.sh ["message"]` builds the app into a temporary folder and opens it on
   throwaway data (`BOTCHU_DATA_DIR`, with its own settings domain, `local.BotChu.dev`) with two demo
   bots in the old layout, so every run also exercises the migration into bot folders, the first

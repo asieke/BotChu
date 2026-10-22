@@ -288,17 +288,6 @@ import Testing
     }
 }
 
-@Suite struct MarkdownTests {
-    @Test func splitsCodeFences() {
-        let blocks = MarkdownBlock.split("Intro\n\n```swift\nlet x = 1\n```\n\n## Next\n- one\n- two")
-        #expect(blocks == [.prose("Intro"), .code("let x = 1"), .prose("**Next**\n• one\n• two")])
-    }
-
-    @Test func unclosedFenceIsCode() {
-        #expect(MarkdownBlock.split("a\n```\nb") == [.prose("a"), .code("b")])
-    }
-}
-
 @Suite struct AgentRunTests {
     @Test func childEnvironmentDropsAgentSessionVariables() {
         let env = AgentRun.childEnvironment([

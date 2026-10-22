@@ -26,6 +26,7 @@ struct BotInspector: View {
                         }
                         InspectorRow("Agent", value: bot.account.kind.displayName)
                         InspectorRow("Model", value: modelName(bot))
+                        InspectorRow("Reasoning", value: bot.reasoningEffort?.title ?? "Default")
                     }
                     InspectorSection("Session") {
                         InspectorRow("Next message", value: sessionSummary(status.session))
@@ -113,7 +114,9 @@ struct BotInspector: View {
     }
 
     private func modelName(_ bot: Bot) -> String {
-        if !bot.model.isEmpty { return bot.model }
+        if !bot.model.isEmpty {
+            return GenerationOptions.modelArgument(bot.model, kind: bot.account.kind, effort: bot.reasoningEffort)
+        }
         return bot.account.kind == .pi ? model.settings.openRouterModel : "CLI default"
     }
 
@@ -197,7 +200,7 @@ struct MemoryPreview: View {
                     .foregroundStyle(.secondary)
             } else {
                 ScrollView {
-                    Text(MarkdownText.attributed(MarkdownBlock.normalize(memory.body)))
+                    MarkdownText(text: memory.body)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }

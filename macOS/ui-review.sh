@@ -29,7 +29,7 @@ cat > "$data/threads/8C1F6A2E-5B7D-4E8A-9C3B-2A1D0F4E6B71.json" <<'JSON'
  {"id":"00000000-0000-4000-8000-000000000004","role":"tool","text":"","date":"2026-10-22T03:01:03Z","toolID":"t1",
   "toolName":"Bash","toolInput":"ls","toolOutput":"AGENTS.md\nCLAUDE.md\nGEMINI.md\nMEMORY.md\n","toolState":"done"},
  {"id":"00000000-0000-4000-8000-000000000005","role":"assistant","date":"2026-10-22T03:01:06Z",
-  "text":"Four files:\n\n- `AGENTS.md` — who I am\n- `MEMORY.md` — what I remember\n\nNoted that you like **short answers**."}]
+  "text":"## Workspace notes\n\nI found **four files**. See the [project guide](https://example.com) for details.\n\n1. Read `AGENTS.md`\n   - It describes who I am.\n2. Keep `MEMORY.md` current.\n\n> Noted that you like short answers.\n\n| File | Purpose |\n| :--- | :--- |\n| `AGENTS.md` | Instructions |\n| `MEMORY.md` | Persistent notes |\n\n```swift\nlet answer = 42\nprint(answer)\n```"}]
 JSON
 printf '# Scout\n\nWhat Scout has learned and keeps across conversations.\n\n- Prefers short answers.\n- Works on BotChu, a macOS app.\n' > "$data/bots/scout/MEMORY.md"
 "$dir/build.sh" "$data" >/dev/null
