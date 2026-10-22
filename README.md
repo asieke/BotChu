@@ -116,7 +116,8 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     Session. On a task's tab it shows the task instead: its repository, issue, branch, pull request
     (and whether it is open, merged or closed), the account (which can change there), that account's
     usage, session and worktree (in Finder or Terminal), with Close Task and New Session. Its colors
-    follow light and dark mode.
+    follow light and dark mode. The window is never narrower than the sidebar, chat and status
+    need, so it widens when they do.
   - **Account usage:** the selected account's allowance used and reset times, shared by all bots
     on that account. Claude Code and Antigravity use their native `/usage` commands; Codex uses
     `account/rateLimits/read`. They run the command configured in Settings, with the CLI managing
@@ -169,7 +170,8 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
     made in throwaway repositories.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
-    fallback and offline restrictions, using isolated windows and no bot data.
+    fallback and offline restrictions, and the main window's layout at its narrowest, using
+    isolated windows and no real bot data.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
     `macOS/build/`), signed with the local "Apple Development" certificate when there is one, ad hoc
     otherwise. It records the SDK the app was linked against in the binary (`vtool`), because

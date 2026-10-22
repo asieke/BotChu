@@ -81,11 +81,11 @@ final class AppModel {
     /// PROJECT.md's `local:` deploy targets, by repository, once read.
     @ObservationIgnored var deployTargetCache: [String: [(machine: String, path: String)]] = [:]
 
-    init(store: Store? = nil, settings: AppSettings? = nil) {
+    init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil) {
         DevHooks.configure()
         self.store = store ?? DevHooks.dataDir.map { Store(root: $0) } ?? .applicationSupport
         self.settings = settings ?? AppSettings()
-        self.usage = DevHooks.usageFetch.map { UsageCache(fetch: $0) } ?? UsageCache()
+        self.usage = usage ?? DevHooks.usageFetch.map { UsageCache(fetch: $0) } ?? UsageCache()
         self.store.migrateIfNeeded()
         let loaded = self.store.loadBots()
         bots = loaded.bots
