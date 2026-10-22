@@ -13,21 +13,35 @@ final class PetSheet: @unchecked Sendable {
         let durations: [Double]
         var total: Double { durations.reduce(0, +) }
 
-        /// The frame `elapsed` seconds in, looping.
-        func index(at elapsed: Double, loops: Bool = true) -> Int? {
-            guard total > 0 else { return 0 }
+        /// Where `elapsed` seconds falls: the frame, the frame after it (nil at the end of an
+        /// animation that doesn't loop), and how far to blend into that one, 0 to 1. The blend runs
+        /// over the last `share` of each frame's time, eased, so poses flow into each other.
+        func position(at elapsed: Double, loops: Bool = true, share: Double = 0.5) -> (index: Int, next: Int?, blend: Double)? {
+            guard total > 0, !frames.isEmpty else { return (0, nil, 0) }
             if !loops, elapsed >= total { return nil }
-            var t = elapsed.truncatingRemainder(dividingBy: total)
+            var t = loops ? elapsed.truncatingRemainder(dividingBy: total) : max(0, elapsed)
+            if t < 0 { t += total }
             for (i, d) in durations.enumerated() {
-                if t < d { return i }
+                if t < d {
+                    let next = i + 1 < frames.count ? i + 1 : (loops ? 0 : nil)
+                    let start = d * (1 - share)
+                    let blend = t <= start ? 0 : PetSheet.ease((t - start) / (d * share))
+                    return (i, next, blend)
+                }
                 t -= d
             }
-            return frames.count - 1
+            return (frames.count - 1, loops ? 0 : nil, 0)
         }
     }
 
     let name: String
     let animations: [String: Animation]
+
+    /// Smoothstep: slow in, slow out.
+    static func ease(_ x: Double) -> Double {
+        let x = min(max(x, 0), 1)
+        return x * x * (3 - 2 * x)
+    }
 
     private init(name: String, animations: [String: Animation]) {
         self.name = name
@@ -139,7 +153,8 @@ final class PetSheet: @unchecked Sendable {
     }
 }
 
-/// A pet, animated for what its bot is doing: the whole figure, or just its head.
+/// A pet, animated for what its bot is doing: the whole figure, or just its head. Frames blend into
+/// each other, and a change of activity cross-fades, so the motion is smooth rather than stepped.
 struct PetSpriteView: View {
     enum Style { case figure, head }
 
@@ -150,47 +165,95 @@ struct PetSpriteView: View {
     var animates = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var started = Date()
+    /// The activity before the last change and when it started, faded out over `fade`.
+    @State private var previous: (activity: BotActivity, started: Date)?
+    @State private var changed = Date.distantPast
+
+    private static let fade = 0.3
 
     var body: some View {
         Group {
             if animates && !reduceMotion {
-                TimelineView(.animation(minimumInterval: 1 / 30)) { context in
-                    frame(at: context.date.timeIntervalSince(started))
+                TimelineView(.animation(minimumInterval: 1 / 60)) { context in
+                    layers(at: context.date)
                 }
             } else {
-                frame(at: 0)
+                still
             }
         }
-        .onChange(of: activity) { started = Date() }
+        .onChange(of: activity) { old, _ in
+            let now = Date()
+            previous = (old, started)
+            changed = now
+            started = now
+        }
         .accessibilityHidden(true)
     }
 
-    private func frame(at elapsed: Double) -> some View {
-        var image = sheet.animations["idle"].flatMap { pick($0, at: elapsed) }
-        if let animation = sheet.animation(for: activity) {
-            if let index = animation.index(at: elapsed, loops: !activity.isOneShot) {
-                image = pick(animation, index: index)
-            } else if let idle = sheet.animations["idle"] {
-                // A one-shot reaction has played: back to idle.
-                image = pick(idle, at: elapsed - animation.total)
-            }
-        }
-        return Group {
-            if let image {
-                Image(decorative: image, scale: 1)
-                    .resizable()
-                    .interpolation(.high)
-                    .aspectRatio(contentMode: .fit)
-            }
+    @ViewBuilder private var still: some View {
+        if let animation = sheet.animation(for: activity) ?? sheet.animations["idle"] {
+            picture(images(of: animation)[0])
         }
     }
 
-    private func pick(_ animation: PetSheet.Animation, at elapsed: Double) -> CGImage? {
-        animation.index(at: elapsed).map { pick(animation, index: $0) }
+    /// Every image showing at `date` with its weight; the weights add up to 1.
+    private func layers(at date: Date) -> some View {
+        var weighted = frames(for: activity, elapsed: date.timeIntervalSince(started))
+        let sinceChange = date.timeIntervalSince(changed)
+        if let previous, sinceChange < Self.fade {
+            let keep = 1 - PetSheet.ease(sinceChange / Self.fade)
+            weighted = weighted.map { ($0.0, $0.1 * (1 - keep)) }
+                + frames(for: previous.activity, elapsed: date.timeIntervalSince(previous.started)).map { ($0.0, $0.1 * keep) }
+        }
+        let shown = weighted.filter { $0.1 > 0.002 }
+        return ZStack {
+            ForEach(Array(shown.enumerated()), id: \.offset) { _, layer in
+                // Adding the weighted layers gives a true cross-dissolve, with no dip in opacity
+                // where the two poses differ.
+                picture(layer.0)
+                    .opacity(layer.1)
+                    .blendMode(.plusLighter)
+            }
+        }
+        // Drawn offscreen on transparency first; otherwise the layers would add onto the card.
+        .drawingGroup()
     }
 
-    private func pick(_ animation: PetSheet.Animation, index: Int) -> CGImage {
-        let images = style == .head ? animation.heads : animation.frames
-        return images[min(index, images.count - 1)]
+    /// The frames of `activity`'s animation `elapsed` seconds in, with their weights. A one-shot
+    /// reaction that has played blends back into idle.
+    private func frames(for activity: BotActivity, elapsed: Double) -> [(CGImage, Double)] {
+        let idle = sheet.animations["idle"]
+        guard let animation = sheet.animation(for: activity) ?? idle else { return [] }
+        let loops = !activity.isOneShot
+        if let p = animation.position(at: elapsed, loops: loops) {
+            let images = images(of: animation)
+            let current = images[min(p.index, images.count - 1)]
+            let next: CGImage? = p.next.map { images[min($0, images.count - 1)] }
+                ?? idle.map { self.images(of: $0)[0] }
+            guard let next, p.blend > 0 else { return [(current, 1)] }
+            return [(current, 1 - p.blend), (next, p.blend)]
+        }
+        guard let idle else { return [] }
+        return frames(forIdle: idle, elapsed: elapsed - animation.total)
+    }
+
+    private func frames(forIdle idle: PetSheet.Animation, elapsed: Double) -> [(CGImage, Double)] {
+        guard let p = idle.position(at: elapsed) else { return [] }
+        let images = images(of: idle)
+        let current = images[min(p.index, images.count - 1)]
+        guard let next = p.next, p.blend > 0 else { return [(current, 1)] }
+        return [(current, 1 - p.blend), (images[min(next, images.count - 1)], p.blend)]
+    }
+
+    private func images(of animation: PetSheet.Animation) -> [CGImage] {
+        style == .head ? animation.heads : animation.frames
+    }
+
+    private func picture(_ image: CGImage) -> some View {
+        Image(decorative: image, scale: 1)
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
     }
 }
+

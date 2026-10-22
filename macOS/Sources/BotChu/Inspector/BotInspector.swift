@@ -163,11 +163,11 @@ struct AvatarCard: View {
     let edit: () -> Void
 
     var body: some View {
-        VStack(spacing: 14) {
-            StatusAvatar(bot: bot, status: status, size: 128)
-            VStack(spacing: 2) {
+        VStack(spacing: 10) {
+            StatusAvatar(bot: bot, status: status, size: 96)
+            VStack(spacing: 1) {
                 Text(bot.name)
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.system(size: 17, weight: .bold))
                     .kerning(-0.2)
                 if !bot.title.isEmpty {
                     Text(bot.title)
@@ -177,28 +177,28 @@ struct AvatarCard: View {
                         .lineLimit(2)
                 }
             }
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 StatusPill(state: StatusLook(status))
                 detail
                 if status.phase.isActive { IndeterminateBar() }
             }
             .frame(maxWidth: .infinity)
         }
-        .padding(EdgeInsets(top: 24, leading: 16, bottom: 18, trailing: 16))
+        .padding(EdgeInsets(top: 14, leading: 12, bottom: 12, trailing: 12))
         .frame(maxWidth: .infinity)
-        .background(RoundedRectangle(cornerRadius: 18).fill(Palette.avatarCard))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.black.opacity(0.04)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Palette.card))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Palette.cardEdge))
         .overlay(alignment: .topTrailing) {
             Button(action: edit) {
                 Image(systemName: "pencil")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 36, height: 36)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Palette.cardButton))
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 30, height: 30)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Palette.button))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(Palette.buttonText)
-            .padding(8)
+            .padding(6)
             .help("Edit \(bot.name), including its appearance")
         }
     }
@@ -306,20 +306,20 @@ struct StatusAvatar: View {
             let t = moving ? context.date.timeIntervalSinceReferenceDate : 0
             ZStack {
                 ring(look, angle: .degrees(t.truncatingRemainder(dividingBy: 1.4) / 1.4 * 360))
-                Circle().fill(Palette.avatarCard).padding(5)
+                Circle().fill(Palette.card).padding(4)
                 BotFace(bot: bot, activity: status.activity, animates: true)
                     .saturation(look == .error ? 0.3 : 1)
                     .clipShape(Circle())
-                    .padding(8)
+                    .padding(6)
             }
             .frame(width: size, height: size)
             .overlay(alignment: .bottomTrailing) {
                 Circle()
                     .fill(look.dot)
-                    .frame(width: 18, height: 18)
-                    .overlay(Circle().stroke(Palette.avatarCard, lineWidth: 3))
+                    .frame(width: 15, height: 15)
+                    .overlay(Circle().stroke(Palette.card, lineWidth: 3))
                     .opacity(moving ? 0.675 + 0.325 * cos(t / 1.2 * 2 * .pi) : 1)
-                    .padding(10)
+                    .padding(7)
             }
         }
         .frame(width: size, height: size)
@@ -544,7 +544,6 @@ struct MemoryPreview: View {
 enum Palette {
     static let sidebar = dynamic(0xF2F0EE, 0x1E1D21)
     static let hairline = dynamic(0xDEDAD5, 0x34333A)
-    static let avatarCard = dynamic(0xECE8F6, 0x2B2740)
     static let card = dynamic(0xFFFFFF, 0x2A2A2F)
     static let cardEdge = Color.primary.opacity(0.05)
     static let rowDivider = dynamic(0xEEECE9, 0x36353B)
@@ -552,9 +551,6 @@ enum Palette {
     static let cardSubtitle = dynamic(0x5C5866, 0xA6A1B3)
     static let pathText = dynamic(0x3A3A3C, 0xC7C7CC)
     static let button = dynamic(0xE5E2DE, 0x3A393F)
-    static let cardButton = Color(nsColor: NSColor(name: nil) { appearance in
-        NSColor.white.withAlphaComponent(appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? 0.08 : 0.6)
-    })
     static let buttonText = dynamic(0x1D1D1F, 0xF2F2F7)
     static let text = buttonText
     static let accent = dynamic(0x5B3FD0, 0x6E52E0)

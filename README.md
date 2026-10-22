@@ -19,7 +19,8 @@ the Mac, and runs in its own workspace folder on this Mac.
     `hatch-pet` skill's 8 × 9 or 8 × 11 atlas of 192 × 208 cells), plus optional extra animations
     BotChu adds for these activities; missing ones fall back to the closest atlas row. **Import
     Codex Pet…** in **Edit Bot** copies one in (for example from `~/.codex/pets/<name>`), and the
-    bot's **Appearance** text says how it looks. Reduce Motion shows a still frame. Only the
+    bot's **Appearance** text says how it looks. Frames blend into each other and a change of
+    activity cross-fades, so the motion is smooth. Reduce Motion shows a still frame. Only the
     selected bot and busy bots move in the sidebar.
   - **Accounts:** any bot can run on any account, switchable in **Edit Bot**:
     Claude Personal, Claude Dev and Claude Work (`claude-personal`, `claude-dev`, `claude-work`),
