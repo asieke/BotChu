@@ -109,6 +109,7 @@ struct SettingsView: View {
 
     private func saveKey() {
         Keychain.set(openRouterKey.trimmingCharacters(in: .whitespacesAndNewlines), for: Keychain.openRouterAccount)
+        model.settings.usageCredentialRevision += 1
         keySaved = true
     }
 

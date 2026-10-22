@@ -27,6 +27,7 @@ final class AppModel {
     @ObservationIgnored var petRuns: [UUID: AgentRun] = [:]
     var editor: EditorRequest?
     let settings: AppSettings
+    let usage: UsageCache
 
     private let store: Store
     /// Index entries whose folders don't hold their bot right now; kept so the bot returns with it.
@@ -36,6 +37,7 @@ final class AppModel {
     init(store: Store? = nil, settings: AppSettings? = nil) {
         self.store = store ?? DevHooks.dataDir.map { Store(root: $0) } ?? .applicationSupport
         self.settings = settings ?? AppSettings()
+        self.usage = DevHooks.usageFetch.map { UsageCache(fetch: $0) } ?? UsageCache()
         self.store.migrateIfNeeded()
         let loaded = self.store.loadBots()
         bots = loaded.bots

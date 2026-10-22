@@ -3,7 +3,7 @@ import SwiftUI
 import BotChuCore
 
 /// The right-hand sidebar: the selected bot's face and state in a card, then what it runs on, its
-/// session, conversation, memory and workspace in grouped cards, and the actions on it.
+/// account usage, session, conversation, memory and workspace in grouped cards, and the actions on it.
 struct BotInspector: View {
     @Environment(AppModel.self) private var model
     let botID: UUID
@@ -27,6 +27,10 @@ struct BotInspector: View {
                             InspectorRow("Reasoning", value: bot.reasoningEffort?.title ?? "Default", last: true)
                         }
                     }
+                    let usageRequest = UsageRequest(account: bot.account, command: model.settings.command(for: bot.account),
+                        credentialRevision: bot.account.kind == .pi ? model.settings.usageCredentialRevision : 0)
+                    AccountUsageSection(request: usageRequest, isRunning: status.phase.isActive)
+                        .id(usageRequest)
                     InspectorSection("Session") {
                         InspectorCard {
                             if case .continuing(let id) = status.session {
@@ -156,8 +160,8 @@ struct BotInspector: View {
     }
 }
 
-/// The card at the top: the bot's face in a ring that shows its state, its name and title, a
-/// status pill, and a line on what it is doing.
+/// The card at the top: the bot's face in a ring that shows its state, its name and title,
+/// a pill while working or after an error, and a line on what it is doing.
 struct AvatarCard: View {
     let bot: Bot
     let status: BotStatus
@@ -170,6 +174,7 @@ struct AvatarCard: View {
                 Text(bot.name)
                     .font(.system(size: 17, weight: .bold))
                     .kerning(-0.2)
+                    .accessibilityLabel("\(bot.name), \(StatusLook(status).label)")
                 if !bot.title.isEmpty {
                     Text(bot.title)
                         .font(.system(size: 13))
@@ -179,7 +184,7 @@ struct AvatarCard: View {
                 }
             }
             VStack(spacing: 6) {
-                StatusPill(state: StatusLook(status))
+                if status.phase != .idle { StatusPill(state: StatusLook(status)) }
                 detail
                 if status.phase.isActive { IndeterminateBar() }
             }

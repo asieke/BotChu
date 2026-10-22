@@ -10,6 +10,7 @@ import BotChuCore
 ///   rows (`sidebar.png`), which the window's picture leaves out.
 /// - `BOTCHU_OPEN`: open `editor` (a new bot) or `settings` at launch.
 /// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
+/// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review.
 /// - `BOTCHU_SEND`: send this message to the selected bot at launch.
 /// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
 /// - `BOTCHU_PET`: give the selected bot this Codex pet folder at launch, as Import Codex Pet does.
@@ -21,6 +22,20 @@ enum DevHooks {
 
     static var dataDir: URL? {
         env["BOTCHU_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    static var usageFetch: UsageCache.Fetch? {
+        guard dataDir != nil, let fixture = env["BOTCHU_USAGE"],
+              ["sample", "stale", "expired", "unavailable"].contains(fixture) else { return nil }
+        return { _, _ in
+            if fixture == "unavailable" { throw UsageFailure("Check the account’s sign-in, then refresh.") }
+            let now = Date()
+            return ProviderUsage(windows: [
+                UsageWindow(id: "session", title: "5-hour", usedPercent: 24,
+                            resetsAt: now.addingTimeInterval(fixture == "expired" ? -60 : 7_200)),
+                UsageWindow(id: "week", title: "Weekly", usedPercent: 83, resetsAt: now.addingTimeInterval(259_200)),
+            ], readAt: now.addingTimeInterval(fixture == "stale" ? -7_200 : 0))
+        }
     }
 
     static func start(model: AppModel, openSettings: () -> Void) {
