@@ -194,3 +194,34 @@ struct PetSpriteView: View {
         return images[min(index, images.count - 1)]
     }
 }
+
+/// How a pet drawing is going, with Cancel (or Dismiss, after a failure).
+struct PetDrawingStatus: View {
+    @Environment(AppModel.self) private var model
+    let botID: UUID
+
+    var body: some View {
+        if let drawing = model.petDrawings[botID] {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if drawing.isActive {
+                    ProgressView().controlSize(.mini)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(drawing.summary)
+                        Text("Started \(drawing.startedAt.formatted(date: .omitted, time: .shortened)); this takes a while.")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    Button("Cancel") { model.cancelPetDrawing(botID) }
+                } else {
+                    Text(drawing.summary)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                    Spacer(minLength: 4)
+                    Button("Dismiss") { model.dismissPetDrawing(botID) }
+                }
+            }
+            .font(.caption)
+            .controlSize(.small)
+        }
+    }
+}

@@ -13,6 +13,8 @@ import BotChuCore
 /// - `BOTCHU_SEND`: send this message to the selected bot at launch.
 /// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
 /// - `BOTCHU_PET`: give the selected bot this Codex pet folder at launch, as Import Codex Pet does.
+/// - `BOTCHU_DRAW_PET`: give the selected bot this appearance and draw its pet at launch (a real
+///   Codex run on the pet account, which takes a while).
 @MainActor
 enum DevHooks {
     static let env = ProcessInfo.processInfo.environment
@@ -48,6 +50,10 @@ enum DevHooks {
         }
         if let folder = env["BOTCHU_PET"], let id = model.selection {
             try? model.importPet(from: URL(fileURLWithPath: (folder as NSString).expandingTildeInPath, isDirectory: true), for: id)
+        }
+        if let appearance = env["BOTCHU_DRAW_PET"], let id = model.selection {
+            model.setAppearance(appearance, for: id)
+            model.drawPet(id)
         }
         if let text = env["BOTCHU_SEND"], let id = model.selection {
             model.send(text, to: id)

@@ -13,6 +13,7 @@ struct BotInspector: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     header(bot, status)
+                    PetDrawingStatus(botID: botID)
                     if let error = status.lastError {
                         Text(error)
                             .font(.caption)
