@@ -18,8 +18,9 @@ the Mac, and runs in its own workspace folder on this Mac.
     deflated after a failed one, and waves when its bot is selected. A pet is a Codex pet (the
     `hatch-pet` skill's 8 × 9 or 8 × 11 atlas of 192 × 208 cells), plus optional extra animations
     BotChu adds for these activities; missing ones fall back to the closest atlas row. **Import
-<<<<<<< HEAD
-    Codex Pet…** in **Edit Bot** copies one in (for example from `~/.codex/pets/<name>`).
+    Codex Pet…** in **Edit Bot** copies one in (for example from `~/.codex/pets/<name>`). Frames
+    blend into each other and a change of activity cross-fades, so the motion is smooth. Reduce
+    Motion shows a still frame. Only the selected bot and busy bots move in the sidebar.
   - **Drawing a pet:** describe the bot's look in **Appearance** in **Edit Bot** and choose **Draw
     Pet** (or create a bot with an appearance). One `codex exec` on a Codex account follows Codex's
     `hatch-pet` skill to draw the base and the nine atlas rows, then draws BotChu's six extra
@@ -27,18 +28,13 @@ the Mac, and runs in its own workspace folder on this Mac.
     with a wrench) with the same skill's layout guides and frame extraction. It works in
     `.botchu/pet-drawing/` and replaces the pet only once a valid atlas exists, so chat goes on and
     the old pet stays meanwhile; a failed drawing stays there to inspect, and the bot's log records
-    the run. Progress shows in the editor and the status sidebar, with Cancel. A bot on a Codex
-    account draws with its own; others use the account in Settings. It needs the skill in that
-    account's Codex home (or `~/.agents/skills`, `~/.codex/skills`) and Python with Pillow
-    (Xcode's `/usr/bin/python3` with `pip install --user pillow`, or Homebrew's), and BotChu says
-    which is missing. A drawing makes about 16 images on that account's allowance and takes 30
-    minutes or more. Reduce Motion shows a still frame. Only the
-=======
-    Codex Pet…** in **Edit Bot** copies one in (for example from `~/.codex/pets/<name>`), and the
-    bot's **Appearance** text says how it looks. Frames blend into each other and a change of
-    activity cross-fades, so the motion is smooth. Reduce Motion shows a still frame. Only the
->>>>>>> feat/8-pet-sprites
-    selected bot and busy bots move in the sidebar.
+    the run. Once installed, the run's working files are removed; its prompts, contact sheet and
+    QA previews stay in `pet/run/`. Progress shows in the editor and the status sidebar, with
+    Cancel. A bot on a Codex account draws with its own; others use the account in Settings. It
+    needs the skill in that account's Codex home (or `~/.agents/skills`, `~/.codex/skills`) and
+    Python with Pillow (Xcode's `/usr/bin/python3` with `pip install --user pillow`, or
+    Homebrew's), and BotChu says which is missing. A drawing makes about 16 images on that
+    account's allowance and takes about half an hour.
   - **Accounts:** any bot can run on any account, switchable in **Edit Bot**:
     Claude Personal, Claude Dev and Claude Work (`claude-personal`, `claude-dev`, `claude-work`),
     Codex Personal, Codex Dev and Codex Work (`codex-personal`, `codex-dev`, `codex-work`), Google
