@@ -3,7 +3,7 @@ import BotChuCore
 
 /// Starts a task for a bot: one of the owner's GitHub repositories, the computer and folder it is
 /// worked on (where it lives, by default), an open issue or pull request there (or something new),
-/// what to do, the branch, and the account it runs on.
+/// what to do and the account it runs on. Branches are managed when the task starts.
 struct NewTaskSheet: View {
     /// What a task on a pull request does with it.
     enum Purpose: Hashable {
@@ -36,9 +36,6 @@ struct NewTaskSheet: View {
     @State private var workKey = ""
     @State private var purpose = Purpose.work
     @State private var brief = ""
-    @State private var branch = ""
-    /// The branch last filled in from the choice; once the field differs, the person chose it.
-    @State private var autoBranch = ""
     @State private var accountID = ""
 
     var body: some View {
@@ -135,14 +132,6 @@ struct NewTaskSheet: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {
-                        if purpose.review == nil {
-                            LabeledContent("Branch") {
-                                TextField("Branch", text: $branch, prompt: Text(chosen == nil ? "Named from the task" : "Named from the issue"))
-                                    .labelsHidden()
-                                    .font(.system(.body, design: .monospaced))
-                                    .disabled(chosen?.work.isPullRequest == true)
-                            }
-                        }
                         Picker("Account", selection: $accountID) {
                             ForEach(Accounts.all) { account in
                                 Label(account.name, systemImage: account.symbol).tag(account.id)
@@ -151,7 +140,7 @@ struct NewTaskSheet: View {
                     } header: {
                         Text("Runs on")
                     } footer: {
-                        branchFooter
+                        taskFooter
                     }
                 }
             }
@@ -165,7 +154,7 @@ struct NewTaskSheet: View {
                 Button("Start Task") { start() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(problem != nil)
-                    .help(problem ?? "Make the task's worktree and send its first message")
+                    .help(problem ?? "Prepare the task and send its first message")
             }
             .padding(16)
         }
@@ -182,9 +171,7 @@ struct NewTaskSheet: View {
         }
         .onChange(of: workKey) {
             if chosen?.work.isPullRequest != true { purpose = .work }
-            refreshBranch()
         }
-        .onChange(of: brief) { if chosen == nil { refreshBranch() } }
     }
 
     // MARK: Repository
@@ -306,9 +293,9 @@ struct NewTaskSheet: View {
             } else if let lookupError {
                 Text(lookupError).foregroundStyle(.red)
             } else if purpose == .comment {
-                Text("The bot reviews the pull request in a worktree at its head and posts one review on GitHub.")
+                Text("The bot reviews the changes and posts one review on GitHub.")
             } else if purpose == .review {
-                Text("The bot reviews the pull request in a worktree at its head and gives its review here; it posts nothing.")
+                Text("The bot reviews the changes and gives its review here; it posts nothing.")
             } else {
                 Text("Or describe something new below.")
             }
@@ -317,17 +304,12 @@ struct NewTaskSheet: View {
         .foregroundStyle(.secondary)
     }
 
-    @ViewBuilder private var branchFooter: some View {
-        let branch = branch.trimmingCharacters(in: .whitespaces)
+    @ViewBuilder private var taskFooter: some View {
         Group {
-            if let problem = branchProblem ?? conflict {
-                Text(problem).foregroundStyle(.red)
-            } else if purpose.review != nil {
-                Text("A review works in a temporary worktree detached at the pull request's head; closing the task removes it.")
-            } else if !branch.isEmpty, !TaskNaming.isStandardBranch(branch), chosen?.work.isPullRequest != true {
-                Text("A repository's scripts/worktree.sh takes only <feat|fix|chore|docs>/<slug> branches, so BotChu makes this one with git instead.")
+            if let conflict {
+                Text(conflict).foregroundStyle(.red)
             } else {
-                Text("BotChu makes the task's worktree in .claude/worktrees/ of the checkout, so the main checkout stays on its branch.")
+                Text("Each task has its own workspace and conversation.")
             }
         }
         .font(.caption)
@@ -342,8 +324,8 @@ struct NewTaskSheet: View {
         if chosen == nil, brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Say what to do, or choose an issue or pull request"
         }
-        if chosen?.fromFork == true, purpose == .work { return "A pull request from a fork has no branch on origin to continue; review it instead" }
-        return folderProblem ?? branchProblem ?? conflict
+        if chosen?.fromFork == true, purpose == .work { return "This pull request comes from a fork. Choose Review it or Review and comment." }
+        return folderProblem ?? conflict
     }
 
     private var folderProblem: String? {
@@ -352,30 +334,12 @@ struct NewTaskSheet: View {
         return hostID == nil ? nil : SSHHost.folderProblem(folder)
     }
 
-    private var branchProblem: String? {
-        let branch = branch.trimmingCharacters(in: .whitespaces)
-        return purpose.review == nil && !branch.isEmpty && !TaskNaming.isValidBranch(branch) ? "That isn't a branch name git takes." : nil
-    }
-
-    /// An open task already working on the chosen issue or pull request, or on the branch, in the
-    /// repository on that computer: this one would share its worktree, or repeat its review.
+    /// Prevent two tasks working on the same issue or pull request. Fresh tasks get unique
+    /// branches automatically during preparation, even when their briefs happen to match.
     private var conflict: String? {
-        guard let repo, let other = model.taskAlreadyWorking(on: repo, hostID: hostID, work: chosen?.work, review: purpose.review,
-                                                             branch: branch.trimmingCharacters(in: .whitespaces)) else { return nil }
-        return "“\(other.title)” already works on this. Send it a message there, or choose another branch."
-    }
-
-    /// Fills in the branch from the choice, unless the person typed their own.
-    private func refreshBranch() {
-        let next: String
-        if let chosen {
-            next = chosen.work.isPullRequest ? chosen.branch ?? "" : TaskNaming.branch(issue: chosen.work.number, text: chosen.work.title, fallback: "issue")
-        } else {
-            let text = brief.trimmingCharacters(in: .whitespacesAndNewlines)
-            next = text.isEmpty ? "" : TaskNaming.branch(issue: nil, text: text, fallback: "task")
-        }
-        if branch == autoBranch || chosen?.work.isPullRequest == true { branch = next }
-        autoBranch = next
+        guard let repo, let other = model.taskAlreadyWorking(on: repo, hostID: hostID, work: chosen?.work,
+                                                             review: purpose.review, branch: "") else { return nil }
+        return "“\(other.title)” already works on this. Send it a message there."
     }
 
     private func start() {
@@ -387,7 +351,6 @@ struct NewTaskSheet: View {
         model.settings.repoLocations[repo] = location == usual ? nil : location
         var task = BotTask(for: bot, repo: repo, checkout: location.path, work: chosen?.work,
                            brief: brief.trimmingCharacters(in: .whitespacesAndNewlines),
-                           branch: purpose.review == nil ? branch.trimmingCharacters(in: .whitespaces) : "",
                            host: model.settings.host(hostID), review: purpose.review)
         if accountID != bot.accountID { task.selectAccount(accountID) }
         lastRepo = repo

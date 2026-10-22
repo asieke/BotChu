@@ -73,7 +73,7 @@ struct ReceiptRow: View {
     var body: some View {
         let task = message.taskID.flatMap { model.task($0, of: botID) }
         HStack(spacing: 6) {
-            Image(systemName: task == nil ? "exclamationmark.triangle" : "arrow.triangle.branch")
+            Image(systemName: task == nil ? "exclamationmark.triangle" : "checklist")
                 .foregroundStyle(task == nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
             Text(message.text)
                 .foregroundStyle(.secondary)

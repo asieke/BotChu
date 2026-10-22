@@ -106,7 +106,7 @@ struct ConversationTab: View {
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 
-    /// Working, failed, news, a pull request, or just which kind of tab it is.
+    /// Working, failed, news, or just which kind of tab it is.
     @ViewBuilder private func light(task: BotTask?, status: BotStatus?) -> some View {
         if status?.phase.isActive == true {
             ProgressView().controlSize(.mini)
@@ -114,10 +114,8 @@ struct ConversationTab: View {
             Circle().fill(Color.red).frame(width: 7, height: 7)
         } else if model.unread.contains(target) {
             Circle().fill(Color.accentColor).frame(width: 7, height: 7)
-        } else if task?.pullRequest != nil {
-            Image(systemName: "arrow.triangle.pull").font(.system(size: 11, weight: .medium)).foregroundStyle(.green)
         } else {
-            Image(systemName: task == nil ? (selected ? "house.fill" : "house") : "arrow.triangle.branch")
+            Image(systemName: task == nil ? (selected ? "house.fill" : "house") : "checklist")
                 .font(.system(size: 11))
         }
     }
@@ -125,9 +123,7 @@ struct ConversationTab: View {
     private func help(task: BotTask?, status: BotStatus?) -> String {
         var lines: [String] = []
         if let task {
-            lines.append(task.repo + (task.isRemote ? " on \(model.machineName(task.hostID, fallback: task.hostName))" : "")
-                         + (task.branch.isEmpty ? "" : " · \(task.branch)"))
-            if let pullRequest = task.pullRequest { lines.append("Pull request #\(pullRequest)") }
+            lines.append(task.repo + (task.isRemote ? " on \(model.machineName(task.hostID, fallback: task.hostName))" : ""))
         } else {
             lines.append("Home: your conversation with the bot")
         }
@@ -138,17 +134,14 @@ struct ConversationTab: View {
 
     @ViewBuilder private func menu(task: BotTask?) -> some View {
         if let task {
-            if let url = task.pullRequestURL {
-                Link("Open Pull Request #\(task.pullRequest ?? 0)", destination: url)
-            }
             if let work = task.work, !work.isPullRequest {
                 Link("Open Issue #\(work.number)", destination: work.url)
             }
             if !task.isRemote {
-                Button("Show Worktree in Finder") { model.revealWorktree(target) }
+                Button("Show Task Folder in Finder") { model.revealWorktree(target) }
                     .disabled(task.folder == nil)
             }
-            Button("Open Worktree in Terminal") { model.openWorktreeInTerminal(target) }
+            Button("Open Task in Terminal") { model.openWorktreeInTerminal(target) }
                 .disabled(task.folder == nil)
             Divider()
         }

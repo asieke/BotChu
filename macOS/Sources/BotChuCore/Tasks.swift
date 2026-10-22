@@ -238,11 +238,10 @@ public enum TaskNaming {
 public enum TaskReceipt {
     public static func started(_ task: BotTask) -> String {
         "Started \(task.title)" + (task.title.localizedCaseInsensitiveContains(task.repoName) ? "" : " in \(task.repo)")
-            + (task.branch.isEmpty ? "" : " on \(task.branch)")
     }
 
-    public static func finished(_ task: BotTask, pullRequest: Int?) -> String {
-        "\(task.title) finished its turn" + (pullRequest.map { " · PR #\($0)" } ?? "")
+    public static func finished(_ task: BotTask) -> String {
+        "\(task.title) finished its turn"
     }
 
     public static func failed(_ task: BotTask, error: String) -> String {

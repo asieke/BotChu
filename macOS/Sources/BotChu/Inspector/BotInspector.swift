@@ -90,8 +90,7 @@ struct BotInspector: View {
     }
 }
 
-/// The card at the top: the bot's face in a ring that shows its state, the name and one line
-/// under it (the bot's title, or for a task, its repository), and a line on what it is doing.
+/// The card at the top: a large character beside the bot's name, task title and current activity.
 /// The ring and pet reflect this conversation's activity.
 struct AvatarCard: View {
     let bot: Bot
@@ -100,59 +99,64 @@ struct AvatarCard: View {
     let subtitle: String
     /// The account the turn starts on.
     let account: Account
-    var faceSize: CGFloat = 67
+    var eyebrow: String?
     /// The pencil in the corner; none without.
     var edit: (() -> Void)?
 
     var body: some View {
-        VStack(spacing: 10) {
-            StatusAvatar(bot: bot, status: status, size: faceSize)
-            VStack(spacing: 1) {
+        HStack(alignment: .center, spacing: 12) {
+            StatusAvatar(bot: bot, status: status, size: 88)
+                .overlay(alignment: .bottomTrailing) {
+                    if let edit {
+                        Button(action: edit) {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 11, weight: .medium))
+                                .frame(width: 24, height: 24)
+                                .background(Circle().fill(Palette.button))
+                                .overlay(Circle().strokeBorder(Palette.card, lineWidth: 2))
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Palette.buttonText)
+                        .help("Edit \(bot.name), including its appearance")
+                        .accessibilityLabel("Edit \(bot.name)")
+                    }
+                }
+            VStack(alignment: .leading, spacing: 5) {
+                if let eyebrow {
+                    Text(eyebrow)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Palette.secondaryText)
+                        .lineLimit(1)
+                        .help(eyebrow)
+                }
                 Text(title)
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.system(size: 15, weight: .bold))
                     .kerning(-0.2)
                     .accessibilityLabel("\(title), \(StatusLook(status).label)")
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2, reservesSpace: eyebrow != nil)
                     .help(title)
                 if !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.system(size: 13))
+                        .font(.system(size: 12))
                         .foregroundStyle(Palette.cardSubtitle)
-                        .multilineTextAlignment(.center)
                         .lineLimit(2)
                 }
+                detail
             }
-            detail
-            .frame(maxWidth: .infinity)
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         }
-        .padding(EdgeInsets(top: 14, leading: 12, bottom: 12, trailing: 12))
-        .frame(maxWidth: .infinity)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Palette.card))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Palette.cardEdge))
-        .overlay(alignment: .topTrailing) {
-            if let edit {
-                Button(action: edit) {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(width: 30, height: 30)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.button))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Palette.buttonText)
-                .padding(6)
-                .help("Edit \(bot.name), including its appearance")
-            }
-        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Palette.card))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.cardEdge))
     }
 
     @ViewBuilder private var detail: some View {
         Group {
             switch status.phase {
             case .preparing:
-                Text("Making the task's worktree…")
+                Text("Preparing the task's workspace…")
             case .starting:
                 Text("Starting \(account.name)…")
             case .working:
@@ -172,7 +176,7 @@ struct AvatarCard: View {
         .font(.system(size: 12))
         .monospacedDigit()
         .foregroundStyle(Palette.cardSubtitle)
-        .multilineTextAlignment(.center)
+        .multilineTextAlignment(.leading)
     }
 }
 
@@ -289,7 +293,7 @@ struct TasksSection: View {
                 Button { model.newTask(for: botID) } label: {
                     Label("New Task…", systemImage: "plus")
                 }
-                .help("Start a task in a repository, in its own worktree and tab (⌘T)")
+                .help("Start a task in a repository, in its own workspace and tab (⌘T)")
                 if !closed.isEmpty {
                     Menu {
                         ForEach(closed.reversed()) { task in
@@ -307,7 +311,7 @@ struct TasksSection: View {
     }
 }
 
-/// An open task in Home's list: its light, title, and repository and branch.
+/// An open task in Home's list: its light, title and repository.
 struct TaskRow: View {
     @Environment(AppModel.self) private var model
     let target: ChatTarget
@@ -351,16 +355,14 @@ struct TaskRow: View {
         if status?.phase.isActive == true { return StatusLook.working.dot }
         if status?.phase == .failed { return StatusLook.error.dot }
         if model.unread.contains(target) { return .accentColor }
-        if task.pullRequest != nil { return Palette.dynamic(0x2E9E4F, 0x4CC46F) }
         return StatusLook.idle.dot
     }
 
-    /// The repository (and its host), then how the task is doing, else its pull request, else its branch.
+    /// The repository (and its host), and how the task is doing.
     private func detail(_ status: BotStatus?) -> String {
         let repo = task.repoName + (task.isRemote ? " on \(model.machineName(task.hostID, fallback: task.hostName))" : "")
         if let status, status.phase != .idle { return "\(repo) · \(status.label)" }
-        if let pullRequest = task.pullRequest { return "\(repo) · PR #\(pullRequest)" }
-        return task.branch.isEmpty ? repo : "\(repo) · \(task.branch)"
+        return repo
     }
 }
 
@@ -471,11 +473,11 @@ struct InspectorSection<Content: View>: View {
     @ViewBuilder let content: Content
     @AppStorage private var expanded: Bool
 
-    init(_ title: String, trailing: String? = nil, @ViewBuilder content: () -> Content) {
+    init(_ title: String, trailing: String? = nil, preferenceKey: String? = nil, @ViewBuilder content: () -> Content) {
         self.title = title
         self.trailing = trailing
         self.content = content()
-        _expanded = AppStorage(wrappedValue: true, "inspector.expanded.\(title)")
+        _expanded = AppStorage(wrappedValue: true, "inspector.expanded.\(preferenceKey ?? title)")
     }
 
     var body: some View {

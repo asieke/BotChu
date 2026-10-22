@@ -81,9 +81,10 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
         #expect(TaskReceipt.started(task) == "Started GitChu #48")
         task.branch = "feat/48-add-filter-bar"
         task.title = "Filters"
-        #expect(TaskReceipt.started(task) == "Started Filters in asieke/GitChu on feat/48-add-filter-bar")
+        #expect(TaskReceipt.started(task) == "Started Filters in asieke/GitChu")
         task.title = "GitChu #48"
-        #expect(TaskReceipt.finished(task, pullRequest: 49) == "GitChu #48 finished its turn · PR #49")
+        task.pullRequest = 49
+        #expect(TaskReceipt.finished(task) == "GitChu #48 finished its turn")
         #expect(TaskReceipt.failed(task, error: "usage limit\nmore") == "GitChu #48 stopped with an error: usage limit")
     }
 }

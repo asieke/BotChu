@@ -64,7 +64,8 @@ request.
     tasks never share files. BotChu does all of this itself, with no other app. **New Task** (⌘T)
     picks the repository (from the ones `gh` lists for your account and your organizations, newest
     push first), the computer and folder it is worked on, an open issue or pull request there or
-    something new, the branch and the account. A repository is worked on where you last chose for it
+    something new, and the account. BotChu names and manages branches automatically. A repository
+    is worked on where you last chose for it
     (Settings lists those choices), else where its `PROJECT.md` deploys it (`local:<machine>:<path>`,
     on this Mac or a host of that machine name), else in the repositories folder on this Mac
     (`~/Desktop/WORKSPACE` by default); BotChu clones it there if it isn't yet (`gh repo clone`, or
@@ -78,7 +79,7 @@ request.
     nothing into the repository: a task's first message opens with the bot's identity, instructions
     and memory (which stays in the bot's folder), where the task is and what it is, as the workspace
     standard hands work to an agent. Tasks show as tabs above the chat (⌃Tab moves between them),
-    each with a light: working, failed, news since you last looked, or a pull request it opened.
+    each showing whether it is working, failed, or has news since you last looked.
     Closing a tab keeps the task's record, conversation and worktree; Home's status lists closed
     tasks to open again. A worktree goes once its pull request merges, with the repository's
     `scripts/worktree.sh --tidy`; if it is gone, the task's next message makes it again.
@@ -151,21 +152,24 @@ request.
     session (new bot, account switch, or **New Session**) also gets the recent conversation, so
     switching accounts keeps the thread's continuity.
   - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I). A card at the top shows
-    the selected bot's face (its pet, playing, or its emoji) in a ring that says its state (grey when idle, a
-    spinning violet arc while it works, red after a failed turn), its name and title, and a line on
-    what it is doing with the turn's running time (or its last activity or error). The compact
-    character and ring convey status
+    a large character (its pet, playing, or its emoji) on the left, beside the bot name, task title
+    and current activity. The ring says its state (grey when idle, a spinning violet arc while it
+    works, red after a failed turn); plain text gives its activity and running time, last activity,
+    or error. The character and ring convey status
     without a dot or status pill. The card and pet animation reflect only the shown Home or task;
     the bot list still shows activity across its tasks. Four icon tabs sit below the character,
     in a rounded bar with a raised selected segment: **Activity** (tasks and conversation stats),
     **Model & Usage** (account, agent, model, reasoning and allowance), **Session** (the CLI session
-    and workspace or worktree), and **Memory** (memory and personality). Hover for tab names, or
+    and workspace controls), and **Memory** (memory and personality). Hover for tab names, or
     focus the bar and use Left/Right arrows. The selected area is remembered across conversations
     and launches; its data always belongs to the shown Home or task. The character, tabs and bottom
     actions stay visible while the selected area's content scrolls. Home keeps Edit and New Session;
-    tasks keep Close Task and New Session. Task Activity includes the repository, computer, issue,
-    branch or review commit, and pull request state. A task's account can change in Model & Usage;
-    Session keeps Finder, Terminal and remote SSH controls. Colors follow light and dark mode.
+    tasks keep Close Task and New Session. Task Activity includes the repository, computer and
+    linked issue. A task's account can change in Model & Usage; Session keeps Finder, Terminal and
+    remote SSH controls. Branch names, review commits, generated pull request metadata and task
+    authorship are managed internally and omitted from the task form, cards, headers, tab tooltips
+    and new automatic progress notes. Explicitly choosing a pull request to continue or review is
+    still available in New Task. Colors follow light and dark mode.
     Sections within each area, and Status above the tabs, still collapse from their headings, with
     their expansion remembered. **Memory** has two cards matching
     Conversation: **MEMORY.md** and **SOUL.md**. Each opens an in-app Markdown editor at half the
@@ -178,7 +182,8 @@ request.
     on that account. Claude Code and Antigravity use their native `/usage` commands; Codex uses
     `account/rateLimits/read`. They run the command configured in Settings, with the CLI managing
     its own login. Checks run in a temporary folder, outside bot conversations, every five minutes
-    while **Model & Usage** is visible, after turns while that area is open, or with Refresh (at most once every 30 seconds).
+    while **Model & Usage** is visible, after turns while that area is open, or with Refresh (at most
+    once every 30 seconds).
     Muse needs one brief `Reply with OK.` request to learn its allowance: it uses isolated,
     temporary host state, checks hourly automatically, and at most once every five minutes after
     a turn or with Refresh. This spends a small amount of its allowance. OpenRouter shows the
@@ -237,8 +242,8 @@ request.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, model-picker keyboard interaction and persisted choices,
     Markdown editor sizing and Save/Cancel, collapsing status sections, inspector tab navigation and
-    restored selection, conversation-scoped allowance reads, and the main window's
-    layout at its narrowest. These share a serialized suite because AppKit
+    restored selection, conversation-scoped allowance reads, automatic task branch creation, and
+    the main window's layout at its narrowest. These share a serialized suite because AppKit
     window focus is global; all use isolated windows and no real bot data.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
     `macOS/build/`), signed with the local "Apple Development" certificate when there is one, ad hoc
