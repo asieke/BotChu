@@ -44,7 +44,7 @@ struct BotEditor: View {
                 } header: {
                     Text("Instructions")
                 } footer: {
-                    Text("Private to the bot. Given at the start of every session, with its MEMORY.md.")
+                    Text("Private to the bot. Given at the start of every session, with its MEMORY.md and SOUL.md.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
