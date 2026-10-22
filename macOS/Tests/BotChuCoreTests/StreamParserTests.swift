@@ -225,10 +225,10 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         #expect(messages[0].toolState == .done)
     }
 
-    @Test func runningToolsCloseAsFailed() {
+    @Test func missingCompletionIsNotAToolFailure() {
         var messages = thread([.toolStarted(id: "x", name: "Bash", input: "sleep 9")])
         ThreadAssembler.closeRunningTools(&messages)
-        #expect(messages[0].toolState == .failed)
+        #expect(messages[0].toolState == .interrupted)
     }
 
     @Test func failureEndsTheOpenReply() {

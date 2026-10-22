@@ -11,6 +11,8 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable {
     public var accountID: String
     /// Empty means the CLI's own default model.
     public var model: String
+    /// Nil leaves reasoning effort to the CLI. Optional for compatibility with saved bots.
+    public var reasoningEffort: ReasoningEffort?
     /// Absolute path of the bot's workspace folder.
     public var workspace: String
     /// The CLI session the thread continues, and the account it belongs to. A session only
@@ -21,7 +23,7 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable {
 
     public init(
         id: UUID = UUID(), name: String, emoji: String = "🤖", title: String = "", instructions: String = "",
-        accountID: String = Accounts.defaultID, model: String = "", workspace: String,
+        accountID: String = Accounts.defaultID, model: String = "", reasoningEffort: ReasoningEffort? = nil, workspace: String,
         sessionID: String? = nil, sessionAccountID: String? = nil, createdAt: Date = Date()
     ) {
         self.id = id
@@ -31,6 +33,7 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable {
         self.instructions = instructions
         self.accountID = accountID
         self.model = model
+        self.reasoningEffort = reasoningEffort
         self.workspace = workspace
         self.sessionID = sessionID
         self.sessionAccountID = sessionAccountID
@@ -68,7 +71,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     }
 
     public enum ToolState: String, Codable, Sendable {
-        case running, done, failed
+        case running, done, failed, interrupted
     }
 
     public var id: UUID
@@ -94,6 +97,14 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.toolInput = toolInput
         self.toolOutput = toolOutput
         self.toolState = toolState
+    }
+    /// Older versions missed AGY's subagent terminal events and saved them as failures.
+    /// No result was recorded, so show an unknown completion instead of inventing success or failure.
+    public func displayedToolState(for kind: AgentKind) -> ToolState {
+        if kind == .antigravity, toolName == "invoke_subagent", toolState == .failed, toolOutput == nil {
+            return .interrupted
+        }
+        return toolState ?? .done
     }
 }
 
@@ -168,10 +179,10 @@ public struct ThreadAssembler {
         }
     }
 
-    /// Marks tools still running as failed, when a run ends or is stopped without finishing them.
+    /// A missing terminal event is not evidence that the tool failed.
     public static func closeRunningTools(_ messages: inout [ChatMessage]) {
         for i in messages.indices where messages[i].toolState == .running {
-            messages[i].toolState = .failed
+            messages[i].toolState = .interrupted
         }
     }
 }

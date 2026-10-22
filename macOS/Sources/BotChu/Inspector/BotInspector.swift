@@ -26,6 +26,7 @@ struct BotInspector: View {
                         }
                         InspectorRow("Agent", value: bot.account.kind.displayName)
                         InspectorRow("Model", value: modelName(bot))
+                        InspectorRow("Reasoning", value: bot.reasoningEffort?.title ?? "Default")
                     }
                     InspectorSection("Session") {
                         InspectorRow("Next message", value: sessionSummary(status.session))
@@ -193,7 +194,7 @@ struct MemoryPreview: View {
                     .foregroundStyle(.secondary)
             } else {
                 ScrollView {
-                    Text(MarkdownText.attributed(MarkdownBlock.normalize(memory.body)))
+                    MarkdownText(text: memory.body)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }

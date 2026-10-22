@@ -26,7 +26,7 @@ struct MessageRow: View {
             }
         case .tool:
             BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
-                ToolCard(message: message)
+                ToolCard(message: message, kind: bot.account.kind)
             }
         case .error:
             Label {
@@ -70,40 +70,9 @@ struct BotTurnRow<Content: View>: View {
     }
 }
 
-struct MarkdownText: View {
-    let text: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(MarkdownBlock.split(text).enumerated()), id: \.offset) { _, block in
-                switch block {
-                case .prose(let prose):
-                    Text(Self.attributed(prose))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                case .code(let code):
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        Text(code)
-                            .font(.system(.callout, design: .monospaced))
-                            .textSelection(.enabled)
-                            .padding(12)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
-                }
-            }
-        }
-        .padding(.top, 3)
-    }
-
-    static func attributed(_ prose: String) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: prose, options: options)) ?? AttributedString(prose)
-    }
-}
-
 struct ToolCard: View {
     let message: ChatMessage
+    let kind: AgentKind
     @State private var expanded = false
 
     var body: some View {
@@ -134,6 +103,10 @@ struct ToolCard: View {
 
             if expanded {
                 VStack(alignment: .leading, spacing: 8) {
+                    if message.displayedToolState(for: kind) == .interrupted {
+                        Text("No completion was recorded for this tool call.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     if let input = message.toolInput, !input.isEmpty {
                         detail(input)
                     }
@@ -154,10 +127,13 @@ struct ToolCard: View {
     }
 
     @ViewBuilder private var status: some View {
-        switch message.toolState ?? .done {
+        switch message.displayedToolState(for: kind) {
         case .running: ProgressView().controlSize(.mini).frame(width: 14)
         case .done: Image(systemName: "checkmark.circle").foregroundStyle(.secondary).frame(width: 14)
         case .failed: Image(systemName: "xmark.circle").foregroundStyle(.red).frame(width: 14)
+        case .interrupted:
+            Image(systemName: "questionmark.circle").foregroundStyle(.secondary).frame(width: 14)
+                .help("No completion was recorded")
         }
     }
 

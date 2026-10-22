@@ -73,12 +73,16 @@ public enum CommandBuilder {
         prompt: String,
         model: String?,
         sessionID: String?,
+        reasoningEffort: ReasoningEffort? = nil,
         openRouterKey: String? = nil,
         newID: () -> String = { UUID().uuidString.lowercased() }
     ) -> Invocation {
         // A prompt that starts with "-" would be read as an option.
         let prompt = prompt.hasPrefix("-") ? " " + prompt : prompt
         let model = model.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0.trimmingCharacters(in: .whitespaces) }
+        let effort = reasoningEffort.flatMap {
+            GenerationOptions.efforts(for: kind, model: model ?? "").contains($0) ? $0.rawValue : nil
+        }
         var args: [String] = []
         var env: [String: String] = [:]
         var session = sessionID
@@ -95,28 +99,34 @@ public enum CommandBuilder {
                 args += ["--session-id", id]
             }
             if let model { args += ["--model", model] }
+            if let effort { args += ["--effort", effort] }
             args.append(prompt)
         case .codex:
             args = ["exec"]
             if let sessionID { args += ["resume", sessionID] }
             args += ["--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"]
             if let model { args += ["-m", model] }
+            if let effort { args += ["-c", "model_reasoning_effort=\"\(effort)\""] }
             args.append(prompt)
         case .antigravity:
             args = ["-p", prompt, "--output-format", "stream-json", "--dangerously-skip-permissions"]
             if let sessionID { args += ["--conversation", sessionID] }
             if let model { args += ["--model", model] }
+            if let effort { args += ["--effort", effort] }
         case .muse:
             let id = sessionID ?? newID()
             session = id
             args = ["exec", "--json", "--session-id", id]
             if let model { args += ["--model", model] }
+            if let effort { args += ["--reasoning-effort", effort] }
             args.append(prompt)
         case .pi:
             let id = sessionID ?? newID()
             session = id
             args = ["-p", "--mode", "json", "--session-id", id, "--provider", "openrouter",
-                    "--model", model ?? defaultOpenRouterModel, prompt]
+                    "--model", model ?? defaultOpenRouterModel]
+            if let effort { args += ["--thinking", effort] }
+            args.append(prompt)
             if let openRouterKey, !openRouterKey.isEmpty { env["OPENROUTER_API_KEY"] = openRouterKey }
         }
         return Invocation(arguments: args, environment: env, sessionID: session)
