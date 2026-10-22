@@ -88,6 +88,54 @@ public struct BotHome: Sendable {
         try Self.writeThread(messages, to: folder.appendingPathComponent("queued.jsonl"))
     }
 
+    public func subagentsURL(taskID: UUID? = nil) -> URL {
+        (taskID.map(taskURL) ?? url).appendingPathComponent("subagents", isDirectory: true)
+    }
+
+    public func subagentURL(id: UUID, taskID: UUID? = nil) -> URL {
+        subagentsURL(taskID: taskID).appendingPathComponent(id.uuidString.lowercased(), isDirectory: true)
+    }
+
+    /// Every descendant lives beside its root conversation, with parentSubagentID defining the tree.
+    public func loadSubagents(taskID: UUID? = nil) -> [SubagentRun] {
+        let folders = (try? FileManager.default.contentsOfDirectory(at: subagentsURL(taskID: taskID), includingPropertiesForKeys: nil)) ?? []
+        return folders.compactMap { folder in
+            (try? Data(contentsOf: folder.appendingPathComponent("run.json")))
+                .flatMap { try? SubagentIPC.decode(SubagentRun.self, from: $0) }
+        }
+        .filter { $0.rootTaskID == taskID }
+        .sorted { ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString) }
+    }
+
+    public func saveSubagent(_ run: SubagentRun) throws {
+        try prepare()
+        let folder = subagentURL(id: run.id, taskID: run.rootTaskID)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try SubagentIPC.encode(run).write(to: folder.appendingPathComponent("run.json"), options: .atomic)
+    }
+
+    public func loadSubagentThread(id: UUID, taskID: UUID? = nil) -> [ChatMessage] {
+        Self.readThread(subagentURL(id: id, taskID: taskID).appendingPathComponent("thread.jsonl"))
+    }
+
+    /// Streaming uses complete snapshots so the open assistant message can be replaced atomically.
+    public func saveSubagentThread(_ messages: [ChatMessage], id: UUID, taskID: UUID? = nil) throws {
+        try prepare()
+        let folder = subagentURL(id: id, taskID: taskID)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Self.writeThread(messages, to: folder.appendingPathComponent("thread.jsonl"))
+    }
+
+    public func appendSubagentMessages(_ messages: [ChatMessage], id: UUID, taskID: UUID? = nil) throws {
+        try saveSubagentThread(loadSubagentThread(id: id, taskID: taskID) + messages, id: id, taskID: taskID)
+    }
+
+    /// Clearing a finished inspector entry never touches the owning conversation or its workspace.
+    public func removeSubagent(id: UUID, taskID: UUID? = nil) throws {
+        let folder = subagentURL(id: id, taskID: taskID)
+        if FileManager.default.fileExists(atPath: folder.path) { try FileManager.default.removeItem(at: folder) }
+    }
+
     /// The task requests waiting in `dispatch/`, oldest first: each file's name and contents. Each
     /// is removed as it is read, so a request is taken once. A file changed in the last `settle`
     /// seconds may still be being written, so it waits for the next look.
