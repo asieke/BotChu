@@ -11,6 +11,7 @@ import BotChuCore
 /// - `BOTCHU_OPEN`: open `editor` (a new bot), `task` (New Task), `memory`, `soul`, or `settings` at launch.
 /// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
 /// - `BOTCHU_OPEN=model|effort|inspector-model|inspector-effort`: open a generation picker.
+/// - `BOTCHU_INSPECTOR=activity|model|session|memory`: select an inspector area on throwaway data.
 /// - `BOTCHU_DEFAULT_MODEL`: an OpenRouter default for a throwaway run only.
 /// - `BOTCHU_WINDOW=compact`: review the main window at its minimum width, on throwaway data.
 /// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review.
@@ -36,6 +37,12 @@ enum DevHooks {
 
     static var dataDir: URL? {
         env["BOTCHU_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    static var inspectorTab: InspectorTab? {
+        guard dataDir != nil else { return nil }
+        if ["inspector-model", "inspector-effort"].contains(env["BOTCHU_OPEN"] ?? "") { return .model }
+        return env["BOTCHU_INSPECTOR"].flatMap(InspectorTab.init(rawValue:))
     }
 
     /// The hosts a throwaway run starts with (`BOTCHU_HOST`).

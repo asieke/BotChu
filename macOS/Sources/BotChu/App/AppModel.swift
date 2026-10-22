@@ -351,14 +351,11 @@ final class AppModel {
     /// Records a task, opens its tab (when `show`), says so in its bot's Home, then makes its
     /// worktree and sends its first message.
     func startTask(_ task: BotTask, for botID: UUID, show: Bool) {
-        guard let bot = bot(botID) else { return }
+        guard bot(botID) != nil else { return }
         let target = ChatTarget.task(task.id, of: botID)
         tasks[botID, default: []].append(task)
         threads[target] = []
         saveTask(task, of: botID)
-        if task.origin == .home {
-            append(ChatMessage(role: .note, text: "\(bot.name) started this task from Home"), to: target)
-        }
         postReceipt(TaskReceipt.started(task), task: task.id, for: botID)
         if show { self.show(target) }
         send(task.opening, to: target)
@@ -594,7 +591,7 @@ final class AppModel {
         if let work = task.work, work.title.isEmpty || (work.isPullRequest && task.branch.isEmpty && task.review == nil) {
             switch await GitHubLookup.work(number: work.number, pullRequest: work.isPullRequest, repo: task.repo) {
             case .success(let found) where found.fromFork && task.review == nil:
-                failure = TaskWorktree.Failure(step: "Pull request #\(work.number) comes from a fork, so its branch isn't on origin; review it instead", output: "")
+                failure = TaskWorktree.Failure(step: "This pull request comes from a fork; start a review task instead", output: "")
             case .success(let found):
                 task.work = found.work
                 if found.work.isPullRequest, task.review == nil, let head = found.branch { task.branch = head }
@@ -631,8 +628,8 @@ final class AppModel {
             }
             if failure == nil, let other = taskAlreadyWorking(on: task.repo, hostID: task.hostID, work: nil, review: nil,
                                                               branch: task.branch, except: task.id) {
-                failure = TaskWorktree.Failure(step: "“\(other.title)” already works on \(task.branch) in this repository",
-                                               output: "Continue there, or start this task on another branch.")
+                failure = TaskWorktree.Failure(step: "“\(other.title)” already works on this in the repository",
+                                               output: "Continue in that task's conversation.")
             }
             if failure == nil {
                 switch await TaskWorktree.prepare(branch: task.branch, checkout: task.checkout, on: machine) {
@@ -661,9 +658,7 @@ final class AppModel {
         if let failure {
             append(ChatMessage(role: .error, text: "Couldn't make this task's worktree\(on). " + failure.message), to: target)
         } else {
-            let folder = task.isRemote ? task.folder ?? "" : ((task.folder ?? "") as NSString).abbreviatingWithTildeInPath
-            let what = task.review != nil ? "detached at \(String((task.head ?? "").prefix(7)))" : "on \(task.branch)"
-            append(ChatMessage(role: .note, text: "Working\(on) in \(folder), \(what)"), to: target)
+            append(ChatMessage(role: .note, text: "Task workspace ready\(on)"), to: target)
         }
         saveThread(target)
         return failure
@@ -1006,7 +1001,7 @@ final class AppModel {
             saveThread(target)
         }
         guard !stopped else { return }
-        postReceipt(failure.map { TaskReceipt.failed(task, error: $0) } ?? TaskReceipt.finished(task, pullRequest: pullRequest),
+        postReceipt(failure.map { TaskReceipt.failed(task, error: $0) } ?? TaskReceipt.finished(task),
                     task: task.id, for: target.botID)
     }
 

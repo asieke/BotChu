@@ -141,11 +141,11 @@ struct TaskIntro: View {
                     Label("on \(machine)", systemImage: "network")
                         .help("Works on \(machine) over SSH, with \(bot.name)'s context from this Mac")
                 }
-                if let work = task.work {
+                if let work = task.work, !work.isPullRequest {
                     Text("·")
                     Link(work.title.isEmpty ? "#\(work.number)" : "#\(work.number) \(work.title)", destination: work.url)
                         .lineLimit(1)
-                        .help("Open \(work.isPullRequest ? "the pull request" : "the issue") on GitHub")
+                        .help("Open the issue on GitHub")
                 }
             }
             .foregroundStyle(.secondary)
@@ -153,11 +153,6 @@ struct TaskIntro: View {
                 Label(task.review == .comment ? "Review, posted on GitHub" : "Review, here only", systemImage: "eye")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if !task.branch.isEmpty {
-                Label(task.branch, systemImage: "arrow.triangle.branch")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
             }
         }
         .frame(maxWidth: .infinity)
@@ -176,7 +171,7 @@ struct PreparingRow: View {
         BotTurnRow(bot: bot, showsAvatar: true) {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(place.map { "Connecting to \($0)…" } ?? "Making the task's worktree…").foregroundStyle(.secondary)
+                Text(place.map { "Connecting to \($0)…" } ?? "Preparing the task's workspace…").foregroundStyle(.secondary)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 11)
