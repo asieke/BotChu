@@ -10,7 +10,6 @@ struct BotChuApp: App {
         WindowGroup("BotChu", id: "main") {
             ContentView()
                 .environment(model)
-                .frame(minWidth: 820, minHeight: 520)
         }
         .defaultSize(width: 1240, height: 800)
         .commands {

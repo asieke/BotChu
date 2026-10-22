@@ -75,10 +75,10 @@ final class AppModel {
     /// since git locks its refs and config.
     @ObservationIgnored private var checkoutWork: [String: Task<Void, Never>] = [:]
 
-    init(store: Store? = nil, settings: AppSettings? = nil) {
+    init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil) {
         self.store = store ?? DevHooks.dataDir.map { Store(root: $0) } ?? .applicationSupport
         self.settings = settings ?? AppSettings()
-        self.usage = DevHooks.usageFetch.map { UsageCache(fetch: $0) } ?? UsageCache()
+        self.usage = usage ?? DevHooks.usageFetch.map { UsageCache(fetch: $0) } ?? UsageCache()
         self.store.migrateIfNeeded()
         let loaded = self.store.loadBots()
         bots = loaded.bots
