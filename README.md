@@ -61,7 +61,9 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     turn, in `.claude/worktrees/<type>-<slug>` of the checkout: with the repository's own
     `scripts/worktree.sh` when it follows the workspace standard (which also links a new
     `<type>/<number>-<slug>` branch to its issue on GitHub), else with git; a pull request's task
-    works on the pull request's branch. The main checkout stays on its branch, and BotChu writes
+    works on the pull request's branch. An issue, pull request or branch has at most one open task
+    (BotChu refuses a second), and a branch named from a brief gets a number when the name is
+    taken, so tasks never share a worktree. The main checkout stays on its branch, and BotChu writes
     nothing into the repository: a task's first message opens with the bot's identity, instructions
     and memory (which stays in the bot's folder), where the task is and what it is, as the workspace
     standard hands work to an agent. Tasks show as tabs above the chat (⌃Tab moves between them),
