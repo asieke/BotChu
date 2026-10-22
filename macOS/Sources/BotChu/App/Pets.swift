@@ -218,18 +218,23 @@ extension AppModel {
         }
     }
 
-    /// Submits one clip, waits for it (up to 20 minutes), and downloads it. Returns its cost.
+    /// Submits one clip, waits for it (up to 20 minutes), and downloads it. Returns its cost. Each
+    /// request is repeated when it fails for a passing reason (`OpenRouterVideos.retrying`), so a
+    /// server hiccup neither loses a clip nor drops one OpenRouter is still making, and charging for.
     nonisolated private static func makeClip(_ clip: PetVideo.Clip, model: PetVideo.Model, image: String,
                                              client: OpenRouterVideos, to file: URL) async throws -> Double {
-        var job = try await client.submit(PetVideo.requestBody(model: model, clip: clip, image: image))
+        let body = try PetVideo.requestBody(model: model, clip: clip, image: image)
+        var job = try await OpenRouterVideos.retrying { try await client.submit(body) }
         let deadline = Date().addingTimeInterval(20 * 60)
         while !job.isFinished {
             guard Date() < deadline else { throw PetError("it took more than 20 minutes") }
             try await Task.sleep(for: .seconds(10))
-            job = try await client.status(of: job.id)
+            let id = job.id
+            job = try await OpenRouterVideos.retrying { try await client.status(of: id) }
         }
         guard job.state == .completed else { throw PetError("\(job.state.rawValue)\(job.error.map { ": \($0)" } ?? "")") }
-        try await client.download(job.id, to: file)
+        let id = job.id
+        try await OpenRouterVideos.retrying { try await client.download(id, to: file) }
         await shrink(file, to: PetVideo.clipSide)
         return job.cost ?? 0
     }
