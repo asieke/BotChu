@@ -19,7 +19,12 @@ run_tests() {
   fi
 }
 run_tests --filter BotChuCoreTests
-run_tests --filter BotChuRenderingTests
+# AppKit's native sidebar button clicks can leave a window-animation callback that stops
+# Swift's outer run loop in a later test. Keep every native-click assertion, but contain that
+# global AppKit state in its own process. Neither invocation may omit its completion summary.
+sidebar_test=nestedSidebarShowsThreeRunningTasksAtCompactWidths
+run_tests --filter BotChuRenderingTests --skip "$sidebar_test"
+run_tests --filter "$sidebar_test"
 # The Swift 6.4 task-group regression only appears under optimization; a release build alone
 # cannot detect lost results or children completing after their group has been destroyed.
 run_tests --configuration release --filter projectLoading
