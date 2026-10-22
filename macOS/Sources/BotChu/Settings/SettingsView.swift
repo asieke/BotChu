@@ -25,6 +25,21 @@ struct SettingsView: View {
             }
 
             Section {
+                LabeledContent("Repositories folder") {
+                    HStack {
+                        TextField("Repositories folder", text: $settings.reposRoot, prompt: Text("~/Desktop/WORKSPACE"))
+                            .labelsHidden()
+                        Button("Choose…") { chooseReposRoot() }
+                    }
+                }
+            } header: {
+                Text("Tasks")
+            } footer: {
+                Text("Tasks start from the git checkouts here, one folder each, and run in worktrees BotChu makes in them. A bot's Home can ask for tasks in these repositories too.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
                 ForEach(Accounts.all) { account in
                     LabeledContent {
                         HStack(spacing: 8) {
@@ -46,7 +61,7 @@ struct SettingsView: View {
             } header: {
                 Text("Accounts")
             } footer: {
-                Text("Each account runs its command through your login shell (zsh -l), headless, in the bot's folder, with permission prompts bypassed. Leave a command empty for the default.")
+                Text("Each account runs its command through your login shell (zsh -l), headless, in the bot's folder or a task's worktree, with permission prompts bypassed. Leave a command empty for the default.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -113,13 +128,19 @@ struct SettingsView: View {
     }
 
     private func chooseRoot() {
+        if let url = chooseFolder() { model.settings.botsRoot = url.path }
+    }
+
+    private func chooseReposRoot() {
+        if let url = chooseFolder() { model.settings.reposRoot = (url.path as NSString).abbreviatingWithTildeInPath }
+    }
+
+    private func chooseFolder() -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "Use Folder"
-        if panel.runModal() == .OK, let url = panel.url {
-            model.settings.botsRoot = url.path
-        }
+        return panel.runModal() == .OK ? panel.url : nil
     }
 }

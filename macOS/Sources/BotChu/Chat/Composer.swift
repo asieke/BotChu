@@ -4,7 +4,8 @@ import SwiftUI
 struct Composer<Controls: View>: View {
     @Binding var draft: String
     var focused: FocusState<Bool>.Binding
-    let botName: String
+    /// "Message Scout", or for a task, "Message Scout about GitChu #48".
+    let placeholder: String
     let running: Bool
     let onSend: () -> Void
     let onStop: () -> Void
@@ -14,14 +15,14 @@ struct Composer<Controls: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextField("Message \(botName)", text: $draft, axis: .vertical)
+            TextField(placeholder, text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.body)
                 .lineLimit(2...10)
                 .focused(focused)
                 .onSubmit(onSend)
                 .padding(.horizontal, 4)
-                .accessibilityLabel("Message \(botName)")
+                .accessibilityLabel(placeholder)
             HStack(spacing: 12) {
                 controls
                 if running {

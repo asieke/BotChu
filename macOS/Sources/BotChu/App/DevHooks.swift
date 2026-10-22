@@ -8,9 +8,13 @@ import BotChuCore
 ///   their own `defaults` domain (`local.BotChu.dev`), so a throwaway run never changes the real ones.
 /// - `BOTCHU_SNAPSHOT`: write a PNG of each window into this folder every second, and of the sidebar's
 ///   rows (`sidebar.png`), which the window's picture leaves out.
-/// - `BOTCHU_OPEN`: open `editor` (a new bot) or `settings` at launch.
+/// - `BOTCHU_OPEN`: open `editor` (a new bot), `task` (New Task for the selected bot) or `settings` at launch.
 /// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
-/// - `BOTCHU_SEND`: send this message to the selected bot at launch.
+/// - `BOTCHU_SEND`: send this message to the selected bot's shown conversation at launch (its Home,
+///   or the tab `BOTCHU_TAB` shows).
+/// - `BOTCHU_TASK`: start a task for the selected bot at launch from `repo|task`, as New Task does
+///   (`repo` is `owner/name` or a checkout's folder in the repositories folder; a real turn).
+/// - `BOTCHU_TAB`: show the selected bot's tab with this number at launch (0 is Home, 1 its first task).
 /// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
 /// - `BOTCHU_PET`: give the selected bot this Codex pet folder at launch, as Import Codex Pet does.
 /// - `BOTCHU_DRAW_PET`: give the selected bot this appearance and draw its pet at launch (a real
@@ -38,6 +42,7 @@ enum DevHooks {
         }
         switch env["BOTCHU_OPEN"] {
         case "editor": model.newBot()
+        case "task": if let id = model.selection { model.newTask(for: id) }
         case "settings": openSettings()
         default: break
         }
@@ -55,8 +60,19 @@ enum DevHooks {
             model.setAppearance(appearance, for: id)
             model.drawPet(id)
         }
+        if let tab = env["BOTCHU_TAB"].flatMap(Int.init), tab > 0, let id = model.selection {
+            model.showTab(offset: tab, of: id)
+        }
         if let text = env["BOTCHU_SEND"], let id = model.selection {
-            model.send(text, to: id)
+            model.send(text, to: model.tab(of: id))
+        }
+        if let spec = env["BOTCHU_TASK"], let id = model.selection, let bot = model.bot(id) {
+            let parts = spec.split(separator: "|", maxSplits: 1).map(String.init)
+            if let checkout = Repositories.find(parts[0], in: model.checkouts()) {
+                let task = BotTask(for: bot, repo: checkout.repo, checkout: checkout.path, work: nil,
+                                   brief: parts.count > 1 ? parts[1] : "Look around and say what this repository is.")
+                model.startTask(task, for: id, show: true)
+            }
         }
     }
 
@@ -64,7 +80,8 @@ enum DevHooks {
     static func snapshotSidebar(model: AppModel, into dir: URL) {
         let rows = VStack(alignment: .leading, spacing: 4) {
             ForEach(model.bots) { bot in
-                BotRow(bot: bot, status: model.status(of: bot), selected: model.selection == bot.id)
+                BotRow(bot: bot, status: model.status(of: bot), selected: model.selection == bot.id,
+                       unread: model.selection == bot.id ? 0 : model.unreadCount(of: bot.id))
             }
         }
         .padding(10)

@@ -1,10 +1,12 @@
 import Foundation
 
 /// A turn in progress: when it started, whether its CLI has printed anything yet, and what the
-/// bot is doing now (from the turn's events).
+/// bot is doing now (from the turn's events). A task's first turn waits while BotChu makes its
+/// worktree (`preparing`).
 public struct RunState: Equatable, Sendable {
     public var startedAt: Date
     public var hasOutput: Bool
+    public var preparing: Bool
     public private(set) var activity: BotActivity
     public private(set) var activitySince: Date
     /// Thinking, waiting until the tool's activity has shown for `minimumShow`.
@@ -13,9 +15,10 @@ public struct RunState: Equatable, Sendable {
     /// Most tool calls take a moment; their animation shows at least this long, so it can be seen.
     public static let minimumShow: TimeInterval = 2.5
 
-    public init(startedAt: Date = Date(), hasOutput: Bool = false, activity: BotActivity = .thinking) {
+    public init(startedAt: Date = Date(), hasOutput: Bool = false, preparing: Bool = false, activity: BotActivity = .thinking) {
         self.startedAt = startedAt
         self.hasOutput = hasOutput
+        self.preparing = preparing
         self.activity = activity
         activitySince = startedAt
     }
@@ -47,10 +50,13 @@ public struct RunState: Equatable, Sendable {
     }
 }
 
-/// What the status sidebar shows about a bot, derived from the bot, its thread and its run.
+/// What the status sidebar shows about a bot or one of its tasks, derived from its settings, its
+/// thread and its run.
 public struct BotStatus: Equatable, Sendable {
     public enum Phase: Equatable, Sendable {
         case idle
+        /// BotChu is making a task's worktree, before its turn starts.
+        case preparing
         /// A turn started, and its CLI has printed nothing yet.
         case starting
         case working
@@ -76,23 +82,33 @@ public struct BotStatus: Equatable, Sendable {
     /// What the bot's pet shows: the turn's activity, else a short reaction (`greeting`, `done`),
     /// else `failed` after a failed turn, else `idle`.
     public var activity: BotActivity
+    /// For a bot whose Home is idle while tasks work (`working(on:)`): the task's title, or how many.
+    public var workingOn: String?
 
     public static func make(bot: Bot, messages: [ChatMessage], run: RunState?, reaction: BotActivity? = nil) -> BotStatus {
+        make(settings: bot, messages: messages, run: run, reaction: reaction)
+    }
+
+    public static func make(task: BotTask, messages: [ChatMessage], run: RunState?) -> BotStatus {
+        make(settings: task, messages: messages, run: run, reaction: nil)
+    }
+
+    static func make(settings: some RunSettings, messages: [ChatMessage], run: RunState?, reaction: BotActivity?) -> BotStatus {
         let lastError: String? = {
-            guard let last = messages.last(where: { $0.role != .note }), last.role == .error else { return nil }
+            guard let last = messages.last(where: { !$0.role.isNote }), last.role == .error else { return nil }
             return last.text
         }()
         let phase: Phase
         if let run {
-            phase = run.hasOutput ? .working : .starting
+            phase = run.preparing ? .preparing : run.hasOutput ? .working : .starting
         } else {
             phase = lastError == nil ? .idle : .failed
         }
         let session: Session
-        if let id = bot.resumableSessionID {
+        if let id = settings.resumableSessionID {
             session = .continuing(id: id)
         } else {
-            session = .startsNew(accountChanged: bot.sessionID != nil && bot.sessionAccountID != bot.accountID)
+            session = .startsNew(accountChanged: settings.sessionID != nil && settings.sessionAccountID != settings.accountID)
         }
         return BotStatus(
             phase: phase,
@@ -100,10 +116,28 @@ public struct BotStatus: Equatable, Sendable {
             session: session,
             messageCount: messages.filter { $0.role == .user || $0.role == .assistant }.count,
             toolCallCount: messages.filter { $0.role == .tool }.count,
-            lastActivity: messages.last(where: { $0.role != .note })?.date,
+            lastActivity: messages.last(where: { !$0.role.isNote })?.date,
             lastError: run == nil ? lastError : nil,
             activity: run?.activity ?? reaction ?? (phase == .failed ? .failed : .idle))
     }
+
+    /// The bot as its sidebar row and card show it: its Home's status, but while Home is idle and
+    /// tasks work, working on them, with the newest turn's activity.
+    public func working(on tasks: [(title: String, run: RunState)]) -> BotStatus {
+        guard !phase.isActive, let newest = tasks.max(by: { $0.run.startedAt < $1.run.startedAt }) else { return self }
+        var status = self
+        status.phase = newest.run.preparing ? .preparing : newest.run.hasOutput ? .working : .starting
+        status.runStartedAt = tasks.map(\.run.startedAt).min()
+        status.lastError = nil
+        status.activity = newest.run.activity
+        status.workingOn = tasks.count == 1 ? newest.title : "\(tasks.count) tasks"
+        return status
+    }
+}
+
+extension BotStatus.Phase {
+    /// A turn is under way, or about to start.
+    public var isActive: Bool { self == .preparing || self == .starting || self == .working }
 }
 
 /// A bot's `MEMORY.md` as the status sidebar shows it: what it holds beyond the seeded heading.

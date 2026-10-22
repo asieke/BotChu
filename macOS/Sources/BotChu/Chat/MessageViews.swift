@@ -4,6 +4,8 @@ import BotChuCore
 struct MessageRow: View {
     let message: ChatMessage
     let bot: Bot
+    /// The CLI of the conversation's account, whose tool calls these are.
+    let kind: AgentKind
     /// The first reply or tool call after the owner's message carries the bot's avatar.
     let startsBotTurn: Bool
 
@@ -36,8 +38,10 @@ struct MessageRow: View {
             }
         case .tool:
             BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
-                ToolCard(message: message, kind: bot.account.kind)
+                ToolCard(message: message, kind: kind)
             }
+        case .receipt:
+            ReceiptRow(message: message, botID: bot.id)
         case .error:
             Label {
                 Text(message.text).textSelection(.enabled)
@@ -57,6 +61,38 @@ struct MessageRow: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 2)
         }
+    }
+}
+
+/// BotChu's word in a bot's Home about one of its tasks, with a way to open the task's tab.
+struct ReceiptRow: View {
+    @Environment(AppModel.self) private var model
+    let message: ChatMessage
+    let botID: UUID
+
+    var body: some View {
+        let task = message.taskID.flatMap { model.task($0, of: botID) }
+        HStack(spacing: 6) {
+            Image(systemName: task == nil ? "exclamationmark.triangle" : "arrow.triangle.branch")
+                .foregroundStyle(task == nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            Text(message.text)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            if let task {
+                Button(task.isArchived ? "Reopen" : "Open") {
+                    let target = ChatTarget.task(task.id, of: botID)
+                    task.isArchived ? model.reopenTask(target) : model.show(target)
+                }
+                .buttonStyle(.link)
+                .help("Show \(task.title)")
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.primary.opacity(0.045)))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
     }
 }
 
