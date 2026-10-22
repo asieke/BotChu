@@ -6,10 +6,12 @@ import BotChuCore
 /// permission (see `macOS/ui-review.sh`):
 /// - `BOTCHU_DATA_DIR`: keep the bot index and bot folders under this folder instead, with settings in
 ///   their own `defaults` domain (`local.BotChu.dev`), so a throwaway run never changes the real ones.
-/// - `BOTCHU_SNAPSHOT`: write a PNG of each window into this folder every second.
+/// - `BOTCHU_SNAPSHOT`: write a PNG of each window into this folder every second, and of the sidebar's
+///   rows (`sidebar.png`), which the window's picture leaves out.
 /// - `BOTCHU_OPEN`: open `editor` (a new bot) or `settings` at launch.
 /// - `BOTCHU_SEND`: send this message to the selected bot at launch.
 /// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
+/// - `BOTCHU_PET`: give the selected bot this Codex pet folder at launch, as Import Codex Pet does.
 @MainActor
 enum DevHooks {
     static let env = ProcessInfo.processInfo.environment
@@ -21,7 +23,11 @@ enum DevHooks {
     static func start(model: AppModel, openSettings: () -> Void) {
         if let dir = env["BOTCHU_SNAPSHOT"] {
             Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-                MainActor.assumeIsolated { snapshot(into: URL(fileURLWithPath: dir, isDirectory: true)) }
+                MainActor.assumeIsolated {
+                    let url = URL(fileURLWithPath: dir, isDirectory: true)
+                    snapshot(into: url)
+                    snapshotSidebar(model: model, into: url)
+                }
             }
         }
         switch env["BOTCHU_OPEN"] {
@@ -36,9 +42,30 @@ enum DevHooks {
             if parts.count > 2 { bot.instructions = parts[2] }
             model.create(bot)
         }
+        if let folder = env["BOTCHU_PET"], let id = model.selection {
+            try? model.importPet(from: URL(fileURLWithPath: (folder as NSString).expandingTildeInPath, isDirectory: true), for: id)
+        }
         if let text = env["BOTCHU_SEND"], let id = model.selection {
             model.send(text, to: id)
         }
+    }
+
+    /// The sidebar's rows as `sidebar.png`; the sidebar's material isn't in the window's picture.
+    static func snapshotSidebar(model: AppModel, into dir: URL) {
+        let rows = VStack(alignment: .leading, spacing: 4) {
+            ForEach(model.bots) { bot in
+                BotRow(bot: bot, status: model.status(of: bot), selected: model.selection == bot.id)
+            }
+        }
+        .padding(10)
+        .frame(width: 240, alignment: .leading)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .environment(model)
+        let renderer = ImageRenderer(content: rows)
+        renderer.scale = 2
+        guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+        try? png.write(to: dir.appendingPathComponent("sidebar.png"))
     }
 
     /// Each visible window as `<n>-<title>.png`, drawn by the app itself.

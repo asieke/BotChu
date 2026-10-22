@@ -9,6 +9,9 @@ struct BotEditor: View {
     /// The workspace last filled in from the name; once the field differs, the person chose it.
     @State private var autoWorkspace = ""
     @State private var confirmDelete = false
+    /// A Codex pet chosen for a bot that isn't created yet; copied in on Create.
+    @State private var pendingPet: URL?
+    @State private var petError: String?
     private let isNew: Bool
 
     init(request: EditorRequest) {
@@ -43,6 +46,41 @@ struct BotEditor: View {
                 } footer: {
                     Text("Private to the bot. Given at the start of every session, with its MEMORY.md.")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+                Section {
+                    HStack(alignment: .top, spacing: 12) {
+                        petPreview
+                        TextEditor(text: Binding(get: { bot.appearance ?? "" },
+                                                 set: { bot.appearance = $0.isEmpty ? nil : $0 }))
+                            .font(.body)
+                            .frame(minHeight: 64)
+                            .scrollContentBackground(.hidden)
+                            .overlay(alignment: .topLeading) {
+                                if (bot.appearance ?? "").isEmpty {
+                                    Text("Describe how this bot looks: a small brass robot with a lantern head…")
+                                        .foregroundStyle(.tertiary)
+                                        .padding(.leading, 5)
+                                        .allowsHitTesting(false)
+                                }
+                            }
+                    }
+                    HStack {
+                        Button("Import Codex Pet…", action: choosePet)
+                            .help("Use a pet made in Codex: a folder with pet.json and its spritesheet, such as ~/.codex/pets/<name>")
+                        Spacer()
+                    }
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    if let petError {
+                        Text(petError).font(.caption).foregroundStyle(.red)
+                    } else if let pendingPet {
+                        Text("\(pendingPet.lastPathComponent) is added when you create the bot.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("The bot's pet stands in for its emoji, and shows what it is doing.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Section {
                     Picker("Account", selection: Binding(get: { bot.accountID }, set: { bot.selectAccount($0) })) {
@@ -85,7 +123,7 @@ struct BotEditor: View {
             }
             .padding(16)
         }
-        .frame(width: 520, height: 600)
+        .frame(width: 520, height: 680)
         .onChange(of: bot.name) {
             guard isNew, bot.workspace == autoWorkspace else { return }
             autoWorkspace = bot.name.trimmingCharacters(in: .whitespaces).isEmpty ? "" : model.defaultWorkspace(for: bot.name)
@@ -120,9 +158,45 @@ struct BotEditor: View {
         }
     }
 
+    @ViewBuilder private var petPreview: some View {
+        if let sheet = model.petSheets[bot.id], !isNew {
+            PetSpriteView(sheet: sheet, activity: .idle)
+                .frame(width: 60, height: 65)
+        } else {
+            BotAvatar(bot: bot, size: 44)
+                .frame(width: 60, height: 65)
+        }
+    }
+
+    private func choosePet() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = "Use Pet"
+        panel.message = "Choose a Codex pet folder, with pet.json and its spritesheet."
+        let pets = (NSHomeDirectory() as NSString).appendingPathComponent(".codex/pets")
+        if FileManager.default.fileExists(atPath: pets) { panel.directoryURL = URL(fileURLWithPath: pets, isDirectory: true) }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        petError = nil
+        guard PetPackage.load(from: url) != nil else {
+            petError = "\(url.lastPathComponent) isn't a Codex pet: it needs pet.json and the spritesheet it names."
+            return
+        }
+        if isNew {
+            pendingPet = url
+        } else {
+            do {
+                try model.importPet(from: url, for: bot.id)
+            } catch {
+                petError = error.localizedDescription
+            }
+        }
+    }
+
     private func save() {
         if isNew {
             model.create(bot)
+            if let pendingPet { try? model.importPet(from: pendingPet, for: bot.id) }
         } else {
             model.update(bot)
         }

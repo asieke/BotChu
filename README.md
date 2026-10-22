@@ -10,6 +10,17 @@ the Mac, and runs in its own workspace folder on this Mac.
   - **Bots:** create, edit and delete bots. A bot has a name, an emoji, a one-line title, private
     instructions, an account, an optional model and a workspace folder (default `~/BotChu/<name>`).
     A new bot introduces itself in one reply, so a misread role shows up at once.
+  - **Pets:** a bot can have an animated character in place of its emoji: its head in the sidebar
+    and the chat, and its whole figure at the top of the status sidebar. It acts out what the bot is
+    doing in a turn, judged from each tool call the CLI reports: thinking, researching (reading and
+    searching files), browsing (web search and fetch), coding (editing files, commits), testing
+    (builds, tests, linters), working (anything else); it celebrates when a turn ends, looks
+    deflated after a failed one, and waves when its bot is selected. A pet is a Codex pet (the
+    `hatch-pet` skill's 8 × 9 or 8 × 11 atlas of 192 × 208 cells), plus optional extra animations
+    BotChu adds for these activities; missing ones fall back to the closest atlas row. **Import
+    Codex Pet…** in **Edit Bot** copies one in (for example from `~/.codex/pets/<name>`), and the
+    bot's **Appearance** text says how it looks. Reduce Motion shows a still frame. Only the
+    selected bot and busy bots move in the sidebar.
   - **Accounts:** any bot can run on any account, switchable in **Edit Bot**:
     Claude Personal, Claude Dev and Claude Work (`claude-personal`, `claude-dev`, `claude-work`),
     Codex Personal, Codex Dev and Codex Work (`codex-personal`, `codex-dev`, `codex-work`), Google
@@ -30,9 +41,10 @@ the Mac, and runs in its own workspace folder on this Mac.
     in Settings). Effort choices depend on the provider/model, and controls wait until a turn ends.
     For known Antigravity models, the effort also selects the matching model-ID suffix.
   - **The bot's folder is the bot:** BotChu keeps each bot's settings (`bot.json`), its whole
-    conversation (`thread.jsonl`, one message per line) and a log of every turn (`logs/<date>.log`:
-    the command, how long it took, the exit status, any error and the CLI's error output) in
-    `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
+    conversation (`thread.jsonl`, one message per line), a log of every turn (`logs/<date>.log`:
+    the command, how long it took, the exit status, any error and the CLI's error output) and its
+    pet (`pet/`: `pet.json`, the spritesheet, and `activities.json` with `activities/<id>/NN.png`
+    for extra animations) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
     is told it can search them for earlier conversations. **History & Logs** in the status sidebar
     opens the folder. Each bot needs its own workspace, and not the bots folder itself; moving a
     bot's workspace in its editor moves its `.botchu/` with it, and deleting a bot puts only its
@@ -59,13 +71,14 @@ the Mac, and runs in its own workspace folder on this Mac.
     runs with (`Accounts.swift`), the bot and message model (`Models.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), the identity, memory and
     recap that open a session (`BotContext.swift`), what the status sidebar shows about a bot and
-    its `MEMORY.md` (`BotStatus.swift`), the JSON store (`Store.swift`), and the `Process` runner
+    its `MEMORY.md` (`BotStatus.swift`), pets: the atlas rows, BotChu's extra animations, the
+    activity a tool call means and the pet folder (`Pet.swift`), the JSON store (`Store.swift`), and the `Process` runner
     that launches a CLI through the login shell, `zsh -l` (`AgentRun.swift`).
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
     in standard system materials: `App/` (the app, window, model, settings, Keychain, dev hooks),
     `Sidebar/` (the bot list), `Chat/` (messages and the composer), `Inspector/` (the status
-    sidebar), `Editor/` (the bot sheet), `Settings/`, and `Shared/` (layout constants, the avatar
-    and the status badge).
+    sidebar), `Editor/` (the bot sheet), `Settings/`, and `Shared/` (layout constants, the avatar,
+    the status badge, and the pet sprite: atlas decoding and the animated view).
   - `Sources/botchu-smoke/` — a command-line check, not shipped in the app, that runs two real
     turns on each account named the way the app does (see **Test**).
   - `Tests/BotChuCoreTests/` — parser tests against captured output of every CLI, command lines,
@@ -126,6 +139,8 @@ the Mac, and runs in its own workspace folder on this Mac.
   Claude Dev); the app writes a PNG of each of its windows into the printed folder every second
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor` or `BOTCHU_OPEN=settings` opens the bot editor or Settings instead.
+  `BOTCHU_PET=~/.codex/pets/<name>` gives the first bot that Codex pet. The window's picture leaves
+  out the sidebar's rows, so they are drawn on their own into `sidebar.png`.
 - Smoke test after deploy: `macOS/install.sh` fails unless the installed app starts (launched hidden,
   checked with `pgrep -x BotChu`, and quit again unless it was already open).
 

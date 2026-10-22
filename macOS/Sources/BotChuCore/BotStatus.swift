@@ -1,13 +1,16 @@
 import Foundation
 
-/// A turn in progress: when it started and whether its CLI has printed anything yet.
+/// A turn in progress: when it started, whether its CLI has printed anything yet, and what the
+/// bot is doing now (from the turn's events).
 public struct RunState: Equatable, Sendable {
     public var startedAt: Date
     public var hasOutput: Bool
+    public var activity: BotActivity
 
-    public init(startedAt: Date = Date(), hasOutput: Bool = false) {
+    public init(startedAt: Date = Date(), hasOutput: Bool = false, activity: BotActivity = .thinking) {
         self.startedAt = startedAt
         self.hasOutput = hasOutput
+        self.activity = activity
     }
 }
 
@@ -37,8 +40,11 @@ public struct BotStatus: Equatable, Sendable {
     public var toolCallCount: Int
     public var lastActivity: Date?
     public var lastError: String?
+    /// What the bot's pet shows: the turn's activity, else a short reaction (`greeting`, `done`),
+    /// else `failed` after a failed turn, else `idle`.
+    public var activity: BotActivity
 
-    public static func make(bot: Bot, messages: [ChatMessage], run: RunState?) -> BotStatus {
+    public static func make(bot: Bot, messages: [ChatMessage], run: RunState?, reaction: BotActivity? = nil) -> BotStatus {
         let lastError: String? = {
             guard let last = messages.last(where: { $0.role != .note }), last.role == .error else { return nil }
             return last.text
@@ -62,7 +68,8 @@ public struct BotStatus: Equatable, Sendable {
             messageCount: messages.filter { $0.role == .user || $0.role == .assistant }.count,
             toolCallCount: messages.filter { $0.role == .tool }.count,
             lastActivity: messages.last(where: { $0.role != .note })?.date,
-            lastError: run == nil ? lastError : nil)
+            lastError: run == nil ? lastError : nil,
+            activity: run?.activity ?? reaction ?? (phase == .failed ? .failed : .idle))
     }
 }
 

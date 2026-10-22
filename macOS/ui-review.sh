@@ -6,6 +6,7 @@
 #   macOS/ui-review.sh                     # just open it
 #   macOS/ui-review.sh "Hello"             # and send "Hello" to the first bot (a real turn)
 #   BOTCHU_OPEN=editor macOS/ui-review.sh  # or open the new-bot editor (or settings)
+#   BOTCHU_PET=~/.codex/pets/mochi macOS/ui-review.sh  # and give the first bot this Codex pet
 # Prints the snapshot folder. Quit the app with `pkill -x BotChu` when done.
 set -euo pipefail
 dir=$(cd "$(dirname "$0")" && pwd)
@@ -35,6 +36,7 @@ printf '# Scout\n\nWhat Scout has learned and keeps across conversations.\n\n- P
 "$dir/build.sh" "$data" >/dev/null
 args=(--env "BOTCHU_DATA_DIR=$data" --env "BOTCHU_SNAPSHOT=$data/snapshots")
 [ -n "${BOTCHU_OPEN:-}" ] && args+=(--env "BOTCHU_OPEN=$BOTCHU_OPEN")
+[ -n "${BOTCHU_PET:-}" ] && args+=(--env "BOTCHU_PET=$BOTCHU_PET")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
 open -n "$data/BotChu.app" "${args[@]}"
 echo "$data/snapshots"

@@ -10,16 +10,28 @@ enum Theme {
     static let cardRadius: CGFloat = 9
 }
 
+/// A bot's face: its pet's head when it has one (animated for what it is doing), else its emoji.
 struct BotAvatar: View {
+    @Environment(AppModel.self) private var model
     let bot: Bot
     var size: CGFloat = 30
+    var activity: BotActivity = .idle
+    var animates = false
 
     var body: some View {
-        Text(bot.emoji)
-            .font(.system(size: size * 0.55))
-            .frame(width: size, height: size)
-            .background(Circle().fill(Self.tint(for: bot.name).opacity(0.22)))
-            .accessibilityHidden(true)
+        Group {
+            if let sheet = model.petSheets[bot.id] {
+                // A pet is drawn on nothing: its own outline is the avatar.
+                PetSpriteView(sheet: sheet, activity: activity, style: .head, animates: animates)
+            } else {
+                Text(bot.emoji)
+                    .font(.system(size: size * 0.55))
+                    .frame(width: size, height: size)
+                    .background(Circle().fill(Self.tint(for: bot.name).opacity(0.22)))
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 
     /// A stable color per name, so each bot keeps its own.
@@ -52,6 +64,28 @@ extension BotStatus.Phase {
     var isActive: Bool { self == .starting || self == .working }
 }
 
+extension BotStatus {
+    /// The phase, or while a turn works, what the bot is doing in it.
+    var label: String { phase == .working ? activity.label : phase.label }
+}
+
+extension BotActivity {
+    var label: String {
+        switch self {
+        case .idle: "Idle"
+        case .greeting: "Saying hello"
+        case .thinking: "Thinking"
+        case .researching: "Researching"
+        case .browsing: "Browsing"
+        case .coding: "Coding"
+        case .testing: "Testing"
+        case .working: "Working"
+        case .done: "Done"
+        case .failed: "Failed"
+        }
+    }
+}
+
 /// The bot's phase as a colored capsule, with the turn's running time while it works.
 struct StatusBadge: View {
     let status: BotStatus
@@ -61,7 +95,7 @@ struct StatusBadge: View {
             Circle()
                 .fill(status.phase.color)
                 .frame(width: 7, height: 7)
-            Text(status.phase.label)
+            Text(status.label)
             if status.phase.isActive, let started = status.runStartedAt {
                 Text(started, style: .timer)
                     .monospacedDigit()

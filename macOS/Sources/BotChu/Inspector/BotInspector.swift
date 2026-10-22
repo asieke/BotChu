@@ -80,21 +80,35 @@ struct BotInspector: View {
         }
     }
 
-    private func header(_ bot: Bot, _ status: BotStatus) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            BotAvatar(bot: bot, size: 44)
-            VStack(alignment: .leading, spacing: 6) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(bot.name).font(.headline)
-                    if !bot.title.isEmpty {
-                        Text(bot.title)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                }
-                StatusBadge(status: status)
+    @ViewBuilder private func header(_ bot: Bot, _ status: BotStatus) -> some View {
+        if let sheet = model.petSheets[bot.id] {
+            // The pet, large and doing what the bot is doing.
+            VStack(alignment: .leading, spacing: 12) {
+                PetSpriteView(sheet: sheet, activity: status.activity)
+                    .frame(width: 120, height: 130)
+                    .frame(maxWidth: .infinity)
+                nameAndStatus(bot, status)
             }
+        } else {
+            HStack(alignment: .top, spacing: 12) {
+                BotAvatar(bot: bot, size: 44)
+                nameAndStatus(bot, status)
+            }
+        }
+    }
+
+    private func nameAndStatus(_ bot: Bot, _ status: BotStatus) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(bot.name).font(.headline)
+                if !bot.title.isEmpty {
+                    Text(bot.title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            StatusBadge(status: status)
         }
     }
 

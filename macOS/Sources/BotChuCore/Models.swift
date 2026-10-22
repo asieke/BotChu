@@ -15,6 +15,9 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable {
     public var reasoningEffort: ReasoningEffort?
     /// Absolute path of the bot's workspace folder.
     public var workspace: String
+    /// How the bot looks, in the owner's words: what its pet is drawn from. Optional for
+    /// compatibility with saved bots.
+    public var appearance: String?
     /// The CLI session the thread continues, and the account it belongs to. A session only
     /// resumes on the account that made it.
     public var sessionID: String?
@@ -24,7 +27,7 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable {
     public init(
         id: UUID = UUID(), name: String, emoji: String = "🤖", title: String = "", instructions: String = "",
         accountID: String = Accounts.defaultID, model: String = "", reasoningEffort: ReasoningEffort? = nil, workspace: String,
-        sessionID: String? = nil, sessionAccountID: String? = nil, createdAt: Date = Date()
+        appearance: String? = nil, sessionID: String? = nil, sessionAccountID: String? = nil, createdAt: Date = Date()
     ) {
         self.id = id
         self.name = name
@@ -35,6 +38,7 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable {
         self.model = model
         self.reasoningEffort = reasoningEffort
         self.workspace = workspace
+        self.appearance = appearance
         self.sessionID = sessionID
         self.sessionAccountID = sessionAccountID
         self.createdAt = createdAt
