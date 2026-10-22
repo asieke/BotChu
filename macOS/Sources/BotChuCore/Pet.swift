@@ -64,29 +64,41 @@ public struct PetActivitySpec: Equatable, Sendable {
     public let durations: [Int]
     /// What the frames show, for the image prompt.
     public let prompt: String
+    /// Another extra whose strip is attached as the pose to match, drawn before this one.
+    public let poseReference: String?
+
+    public init(id: String, alias: String, durations: [Int], prompt: String, poseReference: String? = nil) {
+        self.id = id
+        self.alias = alias
+        self.durations = durations
+        self.prompt = prompt
+        self.poseReference = poseReference
+    }
 
     public var frames: Int { durations.count }
 
-    /// The extra animations, in the order they are drawn. Adding one is one entry here.
+    /// The extra animations, in the order they are drawn. Adding one is one entry here. Motions are
+    /// kept small: these loop for as long as a tool runs, beside the chat.
     public static let all: [PetActivitySpec] = [
         PetActivitySpec(
             id: "thinking", alias: "waiting", durations: Array(repeating: 190, count: 5) + [380],
-            prompt: "Thinking: chin resting on one paw or hand, eyes glancing up, a slow head tilt and one blink across the loop. Calm and quiet. No thought bubbles, symbols or punctuation."),
+            prompt: "Thinking: chin resting on one paw or hand, eyes glancing up, one slow blink. The head and body stay still; only the eyes, eyelids and a fingertip move. No thought bubbles, symbols or punctuation."),
         PetActivitySpec(
             id: "researching", alias: "review", durations: Array(repeating: 170, count: 5) + [340],
-            prompt: "Researching: holding an open book close with both hands and reading it, eyes moving along the page, turning one page midway. The book is a simple solid shape held against the body, with no text."),
+            prompt: "Researching: holding an open book close with both hands and reading it, eyes moving along the page, turning one page slowly midway. The head and body stay still. The book is a simple solid shape held against the body, with no text."),
         PetActivitySpec(
             id: "browsing", alias: "review", durations: Array(repeating: 160, count: 5) + [320],
-            prompt: "Browsing the web: holding a small tablet in front with both hands, looking at it and swiping with one finger. The tablet's face is a plain light rectangle with no text or interface."),
-        PetActivitySpec(
-            id: "coding", alias: "running", durations: Array(repeating: 110, count: 5) + [200],
-            prompt: "Coding: sitting at a small desk in front of an open laptop, seen from a front three-quarter view so both the face and the keyboard read, typing with alternating hands. The desk and laptop touch the pet and fit inside the same slot; the screen faces the pet and shows no text."),
+            prompt: "Browsing the web: holding a small tablet in front with both hands, looking at it and swiping slowly with one finger. Only the finger and the eyes move. The tablet's face is a plain light rectangle with no text or interface."),
         PetActivitySpec(
             id: "testing", alias: "running", durations: Array(repeating: 150, count: 5) + [320],
-            prompt: "Testing: leaning toward a small laptop held or set right in front of it, pressing one key, watching with an expectant look, then a small satisfied nod in the last frames. No checkmarks, text or symbols."),
+            prompt: "Testing: sitting with a small open laptop on its lap or set right in front of it, pressing one key, watching the screen with an expectant look, then a small satisfied nod in the last frames. No checkmarks, text or symbols."),
+        PetActivitySpec(
+            id: "coding", alias: "running", durations: Array(repeating: 130, count: 5) + [240],
+            prompt: "Coding, locked in: the same seat and the same open laptop as the testing animation, now wearing over-ear headphones, typing with small alternating finger taps while its eyes stay on the screen. The head and body stay still. The laptop and headphones touch the pet and fit inside its slot; the screen faces the pet and shows no text.",
+            poseReference: "testing"),
         PetActivitySpec(
             id: "working", alias: "failed", durations: Array(repeating: 120, count: 7) + [220],
-            prompt: "Working hard: tinkering with a small wrench held at chest height, focused expression, steady effortful motion. No sparks, motion lines or floating effects."),
+            prompt: "Working: tinkering with a small wrench held at chest height, focused expression, a small steady turning motion of the wrench. The body stays planted. No sparks, motion lines or floating effects."),
     ]
 
     public static func spec(id: String) -> PetActivitySpec? { all.first { $0.id == id } }

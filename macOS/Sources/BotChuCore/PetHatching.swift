@@ -12,6 +12,26 @@ public enum PetHatching {
 
     public static let runFolder = "run"
     public static let lastMessageFile = "last-message.txt"
+    /// The appearance a pet was drawn from, so a redraw can tell whether its look should change.
+    public static let appearanceFile = "appearance.txt"
+    /// The existing pet's base image, copied into the drawing when its look is kept.
+    public static let keptBaseFile = "kept-base.png"
+
+    /// The pet's base image when a redraw should keep its look: the appearance is the one it was
+    /// drawn from (recorded by BotChu, or the start of the skill's own notes for older pets).
+    public static func baseToKeep(appearance: String, pet folder: URL) -> URL? {
+        let base = folder.appendingPathComponent(runFolder).appendingPathComponent("references/canonical-base.png")
+        guard FileManager.default.fileExists(atPath: base.path) else { return nil }
+        let wanted = appearance.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty else { return nil }
+        if let drawn = try? String(contentsOf: folder.appendingPathComponent(appearanceFile), encoding: .utf8) {
+            return drawn.trimmingCharacters(in: .whitespacesAndNewlines) == wanted ? base : nil
+        }
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent(runFolder).appendingPathComponent("pet_request.json")),
+              let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let notes = request["pet_notes"] as? String else { return nil }
+        return notes.hasPrefix(wanted) ? base : nil
+    }
 
     /// Where the `hatch-pet` skill may be for a Codex account, first match wins: the account's own
     /// Codex home (the profile wrappers set `CODEX_HOME=~/.<account id>`), then the shared places.
@@ -33,20 +53,29 @@ public enum PetHatching {
     }
 
     /// The instructions for the drawing run.
+    /// `keptBase` is the existing pet's base image when its look stays (see `baseToKeep`).
     public static func prompt(petName: String, appearance: String, skill: String, python: String, folder: String,
-                              extras: [PetActivitySpec] = PetActivitySpec.all) -> String {
+                              keptBase: String? = nil, extras: [PetActivitySpec] = PetActivitySpec.all) -> String {
         let run = (folder as NSString).appendingPathComponent(runFolder)
         let name = petName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let look = appearance.trimmingCharacters(in: .whitespacesAndNewlines)
+        let appearanceText = appearance.trimmingCharacters(in: .whitespacesAndNewlines)
         let extraLines = extras.map { spec in
-            "   - `\(spec.id)` (alias `\(spec.alias)`, \(spec.frames) frames): \(spec.prompt)"
+            var line = "   - `\(spec.id)` (alias `\(spec.alias)`, \(spec.frames) frames): \(spec.prompt)"
+            if let reference = spec.poseReference, let other = extras.first(where: { $0.id == reference }) {
+                line += " Also attach \(run)/extras/\(other.id)/decoded/\(other.alias).png as the pose to match."
+            }
+            return line
         }.joined(separator: "\n")
+        let look = keptBase.map { base in
+            "- Keep this pet's existing look: pass \(base) to prepare_pet_run.py as --reference. Don't generate a new base: copy \(base) to \(run)/decoded/base.png and to \(run)/references/canonical-base.png, and mark the base job complete with that source path. Every row is grounded in it."
+        } ?? "- No reference images. Style preset: auto."
         return """
         Draw an animated pet for BotChu, a macOS app, working in \(folder). Work without asking questions: choose sensible defaults and keep going until both parts are done.
 
         Part 1. Follow the hatch-pet skill at \(skill)/SKILL.md to hatch one pet, with these settings:
-        - Pet name: \(name). Its look, in the owner's words: \(look)
-        - No reference images. Style preset: auto.
+        - Pet name: \(name). Its look, in the owner's words: \(appearanceText)
+        \(look)
+        - Keep every motion small and gentle; these loops play for minutes beside a chat. The body stays planted and the head mostly still. In `idle`, only breathing and a blink: no head turns, tilts or shaking. In the other rows, change the pose a little from frame to frame rather than swinging the head or limbs, and keep the same scale and baseline in every frame.
         - Run folder: \(run) (pass it to prepare_pet_run.py as --output-dir).
         - load_workspace_dependencies is not available here. Set PYTHON=\(python) for every script; it has Pillow.
         - Use subagents for the image jobs if you can; otherwise generate each image yourself, one at a time.
@@ -55,7 +84,7 @@ public enum PetHatching {
         - Package into this folder instead of $CODEX_HOME/pets: \(folder)/spritesheet.webp and \(folder)/pet.json with id, displayName, description, "spritesheetPath": "spritesheet.webp" and "spriteVersionNumber": 1.
         - Keep the run folder's qa/ files; skip the cleanup step.
 
-        Part 2. Draw BotChu's extra animations, one at a time, each like a standard row strip grounded in the canonical base. For each extra below:
+        Part 2. Draw BotChu's extra animations, one at a time in the order listed, each like a standard row strip grounded in the canonical base, with the same small, gentle motion. For each extra below:
         1. Write its prompt to \(run)/extras/<id>/prompt.md: the skill's row prompt for its alias row (same identity lock, frame count, invisible slots, chroma key from \(run)/pet_request.json, and the same rules against text, scenery, shadows and detached effects), with the action below in place of the alias row's action. The props an action names (book, tablet, laptop, desk, wrench) are allowed for that animation only; they touch the pet and stay inside its slot.
         2. Generate the strip, attaching \(run)/references/canonical-base.png for identity and \(run)/references/layout-guides/<alias>.png for layout only. Copy the chosen image to \(run)/extras/<id>/decoded/<alias>.png.
         3. Run: "$PYTHON" "\(skill)/scripts/extract_strip_frames.py" --decoded-dir \(run)/extras/<id>/decoded --output-dir \(run)/extras/<id>/frames --states <alias> --chroma-key <the chroma key hex in pet_request.json> --method auto
