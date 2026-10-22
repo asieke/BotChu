@@ -33,8 +33,7 @@ struct ChatView: View {
                         .frame(maxWidth: Theme.chatWidth)
                         .frame(maxWidth: .infinity)
                     }
-                    // Opens at the newest message and stays pinned there as a reply grows.
-                    .defaultScrollAnchor(.bottom)
+                    .followsNewestMessage()
                     .onChange(of: messages.count) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
                 Composer(draft: $draft, focused: $composerFocused, botName: bot.name, running: running,
@@ -105,6 +104,20 @@ struct BotIntro: View {
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
         .padding(.bottom, 12)
+    }
+}
+
+extension View {
+    /// Opens a chat at its newest message and keeps it there as a reply grows. On macOS 15 and later
+    /// a chat shorter than the window starts at the top rather than sinking to the bottom.
+    @ViewBuilder func followsNewestMessage() -> some View {
+        if #available(macOS 15, *) {
+            defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(.bottom, for: .sizeChanges)
+                .defaultScrollAnchor(.top, for: .alignment)
+        } else {
+            defaultScrollAnchor(.bottom)
+        }
     }
 }
 

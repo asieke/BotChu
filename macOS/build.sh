@@ -13,7 +13,12 @@ bin="$(swift build -c release --package-path "$dir" --show-bin-path)/BotChu"
 
 rm -rf "$out"
 mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"
-cp "$bin" "$out/Contents/MacOS/BotChu"
+# SwiftPM's default build system records the deployment target as the binary's SDK version as well
+# (sdk 14.0), so macOS runs the app in compatibility mode, with the old window chrome, in which the
+# toolbar overhangs the sidebar. Record the SDK the app was actually linked against.
+minos=$(vtool -show-build "$bin" | awk '$1 == "minos" { print $2 }')
+vtool -set-build-version macos "$minos" "$(xcrun --sdk macosx --show-sdk-version)" -replace \
+  -output "$out/Contents/MacOS/BotChu" "$bin"
 
 # The icon is drawn in code (icon.swift) rather than committed as a binary.
 swiftc "$dir/icon.swift" -o "$tmp/icon"
