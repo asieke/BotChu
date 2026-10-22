@@ -117,11 +117,13 @@ public struct SubagentTransport: Sendable {
     }
 
     public func heartbeat() async throws {
+        if machine.isRemote { _ = try await remote("heartbeat"); return }
         try await write(Self.heartbeatData(closed: false), relativePath: "heartbeat.json")
     }
 
     /// Keep results for recovery/late waiters. An expired heartbeat makes new calls fail promptly.
     public func close() async throws {
+        if machine.isRemote { _ = try await remote("close"); return }
         try await write(Self.heartbeatData(closed: true), relativePath: "heartbeat.json")
     }
 
@@ -212,6 +214,10 @@ elif operation == 'write':
     relative = pathlib.PurePosixPath(parameters[0])
     if relative.is_absolute() or '..' in relative.parts: raise ValueError('Invalid mailbox path')
     atomic(root / relative, base64.b64decode(parameters[1]))
+elif operation in ['heartbeat', 'close']:
+    closed = operation == 'close'
+    stamp = '1970-01-01T00:00:00Z' if closed else datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    atomic(root / 'heartbeat.json', json.dumps({'updatedAt': stamp, 'closed': closed}).encode())
 else: raise ValueError('Unknown mailbox operation')
 """#
 }
