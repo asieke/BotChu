@@ -713,19 +713,11 @@ final class AppModel {
         return true
     }
 
-    /// Send the oldest follow-up now. Wait for the interrupted process to exit before resuming
-    /// its session; never run two CLI processes for the same conversation at once.
-    func sendQueuedNow(to target: ChatTarget) {
-        guard messageQueues[target]?.messages.isEmpty == false,
-              runStates[target]?.preparing != true,
-              messageQueues[target]?.isInterrupting != true else { return }
+    /// Resume a paused queue. Follow-ups never interrupt a turn already in progress.
+    func resumeQueuedMessages(to target: ChatTarget) {
+        guard !isRunning(target), messageQueues[target]?.messages.isEmpty == false else { return }
         messageQueues[target]?.resume()
-        if let run = runs[target] {
-            messageQueues[target]?.interrupt()
-            run.stop()
-        } else {
-            sendNextQueued(to: target)
-        }
+        sendNextQueued(to: target)
     }
 
     func removeQueuedMessage(_ id: UUID, from target: ChatTarget) {
@@ -871,6 +863,7 @@ final class AppModel {
         var parser = StreamParsers.make(for: account.kind)
         var assembler = ThreadAssembler()
         var ended = false
+        var reportedFailure: String?
         let accountID = account.id
 
         run.onLines = { [weak self, weak run] lines in
@@ -883,7 +876,10 @@ final class AppModel {
                     case .session(let reported):
                         self.recordSession(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: reported),
                                            accountID: accountID, for: target)
-                    case .finished, .failed:
+                    case .failed(let reason):
+                        reportedFailure = reason
+                        ended = true
+                    case .finished:
                         ended = true
                     default: break
                     }
@@ -912,8 +908,7 @@ final class AppModel {
             ThreadAssembler.closeRunningTools(&messages)
             let stopped = run.stopped
             if stopped {
-                messages.append(ChatMessage(role: .note, text: self.messageQueues[target]?.isInterrupting == true
-                    ? "Interrupted to send your next message" : "Stopped"))
+                messages.append(ChatMessage(role: .note, text: "Stopped"))
             } else if !ended, machine.isRemote, status == 255 {
                 // ssh's own failure: the host didn't answer, or refused the connection.
                 let detail = Self.lastLines(stderr)
@@ -926,8 +921,8 @@ final class AppModel {
                     : "\(account.name) exited with status \(status):\n\(detail)"))
             }
             self.threads[target] = messages
-            self.saveThread(target)
-            let failure = messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil }
+            let saved = self.saveThread(target)
+            let failure = reportedFailure ?? messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil }
             if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
             if self.selection != id || self.tab(of: id) != target { self.unread.insert(target) }
             let turn = messages.suffix(from: min(turnStart, messages.count))
@@ -936,7 +931,7 @@ final class AppModel {
                 at: Date(), startedAt: startedAt, status: status, stopped: stopped,
                 toolCalls: turn.filter { $0.role == .tool }.count,
                 error: turn.last(where: { $0.role == .error })?.text, stderr: stderr, what: what))
-            self.messageQueues[target]?.finishTurn(stopped: stopped, failed: !stopped && (failure != nil || status != 0))
+            self.messageQueues[target]?.finishTurn(stopped: stopped, failed: !saved || (!stopped && (failure != nil || status != 0)))
             self.sendNextQueued(to: target)
         }
 

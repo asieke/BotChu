@@ -29,7 +29,7 @@ struct Composer<Controls: View>: View {
                     button("stop.fill", label: "Stop", help: "Stop (⌘.)", action: onStop)
                 }
                 button("arrow.up", label: running ? "Queue message" : "Send", enabled: !isEmpty,
-                       help: running ? "Queue after this turn (Return). Use Send now on the queue to interrupt and resume."
+                       help: running ? "Queue after this turn (Return; Option-Return for a new line)"
                            : "Send (Return; Option-Return for a new line)", action: onSend)
             }
         }

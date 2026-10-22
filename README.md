@@ -108,7 +108,13 @@ request.
     state, pull request and the start of their last reply. A new Home session also lists the open
     tasks. The sidebar row counts the bot's conversations with news.
   - **Message box:** a multiline writing area with account, model/effort and send/stop controls in
-    its bottom row. Return sends; Option-Return inserts a new line.
+    its bottom row. Return sends; Option-Return inserts a new line. Send stays available during a
+    run: follow-ups appear in a queue above the composer and send in order after each successful
+    turn, in the same CLI session. Follow-ups never interrupt work in progress. This works with
+    every account, including tasks over SSH. Pending messages can be edited or removed. Stop and
+    errors pause the queue; relaunching restores it
+    paused. **Send next** resumes it. Each Home and task has its own queue, saved beside its thread
+    in `queued.jsonl`. A worktree being prepared finishes setup before follow-ups can run.
   - **Model controls:** separate model and reasoning-effort buttons below the writing area and in
     the status sidebar's **Runs on** card open the same pickers. Both stay in sync for the shown
     Home or task conversation; choices are saved for its next turn, including resumed sessions.
@@ -146,10 +152,11 @@ request.
     switching accounts keeps the thread's continuity.
   - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I). A card at the top shows
     the selected bot's face (its pet, playing, or its emoji) in a ring that says its state (grey when idle, a
-    spinning violet arc while it works, red after a failed turn), its name and title, a pill while
-    working or after an error, and a line on what it is doing with the turn's running time
-    (or when it was last active, or the
-    error). Grouped cards below give the account, agent and model it runs on, **Usage** (between
+    spinning violet arc while it works, red after a failed turn), its name and title, and a line on
+    what it is doing with the turn's running time (or its last activity or error). The compact
+    character and ring convey status
+    without a dot or status pill. The card and pet animation reflect only the shown Home or task;
+    the bot list still shows activity across its tasks. Grouped cards below give the account, agent and model it runs on, **Usage** (between
     **Runs on** and **Session**), whether the next message continues its CLI session (with its id
     to copy), its open tasks, its message and tool-call counts, last
     activity and creation date, its memory and personality files, and its workspace, with Edit and New
@@ -195,7 +202,8 @@ request.
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), the identity, memory and
     recap that open a session (`BotContext.swift`), account allowance parsing and native queries
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
-    (`UsageCache.swift`), what the status sidebar shows about a bot and
+    (`UsageCache.swift`), per-conversation pending-message delivery (`MessageQueue.swift`), what
+    the status sidebar shows about a bot and
     its `MEMORY.md` (`BotStatus.swift`), pets: the activity a tool call means
     and the clips that show it (`Pet.swift`), making a pet: its poses and clips, the Codex prompt
     for the stills, the OpenRouter request and job, the cost estimate, the manifest and install

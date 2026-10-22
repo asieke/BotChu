@@ -5,7 +5,6 @@ import Foundation
 public struct MessageQueue: Equatable, Sendable {
     public private(set) var messages: [ChatMessage]
     public private(set) var isPaused: Bool
-    public private(set) var isInterrupting = false
 
     /// Recovered messages wait for the owner. A crash between saving the transcript and saving
     /// the queue may leave an already-delivered message in both files.
@@ -26,7 +25,6 @@ public struct MessageQueue: Equatable, Sendable {
 
     public mutating func remove(_ id: UUID) {
         messages.removeAll { $0.id == id }
-        if messages.isEmpty { isInterrupting = false }
     }
 
     public mutating func resume() { isPaused = false }
@@ -34,20 +32,11 @@ public struct MessageQueue: Equatable, Sendable {
     /// Stop, a failed turn, and app shutdown keep unsent text but withdraw automatic delivery.
     public mutating func pause() {
         isPaused = true
-        isInterrupting = false
     }
 
-    public mutating func interrupt() {
-        guard !messages.isEmpty else { return }
-        isPaused = false
-        isInterrupting = true
-    }
-
-    /// Called only after the old process and both output pipes have finished. An explicit Stop
-    /// wins over an earlier Send now; failures always require the owner to resume the queue.
+    /// Called only after the old process and both output pipes have finished. Stop and failures
+    /// always require the owner to resume the queue.
     public mutating func finishTurn(stopped: Bool, failed: Bool) {
-        let requested = isInterrupting
-        isInterrupting = false
-        if failed || (stopped && !requested) { pause() }
+        if failed || stopped { pause() }
     }
 }

@@ -6,12 +6,11 @@ struct QueuedMessages: View {
     let queue: MessageQueue
     let running: Bool
     let preparing: Bool
-    let sendNow: () -> Void
+    let resume: () -> Void
     let edit: (UUID) -> Void
     let remove: (UUID) -> Void
 
     private var explanation: String {
-        if queue.isInterrupting { return "Waiting for the current run to stop…" }
         if queue.isPaused { return "Paused · send when you’re ready" }
         if preparing { return "Will send after the first turn" }
         return "Will send after this turn"
@@ -23,13 +22,13 @@ struct QueuedMessages: View {
                 Label("\(queue.messages.count) queued", systemImage: "text.bubble")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer(minLength: 0)
-                Button(running ? "Send now" : "Send next", action: sendNow)
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .disabled(preparing || queue.isInterrupting)
-                    .help(running ? "Interrupt this turn, then send the oldest queued message in the same session."
-                        : "Resume sending queued messages in order.")
+                if !running {
+                    Button("Send next", action: resume)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .help("Resume sending queued messages in order.")
+                }
             }
             Text(explanation).font(.system(size: 11)).foregroundStyle(.secondary)
             ScrollView {

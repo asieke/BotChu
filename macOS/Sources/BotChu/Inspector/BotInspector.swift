@@ -93,8 +93,8 @@ struct BotInspector: View {
 }
 
 /// The card at the top: the bot's face in a ring that shows its state, the name and one line
-/// under it (the bot's title, or for a task, its repository), a pill while working or after an
-/// error, and a line on what it is doing.
+/// under it (the bot's title, or for a task, its repository), and a line on what it is doing.
+/// The ring and pet reflect this conversation's activity.
 struct AvatarCard: View {
     let bot: Bot
     let status: BotStatus
