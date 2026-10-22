@@ -207,7 +207,7 @@ extension AppModel {
                     try? home.appendLog("── \(Self.logTime()) · pet installed · \(manifest.clips.count) clips · "
                         + String(format: "$%.2f", cost) + (failures.isEmpty ? "" : " · missing: \(failures.joined(separator: "; "))") + "\n\n")
                     self.reloadPet(id)
-                    self.react(.greeting, for: id, seconds: 4)
+                    self.react(.greeting, for: self.tab(of: id), seconds: 4)
                     self.petJobs[id] = failures.isEmpty ? nil
                         : PetJob(phase: .failed("Made \(manifest.clips.count) of \(clips.count) clips; the rest fall back to the closest one. " + failures.joined(separator: "; ")))
                 } catch {

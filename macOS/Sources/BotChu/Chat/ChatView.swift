@@ -43,20 +43,28 @@ struct ChatView: View {
                     .followsNewestMessage()
                     .onChange(of: messages.count) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
-                Composer(draft: Binding(get: { model.drafts[target] ?? "" }, set: { model.drafts[target] = $0 }),
+                VStack(spacing: 8) {
+                    if let queue = model.messageQueues[target], !queue.messages.isEmpty {
+                        QueuedMessages(queue: queue, running: running, preparing: model.runStates[target]?.preparing == true,
+                            resume: { model.resumeQueuedMessages(to: target) },
+                            edit: { model.editQueuedMessage($0, in: target); composerFocused = true },
+                            remove: { model.removeQueuedMessage($0, from: target) })
+                    }
+                    Composer(draft: Binding(get: { model.drafts[target] ?? "" }, set: { model.drafts[target] = $0 }),
                          focused: $composerFocused,
                          placeholder: task.map { "Message \(bot.name) about \($0.title)" } ?? "Message \(bot.name)",
                          running: running, onSend: send, onStop: { model.stop(target) }) {
-                    ModelMenu(settings: current, disabled: running,
-                              onModel: { model.setModel($0, for: target) },
-                              onEffort: { model.setReasoningEffort($0, for: target) })
-                        .layoutPriority(1)
-                        .id(target)
-                    Spacer(minLength: 0)
-                    Text(current.account.name)
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.tail)
-                        .help(task == nil ? "Current account. Change it in Edit Bot." : "This task's account. Change it in the status sidebar.")
+                        ModelMenu(settings: current, disabled: running,
+                                  onModel: { model.setModel($0, for: target) },
+                                  onEffort: { model.setReasoningEffort($0, for: target) })
+                            .layoutPriority(1)
+                            .id(target)
+                        Spacer(minLength: 0)
+                        Text(current.account.name)
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.tail)
+                            .help(task == nil ? "Current account. Change it in Edit Bot." : "This task's account. Change it in the status sidebar.")
+                    }
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 10)
@@ -86,9 +94,8 @@ struct ChatView: View {
 
     private func send() {
         let text = (model.drafts[target] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !model.isRunning(target) else { return }
-        model.drafts[target] = nil
-        model.send(text, to: target)
+        guard !text.isEmpty else { return }
+        if model.send(text, to: target) { model.drafts[target] = nil }
     }
 
     /// Replies and tool calls belong to the bot's turn; its avatar shows once at the turn's start.

@@ -19,7 +19,7 @@ struct TaskInspector: View {
                     InspectorSection("Status") {
                         AvatarCard(bot: bot, status: status, title: task.title,
                                subtitle: "\(bot.name) · \(task.repo)" + (task.isRemote ? " · on \(machine)" : ""),
-                                   account: task.account, faceSize: 72)
+                                   account: task.account, faceSize: 50)
                     }
                     InspectorSection("Task") {
                         InspectorCard {

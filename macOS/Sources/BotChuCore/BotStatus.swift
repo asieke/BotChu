@@ -89,8 +89,8 @@ public struct BotStatus: Equatable, Sendable {
         make(settings: bot, messages: messages, run: run, reaction: reaction)
     }
 
-    public static func make(task: BotTask, messages: [ChatMessage], run: RunState?) -> BotStatus {
-        make(settings: task, messages: messages, run: run, reaction: nil)
+    public static func make(task: BotTask, messages: [ChatMessage], run: RunState?, reaction: BotActivity? = nil) -> BotStatus {
+        make(settings: task, messages: messages, run: run, reaction: reaction)
     }
 
     static func make(settings: some RunSettings, messages: [ChatMessage], run: RunState?, reaction: BotActivity?) -> BotStatus {
@@ -121,7 +121,7 @@ public struct BotStatus: Equatable, Sendable {
             activity: run?.activity ?? reaction ?? (phase == .failed ? .failed : .idle))
     }
 
-    /// The bot as its sidebar row and card show it: its Home's status, but while Home is idle and
+    /// The bot as its sidebar row shows it: its Home's status, but while Home is idle and
     /// tasks work, working on them, with the newest turn's activity.
     public func working(on tasks: [(title: String, run: RunState)]) -> BotStatus {
         guard !phase.isActive, let newest = tasks.max(by: { $0.run.startedAt < $1.run.startedAt }) else { return self }

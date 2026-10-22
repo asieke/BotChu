@@ -9,8 +9,7 @@ struct BotInspector: View {
     let botID: UUID
 
     var body: some View {
-        if let bot = model.bot(botID) {
-            let status = model.status(of: bot)
+        if let bot = model.bot(botID), let status = model.status(of: .home(botID)) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     InspectorSection("Status") {
@@ -94,8 +93,8 @@ struct BotInspector: View {
 }
 
 /// The card at the top: the bot's face in a ring that shows its state, the name and one line
-/// under it (the bot's title, or for a task, its repository), a pill while working or after an
-/// error, and a line on what it is doing.
+/// under it (the bot's title, or for a task, its repository), and a line on what it is doing.
+/// The ring and pet reflect this conversation's activity.
 struct AvatarCard: View {
     let bot: Bot
     let status: BotStatus
@@ -103,7 +102,7 @@ struct AvatarCard: View {
     let subtitle: String
     /// The account the turn starts on.
     let account: Account
-    var faceSize: CGFloat = 96
+    var faceSize: CGFloat = 67
     /// The pencil in the corner; none without.
     var edit: (() -> Void)?
 
@@ -124,11 +123,7 @@ struct AvatarCard: View {
                         .lineLimit(2)
                 }
             }
-            VStack(spacing: 6) {
-                if status.phase != .idle { StatusPill(state: StatusLook(status)) }
-                detail
-                if status.phase.isActive { IndeterminateBar() }
-            }
+            detail
             .frame(maxWidth: .infinity)
         }
         .padding(EdgeInsets(top: 14, leading: 12, bottom: 12, trailing: 12))
@@ -154,32 +149,23 @@ struct AvatarCard: View {
 
     @ViewBuilder private var detail: some View {
         Group {
-            if let workingOn = status.workingOn, status.phase.isActive {
-                // Home is idle; its tasks work.
+            switch status.phase {
+            case .preparing:
+                Text("Making the task's worktree…")
+            case .starting:
+                Text("Starting \(account.name)…")
+            case .working:
                 if let started = status.runStartedAt {
-                    Text("Working on \(workingOn) · \(Text(started, style: .timer))")
+                    Text("\(status.activity.doing) · \(Text(started, style: .timer))")
                 } else {
-                    Text("Working on \(workingOn)")
+                    Text(status.activity.doing)
                 }
-            } else {
-                switch status.phase {
-                case .preparing:
-                    Text("Making the task's worktree…")
-                case .starting:
-                    Text("Starting \(account.name)…")
-                case .working:
-                    if let started = status.runStartedAt {
-                        Text("\(status.activity.doing) · \(Text(started, style: .timer))")
-                    } else {
-                        Text(status.activity.doing)
-                    }
-                case .failed:
-                    Text(status.lastError ?? "The last turn failed")
-                        .lineLimit(4)
-                        .textSelection(.enabled)
-                case .idle:
-                    Text(status.lastActivity.map { "Last active \(BotInspector.ago($0))" } ?? "No messages yet")
-                }
+            case .failed:
+                Text(status.lastError ?? "The last turn failed")
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+            case .idle:
+                Text(status.lastActivity.map { "Last active \(BotInspector.ago($0))" } ?? "No messages yet")
             }
         }
         .font(.system(size: 12))
@@ -377,7 +363,7 @@ struct TaskRow: View {
     }
 }
 
-/// How a bot's state looks: the ring around its face, its dot and its pill.
+/// A conversation's status ring and the bot list's activity color.
 enum StatusLook {
     case idle, working, error
 
@@ -405,41 +391,10 @@ enum StatusLook {
         }
     }
 
-    var pillBackground: Color {
-        switch self {
-        case .idle: Palette.dynamic(0xE6E2DD, 0x3A3A3F)
-        case .working: Palette.dynamic(0xE9E3FB, 0x352B5C)
-        case .error: Palette.dynamic(0xFBE1DF, 0x4A2220)
-        }
-    }
-
-    var pillText: Color {
-        switch self {
-        case .idle: Palette.dynamic(0x3F3F44, 0xD1D1D6)
-        case .working: Palette.dynamic(0x4B2FB3, 0xCBBCFF)
-        case .error: Palette.dynamic(0x9E2219, 0xFFB4AD)
-        }
-    }
-}
-
-struct StatusPill: View {
-    let state: StatusLook
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(state.dot).frame(width: 7, height: 7)
-            Text(state.label)
-        }
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(state.pillText)
-        .padding(.horizontal, 12)
-        .frame(height: 26)
-        .background(Capsule().fill(state.pillBackground))
-    }
 }
 
 /// A bot's face in a ring: grey when idle, a spinning violet arc while it works, red after a
-/// failed turn; a dot in the corner says the same.
+/// failed turn. This is the character card's only status indicator.
 struct StatusAvatar: View {
     let bot: Bot
     let status: BotStatus
@@ -461,14 +416,7 @@ struct StatusAvatar: View {
                     .padding(6)
             }
             .frame(width: size, height: size)
-            .overlay(alignment: .bottomTrailing) {
-                Circle()
-                    .fill(look.dot)
-                    .frame(width: 15, height: 15)
-                    .overlay(Circle().stroke(Palette.card, lineWidth: 3))
-                    .opacity(moving ? 0.675 + 0.325 * cos(t / 1.2 * 2 * .pi) : 1)
-                    .padding(7)
-            }
+
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
@@ -512,30 +460,6 @@ struct BotFace: View {
                     .frame(width: geometry.size.width, height: geometry.size.height)
             }
         }
-    }
-}
-
-/// A slim bar sliding left to right while a turn works.
-struct IndeterminateBar: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.3) / 1.3
-            // Ease in and out, from just off the left to just off the right.
-            let eased = t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2
-            Capsule()
-                .fill(Palette.violet.opacity(0.18))
-                .overlay(alignment: .leading) {
-                    Capsule()
-                        .fill(Palette.violet)
-                        .frame(width: 48)
-                        .offset(x: -48 + eased * 168)
-                }
-                .clipShape(Capsule())
-        }
-        .frame(width: 120, height: 3)
-        .accessibilityHidden(true)
     }
 }
 

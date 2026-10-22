@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A roomy writing area above the current account, generation controls and Send/Stop.
+/// A roomy writing area that stays usable while the bot works. Stop and Send are separate actions.
 struct Composer<Controls: View>: View {
     @Binding var draft: String
     var focused: FocusState<Bool>.Binding
@@ -23,14 +23,14 @@ struct Composer<Controls: View>: View {
                 .onSubmit(onSend)
                 .padding(.horizontal, 4)
                 .accessibilityLabel(placeholder)
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 controls
                 if running {
                     button("stop.fill", label: "Stop", help: "Stop (⌘.)", action: onStop)
-                } else {
-                    button("arrow.up", label: "Send", help: "Send (Return; Option-Return for a new line)", action: onSend)
-                        .disabled(isEmpty)
                 }
+                button("arrow.up", label: running ? "Queue message" : "Send", enabled: !isEmpty,
+                       help: running ? "Queue after this turn (Return; Option-Return for a new line)"
+                           : "Send (Return; Option-Return for a new line)", action: onSend)
             }
         }
         .padding(14)
@@ -42,15 +42,16 @@ struct Composer<Controls: View>: View {
         .shadow(color: .black.opacity(0.05), radius: 12, y: 3)
     }
 
-    private func button(_ symbol: String, label: String, help: String, action: @escaping () -> Void) -> some View {
+    private func button(_ symbol: String, label: String, enabled: Bool = true, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 14, weight: .semibold))
                 .frame(width: 32, height: 32)
-                .foregroundStyle(isEmpty && !running ? Color.secondary : Color(nsColor: .controlBackgroundColor))
-                .background(Circle().fill(isEmpty && !running ? Color.primary.opacity(0.08) : Color.primary))
+                .foregroundStyle(enabled ? Color(nsColor: .controlBackgroundColor) : Color.secondary)
+                .background(Circle().fill(enabled ? Color.primary : Color.primary.opacity(0.08)))
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
         .accessibilityLabel(label)
         .help(help)
     }
