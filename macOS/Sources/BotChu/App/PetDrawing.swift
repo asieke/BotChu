@@ -99,16 +99,21 @@ extension AppModel {
         let home = BotHome(workspace: bot.workspace)
         let staging = PetHatching.stagingURL(for: home)
         let files = FileManager.default
+        // A redraw with the same appearance keeps the pet's look: its base image is reused.
+        let keptBase = staging.appendingPathComponent(PetHatching.keptBaseFile)
+        let keeping = PetHatching.baseToKeep(appearance: appearance, pet: home.petURL)
         do {
             // A drawing that failed before is kept for a look until the next one starts.
             if files.fileExists(atPath: staging.path) { try files.trashItem(at: staging, resultingItemURL: nil) }
             try files.createDirectory(at: staging, withIntermediateDirectories: true)
+            if let keeping { try files.copyItem(at: keeping, to: keptBase) }
+            try appearance.write(to: staging.appendingPathComponent(PetHatching.appearanceFile), atomically: true, encoding: .utf8)
         } catch {
             petDrawings[id] = PetDrawing(phase: .failed("Couldn't prepare \(staging.path): \(error.localizedDescription)"))
             return
         }
         let prompt = PetHatching.prompt(petName: bot.name, appearance: appearance, skill: skill, python: python,
-                                        folder: staging.path)
+                                        folder: staging.path, keptBase: keeping == nil ? nil : keptBase.path)
         let lastMessage = staging.appendingPathComponent(PetHatching.lastMessageFile)
         let invocation = CommandBuilder.codexJob(prompt: prompt, outputFile: lastMessage.path)
         let command = settings.command(for: account)

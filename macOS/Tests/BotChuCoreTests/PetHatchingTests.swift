@@ -36,6 +36,36 @@ import Testing
         }
     }
 
+    @Test func promptAsksForGentleMotionAndPoseReferences() {
+        let prompt = PetHatching.prompt(petName: "M", appearance: "a monkey", skill: "/s", python: "/p", folder: "/w/d")
+        #expect(prompt.contains("Keep every motion small and gentle"))
+        #expect(prompt.contains("In `idle`, only breathing and a blink"))
+        #expect(prompt.contains("No reference images."))
+        #expect(prompt.contains("Also attach /w/d/run/extras/testing/decoded/running.png as the pose to match."))
+        let order = PetActivitySpec.all.map(\.id)
+        #expect(order.firstIndex(of: "testing")! < order.firstIndex(of: "coding")!)
+        let kept = PetHatching.prompt(petName: "M", appearance: "a monkey", skill: "/s", python: "/p", folder: "/w/d",
+                                      keptBase: "/w/d/kept-base.png")
+        #expect(kept.contains("Keep this pet's existing look: pass /w/d/kept-base.png to prepare_pet_run.py as --reference."))
+        #expect(!kept.contains("No reference images."))
+    }
+
+    @Test func redrawKeepsTheLookOnlyForTheSameAppearance() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pet = root.appendingPathComponent("pet")
+        #expect(PetHatching.baseToKeep(appearance: "a monkey", pet: pet) == nil)
+        try write("png", "pet/run/references/canonical-base.png")
+        // Older pets: the skill's notes start with the appearance.
+        try write(#"{"pet_notes":"A sweet cuddly plush monkey. Soft cocoa-brown plush."}"#, "pet/run/pet_request.json")
+        #expect(PetHatching.baseToKeep(appearance: " A sweet cuddly plush monkey. ", pet: pet)?.lastPathComponent == "canonical-base.png")
+        #expect(PetHatching.baseToKeep(appearance: "A robot", pet: pet) == nil)
+        // Newer pets record the appearance they were drawn from.
+        try write("A robot", "pet/appearance.txt")
+        #expect(PetHatching.baseToKeep(appearance: "A robot", pet: pet) != nil)
+        #expect(PetHatching.baseToKeep(appearance: "A sweet cuddly plush monkey.", pet: pet) == nil)
+        #expect(PetHatching.baseToKeep(appearance: "  ", pet: pet) == nil)
+    }
+
     @Test func skillAndPythonCandidates() {
         #expect(PetHatching.skillCandidates(accountID: "codex-dev", home: "/Users/a") == [
             "/Users/a/.codex-dev/skills/hatch-pet", "/Users/a/.agents/skills/hatch-pet", "/Users/a/.codex/skills/hatch-pet"])
