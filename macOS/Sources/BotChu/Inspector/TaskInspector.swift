@@ -2,9 +2,7 @@ import AppKit
 import SwiftUI
 import BotChuCore
 
-/// The status sidebar for a task: its bot's face and the task's state in a card, then the task
-/// (repository, machine, issue, branch and pull request), what it runs on, its account usage, session,
-/// conversation and worktree, and the actions on it.
+/// A task's character and the same four inspector areas as Home, using this task's data and actions.
 struct TaskInspector: View {
     @Environment(AppModel.self) private var model
     let target: ChatTarget
@@ -13,14 +11,16 @@ struct TaskInspector: View {
 
     var body: some View {
         if let bot = model.bot(target.botID), let task = model.task(target), let status = model.status(of: target) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    let machine = model.machineName(task.hostID, fallback: task.hostName)
-                    InspectorSection("Status") {
-                        AvatarCard(bot: bot, status: status, title: task.title,
-                               subtitle: "\(bot.name) · \(task.repo)" + (task.isRemote ? " · on \(machine)" : ""),
-                                   account: task.account, faceSize: 50)
-                    }
+            let machine = model.machineName(task.hostID, fallback: task.hostName)
+            InspectorPanel {
+                InspectorSection("Status") {
+                    AvatarCard(bot: bot, status: status, title: task.title,
+                           subtitle: "\(bot.name) · \(task.repo)" + (task.isRemote ? " · on \(machine)" : ""),
+                               account: task.account, faceSize: 50)
+                }
+            } content: { tab in
+                switch tab {
+                case .activity:
                     InspectorSection("Task") {
                         InspectorCard {
                             InspectorRow("Repository", value: task.repo)
@@ -69,16 +69,6 @@ struct TaskInspector: View {
                             InspectorRow("Started by", value: task.origin == .home ? "\(bot.name), from Home" : "You", last: true)
                         }
                     }
-                    InspectorSection("Runs on") {
-                        RunsOnCard(settings: task, target: target, changeAccount: model.isRunning(target) ? nil : { model.setAccount($0, for: target) })
-                    }
-                    let usageRequest = UsageRequest(account: task.account, command: model.settings.command(for: task.account),
-                        credentialRevision: task.account.kind == .pi ? model.settings.usageCredentialRevision : 0)
-                    AccountUsageSection(request: usageRequest, isRunning: model.isRunning(target))
-                        .id(usageRequest)
-                    InspectorSection("Session") {
-                        SessionCard(session: status.session)
-                    }
                     InspectorSection("Conversation") {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                             StatTile(value: "\(status.messageCount)", label: "Messages", tabular: true)
@@ -87,7 +77,18 @@ struct TaskInspector: View {
                             StatTile(value: task.createdAt.formatted(.dateTime.month(.abbreviated).day()), label: "Started")
                         }
                     }
-                    MemorySection(botID: target.botID)
+                case .model:
+                    InspectorSection("Runs on") {
+                        RunsOnCard(settings: task, target: target, changeAccount: model.isRunning(target) ? nil : { model.setAccount($0, for: target) })
+                    }
+                    let usageRequest = UsageRequest(account: task.account, command: model.settings.command(for: task.account),
+                        credentialRevision: task.account.kind == .pi ? model.settings.usageCredentialRevision : 0)
+                    AccountUsageSection(request: usageRequest, isRunning: model.isRunning(target))
+                        .id(usageRequest)
+                case .session:
+                    InspectorSection("Session") {
+                        SessionCard(session: status.session)
+                    }
                     InspectorSection("Worktree", trailing: task.isRemote ? "on \(machine)" : nil) {
                         InspectorCard(padded: true) {
                             Group {
@@ -130,14 +131,10 @@ struct TaskInspector: View {
                         .buttonStyle(InspectorButtonStyle(fill: true))
                         .disabled(task.folder == nil)
                     }
+                case .memory:
+                    MemorySection(botID: target.botID)
                 }
-                .padding(EdgeInsets(top: 8, leading: 16, bottom: 24, trailing: 16))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // Explicit, so the sidebar's vibrancy doesn't recolor text on these opaque cards.
-                .foregroundStyle(Palette.text)
-            }
-            .background(Palette.sidebar)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+            } actions: {
                 actions
             }
             .task(id: "\(task.id)|\(task.pullRequest ?? 0)|\(status.phase.isActive)") {

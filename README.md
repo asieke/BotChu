@@ -156,16 +156,18 @@ request.
     what it is doing with the turn's running time (or its last activity or error). The compact
     character and ring convey status
     without a dot or status pill. The card and pet animation reflect only the shown Home or task;
-    the bot list still shows activity across its tasks. Grouped cards below give the account, agent and model it runs on, **Usage** (between
-    **Runs on** and **Session**), whether the next message continues its CLI session (with its id
-    to copy), its open tasks, its message and tool-call counts, last
-    activity and creation date, its memory and personality files, and its workspace, with Edit and New
-    Session. On a task's tab it shows the task instead: its repository, the computer it works on,
-    issue, branch (or, for a review, the commit it is detached at), pull request (and whether it is
-    open, merged or closed), the account (which can change there), that account's usage, session
-    and worktree (in Finder or Terminal, or over SSH in Terminal), with Close Task and New Session. Its colors
-    follow light and dark mode. Every section, including Status, collapses from its heading; the
-    app remembers expanded sections across tabs and launches. **Memory** has two cards matching
+    the bot list still shows activity across its tasks. Four icon tabs sit below the character,
+    in a rounded bar with a raised selected segment: **Activity** (tasks and conversation stats),
+    **Model & Usage** (account, agent, model, reasoning and allowance), **Session** (the CLI session
+    and workspace or worktree), and **Memory** (memory and personality). Hover for tab names, or
+    focus the bar and use Left/Right arrows. The selected area is remembered across conversations
+    and launches; its data always belongs to the shown Home or task. The character, tabs and bottom
+    actions stay visible while the selected area's content scrolls. Home keeps Edit and New Session;
+    tasks keep Close Task and New Session. Task Activity includes the repository, computer, issue,
+    branch or review commit, and pull request state. A task's account can change in Model & Usage;
+    Session keeps Finder, Terminal and remote SSH controls. Colors follow light and dark mode.
+    Sections within each area, and Status above the tabs, still collapse from their headings, with
+    their expansion remembered. **Memory** has two cards matching
     Conversation: **MEMORY.md** and **SOUL.md**. Each opens an in-app Markdown editor at half the
     parent window's width and height, with Save (⌘S), Cancel (Escape), and Reload. Saving preserves exact
     Markdown and refuses to overwrite a file changed on disk since it was opened. Saved changes
@@ -176,7 +178,7 @@ request.
     on that account. Claude Code and Antigravity use their native `/usage` commands; Codex uses
     `account/rateLimits/read`. They run the command configured in Settings, with the CLI managing
     its own login. Checks run in a temporary folder, outside bot conversations, every five minutes
-    while the status sidebar is open, after turns, or with Refresh (at most once every 30 seconds).
+    while **Model & Usage** is visible, after turns while that area is open, or with Refresh (at most once every 30 seconds).
     Muse needs one brief `Reply with OK.` request to learn its allowance: it uses isolated,
     temporary host state, checks hourly automatically, and at most once every five minutes after
     a turn or with Refresh. This spends a small amount of its allowance. OpenRouter shows the
@@ -234,7 +236,8 @@ request.
     from a remote task.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, model-picker keyboard interaction and persisted choices,
-    Markdown editor sizing and Save/Cancel, collapsing status sections, and the main window's
+    Markdown editor sizing and Save/Cancel, collapsing status sections, inspector tab navigation and
+    restored selection, conversation-scoped allowance reads, and the main window's
     layout at its narrowest. These share a serialized suite because AppKit
     window focus is global; all use isolated windows and no real bot data.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
@@ -320,6 +323,8 @@ request.
   `BOTCHU_ACCOUNT`, `BOTCHU_MODEL` and `BOTCHU_EFFORT` set the first demo bot's generation choices;
   `BOTCHU_DEFAULT_MODEL` supplies an isolated OpenRouter default. `BOTCHU_OPEN=model` or `effort`
   opens the composer's picker, and `inspector-model` or `inspector-effort` opens the sidebar's.
+  `BOTCHU_INSPECTOR=activity`, `model`, `session` or `memory` selects a status sidebar tab;
+  `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
   `BOTCHU_WINDOW=compact` checks the minimum window width.
 - Account allowance end to end: `swift run --package-path macOS botchu-smoke --usage [account id …]`
   reads each account's usage through the same client as the inspector. It prints only the normalized

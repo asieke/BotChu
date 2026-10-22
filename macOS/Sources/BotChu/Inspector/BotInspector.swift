@@ -2,30 +2,21 @@ import AppKit
 import SwiftUI
 import BotChuCore
 
-/// The right-hand sidebar for a bot's Home: its face and state in a card, then what it runs on, its
-/// account usage, session, tasks, conversation, memory and workspace in grouped cards, and the actions on it.
+/// Home's character and four inspector areas, scoped to this bot's Home conversation.
 struct BotInspector: View {
     @Environment(AppModel.self) private var model
     let botID: UUID
 
     var body: some View {
         if let bot = model.bot(botID), let status = model.status(of: .home(botID)) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    InspectorSection("Status") {
-                        AvatarCard(bot: bot, status: status, title: bot.name, subtitle: bot.title, account: bot.account) { model.edit(botID) }
-                        PetJobStatus(botID: botID)
-                    }
-                    InspectorSection("Runs on") {
-                        RunsOnCard(settings: bot, target: .home(botID))
-                    }
-                    let usageRequest = UsageRequest(account: bot.account, command: model.settings.command(for: bot.account),
-                        credentialRevision: bot.account.kind == .pi ? model.settings.usageCredentialRevision : 0)
-                    AccountUsageSection(request: usageRequest, isRunning: model.isRunning(.home(botID)))
-                        .id(usageRequest)
-                    InspectorSection("Session") {
-                        SessionCard(session: status.session)
-                    }
+            InspectorPanel {
+                InspectorSection("Status") {
+                    AvatarCard(bot: bot, status: status, title: bot.name, subtitle: bot.title, account: bot.account) { model.edit(botID) }
+                    PetJobStatus(botID: botID)
+                }
+            } content: { tab in
+                switch tab {
+                case .activity:
                     TasksSection(botID: botID)
                     InspectorSection("Conversation") {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
@@ -35,7 +26,18 @@ struct BotInspector: View {
                             StatTile(value: bot.createdAt.formatted(.dateTime.month(.abbreviated).day()), label: "Created")
                         }
                     }
-                    MemorySection(botID: botID)
+                case .model:
+                    InspectorSection("Runs on") {
+                        RunsOnCard(settings: bot, target: .home(botID))
+                    }
+                    let usageRequest = UsageRequest(account: bot.account, command: model.settings.command(for: bot.account),
+                        credentialRevision: bot.account.kind == .pi ? model.settings.usageCredentialRevision : 0)
+                    AccountUsageSection(request: usageRequest, isRunning: model.isRunning(.home(botID)))
+                        .id(usageRequest)
+                case .session:
+                    InspectorSection("Session") {
+                        SessionCard(session: status.session)
+                    }
                     InspectorSection("Workspace") {
                         InspectorCard(padded: true) {
                             Text((bot.workspace as NSString).abbreviatingWithTildeInPath)
@@ -57,14 +59,10 @@ struct BotInspector: View {
                         }
                         .buttonStyle(InspectorButtonStyle(fill: true))
                     }
+                case .memory:
+                    MemorySection(botID: botID)
                 }
-                .padding(EdgeInsets(top: 8, leading: 16, bottom: 24, trailing: 16))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // Explicit, so the sidebar's vibrancy doesn't recolor text on these opaque cards.
-                .foregroundStyle(Palette.text)
-            }
-            .background(Palette.sidebar)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+            } actions: {
                 actions
             }
         }
@@ -115,6 +113,9 @@ struct AvatarCard: View {
                     .kerning(-0.2)
                     .accessibilityLabel("\(title), \(StatusLook(status).label)")
                     .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(title)
                 if !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.system(size: 13))
