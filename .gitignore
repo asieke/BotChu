@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+node_modules/
+__pycache__/
+.venv/
+dist/
+build/
+*.log
+.DS_Store
+.claude/worktrees/
+# SwiftPM build output and the built app (macOS/build/).
+.build/
+.swiftpm/
+*.app/
