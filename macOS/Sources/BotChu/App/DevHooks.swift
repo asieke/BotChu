@@ -8,7 +8,7 @@ import BotChuCore
 ///   their own `defaults` domain (`local.BotChu.dev`), so a throwaway run never changes the real ones.
 /// - `BOTCHU_SNAPSHOT`: write a PNG of each window into this folder every second, and of the sidebar's
 ///   rows (`sidebar.png`), which the window's picture leaves out.
-/// - `BOTCHU_OPEN`: open `editor` (a new bot), `task` (New Task for the selected bot) or `settings` at launch.
+/// - `BOTCHU_OPEN`: open `editor` (a new bot), `task` (New Task), `memory`, `soul`, or `settings` at launch.
 /// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
 /// - `BOTCHU_OPEN=model|effort|inspector-model|inspector-effort`: open a generation picker.
 /// - `BOTCHU_DEFAULT_MODEL`: an OpenRouter default for a throwaway run only.
@@ -96,6 +96,8 @@ enum DevHooks {
         switch env["BOTCHU_OPEN"] {
         case "editor": model.newBot()
         case "task": if let id = model.selection { model.newTask(for: id) }
+        case "memory": if let id = model.selection { model.editDocument(.memory, for: id) }
+        case "soul": if let id = model.selection { model.editDocument(.soul, for: id) }
         case "settings": openSettings()
         default: break
         }

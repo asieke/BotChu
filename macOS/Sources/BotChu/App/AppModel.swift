@@ -15,6 +15,12 @@ struct TaskSheetRequest: Identifiable {
     var botID: UUID
 }
 
+struct DocumentEditorRequest: Identifiable {
+    let id = UUID()
+    let bot: Bot
+    let document: BotDocument
+}
+
 /// A conversation in the window: a bot's own (its Home), or one of its tasks.
 struct ChatTarget: Hashable {
     var botID: UUID
@@ -58,6 +64,7 @@ final class AppModel {
     @ObservationIgnored var petTasks: [UUID: Task<Void, Never>] = [:]
     var editor: EditorRequest?
     var taskSheet: TaskSheetRequest?
+    var documentEditor: DocumentEditorRequest?
     let settings: AppSettings
     let usage: UsageCache
     let modelCatalog = ModelCatalog()
@@ -176,9 +183,18 @@ final class AppModel {
         editor = EditorRequest(bot: bot, isNew: false)
     }
 
+    func editDocument(_ document: BotDocument, for id: UUID) {
+        guard let bot = bot(id) else { return }
+        documentEditor = DocumentEditorRequest(bot: bot, document: document)
+    }
+
     /// Why a bot can't use `path` as its workspace, or nil when it can.
     func workspaceProblem(_ path: String, for id: UUID) -> String? {
-        Workspace.problem(with: path, for: id, among: bots, botsRoot: settings.expandedBotsRoot)
+        if let bot = bot(id), isBusy(id),
+           URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL != URL(fileURLWithPath: bot.workspace).standardizedFileURL {
+            return "Finish or stop this bot's turns before moving its workspace."
+        }
+        return Workspace.problem(with: path, for: id, among: bots, botsRoot: settings.expandedBotsRoot)
     }
 
     /// The default workspace for a new bot named `name`: its slug under the bots folder, numbered
@@ -214,12 +230,17 @@ final class AppModel {
         var bot = edited
         bot.workspace = (bot.workspace as NSString).expandingTildeInPath
         if bot.emoji.isEmpty { bot.emoji = "🤖" }
+        if let problem = workspaceProblem(bot.workspace, for: bot.id) {
+            append(ChatMessage(role: .error, text: problem), to: .home(bot.id))
+            return
+        }
         if bot.workspace != bots[i].workspace {
             // The bot's history, logs and tasks move with it.
             do {
                 try BotHome(workspace: bots[i].workspace).move(toWorkspace: bot.workspace)
             } catch {
                 append(ChatMessage(role: .error, text: "Couldn't move this bot's history to \(bot.workspace): \(error.localizedDescription)"), to: .home(bot.id))
+                return
             }
         }
         let moved = bot.workspace != bots[i].workspace
@@ -790,7 +811,9 @@ final class AppModel {
         let id = bot.id
         let account = current.account
         let resume = current.resumableSessionID
+        prepareWorkspace(bot)
         let memory = Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.memoryFile))
+        let soul = Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.soulFile))
         let sharedMemory = Workspace.read(settings.sharedMemoryPath)
         let directory: String
         var machine = Machine.thisMac
@@ -809,14 +832,13 @@ final class AppModel {
                 // A task on a host can't open the bot's folder, so it hears the recent Home conversation.
                 preamble = BotContext.taskPreamble(bot: bot, task: task, memory: memory, sharedMemory: sharedMemory, history: history,
                                                    machine: machineDescription(of: task),
-                                                   home: machine.isRemote ? thread(.home(id)) : [])
+                                                   home: machine.isRemote ? thread(.home(id)) : [], soul: soul)
             }
         } else {
-            prepareWorkspace(bot)
             directory = bot.workspace
             if resume == nil {
                 preamble = BotContext.sessionPreamble(bot: bot, memory: memory, sharedMemory: sharedMemory, history: history,
-                                                      tasks: openTasks(of: id).map { report(on: $0, of: id, replyLimit: 240) })
+                                                      tasks: openTasks(of: id).map { report(on: $0, of: id, replyLimit: 240) }, soul: soul)
             }
         }
         let prompt = BotContext.prompt(for: text, preamble: preamble, updates: updates)

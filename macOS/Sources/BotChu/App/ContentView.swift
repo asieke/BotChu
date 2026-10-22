@@ -8,6 +8,7 @@ struct ContentView: View {
     @Environment(\.openSettings) private var openSettings
     @AppStorage("showsStatus") private var showsStatus = true
     @State private var hooksStarted = false
+    @State private var contentSize = CGSize(width: 1240, height: 800)
 
     var body: some View {
         @Bindable var model = model
@@ -21,6 +22,13 @@ struct ContentView: View {
         // with the sidebar's and the status's widths (the split view counts the sidebar twice). A
         // window narrower than that, which a fixed minimum allowed, lays out forever and AppKit aborts.
         .frame(minHeight: 520)
+        .background {
+            GeometryReader { geometry in
+                Color.clear
+                    .onAppear { contentSize = geometry.size }
+                    .onChange(of: geometry.size) { _, size in contentSize = size }
+            }
+        }
         .sheet(item: $model.editor) { request in
             BotEditor(request: request)
                 .environment(model)
@@ -28,6 +36,10 @@ struct ContentView: View {
         .sheet(item: $model.taskSheet) { request in
             NewTaskSheet(botID: request.botID)
                 .environment(model)
+        }
+        .sheet(item: $model.documentEditor) { request in
+            BotDocumentEditor(request: request)
+                .frame(width: contentSize.width * 0.5, height: contentSize.height * 0.5)
         }
         .task {
             guard !hooksStarted else { return }

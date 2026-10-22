@@ -152,13 +152,33 @@ public struct BotHome: Sendable {
         try handle.write(contentsOf: Data(text.utf8))
     }
 
-    /// Moves the folder elsewhere when a bot's workspace changes.
+    /// Moves the bot and its editable Markdown together, rejecting collisions before moving anything.
     public func move(toWorkspace workspace: String) throws {
         let destination = BotHome(workspace: workspace)
-        guard FileManager.default.fileExists(atPath: url.path),
-              !FileManager.default.fileExists(atPath: destination.url.path) else { return }
-        try FileManager.default.createDirectory(at: destination.url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager.default.moveItem(at: url, to: destination.url)
+        let files = FileManager.default
+        let sourceFolder = url.deletingLastPathComponent()
+        let targetFolder = destination.url.deletingLastPathComponent()
+        guard sourceFolder.standardizedFileURL != targetFolder.standardizedFileURL else { return }
+        let sources = ([url] + BotDocument.allCases.map { sourceFolder.appendingPathComponent($0.rawValue) })
+            .filter { files.fileExists(atPath: $0.path) }
+        for source in sources {
+            let target = targetFolder.appendingPathComponent(source.lastPathComponent)
+            guard !files.fileExists(atPath: target.path) else {
+                throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
+            }
+        }
+        try files.createDirectory(at: targetFolder, withIntermediateDirectories: true)
+        var moved: [(source: URL, target: URL)] = []
+        do {
+            for source in sources {
+                let target = targetFolder.appendingPathComponent(source.lastPathComponent)
+                try files.moveItem(at: source, to: target)
+                moved.append((source, target))
+            }
+        } catch {
+            for entry in moved.reversed() { try? files.moveItem(at: entry.target, to: entry.source) }
+            throw error
+        }
     }
 
     /// Puts the folder in the Trash, when its bot is deleted; the rest of the workspace stays.
