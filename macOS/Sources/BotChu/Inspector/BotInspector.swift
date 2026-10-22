@@ -62,8 +62,7 @@ struct BotInspector: View {
                             .controlSize(.small)
                     }
                 }
-                // The inspector's scroll view already leaves room below the toolbar.
-                .padding([.horizontal, .bottom], 16)
+                .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {

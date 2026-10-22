@@ -54,7 +54,9 @@ the Mac, and runs in its own workspace folder on this Mac.
     context and store.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
     `macOS/build/`), signed with the local "Apple Development" certificate when there is one, ad hoc
-    otherwise. `install.sh` builds into `~/Applications`, restarts BotChu if it was running, and
+    otherwise. It records the SDK the app was linked against in the binary (`vtool`), because
+    SwiftPM's default build system records the deployment target there instead, and macOS then
+    runs the app with the old window design, whose toolbar overhangs the sidebar. `install.sh` builds into `~/Applications`, restarts BotChu if it was running, and
     smoke-tests that it starts. `test.sh` runs the unit tests. `ui-review.sh` opens a build on
     throwaway data for checking its screens (see **Test**).
 - Data: `~/Library/Application Support/BotChu/` holds `bots.json` and one `threads/<bot id>.json` per
