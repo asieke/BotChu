@@ -4,14 +4,13 @@ A minimal, open-source, native macOS app for persistent AI bots, in the spirit o
 [rakazo](https://github.com/elie222/rakazo). Bots are listed down the left; the selected bot's chat
 fills the window. Each bot is driven by a coding-agent CLI that is already installed and signed in on
 the Mac, and runs in its own workspace folder on this Mac. A bot can also work on tasks in your
-GitHub repositories, in parallel, each in its own git worktree and in a tab beside its own
-conversation: on this Mac, or on another computer it reaches over SSH. A task can also review a pull
-request.
+GitHub repositories, in parallel, each in its own git worktree and nested under its bot in the left
+sidebar: on this Mac, or on another computer it reaches over SSH. A task can also review a pull request.
 
 ## Scope
 - Does:
   - **Workspace:** the left sidebar has **Projects**, **Agents**, and **Providers**, followed by
-    the bots’ conversations. Opening a gallery keeps the selected bot’s task tab and unsent draft;
+    the bots’ conversations. Opening a gallery keeps the selected conversation and unsent draft;
     turns that finish while a gallery is shown still get an unread badge.
   - **Projects:** searchable gallery and table views, one project per non-archived GitHub repository
     returned by `gh` for your account and organizations. Cards show the description and visibility
@@ -112,10 +111,12 @@ request.
     taken, so tasks never share a worktree. The main checkout stays on its branch, and BotChu writes
     nothing into the repository: a task's first message opens with the bot's identity, instructions
     and memory (which stays in the bot's folder), where the task is and what it is, as the workspace
-    standard hands work to an agent. Tasks show as tabs above the chat (⌃Tab moves between them),
-    each showing whether it is working, failed, or has news since you last looked.
-    Closing a tab keeps the task's record, conversation and worktree; Home's status lists closed
-    tasks to open again. A worktree goes once its pull request merges, with the repository's
+    standard hands work to an agent. Tasks nest below an expandable bot row in the left sidebar
+    (⌃Tab moves between Home and its open tasks). Each row shows activity, elapsed time while running, failure or unread state;
+    the bot row counts running tasks. The disclosure arrow expands without changing the conversation,
+    the bot row opens Home, and **+ New task** starts another task. Task context menus keep workspace,
+    browser, new-session and close actions. Closing a task keeps its record, conversation and worktree;
+    Home's status lists closed tasks to open again. A worktree goes once its pull request merges, with the repository's
     `scripts/worktree.sh --tidy`; if it is gone, the task's next message makes it again.
   - **Pull request reviews:** for a pull request, New Task can also **Review it** or **Review and
     comment**. The review works in a temporary worktree detached at the pull request's head (also
@@ -131,17 +132,30 @@ request.
     Stop interrupts the CLI there. The bot's folder stays on this Mac: the task's first message
     brings the bot's identity, instructions and memory and a recap of its Home conversation, and
     notes the bot writes in `<remember>…</remember>` in a reply are added to its `MEMORY.md` here.
-    The tab and the status sidebar name the computer, and **Terminal** opens a shell in the
+    The status sidebar names the computer, and **Terminal** opens a shell in the
     worktree there. The OpenRouter key never leaves this Mac, so Pi on a host needs that host's own
     `OPENROUTER_API_KEY`.
   - **Home coordinates:** a bot asks for a task itself by writing a JSON request into
     `.botchu/dispatch/` in its folder (`{"repo": "owner/name", "issue": 48, "task": "…"}`, or
     `"review": 12` with `"comment": true` to post it, and `"machine"` for a host), as its
     `AGENTS.md` explains. While a Home turn runs, BotChu takes requests within seconds and starts
-    each in its own tab. Home gets a receipt when a task starts, ends a turn or fails (with an Open
-    link to its tab), or can't start, and its next turn opens with a report on those tasks: their
+    each in its own sidebar row. Home gets a receipt when a task starts, ends a turn or fails (with an Open
+    link to its conversation), or can't start, and its next turn opens with a report on those tasks: their
     state, pull request and the start of their last reply. A new Home session also lists the open
     tasks. The sidebar row counts the bot's conversations with news.
+  - **Sub-agents:** Home, tasks and delegated runs can call another configured bot with
+    `botchu-subagent call`, or launch several with `spawn` and collect their handoffs with `wait`.
+    `list` shows the available bots. Each child uses the called bot's identity, soul, memory, account,
+    model and effort in a fresh CLI session; its Home conversation is separate. By default it works
+    in the caller's workspace, on the same machine; `--workspace bot_home` uses the called bot's
+    folder on this Mac. Shared-workspace delegates should own separate files or review without editing.
+    The **Sub-agents** inspector shows expandable nested runs, live tools/replies, duration, handoffs,
+    Copy and Stop. Home also groups delegations belonging to its tasks. These runs never add left
+    sidebar rows. Stop cascades through descendants; callers must wait before finishing their turn.
+    Three nesting levels, twelve concurrent children and sixty-four delegations per root turn bound
+    runaway fan-out. Interrupted records become stopped on relaunch. The helper needs Python 3 on
+    each execution machine; SSH mailboxes are polled independently of CLI output. See
+    [delegation protocol](docs/subagents.md) for lifecycle and persistence details.
   - **Message box:** a multiline writing area with account, model/effort and send/stop controls in
     its bottom row. Return sends; Option-Return inserts a new line. Send stays available during a
     run: follow-ups appear in a queue above the composer and send in order after each successful
@@ -193,8 +207,8 @@ request.
     works, red after a failed turn); plain text gives its activity and running time, last activity,
     or error. The character and ring convey status
     without a dot or status pill. The card and pet animation reflect only the shown Home or task;
-    the bot list still shows activity across its tasks. Four icon tabs sit below the character,
-    in a rounded bar with a raised selected segment: **Activity** (tasks and conversation stats),
+    the bot list still shows activity across its tasks. Five icon tabs sit below the character,
+    in a rounded bar with a raised selected segment: **Activity** (tasks and conversation stats), **Sub-agents** (delegated work),
     **Model & Usage** (account, agent, model, reasoning and allowance), **Session** (the CLI session
     and workspace controls), and **Memory** (memory and personality). Hover for tab names, or
     focus the bar and use Left/Right arrows. The selected area is remembered across conversations
@@ -203,7 +217,7 @@ request.
     tasks keep Close Task and New Session. Task Activity includes the repository, computer and
     linked issue. Home and task accounts can change in Model & Usage; Session keeps Finder, Terminal and
     remote SSH controls. Branch names, review commits, generated pull request metadata and task
-    authorship are managed internally and omitted from the task form, cards, headers, tab tooltips
+    authorship are managed internally and omitted from the task form, cards, headers, sidebar tooltips
     and new automatic progress notes. Explicitly choosing a pull request to continue or review is
     still available in New Task. Colors follow light and dark mode.
     Sections within each area, and Status above the tabs, still collapse from their headings, with
@@ -259,12 +273,14 @@ request.
     review worktrees, and what `gh` says about your repositories, issues and pull requests
     (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
     or proposing it through GitHub with retryable, metadata-only PRs (`ProjectGitHub.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
-    a CLI through the login shell, `zsh -l`, or on a host over `ssh` (`AgentRun.swift`).
+    a CLI through the login shell, `zsh -l`, or on a host over `ssh` (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
+    `Subagents.swift`, `Store.swift`, `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
+    handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
     in standard system materials: `App/` (the app, window, model, settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`),
-    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (the tab bar, messages and the composer), `Inspector/` (the
+    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (messages and the composer), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown and New Task sheets), `Settings/` (with
     the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, and the pet's looping video).
@@ -335,7 +351,10 @@ request.
   --report` posts the `check` status a PR needs before merging. `scripts/verify-pr.sh`, given a PR
   number, tests someone else's PR on this machine and posts its `check` status; with `--no-report`
   first, it posts nothing (for reviews). There is no CI: the checks need a Mac with full Xcode.
-- `macOS/test.sh` also runs the project-loading regression tests in Release. They check every
+- `macOS/test.sh` requires every test bundle to finish and rejects explicit failure summaries,
+  even if SwiftPM returns success. The native-click sidebar test runs in its own process because
+  AppKit's window-animation callbacks can stop the Swift test runner's event loop during later
+  tests; all its assertions still run. The script also runs the project-loading regression tests in Release. They check every
   repository result, the four-request limit, and completion of children when navigating away or
   cancelling a load. Swift 6.4 has an [optimizer bug](https://github.com/swiftlang/swift/issues/93208)
   in task-group children returning String-first tuples from `do`/`catch`; project and pet loading
@@ -358,7 +377,7 @@ request.
   Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository).
   `BOTCHU_OPEN=projects`, `agents` or `providers` opens the corresponding workspace gallery.
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
-  `BOTCHU_TAB=<n>` shows the first bot's nth tab (and the message goes there), and
+  `BOTCHU_TAB=<n>` shows the first bot's nth conversation (and the message goes there), and
   `BOTCHU_TASK="hello-world|<task>"` starts a task in the throwaway repository (a real turn).
   Hosts: `BOTCHU_HOST="<nickname>|<ssh host>|<repositories folder>|<machine>|<account>=<command>,…"`
   (several separated by `;`) sets Settings ▸ Hosts, and `BOTCHU_TASK="<owner/name>|<task>|<nickname>"`
@@ -378,7 +397,7 @@ request.
   `BOTCHU_ACCOUNT`, `BOTCHU_MODEL` and `BOTCHU_EFFORT` set the first demo bot's generation choices;
   `BOTCHU_DEFAULT_MODEL` supplies an isolated OpenRouter default. `BOTCHU_OPEN=model` or `effort`
   opens the composer's picker, and `inspector-model` or `inspector-effort` opens the sidebar's.
-  `BOTCHU_INSPECTOR=activity`, `model`, `session` or `memory` selects a status sidebar tab;
+  `BOTCHU_INSPECTOR=activity`, `subagents`, `model`, `session` or `memory` selects a status sidebar tab;
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
   `BOTCHU_WINDOW=compact` checks the minimum window width.
 - Account allowance end to end: `swift run --package-path macOS botchu-smoke --usage [account id …]`

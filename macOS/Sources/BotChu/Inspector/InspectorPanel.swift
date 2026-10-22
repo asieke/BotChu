@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum InspectorTab: String, CaseIterable, Identifiable {
-    case activity, model, session, memory
+    case activity, subagents, model, session, memory
 
     static let storageKey = "inspector.selectedTab"
     var id: Self { self }
@@ -9,6 +9,7 @@ enum InspectorTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .activity: "Activity"
+        case .subagents: "Sub-agents"
         case .model: "Model & Usage"
         case .session: "Session"
         case .memory: "Memory"
@@ -18,6 +19,7 @@ enum InspectorTab: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .activity: "list.bullet"
+        case .subagents: "arrow.triangle.branch"
         case .model: "slider.horizontal.3"
         case .session: "clock.arrow.circlepath"
         case .memory: "touchid"
@@ -29,6 +31,7 @@ enum InspectorTab: String, CaseIterable, Identifiable {
 /// the character, tabs and conversation actions stay in place.
 struct InspectorPanel<Header: View, Content: View, Actions: View>: View {
     @AppStorage(InspectorTab.storageKey) private var selection: InspectorTab = .activity
+    var badgeCounts: [InspectorTab: Int] = [:]
     @ViewBuilder let header: Header
     @ViewBuilder var content: (InspectorTab) -> Content
     @ViewBuilder let actions: Actions
@@ -37,7 +40,7 @@ struct InspectorPanel<Header: View, Content: View, Actions: View>: View {
         VStack(spacing: 0) {
             VStack(spacing: 16) {
                 header
-                InspectorTabBar(selection: $selection)
+                InspectorTabBar(selection: $selection, badgeCounts: badgeCounts)
             }
             .padding(EdgeInsets(top: 8, leading: 16, bottom: 16, trailing: 16))
             ScrollView {
@@ -63,6 +66,7 @@ struct InspectorPanel<Header: View, Content: View, Actions: View>: View {
 
 struct InspectorTabBar: View {
     @Binding var selection: InspectorTab
+    var badgeCounts: [InspectorTab: Int] = [:]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focused: InspectorTab?
     @State private var hovered: InspectorTab?
@@ -94,6 +98,13 @@ struct InspectorTabBar: View {
                                 Capsule().strokeBorder(Palette.violet, lineWidth: 2)
                             }
                         }
+                        .overlay(alignment: .topTrailing) {
+                            if let count = badgeCounts[tab], count > 0 {
+                                Text(String(count)).font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.white).padding(.horizontal, 4).padding(.vertical, 2)
+                                    .background(Capsule().fill(Palette.accent)).allowsHitTesting(false)
+                            }
+                        }
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -102,7 +113,7 @@ struct InspectorTabBar: View {
                 .focusEffectDisabled()
                 .onHover { hovered = $0 ? tab : nil }
                 .help(tab.title)
-                .accessibilityLabel(tab.title)
+                .accessibilityLabel(tab.title + ((badgeCounts[tab] ?? 0) > 0 ? ", \(badgeCounts[tab]!) running" : ""))
                 .accessibilityAddTraits(selection == tab ? .isSelected : [])
                 .accessibilityIdentifier("inspector-tab-\(tab.rawValue)")
                 .overlay(alignment: .trailing) {

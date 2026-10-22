@@ -25,7 +25,7 @@ public final class AgentRun: @unchecked Sendable {
     public init(command: String, invocation: Invocation, directory: URL) {
         remote = nil
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-l", "-c", CommandBuilder.shellScript(command: command), "botchu"] + invocation.arguments
+        process.arguments = ["-l", "-c", Self.delegationShellPrefix(invocation.environment) + CommandBuilder.shellScript(command: command), "botchu"] + invocation.arguments
         process.currentDirectoryURL = directory
         var env = Self.childEnvironment(ProcessInfo.processInfo.environment)
         env["NO_COLOR"] = "1"
@@ -37,12 +37,13 @@ public final class AgentRun: @unchecked Sendable {
         process.standardError = stderr
     }
 
-    /// A run in `folder` on a host. The invocation's environment stays on this Mac (it holds the
-    /// OpenRouter key), so a CLI there uses that machine's own.
+    /// A run in `folder` on a host. Only the explicit delegation context crosses SSH; credentials
+    /// such as the OpenRouter key stay on this Mac, so a CLI there uses that machine's own.
     public init(command: String, invocation: Invocation, on machine: Machine, folder: String) {
         remote = machine
         process.executableURL = URL(fileURLWithPath: Machine.ssh)
-        let script = "export NO_COLOR=1 TERM=dumb; printf '%s %s\\n' \(Self.pidMarker) \"$$\"; "
+        let script = "export NO_COLOR=1 TERM=dumb; " + Self.delegationShellPrefix(invocation.environment)
+            + "printf '%s %s\\n' \(Self.pidMarker) \"$$\"; "
             + CommandBuilder.shellScript(command: command)
         process.arguments = Machine.sshOptions + [machine.destination ?? "",
                                                   Machine.remoteCommand(script: script, arguments: invocation.arguments, in: folder)]
@@ -62,6 +63,20 @@ public final class AgentRun: @unchecked Sendable {
         let names: Set<String> = ["API_TIMEOUT_MS", "BAGGAGE", "DISABLE_AUTOUPDATER", "DISABLE_MICROCOMPACT",
                                   "USE_LOCAL_OAUTH", "USE_STAGING_OAUTH", "OPENROUTER_API_KEY"]
         return env.filter { key, _ in !names.contains(key) && !prefixes.contains(where: key.hasPrefix) }
+    }
+
+    /// Login shell files can replace PATH. Install the helper path afterwards, and export only
+    /// these coordinator-owned values on remote hosts, never the invocation's API credentials.
+    static func delegationShellPrefix(_ environment: [String: String]) -> String {
+        let names = ["BOTCHU_INVOCATION_ID", "BOTCHU_CALLER_BOT_ID", "BOTCHU_CALLER_TASK_ID",
+                     "BOTCHU_CALLER_SUBAGENT_ID", "BOTCHU_CALLER_DEPTH", "BOTCHU_IPC_DIR", "BOTCHU_BIN_DIR"]
+        var script = names.compactMap { name in
+            environment[name].map { "export \(name)=\(Shell.quote($0)); " }
+        }.joined()
+        if let directory = environment["BOTCHU_BIN_DIR"], !directory.isEmpty {
+            script += "export PATH=\(Shell.quote(directory)):\"$PATH\"; "
+        }
+        return script
     }
 
     public func start() throws {
