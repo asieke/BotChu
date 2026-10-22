@@ -19,8 +19,16 @@ the Mac, and runs in its own workspace folder on this Mac.
     agent runs shows as a collapsible card with its input and output. A turn can be stopped. The
     thread and the CLI's session id are saved, so the next message (also after a relaunch) resumes
     the same CLI session.
-  - **Memory:** each bot's workspace has a `MEMORY.md` it keeps itself, and `~/BotChu/MEMORY.md` is
-    shared by every bot. Both, with the bot's identity and instructions, open every new CLI session
+  - **The bot's folder is the bot:** BotChu keeps each bot's settings (`bot.json`), its whole
+    conversation (`thread.jsonl`, one message per line) and a log of every turn (`logs/<date>.log`:
+    the command, how long it took, the exit status, any error and the CLI's error output) in
+    `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
+    is told it can search them for earlier conversations. **History & Logs** in the status sidebar
+    opens the folder. Each bot needs its own workspace, and not the bots folder itself; moving a
+    bot's workspace in its editor moves its `.botchu/` with it, and deleting a bot puts only its
+    `.botchu/` in the Trash.
+  - **Memory:** each bot's workspace has a `MEMORY.md` it keeps itself, and the bots folder's
+    `MEMORY.md` (`~/BotChu/MEMORY.md` by default) is shared by every bot. Both, with the bot's identity and instructions, open every new CLI session
     and are written to the workspace's `AGENTS.md`, `CLAUDE.md` and `GEMINI.md`, so the agent keeps
     them across its own context compaction. A new session (new bot, account switch, or **New
     Session**) also gets the recent conversation, so switching accounts keeps the thread's continuity.
@@ -59,8 +67,11 @@ the Mac, and runs in its own workspace folder on this Mac.
     runs the app with the old window design, whose toolbar overhangs the sidebar. `install.sh` builds into `~/Applications`, restarts BotChu if it was running, and
     smoke-tests that it starts. `test.sh` runs the unit tests. `ui-review.sh` opens a build on
     throwaway data for checking its screens (see **Test**).
-- Data: `~/Library/Application Support/BotChu/` holds `bots.json` and one `threads/<bot id>.json` per
-  bot. Settings are in the `defaults` domain `local.BotChu`; the OpenRouter key is in the Keychain
+- Data: each bot's `.botchu/` folder in its workspace (above), and `index.json` in
+  `~/Library/Application Support/BotChu/`, which only lists the bots' workspaces in sidebar order.
+  Versions before bot folders kept everything in `bots.json` and `threads/` there; the first launch
+  moves them into the bots' folders and keeps the old files in `backup-before-bot-folders/`.
+  Settings are in the `defaults` domain `local.BotChu`; the OpenRouter key is in the Keychain
   (service `local.BotChu`). Bot workspaces are under `~/BotChu/` by default. No database and no port.
 - Each turn runs one headless CLI process in the bot's folder:
   - Claude: `claude -p … --output-format stream-json --verbose --include-partial-messages --dangerously-skip-permissions`, `--session-id` then `--resume`.
@@ -97,8 +108,10 @@ the Mac, and runs in its own workspace folder on this Mac.
   prints both threads. It spends the accounts' own allowance, so it is not part of `check`;
   OpenRouter needs `OPENROUTER_API_KEY` in its environment.
 - Screens: `macOS/ui-review.sh ["message"]` builds the app into a temporary folder and opens it on
-  throwaway data (`BOTCHU_DATA_DIR`) with two demo bots, the first with a short sample
-  conversation and memory, optionally sending it a message (a real turn on Claude Dev); the app writes a PNG of each of its windows into the printed folder every second
+  throwaway data (`BOTCHU_DATA_DIR`, with its own settings domain, `local.BotChu.dev`) with two demo
+  bots in the old layout, so every run also exercises the migration into bot folders, the first
+  with a short sample conversation and memory, optionally sending it a message (a real turn on
+  Claude Dev); the app writes a PNG of each of its windows into the printed folder every second
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor` or `BOTCHU_OPEN=settings` opens the bot editor or Settings instead.
 - Smoke test after deploy: `macOS/install.sh` fails unless the installed app starts (launched hidden,

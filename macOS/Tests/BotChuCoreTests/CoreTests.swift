@@ -143,22 +143,148 @@ import Testing
 }
 
 @Suite struct StoreTests {
-    @Test func roundTrips() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-store-\(UUID().uuidString)")
+    let date = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func tempDir() -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-store-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    @Test func homeRoundTrips() throws {
+        let root = tempDir()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = Store(root: root)
-        #expect(store.loadBots().isEmpty)
         // The files keep whole seconds (ISO 8601).
-        let date = Date(timeIntervalSince1970: 1_800_000_000)
-        let bot = Bot(name: "Scout", workspace: "/tmp/scout", sessionID: "s", sessionAccountID: "muse", createdAt: date)
-        try store.saveBots([bot])
-        #expect(store.loadBots() == [bot])
-        let messages = [ChatMessage(role: .user, text: "hi", date: date),
+        let bot = Bot(name: "Scout", workspace: root.appendingPathComponent("scout").path, sessionID: "s",
+                      sessionAccountID: "muse", createdAt: date)
+        let home = BotHome(workspace: bot.workspace)
+        #expect(home.loadBot() == nil)
+        try home.save(bot)
+        #expect(home.loadBot() == bot)
+        let messages = [ChatMessage(role: .user, text: "hi\nthere", date: date),
                         ChatMessage(role: .tool, date: date, toolID: "t", toolName: "Bash", toolState: .done)]
-        try store.saveThread(messages, for: bot.id)
-        #expect(store.loadThread(bot.id) == messages)
-        store.deleteThread(bot.id)
-        #expect(store.loadThread(bot.id).isEmpty)
+        try home.saveThread(messages)
+        #expect(home.loadThread() == messages)
+        // One message per line, so the bot (or grep) can search it.
+        #expect(try String(contentsOf: home.threadURL, encoding: .utf8).split(separator: "\n").count == 2)
+        #expect(try String(contentsOf: home.url.appendingPathComponent(".gitignore"), encoding: .utf8).contains("*"))
+    }
+
+    @Test func logsAppendByDay() throws {
+        let root = tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = BotHome(workspace: root.path)
+        try home.appendLog("one\n", at: date)
+        try home.appendLog("two\n", at: date)
+        let file = home.logsURL.appendingPathComponent("\(BotHome.day.string(from: date)).log")
+        #expect(try String(contentsOf: file, encoding: .utf8) == "one\ntwo\n")
+    }
+
+    @Test func homeMovesWithItsWorkspace() throws {
+        let root = tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bot = Bot(name: "Scout", workspace: root.appendingPathComponent("a").path, createdAt: date)
+        try BotHome(workspace: bot.workspace).save(bot)
+        let moved = root.appendingPathComponent("b").path
+        try BotHome(workspace: bot.workspace).move(toWorkspace: moved)
+        #expect(BotHome(workspace: moved).loadBot()?.id == bot.id)
+        #expect(!BotHome(workspace: bot.workspace).exists)
+    }
+
+    @Test func indexLoadsBotsAndKeepsMissingOnes() throws {
+        let root = tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = Store(root: root.appendingPathComponent("support"))
+        let here = Bot(name: "Here", workspace: root.appendingPathComponent("here").path, createdAt: date)
+        try BotHome(workspace: here.workspace).save(here)
+        let gone = Store.Entry(id: UUID(), workspace: root.appendingPathComponent("gone").path)
+        try store.saveIndex([Store.Entry(id: here.id, workspace: here.workspace), gone])
+        let loaded = store.loadBots()
+        #expect(loaded.bots == [here])
+        #expect(loaded.missing == [gone])
+    }
+
+    @Test func migratesLegacyFilesIntoBotFolders() throws {
+        let root = tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("support")
+        let store = Store(root: support)
+        let bot = Bot(name: "Scout", workspace: root.appendingPathComponent("scout").path, sessionID: "s",
+                      sessionAccountID: "claude-dev", createdAt: date)
+        let thread = [ChatMessage(role: .user, text: "hi", date: date)]
+        try FileManager.default.createDirectory(at: support.appendingPathComponent("threads"), withIntermediateDirectories: true)
+        try Store.encoder.encode([bot]).write(to: store.legacyBotsURL)
+        try Store.encoder.encode(thread).write(to: store.legacyThreadsURL.appendingPathComponent("\(bot.id.uuidString).json"))
+
+        #expect(store.migrateIfNeeded())
+        #expect(BotHome(workspace: bot.workspace).loadBot() == bot)
+        #expect(store.loadThread(for: bot) == thread)
+        #expect(store.loadBots().bots == [bot])
+        #expect(!FileManager.default.fileExists(atPath: store.legacyBotsURL.path))
+        #expect(FileManager.default.fileExists(atPath: store.backupURL.appendingPathComponent("bots.json").path))
+        #expect(!store.migrateIfNeeded())
+    }
+
+    @Test func botWhoseFolderWasntWrittenComesFromTheBackup() throws {
+        let root = tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = Store(root: root.appendingPathComponent("support"))
+        let workspace = root.appendingPathComponent("scout")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let bot = Bot(name: "Scout", workspace: workspace.path, createdAt: date)
+        try FileManager.default.createDirectory(at: store.backupURL, withIntermediateDirectories: true)
+        try Store.encoder.encode([bot]).write(to: store.backupURL.appendingPathComponent("bots.json"))
+        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        #expect(store.loadBots().bots == [bot])
+        // A folder that is gone entirely is missing, not resurrected from the backup.
+        try FileManager.default.removeItem(at: workspace)
+        #expect(store.loadBots().bots.isEmpty)
+    }
+}
+
+@Suite struct WorkspaceProblemTests {
+    let others = [Bot(name: "Dev Bot", workspace: "/Users/a/BOTS/Dev Bot")]
+
+    @Test func botsFolderItselfIsRefused() {
+        #expect(Workspace.problem(with: "/Users/a/BOTS/", for: UUID(), among: others, botsRoot: "/Users/a/BOTS") != nil)
+    }
+
+    @Test func anotherBotsFolderIsRefused() {
+        let problem = Workspace.problem(with: "/Users/a/BOTS/Dev Bot", for: UUID(), among: others, botsRoot: "/Users/a/BOTS")
+        #expect(problem?.contains("Dev Bot") == true)
+        #expect(Workspace.problem(with: "/Users/a/BOTS/Dev Bot", for: others[0].id, among: others, botsRoot: "/Users/a/BOTS") == nil)
+    }
+
+    @Test func ownFolderAndEmptyAreFine() {
+        #expect(Workspace.problem(with: "/Users/a/BOTS/Scout", for: UUID(), among: others, botsRoot: "/Users/a/BOTS") == nil)
+        #expect(Workspace.problem(with: "", for: UUID(), among: others, botsRoot: "/Users/a/BOTS") == nil)
+    }
+}
+
+@Suite struct TurnLogTests {
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @Test func startHidesThePromptAndQuotes() {
+        let prompt = "<botchu_context>\nlong</botchu_context>\n\nhi"
+        let text = TurnLog.started(at: start, account: Accounts.account(id: "claude-dev"), command: "~/.local/bin/claude-dev",
+                                   arguments: ["-p", "--model", "opus 5", prompt], prompt: prompt, resuming: "s1")
+        #expect(text.contains("turn started · Claude Dev · resumes s1"))
+        #expect(text.contains("~/.local/bin/claude-dev -p --model 'opus 5' <prompt: \(prompt.count) characters>"))
+        #expect(!text.contains("long"))
+    }
+
+    @Test func endIncludesErrorAndStderr() {
+        let text = TurnLog.ended(at: start.addingTimeInterval(12.34), startedAt: start, status: 1, stopped: false,
+                                 toolCalls: 1, error: "usage limit", stderr: "warn: a\nwarn: b\n")
+        #expect(text.contains("turn failed in 12.3 s · exit 1 · 1 tool call\n"))
+        #expect(text.contains("   error:\n   | usage limit\n"))
+        #expect(text.contains("   stderr:\n   | warn: a\n   | warn: b\n"))
+    }
+
+    @Test func stoppedTurn() {
+        let text = TurnLog.ended(at: start, startedAt: start, status: 2, stopped: true, toolCalls: 0, error: nil, stderr: "")
+        #expect(text.contains("turn stopped in 0.0 s · exit 2 · 0 tool calls"))
+        #expect(!text.contains("stderr"))
     }
 }
 

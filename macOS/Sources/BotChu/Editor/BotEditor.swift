@@ -44,7 +44,7 @@ struct BotEditor: View {
                     Text("Private to the bot. Given at the start of every session, with its MEMORY.md.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("Runs on") {
+                Section {
                     Picker("Account", selection: $bot.accountID) {
                         ForEach(Accounts.all) { account in
                             Label(account.name, systemImage: account.symbol).tag(account.id)
@@ -57,6 +57,15 @@ struct BotEditor: View {
                                 .labelsHidden()
                             Button("Choose…", action: chooseFolder)
                         }
+                    }
+                } header: {
+                    Text("Runs on")
+                } footer: {
+                    if let problem = workspaceProblem {
+                        Text(problem).font(.caption).foregroundStyle(.red)
+                    } else {
+                        Text("BotChu keeps the bot's history and logs in .botchu/ inside this folder.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -72,7 +81,7 @@ struct BotEditor: View {
                     .keyboardShortcut(.cancelAction)
                 Button(isNew ? "Create Bot" : "Save") { save() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(bot.name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(bot.name.trimmingCharacters(in: .whitespaces).isEmpty || workspaceProblem != nil)
             }
             .padding(16)
         }
@@ -90,6 +99,10 @@ struct BotEditor: View {
         } message: {
             Text("Its conversation is deleted. Its workspace folder is kept.")
         }
+    }
+
+    private var workspaceProblem: String? {
+        model.workspaceProblem(bot.workspace, for: bot.id)
     }
 
     private var modelPrompt: String {

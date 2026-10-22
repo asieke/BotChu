@@ -12,7 +12,9 @@ final class AppSettings {
     /// Command overrides by account id; a missing or empty entry means the account's default.
     var commands: [String: String] { didSet { defaults.set(commands, forKey: "commands") } }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults? = nil) {
+        // Throwaway runs (DevHooks) keep their settings apart from the real ones.
+        let defaults = defaults ?? (DevHooks.dataDir == nil ? .standard : UserDefaults(suiteName: "local.BotChu.dev")!)
         self.defaults = defaults
         if let dev = DevHooks.dataDir {
             botsRoot = dev.appendingPathComponent("bots").path

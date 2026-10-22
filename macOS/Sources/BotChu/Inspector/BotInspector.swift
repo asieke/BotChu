@@ -58,8 +58,12 @@ struct BotInspector: View {
                             .truncationMode(.middle)
                             .textSelection(.enabled)
                             .help(bot.workspace)
-                        Button("Show in Finder") { model.revealWorkspace(botID) }
-                            .controlSize(.small)
+                        HStack {
+                            Button("Show in Finder") { model.revealWorkspace(botID) }
+                            Button("History & Logs") { model.revealHistory(botID) }
+                                .help("Open .botchu/: the bot's settings, its conversation and a log of each turn")
+                        }
+                        .controlSize(.small)
                     }
                 }
                 .padding(16)
