@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import BotChuCore
 
 /// Environment variables for checking the app without touching real data or needing screen-recording
 /// permission (see `macOS/ui-review.sh`):
@@ -7,6 +8,7 @@ import SwiftUI
 /// - `BOTCHU_SNAPSHOT`: write a PNG of each window into this folder every second.
 /// - `BOTCHU_OPEN`: open `editor` (a new bot) or `settings` at launch.
 /// - `BOTCHU_SEND`: send this message to the selected bot at launch.
+/// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
 @MainActor
 enum DevHooks {
     static let env = ProcessInfo.processInfo.environment
@@ -15,7 +17,7 @@ enum DevHooks {
         env["BOTCHU_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
 
-    static func start(model: AppModel) {
+    static func start(model: AppModel, openSettings: () -> Void) {
         if let dir = env["BOTCHU_SNAPSHOT"] {
             Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
                 MainActor.assumeIsolated { snapshot(into: URL(fileURLWithPath: dir, isDirectory: true)) }
@@ -23,8 +25,15 @@ enum DevHooks {
         }
         switch env["BOTCHU_OPEN"] {
         case "editor": model.newBot()
-        case "settings": NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        case "settings": openSettings()
         default: break
+        }
+        if let spec = env["BOTCHU_CREATE"] {
+            let parts = spec.split(separator: "|", maxSplits: 2).map(String.init)
+            var bot = Bot(name: parts[0], workspace: model.defaultWorkspace(for: parts[0]))
+            if parts.count > 1 { bot.accountID = parts[1] }
+            if parts.count > 2 { bot.instructions = parts[2] }
+            model.create(bot)
         }
         if let text = env["BOTCHU_SEND"], let id = model.selection {
             model.send(text, to: id)

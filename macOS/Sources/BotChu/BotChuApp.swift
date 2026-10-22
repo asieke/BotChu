@@ -4,18 +4,12 @@ import BotChuCore
 @main
 struct BotChuApp: App {
     @State private var model = AppModel()
-    @State private var hooksStarted = false
 
     var body: some Scene {
         WindowGroup("BotChu", id: "main") {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 780, minHeight: 500)
-                .task {
-                    guard !hooksStarted else { return }
-                    hooksStarted = true
-                    DevHooks.start(model: model)
-                }
         }
         .defaultSize(width: 1100, height: 760)
         .commands {
@@ -49,6 +43,8 @@ struct BotChuApp: App {
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
+    @State private var hooksStarted = false
 
     var body: some View {
         @Bindable var model = model
@@ -73,6 +69,11 @@ struct ContentView: View {
         .sheet(item: $model.editor) { request in
             BotEditor(request: request)
                 .environment(model)
+        }
+        .task {
+            guard !hooksStarted else { return }
+            hooksStarted = true
+            DevHooks.start(model: model, openSettings: { openSettings() })
         }
     }
 }

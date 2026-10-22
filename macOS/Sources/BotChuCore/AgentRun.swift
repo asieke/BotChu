@@ -19,7 +19,7 @@ public final class AgentRun: @unchecked Sendable {
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-l", "-c", CommandBuilder.shellScript(command: command), "botchu"] + invocation.arguments
         process.currentDirectoryURL = directory
-        var env = ProcessInfo.processInfo.environment
+        var env = Self.childEnvironment(ProcessInfo.processInfo.environment)
         env["NO_COLOR"] = "1"
         env["TERM"] = "dumb"
         for (key, value) in invocation.environment { env[key] = value }
@@ -27,6 +27,17 @@ public final class AgentRun: @unchecked Sendable {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = stdout
         process.standardError = stderr
+    }
+
+    /// The environment a CLI starts from: BotChu's own, without the variables an agent session sets
+    /// for the processes under it. When BotChu itself was opened from inside Claude Code or Codex,
+    /// those would make each bot's CLI act as a nested child of that session (Claude Code then waits
+    /// on its parent's auth and messaging sockets) or use its account.
+    public static func childEnvironment(_ env: [String: String]) -> [String: String] {
+        let prefixes = ["CLAUDE", "CODEX_", "ANTHROPIC_", "OPENAI_", "BOTCHU_", "MCP_", "AI_AGENT"]
+        let names: Set<String> = ["API_TIMEOUT_MS", "BAGGAGE", "DISABLE_AUTOUPDATER", "DISABLE_MICROCOMPACT",
+                                  "USE_LOCAL_OAUTH", "USE_STAGING_OAUTH", "OPENROUTER_API_KEY"]
+        return env.filter { key, _ in !names.contains(key) && !prefixes.contains(where: key.hasPrefix) }
     }
 
     public func start() throws {

@@ -172,3 +172,14 @@ import Testing
         #expect(MarkdownBlock.split("a\n```\nb") == [.prose("a"), .code("b")])
     }
 }
+
+@Suite struct AgentRunTests {
+    @Test func childEnvironmentDropsAgentSessionVariables() {
+        let env = AgentRun.childEnvironment([
+            "HOME": "/Users/a", "PATH": "/usr/bin", "CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "x",
+            "CLAUDE_CONFIG_DIR": "/Users/a/.claude-dev", "CODEX_HOME": "/c", "AI_AGENT": "claude-code",
+            "ANTHROPIC_API_KEY": "k", "BOTCHU_SEND": "hi", "MCP_SERVER_CONNECTION_BATCH_SIZE": "4", "LANG": "en_US.UTF-8",
+        ])
+        #expect(env == ["HOME": "/Users/a", "PATH": "/usr/bin", "LANG": "en_US.UTF-8"])
+    }
+}

@@ -92,6 +92,9 @@ struct BotIntro: View {
             Text((bot.workspace as NSString).abbreviatingWithTildeInPath)
                 .font(.caption.monospaced())
                 .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(bot.workspace)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)

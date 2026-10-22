@@ -18,6 +18,9 @@ struct BotEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            Text(isNew ? "New Bot" : "Edit \(bot.name)")
+                .font(.headline)
+                .padding(.top, 16)
             Form {
                 Section {
                     HStack(spacing: 12) {
@@ -26,7 +29,7 @@ struct BotEditor: View {
                             .multilineTextAlignment(.center)
                             .font(.system(size: 22))
                             .frame(width: 52)
-                        TextField("Name", text: $bot.name, prompt: Text("Name"))
+                        TextField("Name", text: $bot.name, prompt: Text("Required"))
                     }
                     TextField("Title", text: $bot.title, prompt: Text("What it's for, in one line"))
                 }

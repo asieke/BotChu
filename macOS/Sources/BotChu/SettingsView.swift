@@ -72,8 +72,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 600)
-        .frame(minHeight: 560)
+        .frame(width: 600, height: 740)
         .task {
             await withTaskGroup(of: Void.self) { group in
                 for account in Accounts.all { group.addTask { await check(account) } }

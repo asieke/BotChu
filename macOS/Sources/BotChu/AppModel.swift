@@ -198,10 +198,12 @@ final class AppModel {
         var parser = StreamParsers.make(for: account.kind)
         var assembler = ThreadAssembler()
         var ended = false
+        var heard = false
         let accountID = account.id
 
         run.onLines = { [weak self] lines in
             guard let self, self.bot(id) != nil else { return }
+            heard = true
             var messages = self.thread(id)
             for line in lines {
                 for event in parser.parse(line: line) {
@@ -244,6 +246,13 @@ final class AppModel {
             try run.start()
             runs[id] = run
             running.insert(id)
+            // A CLI that has printed nothing yet is usually blocked on a macOS prompt: as BotChu's
+            // child, it needs BotChu's permission for protected folders (Desktop, Documents) its own
+            // settings point into, and the prompt may be behind other windows.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self, weak run] in
+                guard let self, let run, self.runs[id] === run, !heard else { return }
+                self.append(ChatMessage(role: .note, text: "\(account.name) hasn't started yet. If macOS is asking whether BotChu may access a folder, allow it: the CLI reads its settings from there."), to: id)
+            }
         } catch {
             append(ChatMessage(role: .error, text: "Couldn't start \(account.name): \(error.localizedDescription)"), to: id)
             saveThread(id)

@@ -62,6 +62,11 @@ the Mac, and runs in its own workspace folder on this Mac.
 - Prerequisites: macOS 14 or later with full Xcode 16 or later (`xcode-select -p` must point into
   Xcode.app), and whichever agent CLIs you want to use, installed and signed in (on Alex's Mac the
   profile wrappers live in `~/.local/bin`).
+- Folder access: each CLI runs as BotChu's child, so when a CLI's own settings point into a
+  protected folder (for example a Claude Code plugin under `~/Desktop`), macOS asks once whether
+  BotChu may access that folder, and the turn waits until you answer. A bot that has printed nothing
+  after 20 seconds says so in its chat. Because the app is signed with the same certificate every
+  build, the answer survives reinstalls.
 - Install: nothing to install; the package has no dependencies.
 - Configure: nothing in `.env`. The OpenRouter key goes in BotChu ▸ Settings.
 - Run from a checkout without touching the installed copy:
