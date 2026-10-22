@@ -19,6 +19,7 @@ final class SubagentRuntime {
     @ObservationIgnored private var watchers: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var deliveries: [UUID: SubagentTransport] = [:]
     @ObservationIgnored private var deliveryTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var rejections: [UUID: [UUID: SubagentResult]] = [:]
     @ObservationIgnored private var pendingFinishes: [UUID: (SubagentPhase, String?)] = [:]
     @ObservationIgnored private var requestCounts: [ChatTarget: Int] = [:]
 
@@ -132,6 +133,13 @@ final class SubagentRuntime {
             try? await caller.transport.acknowledge(filename: filename)
             return
         }
+        if let rejected = rejections[caller.id]?[fileID] {
+            do {
+                try await caller.transport.writeResult(id: fileID, data: SubagentIPC.encode(rejected))
+                try await caller.transport.acknowledge(filename: filename)
+            } catch { self.error = "Couldn't acknowledge a rejected request: \(error.localizedDescription)" }
+            return
+        }
         do {
             let request = try SubagentIPC.decode(SubagentRequest.self, from: data)
             guard request.id == fileID, request.invocationID == caller.id,
@@ -180,6 +188,7 @@ final class SubagentRuntime {
             catch { self.error = "Couldn't acknowledge a sub-agent request: \(error.localizedDescription)" }
         } catch {
             let failed = SubagentResult(id: fileID, targetBotName: "Sub-agent", phase: .failed, errorMessage: error.localizedDescription)
+            rejections[caller.id, default: [:]][fileID] = failed
             do {
                 try await caller.transport.writeResult(id: fileID, data: SubagentIPC.encode(failed))
                 try await caller.transport.acknowledge(filename: filename)
@@ -220,6 +229,7 @@ final class SubagentRuntime {
             var assembler = ThreadAssembler()
             var finished = false
             var failure: String?
+            var persistenceFailure: String?
             runner.onLines = { [weak self, weak runner] lines in
                 guard let self, let runner, self.runners[id] === runner, self.run(id)?.phase.isActive == true else { return }
                 var messages = self.threads[id] ?? []
@@ -241,7 +251,12 @@ final class SubagentRuntime {
                 self.threads[id] = messages
                 if let record = self.run(id) {
                     do { try self.persist(record, messages: messages) }
-                    catch { self.finish(id, phase: .failed, error: "Couldn't save the sub-agent transcript: \(error.localizedDescription)"); runner.stop() }
+                    catch {
+                        if persistenceFailure == nil {
+                            persistenceFailure = "Couldn't save the sub-agent transcript: \(error.localizedDescription)"
+                            self.stop(id)
+                        }
+                    }
                 }
             }
             runner.onExit = { [weak self, weak runner] status, stderr in
@@ -254,9 +269,9 @@ final class SubagentRuntime {
                 ThreadAssembler.closeRunningTools(&messages)
                 self.threads[id] = messages
                 let reply = messages.last(where: { $0.role == .assistant })?.text ?? ""
-                let reason = failure ?? ((status != 0 || !finished || reply.isEmpty)
+                let reason = persistenceFailure ?? failure ?? ((status != 0 || !finished || reply.isEmpty)
                     ? "\(account.name) ended without a successful handoff (exit \(status)). \(AppModel.lastLines(stderr))" : nil)
-                self.finish(id, phase: runner.stopped ? .stopped : reason == nil ? .completed : .failed, error: reason)
+                self.finish(id, phase: persistenceFailure != nil ? .failed : runner.stopped ? .stopped : reason == nil ? .completed : .failed, error: reason)
             }
             record.phase = .running
             record.startedAt = Date()
@@ -276,6 +291,8 @@ final class SubagentRuntime {
     func stop(_ id: UUID) {
         for child in all where child.parentSubagentID == id && child.phase.isActive { stop(child.id) }
         preparations.removeValue(forKey: id)?.cancel()
+        // Revoke admissions immediately, even when the process takes time to honor Stop.
+        for context in Array(contexts.values) where context.parent == id { endCaller(context.id) }
         if let runner = runners[id] {
             runner.stop()
             // Do not return the workspace to the caller until the child process actually exits.
@@ -298,6 +315,7 @@ final class SubagentRuntime {
     func endCaller(_ id: UUID) {
         guard let caller = contexts.removeValue(forKey: id) else { return }
         watchers.removeValue(forKey: id)?.cancel()
+        rejections[id] = nil
         for record in all where record.callerInvocationID == id && record.phase.isActive { stop(record.id) }
         Task { try? await caller.transport.close() }
     }

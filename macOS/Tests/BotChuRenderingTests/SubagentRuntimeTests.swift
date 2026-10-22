@@ -23,6 +23,49 @@ extension RenderingTests {
         #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("HANDOFF-REAL-OK") == true)
     }
 
+    @Test func replayingARejectedRequestCannotAdmitWorkAfterTheRosterChanges() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let caller = try await fixture.app.delegation.prepareCaller(target: fixture.target, directory: fixture.folder.path, machine: .thisMac, hostID: nil)
+        defer { fixture.app.delegation.endCaller(caller.id) }
+        let ipc = SubagentIPC(root: URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!))
+        let request = SubagentRequest(invocationID: caller.id, callerBotID: fixture.parent.id, callerTaskID: fixture.target.taskID,
+                                     depth: 0, targetAgent: "Future", brief: "LEAF")
+        let data = try SubagentIPC.encode(request)
+        try data.write(to: ipc.requestURL(request.id), options: .atomic)
+        try await fixture.wait { FileManager.default.fileExists(atPath: ipc.resultURL(request.id).path) }
+        var renamed = fixture.worker
+        renamed.name = "Future"
+        fixture.app.update(renamed)
+        // Recreate an unacknowledged file after the original failed outcome was returned.
+        try data.write(to: ipc.requestURL(request.id), options: .atomic)
+        try await fixture.wait { !FileManager.default.fileExists(atPath: ipc.requestURL(request.id).path) }
+        let result = try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: ipc.resultURL(request.id)))
+        #expect(result.phase == .failed)
+        #expect(fixture.app.delegation.all.isEmpty)
+    }
+
+    @Test func transcriptWriteFailureWaitsForTheWorkerToExitBeforeReturningFailure() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let caller = try await fixture.app.delegation.prepareCaller(target: fixture.target, directory: fixture.folder.path, machine: .thisMac, hostID: nil)
+        defer { fixture.app.delegation.endCaller(caller.id) }
+        let ipc = SubagentIPC(root: URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!))
+        let request = SubagentRequest(invocationID: caller.id, callerBotID: fixture.parent.id, callerTaskID: fixture.target.taskID,
+                                     depth: 0, targetAgent: "Worker", brief: "SAVE_FAILURE")
+        try SubagentIPC.encode(request).write(to: ipc.requestURL(request.id), options: .atomic)
+        try await fixture.wait { FileManager.default.fileExists(atPath: fixture.folder.appendingPathComponent("waiting-for-save").path) }
+        let transcript = fixture.home.subagentURL(id: request.id, taskID: fixture.target.taskID).appendingPathComponent("thread.jsonl")
+        try FileManager.default.removeItem(at: transcript)
+        try FileManager.default.createDirectory(at: transcript, withIntermediateDirectories: true)
+        try Data().write(to: fixture.folder.appendingPathComponent("fail-ready"))
+        try await fixture.wait { FileManager.default.fileExists(atPath: ipc.resultURL(request.id).path) }
+        #expect(FileManager.default.fileExists(atPath: fixture.folder.appendingPathComponent("child-exited").path))
+        let result = try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: ipc.resultURL(request.id)))
+        #expect(result.phase == .failed)
+        #expect(!fixture.app.isRunning(fixture.target))
+    }
+
     @Test func sshDelegationUsesHostCommandsForSharedWorkAndLocalCommandsForBotHome() async throws {
         let fixture = try SubagentFixture(remote: true)
         defer { fixture.cleanUp() }
@@ -328,7 +371,7 @@ extension RenderingTests {
     }
 
     static let script = #"""
-    import json, os, re, subprocess, sys, time
+    import json, os, re, signal, subprocess, sys, time
     def emit(value): print(json.dumps(value), flush=True)
     def helper(*args):
         result = subprocess.run(["botchu-subagent", *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -362,6 +405,16 @@ extension RenderingTests {
         answer = helper("call", "--agent", "Worker", "--brief", "STOP_CHILD")
     elif brief == "STOP_CHILD":
         answer = helper("call", "--agent", "Worker", "--brief", "BLOCK")
+    elif brief == "SAVE_FAILURE":
+        def stop_after_cleanup(signum, frame):
+            time.sleep(.4)
+            open("child-exited", "w").close()
+            sys.exit(130)
+        signal.signal(signal.SIGINT, stop_after_cleanup)
+        open("waiting-for-save", "w").close()
+        while not os.path.exists("fail-ready"): time.sleep(.01)
+        emit({"type":"item.completed", "item":{"type":"agent_message", "text":"Cannot persist this reply"}})
+        while True: time.sleep(.1)
     elif brief == "BLOCK":
         while True: time.sleep(.1)
     elif brief == "DEPTH":

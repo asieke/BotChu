@@ -83,6 +83,7 @@ final class AppModel {
     private let store: Store
     /// Index entries whose folders don't hold their bot right now; kept so the bot returns with it.
     @ObservationIgnored private var missing: [Store.Entry] = []
+    @ObservationIgnored private var delegationSessions: [ChatTarget: Set<String>] = [:]
     @ObservationIgnored private var runs: [ChatTarget: AgentRun] = [:]
     /// While a bot's Home turn runs, BotChu looks for the tasks it asks for (`.botchu/dispatch/`).
     @ObservationIgnored private var dispatchTimers: [UUID: Timer] = [:]
@@ -863,8 +864,10 @@ final class AppModel {
                 let context = try await delegation.prepareCaller(target: target, directory: directory, machine: machine, hostID: task?.hostID)
                 guard waiting[target] == ticket else { delegation.endCaller(context.id); return }
                 waiting[target] = nil
-                let delegationInstructions = BotContext.subagentsSection(availableBots: delegation.roster)
-                let prompt = BotContext.prompt(for: text, preamble: [preamble, delegationInstructions].compactMap { $0 }.joined(separator: "\n\n"), updates: updates)
+                let needsDelegationContext = resume.map { !(delegationSessions[target] ?? []).contains($0) } ?? true
+                let delegationInstructions = needsDelegationContext ? BotContext.subagentsSection(availableBots: delegation.roster) : nil
+                let contextSections = [preamble, delegationInstructions].compactMap { $0 }
+                let prompt = BotContext.prompt(for: text, preamble: contextSections.isEmpty ? nil : contextSections.joined(separator: "\n\n"), updates: updates)
                 let model = GenerationOptions.effectiveModel(current.model, kind: account.kind, openRouterDefault: settings.openRouterModel)
                 var invocation = CommandBuilder.invocation(
                     kind: account.kind,
@@ -910,8 +913,9 @@ final class AppModel {
                         for event in parser.parse(line: line) {
                             switch event {
                             case .session(let reported):
-                                self.recordSession(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: reported),
-                                                   accountID: accountID, for: target)
+                                let session = CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: reported)
+                                self.recordSession(session, accountID: accountID, for: target)
+                                self.delegationSessions[target, default: []].insert(session)
                             case .failed(let reason):
                                 reportedFailure = reason
                                 ended = true
@@ -977,6 +981,7 @@ final class AppModel {
                                                         arguments: invocation.arguments, prompt: prompt, resuming: resume, what: what,
                                                         directory: task == nil ? nil : machine.isRemote ? "\(place): \(directory)" : directory))
                     try run.start()
+                    if let resume { delegationSessions[target, default: []].insert(resume) }
                     runs[target] = run
                     reactions[target] = nil
                     reactionTickets[target] = nil

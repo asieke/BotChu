@@ -23,6 +23,7 @@ struct SubagentsInspectorContent: View {
                 Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
             }
         }
+        .frame(minWidth: 0, idealWidth: 240, maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("subagents-inspector")
     }
 }
@@ -114,7 +115,7 @@ private struct SubagentCard: View {
             if expanded {
                 Divider()
                 Text("Asked by \(callerName)").font(.system(size: 11, weight: .semibold))
-                Text(run.brief).font(.system(size: 11)).textSelection(.enabled)
+                Text(run.brief).font(.system(size: 11)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                 let messages = model.delegation.threads[run.id] ?? []
                 if !messages.isEmpty {
                     ScrollView {
@@ -154,6 +155,7 @@ private struct SubagentCard: View {
                       run.workspaceMode == .sharedCallerWorkspace ? "Shared workspace" : "Bot workspace"].joined(separator: " · "))
                     .font(.system(size: 10)).foregroundStyle(Palette.secondaryText)
                 Text(run.workingDirectory).font(.system(size: 10, design: .monospaced))
+                    .fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(Palette.secondaryText).textSelection(.enabled)
                 if !run.phase.isActive { Button("Clear run") { model.delegation.clear(run.id) }.font(.system(size: 11)).buttonStyle(.borderless) }
             }
