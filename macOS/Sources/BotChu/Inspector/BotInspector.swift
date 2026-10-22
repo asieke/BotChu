@@ -151,7 +151,7 @@ struct BotInspector: View {
     }
 
     static func ago(_ date: Date) -> String {
-        date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated))
+        Date().timeIntervalSince(date) < 5 ? "just now" : date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated))
     }
 }
 

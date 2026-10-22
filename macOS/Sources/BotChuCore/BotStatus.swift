@@ -5,12 +5,45 @@ import Foundation
 public struct RunState: Equatable, Sendable {
     public var startedAt: Date
     public var hasOutput: Bool
-    public var activity: BotActivity
+    public private(set) var activity: BotActivity
+    public private(set) var activitySince: Date
+    /// Thinking, waiting until the tool's activity has shown for `minimumShow`.
+    public private(set) var pending: BotActivity?
+
+    /// Most tool calls take a moment; their animation shows at least this long, so it can be seen.
+    public static let minimumShow: TimeInterval = 2.5
 
     public init(startedAt: Date = Date(), hasOutput: Bool = false, activity: BotActivity = .thinking) {
         self.startedAt = startedAt
         self.hasOutput = hasOutput
         self.activity = activity
+        activitySince = startedAt
+    }
+
+    /// Moves to `next`. Going back to thinking from a tool's activity waits until that activity has
+    /// shown for `minimumShow`; then this returns how long to wait before calling `settle`.
+    public mutating func move(to next: BotActivity, at now: Date = Date()) -> TimeInterval? {
+        if next == activity {
+            pending = nil
+            return nil
+        }
+        let shown = now.timeIntervalSince(activitySince)
+        if next == .thinking, activity != .thinking, shown < Self.minimumShow {
+            pending = next
+            return Self.minimumShow - shown
+        }
+        activity = next
+        activitySince = now
+        pending = nil
+        return nil
+    }
+
+    /// Takes the activity that was waiting, once its time has come.
+    public mutating func settle(at now: Date = Date()) {
+        guard let pending, now.timeIntervalSince(activitySince) >= Self.minimumShow - 0.05 else { return }
+        activity = pending
+        activitySince = now
+        self.pending = nil
     }
 }
 
