@@ -5,6 +5,24 @@ import BotChuCore
 @testable import BotChu
 
 extension RenderingTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["BOTCHU_TEST_REAL_DELEGATION"] == "1"))
+    func realCodexTurnReceivesAClaudeSubagentHandoff() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        fixture.settings.commands = [:]
+        var worker = fixture.worker
+        worker.selectAccount(Accounts.account(id: "claude-dev"))
+        fixture.app.update(worker)
+        fixture.app.send("Use your shell to run exactly: botchu-subagent call --agent Worker --brief 'Reply with HANDOFF-REAL-OK, without tools or any files.' Then repeat the returned handoff. Do not edit files or do any other task.", to: fixture.target)
+        try await fixture.wait(seconds: 180) { !fixture.app.isRunning(fixture.target) }
+        let runs = fixture.app.delegation.records[fixture.target] ?? []
+        #expect(runs.count == 1)
+        #expect(runs.first?.accountID == "claude-dev")
+        #expect(runs.first?.phase == .completed)
+        #expect(runs.first?.handoffOutput?.contains("HANDOFF-REAL-OK") == true)
+        #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("HANDOFF-REAL-OK") == true)
+    }
+
     @Test func subagentFanoutReturnsNestedHandoffsToTheCallingTask() async throws {
         let fixture = try SubagentFixture()
         defer { fixture.cleanUp() }
@@ -87,6 +105,22 @@ extension RenderingTests {
         if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
             DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("subagents"))
         }
+        // Recreate with a live run to check automatic expansion and bounded streaming content.
+        restored.delegation.records[fixture.target] = [parent, child]
+        restored.delegation.states[parent.id] = RunState(hasOutput: true, activity: .testing)
+        restored.delegation.threads[parent.id] = [
+            ChatMessage(role: .tool, toolName: "Run tests", toolInput: "swift test", toolState: .running),
+            ChatMessage(role: .assistant, text: "Checking the changed files and test results."),
+        ]
+        window.contentView = NSHostingView(rootView: TaskInspector(target: fixture.target).environment(restored).defaultAppStorage(defaults))
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(window.contentView?.fittingSize.width ?? 0 <= 380)
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("subagents-expanded"))
+        }
+        parent.phase = .stopped
+        restored.delegation.records[fixture.target] = [parent, child]
+        restored.delegation.states[parent.id] = nil
         restored.delegation.clear(parent.id)
         #expect(restored.delegation.all.isEmpty)
     }
@@ -129,8 +163,8 @@ extension RenderingTests {
         app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests") })
     }
 
-    func wait(_ condition: () -> Bool) async throws {
-        for _ in 0..<800 {
+    func wait(seconds: Int = 20, _ condition: () -> Bool) async throws {
+        for _ in 0..<(seconds * 40) {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(25))
         }

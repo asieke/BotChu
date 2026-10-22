@@ -133,7 +133,8 @@ final class SubagentRuntime {
             guard request.id == fileID, request.invocationID == caller.id,
                   contexts[caller.id] != nil else { throw DelegationFailure("This calling turn has ended or the request has the wrong invocation.") }
             try SubagentCallerContext(invocationID: caller.id, botID: caller.target.botID, taskID: caller.target.taskID,
-                parentSubagentID: caller.parent, depth: caller.depth, workingDirectory: caller.directory, hostID: caller.hostID).validate(request)
+                parentSubagentID: caller.parent, depth: caller.depth, workingDirectory: caller.directory, hostID: caller.hostID).validate(request,
+                    now: caller.transport.machine.isRemote ? request.createdAt : Date())
             if let existing = run(request.id) {
                 guard existing.callerInvocationID == caller.id else { throw DelegationFailure("This request ID belongs to a different invocation.") }
                 if !existing.phase.isActive { try await caller.transport.writeResult(id: existing.id, data: SubagentIPC.encode(result(existing))) }
@@ -310,7 +311,7 @@ final class SubagentRuntime {
         record.phase = phase
         record.finishedAt = Date()
         record.errorMessage = error
-        record.handoffOutput = threads[id]?.last(where: { $0.role == .assistant })?.text
+        record.handoffOutput = threads[id]?.last(where: { $0.role == .assistant }).map { MemoryNotes.handoffText($0.text) }
         var messages = threads[id] ?? []
         ThreadAssembler.closeRunningTools(&messages)
         if let error { messages.append(ChatMessage(role: phase == .stopped ? .note : .error, text: error)) }

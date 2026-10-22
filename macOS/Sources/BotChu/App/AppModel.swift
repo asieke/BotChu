@@ -880,6 +880,7 @@ final class AppModel {
                 if account.kind == .pi, !machine.isRemote, Keychain.get(Keychain.openRouterAccount)?.isEmpty ?? true {
                     delegation.endCaller(context.id)
                     runStates[target] = nil
+                    messageQueues[target]?.pause()
                     append(ChatMessage(role: .error, text: "Add your OpenRouter API key in BotChu ▸ Settings first."), to: target)
                     saveThread(target)
                     return
@@ -993,6 +994,7 @@ final class AppModel {
                 } catch {
                     delegation.endCaller(context.id)
                     runStates[target] = nil
+                    messageQueues[target]?.pause()
                     append(ChatMessage(role: .error, text: "Couldn't start \(account.name): \(error.localizedDescription)"), to: target)
                     saveThread(target)
                 }

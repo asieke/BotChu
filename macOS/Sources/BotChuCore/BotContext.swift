@@ -426,6 +426,13 @@ public enum BotContext {
 /// What a task on another computer asks to remember: the lines of the `<remember>` blocks in its
 /// replies, which BotChu adds to the bot's MEMORY.md on this Mac, since the task can't open it.
 public enum MemoryNotes {
+    /// Memory controls belong to the bot that emitted them. Returning them as a delegated
+    /// handoff could make the caller save the same private notes in its own memory.
+    public static func handoffText(_ text: String) -> String {
+        text.replacingOccurrences(of: "(?is)<remember>.*?</remember>", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     public static func remembered(in messages: [ChatMessage]) -> [String] {
         let tag = BotContext.rememberTag
         guard let regex = try? NSRegularExpression(pattern: "<\(tag)>(.*?)</\(tag)>", options: [.dotMatchesLineSeparators, .caseInsensitive]) else { return [] }
