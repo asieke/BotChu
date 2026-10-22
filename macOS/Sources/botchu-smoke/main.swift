@@ -10,7 +10,8 @@ import BotChuCore
 // Each line as it is printed, also when the output goes to a file.
 setvbuf(stdout, nil, _IOLBF, 0)
 
-let requested = Array(CommandLine.arguments.dropFirst())
+let usageOnly = CommandLine.arguments.dropFirst().first == "--usage"
+let requested = Array(CommandLine.arguments.dropFirst(usageOnly ? 2 : 1))
 let accounts = requested.isEmpty ? Accounts.all : requested.map { Accounts.account(id: $0) }
 let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-smoke-\(UUID().uuidString)")
 
@@ -70,6 +71,24 @@ func show(_ messages: [ChatMessage]) {
 Task {
     var failures: [String] = []
     for account in accounts {
+        if usageOnly {
+            print("== \(account.name) usage")
+            do {
+                let reading = try await ProviderUsageClient.read(UsageRequest(account: account, command: account.defaultCommand),
+                    openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"])
+                for window in reading.windows {
+                    let percent = window.usedPercent.map { "\($0.formatted(.number.precision(.fractionLength(1))))% used" } ?? "not reported"
+                    let reset = window.resetsAt?.formatted(.iso8601) ?? window.resetDescription ?? "not reported"
+                    print("    \(window.title): \(percent); reset \(reset)")
+                }
+                if let note = reading.note { print("    \(note)") }
+                print("    OK")
+            } catch {
+                print("    FAIL: \((error as? UsageFailure)?.message ?? "Usage query failed")")
+                failures.append(account.id)
+            }
+            continue
+        }
         let word = "ZEBRA\(Int.random(in: 100...999))"
         var bot = Bot(name: "Smoke", title: "A test bot", instructions: "Answer in as few words as possible.",
                       accountID: account.id, workspace: root.appendingPathComponent(account.id).path)

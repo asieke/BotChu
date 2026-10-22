@@ -10,6 +10,7 @@ import BotChuCore
 ///   rows (`sidebar.png`), which the window's picture leaves out.
 /// - `BOTCHU_OPEN`: open `editor` (a new bot), `task` (New Task for the selected bot) or `settings` at launch.
 /// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
+/// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review.
 /// - `BOTCHU_SEND`: send this message to the selected bot's shown conversation at launch (its Home,
 ///   or the tab `BOTCHU_TAB` shows).
 /// - `BOTCHU_TASK`: start a task for the selected bot at launch from `repo|task`, as New Task does
@@ -25,6 +26,20 @@ enum DevHooks {
 
     static var dataDir: URL? {
         env["BOTCHU_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    static var usageFetch: UsageCache.Fetch? {
+        guard dataDir != nil, let fixture = env["BOTCHU_USAGE"],
+              ["sample", "stale", "expired", "unavailable"].contains(fixture) else { return nil }
+        return { _, _ in
+            if fixture == "unavailable" { throw UsageFailure("Check the account’s sign-in, then refresh.") }
+            let now = Date()
+            return ProviderUsage(windows: [
+                UsageWindow(id: "session", title: "5-hour", usedPercent: 24,
+                            resetsAt: now.addingTimeInterval(fixture == "expired" ? -60 : 7_200)),
+                UsageWindow(id: "week", title: "Weekly", usedPercent: 83, resetsAt: now.addingTimeInterval(259_200)),
+            ], readAt: now.addingTimeInterval(fixture == "stale" ? -7_200 : 0))
+        }
     }
 
     static func start(model: AppModel, openSettings: () -> Void) {

@@ -3,7 +3,7 @@ import SwiftUI
 import BotChuCore
 
 /// The status sidebar for a task: its bot's face and the task's state in a card, then the task
-/// (repository, issue, branch and pull request), what it runs on, its session, conversation and
+/// (repository, issue, branch and pull request), what it runs on, its account usage, session, conversation and
 /// worktree, and the actions on it.
 struct TaskInspector: View {
     @Environment(AppModel.self) private var model
@@ -56,6 +56,10 @@ struct TaskInspector: View {
                     InspectorSection("Runs on") {
                         RunsOnCard(settings: task, changeAccount: model.isRunning(target) ? nil : { model.setAccount($0, for: target) })
                     }
+                    let usageRequest = UsageRequest(account: task.account, command: model.settings.command(for: task.account),
+                        credentialRevision: task.account.kind == .pi ? model.settings.usageCredentialRevision : 0)
+                    AccountUsageSection(request: usageRequest, isRunning: model.isRunning(target))
+                        .id(usageRequest)
                     InspectorSection("Session") {
                         SessionCard(session: status.session)
                     }
