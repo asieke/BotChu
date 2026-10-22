@@ -1,13 +1,49 @@
 import Foundation
 
-/// A turn in progress: when it started and whether its CLI has printed anything yet.
+/// A turn in progress: when it started, whether its CLI has printed anything yet, and what the
+/// bot is doing now (from the turn's events).
 public struct RunState: Equatable, Sendable {
     public var startedAt: Date
     public var hasOutput: Bool
+    public private(set) var activity: BotActivity
+    public private(set) var activitySince: Date
+    /// Thinking, waiting until the tool's activity has shown for `minimumShow`.
+    public private(set) var pending: BotActivity?
 
-    public init(startedAt: Date = Date(), hasOutput: Bool = false) {
+    /// Most tool calls take a moment; their animation shows at least this long, so it can be seen.
+    public static let minimumShow: TimeInterval = 2.5
+
+    public init(startedAt: Date = Date(), hasOutput: Bool = false, activity: BotActivity = .thinking) {
         self.startedAt = startedAt
         self.hasOutput = hasOutput
+        self.activity = activity
+        activitySince = startedAt
+    }
+
+    /// Moves to `next`. Going back to thinking from a tool's activity waits until that activity has
+    /// shown for `minimumShow`; then this returns how long to wait before calling `settle`.
+    public mutating func move(to next: BotActivity, at now: Date = Date()) -> TimeInterval? {
+        if next == activity {
+            pending = nil
+            return nil
+        }
+        let shown = now.timeIntervalSince(activitySince)
+        if next == .thinking, activity != .thinking, shown < Self.minimumShow {
+            pending = next
+            return Self.minimumShow - shown
+        }
+        activity = next
+        activitySince = now
+        pending = nil
+        return nil
+    }
+
+    /// Takes the activity that was waiting, once its time has come.
+    public mutating func settle(at now: Date = Date()) {
+        guard let pending, now.timeIntervalSince(activitySince) >= Self.minimumShow - 0.05 else { return }
+        activity = pending
+        activitySince = now
+        self.pending = nil
     }
 }
 
@@ -37,8 +73,11 @@ public struct BotStatus: Equatable, Sendable {
     public var toolCallCount: Int
     public var lastActivity: Date?
     public var lastError: String?
+    /// What the bot's pet shows: the turn's activity, else a short reaction (`greeting`, `done`),
+    /// else `failed` after a failed turn, else `idle`.
+    public var activity: BotActivity
 
-    public static func make(bot: Bot, messages: [ChatMessage], run: RunState?) -> BotStatus {
+    public static func make(bot: Bot, messages: [ChatMessage], run: RunState?, reaction: BotActivity? = nil) -> BotStatus {
         let lastError: String? = {
             guard let last = messages.last(where: { $0.role != .note }), last.role == .error else { return nil }
             return last.text
@@ -62,7 +101,8 @@ public struct BotStatus: Equatable, Sendable {
             messageCount: messages.filter { $0.role == .user || $0.role == .assistant }.count,
             toolCallCount: messages.filter { $0.role == .tool }.count,
             lastActivity: messages.last(where: { $0.role != .note })?.date,
-            lastError: run == nil ? lastError : nil)
+            lastError: run == nil ? lastError : nil,
+            activity: run?.activity ?? reaction ?? (phase == .failed ? .failed : .idle))
     }
 }
 

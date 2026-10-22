@@ -9,7 +9,7 @@ struct SidebarView: View {
         @Bindable var model = model
         List(selection: $model.selection) {
             ForEach(model.bots) { bot in
-                BotRow(bot: bot, phase: model.status(of: bot).phase)
+                BotRow(bot: bot, status: model.status(of: bot), selected: model.selection == bot.id)
                     .tag(bot.id)
                     .contextMenu {
                         Button("Edit…") { model.edit(bot.id) }
@@ -55,11 +55,15 @@ struct SidebarView: View {
 
 struct BotRow: View {
     let bot: Bot
-    let phase: BotStatus.Phase
+    let status: BotStatus
+    let selected: Bool
+
+    private var phase: BotStatus.Phase { status.phase }
 
     var body: some View {
         HStack(spacing: 10) {
-            BotAvatar(bot: bot, size: 30)
+            // Only the selected bot and busy ones move, so a long list stays calm.
+            BotAvatar(bot: bot, size: 30, activity: status.activity, animates: selected || status.activity != .idle)
             VStack(alignment: .leading, spacing: 1) {
                 Text(bot.name)
                     .lineLimit(1)
@@ -77,6 +81,6 @@ struct BotRow: View {
     }
 
     private var subtitle: String {
-        phase == .idle ? bot.account.name : phase.label
+        phase == .idle ? bot.account.name : status.label
     }
 }

@@ -15,7 +15,13 @@ final class AppModel {
     var threads: [UUID: [ChatMessage]] = [:]
     /// Turns in progress, by bot.
     var runStates: [UUID: RunState] = [:]
-    var selection: UUID?
+    var selection: UUID? {
+        didSet { if let selection, selection != oldValue { react(.greeting, for: selection, seconds: 2) } }
+    }
+    /// Decoded pets, by bot; a bot without one shows its emoji.
+    var petSheets: [UUID: PetSheet] = [:]
+    /// Short pet reactions after a turn or on selection (`greeting`, `done`), by bot.
+    var reactions: [UUID: BotActivity] = [:]
     var editor: EditorRequest?
     let settings: AppSettings
 
@@ -31,7 +37,10 @@ final class AppModel {
         let loaded = self.store.loadBots()
         bots = loaded.bots
         missing = loaded.missing
-        for bot in bots { threads[bot.id] = self.store.loadThread(for: bot) }
+        for bot in bots {
+            threads[bot.id] = self.store.loadThread(for: bot)
+            reloadPet(bot.id)
+        }
         selection = bots.first?.id
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stopAll() }
@@ -43,7 +52,7 @@ final class AppModel {
     func isRunning(_ id: UUID) -> Bool { runStates[id] != nil }
 
     func status(of bot: Bot) -> BotStatus {
-        BotStatus.make(bot: bot, messages: thread(bot.id), run: runStates[bot.id])
+        BotStatus.make(bot: bot, messages: thread(bot.id), run: runStates[bot.id], reaction: reactions[bot.id])
     }
 
     // MARK: Bots
@@ -103,9 +112,11 @@ final class AppModel {
                 append(ChatMessage(role: .error, text: "Couldn't move this bot's history to \(bot.workspace): \(error.localizedDescription)"), to: bot.id)
             }
         }
+        let moved = bot.workspace != bots[i].workspace
         bots[i] = bot
         save(bot)
         prepareWorkspace(bot)
+        if moved { reloadPet(bot.id) }
     }
 
     func setModel(_ selected: String, for id: UUID) {
@@ -125,6 +136,8 @@ final class AppModel {
         if let bot = bot(id) { BotHome(workspace: bot.workspace).trash() }
         bots.removeAll { $0.id == id }
         threads[id] = nil
+        petSheets[id] = nil
+        reactions[id] = nil
         saveIndex()
         if selection == id { selection = bots.first?.id }
     }
@@ -151,6 +164,38 @@ final class AppModel {
         let home = BotHome(workspace: bot.workspace)
         try? FileManager.default.createDirectory(at: home.logsURL, withIntermediateDirectories: true)
         NSWorkspace.shared.open(home.url)
+    }
+
+    // MARK: Pets
+
+    /// Reads the bot's pet again, off the main thread (decoding an atlas takes a moment).
+    func reloadPet(_ id: UUID) {
+        guard let bot = bot(id) else { return }
+        let home = BotHome(workspace: bot.workspace)
+        Task.detached(priority: .utility) {
+            let sheet = home.loadPet().flatMap(PetSheet.load)
+            await MainActor.run { [weak self] in
+                guard let self, self.bot(id)?.workspace == bot.workspace else { return }
+                self.petSheets[id] = sheet
+            }
+        }
+    }
+
+    /// Copies a Codex pet folder (`pet.json` and its spritesheet) into the bot's folder.
+    func importPet(from folder: URL, for id: UUID) throws {
+        guard let bot = bot(id) else { return }
+        let home = BotHome(workspace: bot.workspace)
+        try PetPackage.importCodexPet(from: folder, into: home.petURL)
+        reloadPet(id)
+    }
+
+    /// Shows a short reaction, unless a turn is running, then goes back to what the bot shows otherwise.
+    private func react(_ reaction: BotActivity, for id: UUID, seconds: Double) {
+        guard runStates[id] == nil else { return }
+        reactions[id] = reaction
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            if self?.reactions[id] == reaction { self?.reactions[id] = nil }
+        }
     }
 
     // MARK: Turns
@@ -225,6 +270,13 @@ final class AppModel {
                         ended = true
                     default: break
                     }
+                    if let activity = BotActivity.next(after: event),
+                       activity != self.runStates[id]?.activity || self.runStates[id]?.pending != nil,
+                       let wait = self.runStates[id]?.move(to: activity) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+                            self?.runStates[id]?.settle()
+                        }
+                    }
                     assembler.apply(event, to: &messages)
                 }
             }
@@ -250,6 +302,9 @@ final class AppModel {
             }
             self.threads[id] = messages
             self.saveThread(id)
+            if run?.stopped != true, messages.last(where: { $0.role != .note })?.role != .error {
+                self.react(.done, for: id, seconds: 3)
+            }
             let turn = messages.suffix(from: min(turnStart, messages.count))
             try? home.appendLog(TurnLog.ended(
                 at: Date(), startedAt: startedAt, status: status, stopped: run?.stopped == true,
@@ -263,6 +318,7 @@ final class AppModel {
                                                 prompt: BotContext.prompt(for: text, preamble: preamble), resuming: resume))
             try run.start()
             runs[id] = run
+            reactions[id] = nil
             runStates[id] = RunState()
             // A CLI that has printed nothing yet is usually blocked on a macOS prompt: as BotChu's
             // child, it needs BotChu's permission for protected folders (Desktop, Documents) its own

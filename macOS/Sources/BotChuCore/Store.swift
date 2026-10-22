@@ -1,8 +1,8 @@
 import Foundation
 
 /// A bot's own files, in `.botchu/` inside its workspace, so the folder is the whole bot: its
-/// settings (`bot.json`), its conversation (`thread.jsonl`, one message per line) and a log of each
-/// turn (`logs/<date>.log`). A `.gitignore` keeps them out of a workspace that is a git repository.
+/// settings (`bot.json`), its conversation (`thread.jsonl`, one message per line), a log of each
+/// turn (`logs/<date>.log`) and its animated pet (`pet/`). A `.gitignore` keeps them out of a workspace that is a git repository.
 public struct BotHome: Sendable {
     public static let folderName = ".botchu"
 
@@ -15,6 +15,10 @@ public struct BotHome: Sendable {
     public var botURL: URL { url.appendingPathComponent("bot.json") }
     public var threadURL: URL { url.appendingPathComponent("thread.jsonl") }
     public var logsURL: URL { url.appendingPathComponent("logs", isDirectory: true) }
+    /// The bot's animated pet, when it has one (see `PetPackage`).
+    public var petURL: URL { url.appendingPathComponent("pet", isDirectory: true) }
+
+    public func loadPet() -> PetPackage? { PetPackage.load(from: petURL) }
 
     public var exists: Bool { FileManager.default.fileExists(atPath: botURL.path) }
 
