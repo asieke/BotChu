@@ -4,6 +4,13 @@ import ImageIO
 import UniformTypeIdentifiers
 import BotChuCore
 
+// Use a named result for the same Swift 6.4 task-group workaround as project loading.
+private struct PetClipResult: Sendable {
+    let id: String
+    let cost: Double
+    let error: String?
+}
+
 /// A pet being made for a bot: Codex draws its stills, then OpenRouter turns each into a clip.
 struct PetJob: Equatable {
     enum Phase: Equatable {
@@ -171,21 +178,26 @@ extension AppModel {
                 images[still] = Self.dataURI(jpegOf: staging.appendingPathComponent(PetVideo.stillsFolder).appendingPathComponent("\(still).png"))
             }
             var failures: [String] = []
-            await withTaskGroup(of: (String, Double, String?).self) { group in
+            await withTaskGroup(of: PetClipResult.self) { group in
                 for clip in clips {
                     guard let image = images[clip.still] else { failures.append("\(clip.id): couldn't read its still"); continue }
                     group.addTask {
+                        let cost: Double
+                        let failure: String?
                         do {
                             let file = staging.appendingPathComponent(PetVideo.clipsFolder).appendingPathComponent("\(clip.id).mp4")
-                            let cost = try await Self.makeClip(clip, model: model, image: image, client: client, to: file)
-                            return (clip.id, cost, nil)
+                            cost = try await Self.makeClip(clip, model: model, image: image, client: client, to: file)
+                            failure = nil
                         } catch {
-                            return (clip.id, 0, error.localizedDescription)
+                            cost = 0
+                            failure = error.localizedDescription
                         }
+                        return PetClipResult(id: clip.id, cost: cost, error: failure)
                     }
                 }
                 var done = 0
-                for await (clipID, cost, error) in group {
+                for await result in group {
+                    let (clipID, cost, error) = (result.id, result.cost, result.error)
                     done += 1
                     if let error { failures.append("\(clipID): \(error)") }
                     try? home.appendLog("── \(Self.logTime()) · pet clip \(clipID) "

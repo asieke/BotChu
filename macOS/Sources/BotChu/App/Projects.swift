@@ -1,6 +1,14 @@
 import Foundation
 import BotChuCore
 
+// Swift 6.4 can miscompile String-first tuple returns from task-group do/catch branches
+// in optimized builds, losing results or completing children into a destroyed group.
+// Keep a named result and one return: https://github.com/swiftlang/swift/issues/93208
+private struct ProjectLoadResult: Sendable {
+    let repo: String
+    let result: Result<ProjectRecord, Error>
+}
+
 extension AppModel {
     func loadProjects(force: Bool = false) async {
         guard !projectsLoading else { return }
@@ -13,16 +21,19 @@ extension AppModel {
         for start in stride(from: 0, to: pending.count, by: 4) {
             guard !Task.isCancelled else { return }
             let batch = Array(pending[start..<min(start + 4, pending.count)])
-            await withTaskGroup(of: (String, Result<ProjectRecord, Error>).self) { group in
+            await withTaskGroup(of: ProjectLoadResult.self) { group in
                 let client = projectGitHub
                 for repo in batch {
                     group.addTask {
-                        do { return (repo.id, .success(try await client.record(repo: repo.id))) }
-                        catch { return (repo.id, .failure(error)) }
+                        let result: Result<ProjectRecord, Error>
+                        do { result = .success(try await client.record(repo: repo.id)) }
+                        catch { result = .failure(error) }
+                        return ProjectLoadResult(repo: repo.id, result: result)
                     }
                 }
-                for await (repo, result) in group {
-                    switch result {
+                for await loaded in group {
+                    let repo = loaded.repo
+                    switch loaded.result {
                     case .success(let record):
                         projectRecords[repo] = record
                         projectErrors[repo] = nil
