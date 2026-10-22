@@ -3,7 +3,7 @@ import SwiftUI
 import BotChuCore
 
 /// The right-hand sidebar for a bot's Home: its face and state in a card, then what it runs on, its
-/// session, tasks, conversation, memory and workspace in grouped cards, and the actions on it.
+/// account usage, session, tasks, conversation, memory and workspace in grouped cards, and the actions on it.
 struct BotInspector: View {
     @Environment(AppModel.self) private var model
     let botID: UUID
@@ -19,6 +19,10 @@ struct BotInspector: View {
                     InspectorSection("Runs on") {
                         RunsOnCard(settings: bot)
                     }
+                    let usageRequest = UsageRequest(account: bot.account, command: model.settings.command(for: bot.account),
+                        credentialRevision: bot.account.kind == .pi ? model.settings.usageCredentialRevision : 0)
+                    AccountUsageSection(request: usageRequest, isRunning: model.isRunning(.home(botID)))
+                        .id(usageRequest)
                     InspectorSection("Session") {
                         SessionCard(session: status.session)
                     }
@@ -109,8 +113,8 @@ struct BotInspector: View {
 }
 
 /// The card at the top: the bot's face in a ring that shows its state, the name and one line
-/// under it (the bot's title, or for a task, its repository), a status pill, and a line on what it
-/// is doing.
+/// under it (the bot's title, or for a task, its repository), a pill while working or after an
+/// error, and a line on what it is doing.
 struct AvatarCard: View {
     let bot: Bot
     let status: BotStatus
@@ -129,6 +133,7 @@ struct AvatarCard: View {
                 Text(title)
                     .font(.system(size: 17, weight: .bold))
                     .kerning(-0.2)
+                    .accessibilityLabel("\(title), \(StatusLook(status).label)")
                     .multilineTextAlignment(.center)
                 if !subtitle.isEmpty {
                     Text(subtitle)
@@ -139,7 +144,7 @@ struct AvatarCard: View {
                 }
             }
             VStack(spacing: 6) {
-                StatusPill(state: StatusLook(status))
+                if status.phase != .idle { StatusPill(state: StatusLook(status)) }
                 detail
                 if status.phase.isActive { IndeterminateBar() }
             }

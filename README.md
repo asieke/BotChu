@@ -104,15 +104,30 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     Session**) also gets the recent conversation, so switching accounts keeps the thread's continuity.
   - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I). A card at the top shows
     the selected bot's face (its pet or emoji) in a ring that says its state (grey when idle, a
-    spinning violet arc while it works, red after a failed turn), its name and title, a status pill,
-    and a line on what it is doing with the turn's running time (or when it was last active, or the
-    error). Grouped cards below give the account, agent and model it runs on, whether the next
-    message continues its CLI session (with its id to copy), its open tasks, its message and tool-call counts, last
+    spinning violet arc while it works, red after a failed turn), its name and title, a pill while
+    working or after an error, and a line on what it is doing with the turn's running time
+    (or when it was last active, or the
+    error). Grouped cards below give the account, agent and model it runs on, **Usage** (between
+    **Runs on** and **Session**), whether the next message continues its CLI session (with its id
+    to copy), its open tasks, its message and tool-call counts, last
     activity and creation date, what its `MEMORY.md` holds, and its workspace, with Edit and New
     Session. On a task's tab it shows the task instead: its repository, issue, branch, pull request
-    (and whether it is open, merged or closed), the account (which can change there), session and
-    worktree (in Finder or Terminal), with Close Task and New Session. Its colors follow light and
-    dark mode.
+    (and whether it is open, merged or closed), the account (which can change there), that account's
+    usage, session and worktree (in Finder or Terminal), with Close Task and New Session. Its colors
+    follow light and dark mode.
+  - **Account usage:** the selected account's allowance used and reset times, shared by all bots
+    on that account. Claude Code and Antigravity use their native `/usage` commands; Codex uses
+    `account/rateLimits/read`. They run the command configured in Settings, with the CLI managing
+    its own login. Checks run in a temporary folder, outside bot conversations, every five minutes
+    while the status sidebar is open, after turns, or with Refresh (at most once every 30 seconds).
+    Muse needs one brief `Reply with OK.` request to learn its allowance: it uses isolated,
+    temporary host state, checks hourly automatically, and at most once every five minutes after
+    a turn or with Refresh. This spends a small amount of its allowance. OpenRouter shows the
+    saved key's spending allowance and any reported shared budgets, with resets at midnight UTC;
+    an uncapped key says so, without claiming unlimited account credits. Saving a different key
+    clears its previous readout. Failed checks retain the last successful reading marked stale;
+    an expired window hides its old percentage until a new reading arrives. CLI output,
+    credentials and usage readings are not written to disk by BotChu.
   - **Settings:** the bots folder, the repositories folder, each account's command, the Codex
     account that draws pets, the OpenRouter API key (Keychain) and default OpenRouter model.
 - Does not: run bots or tasks anywhere but this Mac (yet: SSH hosts, set up in BotChu itself, come
@@ -125,7 +140,9 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
   - `Sources/BotChuCore/` — Foundation only, unit-tested: accounts and the command line each CLI
     runs with (`Accounts.swift`), the bot and message model (`Models.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), the identity, memory and
-    recap that open a session (`BotContext.swift`), what the status sidebar shows about a bot and
+    recap that open a session (`BotContext.swift`), account allowance parsing and native queries
+    (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
+    (`UsageCache.swift`), what the status sidebar shows about a bot and
     its `MEMORY.md` (`BotStatus.swift`), pets: the atlas rows, BotChu's extra animations, the
     activity a tool call means and the pet folder (`Pet.swift`), drawing a pet with Codex: the
     prompt, prerequisites, progress and install (`PetHatching.swift`), tasks: the task, its title
@@ -214,6 +231,12 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
   `BOTCHU_DRAW_PET="<appearance>"` has Codex draw it one (a real run on the pet account). The window's picture leaves
   out the sidebar's rows, so they are drawn on their own into `sidebar.png`.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
+  `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
+  querying any account. Usage fixtures are ignored outside throwaway data runs.
+- Account allowance end to end: `swift run --package-path macOS botchu-smoke --usage [account id …]`
+  reads each account's usage through the same client as the inspector. It prints only the normalized
+  usage fields, never raw CLI output or credentials. Muse makes its brief usage request; OpenRouter
+  needs `OPENROUTER_API_KEY` in the environment. This is separate from the two-turn conversation smoke.
 - Smoke test after deploy: `macOS/install.sh` fails unless the installed app starts (launched hidden,
   checked with `pgrep -x BotChu`, and quit again unless it was already open).
 
