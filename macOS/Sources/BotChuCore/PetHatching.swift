@@ -119,9 +119,26 @@ public enum PetHatching {
         return manifest
     }
 
+    /// The run's working files, removed once the pet is installed, as the skill's own cleanup does
+    /// (about 45 MB): generated strips, extracted frames, layout guides, the uncompressed atlas.
+    /// The request, prompts, canonical base, contact sheet, QA review and previews stay.
+    static let workingFiles = ["decoded", "frames", "final", "references/layout-guides", "qa/rows", "qa/corrections"]
+
+    /// Removes a finished run's working files from `staging`.
+    public static func pruneRun(in staging: URL) {
+        let run = staging.appendingPathComponent(runFolder)
+        let files = FileManager.default
+        var paths = workingFiles
+        if let extras = try? files.contentsOfDirectory(atPath: run.appendingPathComponent("extras").path) {
+            paths += extras.flatMap { ["extras/\($0)/decoded", "extras/\($0)/frames"] }
+        }
+        for path in paths { try? files.removeItem(at: run.appendingPathComponent(path)) }
+    }
+
     /// Replaces the bot's pet with the drawing in `staging`; the old pet goes to the Trash.
     public static func install(from staging: URL, into home: BotHome) throws {
         let files = FileManager.default
+        pruneRun(in: staging)
         if files.fileExists(atPath: home.petURL.path) {
             try files.trashItem(at: home.petURL, resultingItemURL: nil)
         }

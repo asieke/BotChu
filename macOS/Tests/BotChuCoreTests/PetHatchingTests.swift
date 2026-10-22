@@ -64,6 +64,24 @@ import Testing
         #expect(saved == manifest)
     }
 
+    @Test func pruningKeepsTheReviewFiles() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        for path in ["run/decoded/idle.png", "run/frames/idle/00.png", "run/final/spritesheet.png",
+                     "run/references/layout-guides/idle.png", "run/qa/rows/idle.png",
+                     "run/extras/coding/decoded/running.png", "run/extras/coding/frames/running/00.png",
+                     "run/pet_request.json", "run/prompts/base.md", "run/references/canonical-base.png",
+                     "run/qa/contact-sheet.png", "run/qa/review.json", "run/extras/coding/prompt.md",
+                     "activities/coding/00.png"] {
+            try write("x", path)
+        }
+        PetHatching.pruneRun(in: root)
+        let left = FileManager.default.enumerator(atPath: root.path)!.compactMap { $0 as? String }
+            .filter { !$0.hasSuffix("/") && $0.contains(".") }.sorted()
+        #expect(left == ["activities/coding/00.png", "run/extras/coding/prompt.md", "run/pet_request.json",
+                         "run/prompts/base.md", "run/qa/contact-sheet.png", "run/qa/review.json",
+                         "run/references/canonical-base.png"])
+    }
+
     @Test func installReplacesThePet() throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let home = BotHome(workspace: root.appendingPathComponent("bot").path)

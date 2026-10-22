@@ -18,6 +18,7 @@ the Mac, and runs in its own workspace folder on this Mac.
     deflated after a failed one, and waves when its bot is selected. A pet is a Codex pet (the
     `hatch-pet` skill's 8 × 9 or 8 × 11 atlas of 192 × 208 cells), plus optional extra animations
     BotChu adds for these activities; missing ones fall back to the closest atlas row. **Import
+<<<<<<< HEAD
     Codex Pet…** in **Edit Bot** copies one in (for example from `~/.codex/pets/<name>`).
   - **Drawing a pet:** describe the bot's look in **Appearance** in **Edit Bot** and choose **Draw
     Pet** (or create a bot with an appearance). One `codex exec` on a Codex account follows Codex's
@@ -32,6 +33,11 @@ the Mac, and runs in its own workspace folder on this Mac.
     (Xcode's `/usr/bin/python3` with `pip install --user pillow`, or Homebrew's), and BotChu says
     which is missing. A drawing makes about 16 images on that account's allowance and takes 30
     minutes or more. Reduce Motion shows a still frame. Only the
+=======
+    Codex Pet…** in **Edit Bot** copies one in (for example from `~/.codex/pets/<name>`), and the
+    bot's **Appearance** text says how it looks. Frames blend into each other and a change of
+    activity cross-fades, so the motion is smooth. Reduce Motion shows a still frame. Only the
+>>>>>>> feat/8-pet-sprites
     selected bot and busy bots move in the sidebar.
   - **Accounts:** any bot can run on any account, switchable in **Edit Bot**:
     Claude Personal, Claude Dev and Claude Work (`claude-personal`, `claude-dev`, `claude-work`),
