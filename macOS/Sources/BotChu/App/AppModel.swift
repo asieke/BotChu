@@ -58,6 +58,7 @@ final class AppModel {
     var taskSheet: TaskSheetRequest?
     let settings: AppSettings
     let usage: UsageCache
+    let modelCatalog = ModelCatalog()
 
     private let store: Store
     /// Index entries whose folders don't hold their bot right now; kept so the bot returns with it.
@@ -222,7 +223,9 @@ final class AppModel {
     }
 
     func setReasoningEffort(_ effort: ReasoningEffort?, for target: ChatTarget) {
-        guard !isRunning(target) else { return }
+        guard !isRunning(target), let current = runSettings(of: target) else { return }
+        let effective = GenerationOptions.effectiveModel(current.model, kind: current.account.kind, openRouterDefault: settings.openRouterModel)
+        if let effort, !GenerationOptions.efforts(for: current.account.kind, model: effective).contains(effort) { return }
         change(target) { $0.reasoningEffort = effort }
     }
 
@@ -670,7 +673,7 @@ final class AppModel {
             }
         }
         let prompt = BotContext.prompt(for: text, preamble: preamble, updates: updates)
-        let model = account.kind == .pi && current.model.isEmpty ? settings.openRouterModel : current.model
+        let model = GenerationOptions.effectiveModel(current.model, kind: account.kind, openRouterDefault: settings.openRouterModel)
         let invocation = CommandBuilder.invocation(
             kind: account.kind,
             prompt: prompt,

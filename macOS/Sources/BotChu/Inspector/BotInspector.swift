@@ -17,7 +17,7 @@ struct BotInspector: View {
                     AvatarCard(bot: bot, status: status, title: bot.name, subtitle: bot.title, account: bot.account) { model.edit(botID) }
                     PetDrawingStatus(botID: botID)
                     InspectorSection("Runs on") {
-                        RunsOnCard(settings: bot)
+                        RunsOnCard(settings: bot, target: .home(botID))
                     }
                     let usageRequest = UsageRequest(account: bot.account, command: model.settings.command(for: bot.account),
                         credentialRevision: bot.account.kind == .pi ? model.settings.usageCredentialRevision : 0)
@@ -213,6 +213,7 @@ struct AvatarCard: View {
 struct RunsOnCard: View {
     @Environment(AppModel.self) private var model
     let settings: any RunSettings
+    let target: ChatTarget
     var changeAccount: ((String) -> Void)?
 
     var body: some View {
@@ -239,16 +240,11 @@ struct RunsOnCard: View {
                 }
             }
             InspectorRow("Agent", value: settings.account.kind.displayName)
-            InspectorRow("Model", value: modelName)
-            InspectorRow("Reasoning", value: settings.reasoningEffort?.title ?? "Default", last: true)
+            ModelMenu(settings: settings, disabled: model.isRunning(target),
+                      onModel: { model.setModel($0, for: target) },
+                      onEffort: { model.setReasoningEffort($0, for: target) }, inInspector: true)
+                .id(target)
         }
-    }
-
-    private var modelName: String {
-        if !settings.model.isEmpty {
-            return GenerationOptions.modelArgument(settings.model, kind: settings.account.kind, effort: settings.reasoningEffort)
-        }
-        return settings.account.kind == .pi ? model.settings.openRouterModel : "CLI default"
     }
 }
 

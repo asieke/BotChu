@@ -82,6 +82,15 @@ public enum GenerationOptions {
     public static func name(for model: String, kind: AgentKind) -> String {
         option(for: model, kind: kind)?.name ?? (model.isEmpty ? "Default model" : model)
     }
+
+    /// The model sent on the next turn. Native CLI defaults stay unspecified; OpenRouter always
+    /// receives a model, inherited from Settings or the built-in fallback when Settings is blank.
+    public static func effectiveModel(_ model: String, kind: AgentKind, openRouterDefault: String) -> String {
+        let selected = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard kind == .pi, selected.isEmpty else { return selected }
+        let fallback = openRouterDefault.trimmingCharacters(in: .whitespacesAndNewlines)
+        return fallback.isEmpty ? CommandBuilder.defaultOpenRouterModel : fallback
+    }
 }
 
 extension RunSettings {

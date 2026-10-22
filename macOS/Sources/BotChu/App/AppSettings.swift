@@ -29,7 +29,8 @@ final class AppSettings {
             botsRoot = defaults.string(forKey: "botsRoot") ?? (NSHomeDirectory() as NSString).appendingPathComponent("BotChu")
             reposRoot = defaults.string(forKey: "reposRoot") ?? "~/Desktop/WORKSPACE"
         }
-        openRouterModel = defaults.string(forKey: "openRouterModel") ?? CommandBuilder.defaultOpenRouterModel
+        openRouterModel = (DevHooks.dataDir != nil ? DevHooks.env["BOTCHU_DEFAULT_MODEL"] : nil)
+            ?? defaults.string(forKey: "openRouterModel") ?? CommandBuilder.defaultOpenRouterModel
         commands = defaults.dictionary(forKey: "commands") as? [String: String] ?? [:]
         petAccountID = defaults.string(forKey: "petAccountID") ?? "codex-personal"
     }
