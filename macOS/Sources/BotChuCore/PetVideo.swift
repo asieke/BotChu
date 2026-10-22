@@ -137,6 +137,15 @@ public enum PetVideo {
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
 
+    /// Whether a refused request is worth repeating: a rate limit or a server error, which leave no
+    /// job behind (so nothing is charged twice). Anything else, such as a bad model or image, isn't.
+    public static func isTransient(status: Int) -> Bool {
+        status == 429 || (500...599).contains(status)
+    }
+
+    /// Seconds to wait before each repeat of a request that failed for a passing reason.
+    public static let retryDelays: [Double] = [5, 15]
+
     /// A video job as OpenRouter reports it.
     public struct Job: Equatable, Sendable {
         public enum State: String, Sendable { case pending, inProgress = "in_progress", completed, failed, cancelled, expired }

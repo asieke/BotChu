@@ -27,7 +27,9 @@ repositories, in parallel, each in its own git worktree and in a tab beside its 
     with the estimated cost. One `codex exec` on a Codex account draws eight square stills of the
     character, one per pose, with its built-in image generation (on that account's ChatGPT
     allowance). BotChu then sends each still to an image-to-video model on OpenRouter, as both the
-    first and last frame of a 4 or 5 second clip, so it loops; all ten clips at once. Each clip is
+    first and last frame of a 4 or 5 second clip, so it loops; all ten clips at once. A request
+    that fails for a passing reason (a rate limit, a server error, a dropped connection) is tried
+    twice more, 5 and 15 seconds later. Each clip is
     scaled down to 256 × 256 pixels after downloading. The default model, Seedance 1.5 Pro at
     480p, costs about $0.06 a clip, about $0.56 a pet; Kling 3.0 Standard at 720p is about $4. It
     takes about 10 minutes. A remake with the same appearance keeps the character: the current

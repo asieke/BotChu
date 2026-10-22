@@ -71,6 +71,18 @@ import Testing
         #expect(PetVideo.Job.parse(Data("not json".utf8)) == nil)
     }
 
+    @Test func onlyPassingFailuresAreRetried() {
+        // The researching clip of a real pet came back "status 500: Internal Server Error".
+        #expect(PetVideo.isTransient(status: 500))
+        #expect(PetVideo.isTransient(status: 503))
+        #expect(PetVideo.isTransient(status: 429))
+        // A bad model (a real 400) or a missing key (a real 401) fails the same way every time.
+        #expect(!PetVideo.isTransient(status: 400))
+        #expect(!PetVideo.isTransient(status: 401))
+        #expect(!PetVideo.isTransient(status: 0))
+        #expect(PetVideo.retryDelays.count == 2)
+    }
+
     @Test func stillsPromptKeepsTheCharacter() {
         let prompt = PetVideo.stillsPrompt(petName: "10x Bot", appearance: "A plush monkey\n", folder: "/w/v",
                                            reference: "/w/v/reference.png")
