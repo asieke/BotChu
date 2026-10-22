@@ -9,9 +9,9 @@ struct BotEditor: View {
     /// The workspace last filled in from the name; once the field differs, the person chose it.
     @State private var autoWorkspace = ""
     @State private var confirmDelete = false
-    /// A Codex pet chosen for a bot that isn't created yet; copied in on Create.
-    @State private var pendingPet: URL?
-    @State private var petError: String?
+    @State private var confirmPet = false
+    /// Asked on Create, when the new bot has an appearance.
+    @State private var confirmCreatePet = false
     private let isNew: Bool
 
     init(request: EditorRequest) {
@@ -64,38 +64,23 @@ struct BotEditor: View {
                                 }
                             }
                     }
-                    HStack {
-                        if !isNew {
-                            Button(model.petSheets[bot.id] == nil ? "Draw Pet" : "Redraw Pet") {
-                                model.setAppearance(bot.appearance ?? "", for: bot.id)
-                                model.drawPet(bot.id)
-                            }
-                            .disabled((bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                      || model.petDrawings[bot.id]?.isActive == true)
-                            .help("Have \(model.petAccount(for: bot).name) draw this bot's pet from its appearance, in the background")
-                        }
-                        Button("Import Codex Pet…", action: choosePet)
-                            .help("Use a pet made in Codex: a folder with pet.json and its spritesheet, such as ~/.codex/pets/<name>")
-                        Spacer()
-                    }
                     if !isNew {
-                        PetDrawingStatus(botID: bot.id)
+                        HStack {
+                            Button(model.pets[bot.id] == nil ? "Make Pet…" : "Remake Pet…") { confirmPet = true }
+                                .disabled((bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                          || model.petJobs[bot.id]?.isActive == true)
+                                .help("Codex draws a still per state, then OpenRouter turns each into a short looping clip")
+                            Spacer()
+                        }
+                        PetJobStatus(botID: bot.id)
                     }
                 } header: {
                     Text("Appearance")
                 } footer: {
-                    if let petError {
-                        Text(petError).font(.caption).foregroundStyle(.red)
-                    } else if let pendingPet {
-                        Text("\(pendingPet.lastPathComponent) is added when you create the bot.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else if isNew {
-                        Text("With an appearance, \(model.petAccount(for: bot).name) draws the bot's pet after you create it. It stands in for the emoji and acts out what the bot is doing.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        Text("The pet stands in for the emoji and acts out what the bot is doing. \(model.petAccount(for: bot).name) draws it with Codex's hatch-pet skill, in the background; it takes a while.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    Text(isNew
+                         ? "With an appearance, you can make the bot's pet when you create it: an animated character that stands in for the emoji and acts out what the bot is doing."
+                         : "The pet stands in for the emoji and acts out what the bot is doing. A remake with the same appearance keeps its look.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
                     Picker("Account", selection: Binding(get: { bot.accountID }, set: { bot.selectAccount($0) })) {
@@ -144,6 +129,20 @@ struct BotEditor: View {
             autoWorkspace = bot.name.trimmingCharacters(in: .whitespaces).isEmpty ? "" : model.defaultWorkspace(for: bot.name)
             bot.workspace = autoWorkspace
         }
+        .confirmationDialog("Make a pet for \(bot.name)?", isPresented: $confirmPet) {
+            Button("Make Pet (\(petCost))") {
+                model.setAppearance(bot.appearance ?? "", for: bot.id)
+                model.makePet(bot.id)
+            }
+        } message: {
+            Text(petExplanation)
+        }
+        .confirmationDialog("Make a pet for \(bot.name) too?", isPresented: $confirmCreatePet) {
+            Button("Create and Make Pet (\(petCost))") { finish(makingPet: true) }
+            Button("Create Without a Pet") { finish(makingPet: false) }
+        } message: {
+            Text(petExplanation)
+        }
         .confirmationDialog("Delete \(bot.name)?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
                 model.delete(bot.id)
@@ -174,8 +173,10 @@ struct BotEditor: View {
     }
 
     @ViewBuilder private var petPreview: some View {
-        if let sheet = model.petSheets[bot.id], !isNew {
-            PetSpriteView(sheet: sheet, activity: .idle)
+        if let video = model.pets[bot.id], !isNew {
+            PetVideoView(package: video, activity: .idle)
+                .frame(width: 56, height: 56)
+                .clipShape(Circle())
                 .frame(width: 60, height: 65)
         } else {
             BotAvatar(bot: bot, size: 44)
@@ -183,42 +184,28 @@ struct BotEditor: View {
         }
     }
 
-    private func choosePet() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.prompt = "Use Pet"
-        panel.message = "Choose a Codex pet folder, with pet.json and its spritesheet."
-        let pets = (NSHomeDirectory() as NSString).appendingPathComponent(".codex/pets")
-        if FileManager.default.fileExists(atPath: pets) { panel.directoryURL = URL(fileURLWithPath: pets, isDirectory: true) }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        petError = nil
-        guard PetPackage.load(from: url) != nil else {
-            petError = "\(url.lastPathComponent) isn't a Codex pet: it needs pet.json and the spritesheet it names."
+    private func save() {
+        if isNew, !(bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            confirmCreatePet = true
             return
         }
-        if isNew {
-            pendingPet = url
-        } else {
-            do {
-                try model.importPet(from: url, for: bot.id)
-            } catch {
-                petError = error.localizedDescription
-            }
-        }
+        finish(makingPet: false)
     }
 
-    private func save() {
+    private func finish(makingPet: Bool) {
         if isNew {
             model.create(bot)
-            if let pendingPet {
-                try? model.importPet(from: pendingPet, for: bot.id)
-            } else if !(bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                model.drawPet(bot.id)
-            }
+            if makingPet { model.makePet(bot.id) }
         } else {
             model.update(bot)
         }
         dismiss()
+    }
+
+    private var petCost: String { String(format: "about $%.2f", PetVideo.estimatedCost(model.petModel)) }
+
+    private var petExplanation: String {
+        String(format: "%@ draws %d stills of it from its appearance, on your ChatGPT allowance (keeping its pet's look when the appearance hasn't changed). Then OpenRouter turns them into %d short looping clips on %@, for %@ of your OpenRouter credit. It takes about 10 minutes, in the background.",
+               model.petAccount(for: bot).name, PetVideo.stills.count, PetVideo.clips.count, model.petModel.name, petCost)
     }
 }

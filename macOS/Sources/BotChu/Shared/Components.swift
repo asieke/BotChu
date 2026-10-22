@@ -27,9 +27,11 @@ struct BotAvatar: View {
 
     var body: some View {
         Group {
-            if let sheet = model.petSheets[bot.id] {
-                // A pet is drawn on nothing: its own outline is the avatar.
-                PetSpriteView(sheet: sheet, activity: activity, style: .head, animates: animates)
+            if let video = model.pets[bot.id] {
+                // A pet is a square portrait: shown in a circle, like a profile picture.
+                PetVideoView(package: video, activity: activity, animates: animates)
+                    .frame(width: size, height: size)
+                    .clipShape(Circle())
             } else {
                 Text(bot.emoji)
                     .font(.system(size: size * 0.55))

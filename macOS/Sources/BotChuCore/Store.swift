@@ -17,7 +17,7 @@ public struct BotHome: Sendable {
     public var botURL: URL { url.appendingPathComponent("bot.json") }
     public var threadURL: URL { url.appendingPathComponent("thread.jsonl") }
     public var logsURL: URL { url.appendingPathComponent("logs", isDirectory: true) }
-    /// The bot's animated pet, when it has one (see `PetPackage`).
+    /// The bot's animated pet, when it has one (see `PetVideo`).
     public var petURL: URL { url.appendingPathComponent("pet", isDirectory: true) }
     public var tasksURL: URL { url.appendingPathComponent("tasks", isDirectory: true) }
     /// Where the bot puts requests for tasks from its Home conversation (`TaskRequest`), which
@@ -27,7 +27,6 @@ public struct BotHome: Sendable {
     public func taskURL(_ id: UUID) -> URL { tasksURL.appendingPathComponent(id.uuidString.lowercased(), isDirectory: true) }
     public func taskThreadURL(_ id: UUID) -> URL { taskURL(id).appendingPathComponent("thread.jsonl") }
 
-    public func loadPet() -> PetPackage? { PetPackage.load(from: petURL) }
 
     public var exists: Bool { FileManager.default.fileExists(atPath: botURL.path) }
 

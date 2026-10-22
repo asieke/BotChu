@@ -23,9 +23,9 @@ import BotChuCore
 ///   command here lets a review exercise tasks on a host without one).
 /// - `BOTCHU_TASK_REPO`: with `BOTCHU_OPEN=task`, the repository (`owner/name`) New Task chooses.
 /// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
-/// - `BOTCHU_PET`: give the selected bot this Codex pet folder at launch, as Import Codex Pet does.
-/// - `BOTCHU_DRAW_PET`: give the selected bot this appearance and draw its pet at launch (a real
-///   Codex run on the pet account, which takes a while).
+/// - `BOTCHU_PET`: give the selected bot this pet folder at launch (`video.json`, `stills/`, `clips/`).
+/// - `BOTCHU_DRAW_PET`: give the selected bot this appearance and make its pet at launch (a real Codex
+///   run, then real clips on OpenRouter, which cost OpenRouter credit).
 @MainActor
 enum DevHooks {
     static let env = ProcessInfo.processInfo.environment
@@ -90,12 +90,16 @@ enum DevHooks {
             if parts.count > 2 { bot.instructions = parts[2] }
             model.create(bot)
         }
-        if let folder = env["BOTCHU_PET"], let id = model.selection {
-            try? model.importPet(from: URL(fileURLWithPath: (folder as NSString).expandingTildeInPath, isDirectory: true), for: id)
+        if let folder = env["BOTCHU_PET"], let id = model.selection, let bot = model.bot(id) {
+            let target = PetVideo.folder(for: BotHome(workspace: bot.workspace))
+            try? FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: target)
+            try? FileManager.default.copyItem(at: URL(fileURLWithPath: (folder as NSString).expandingTildeInPath), to: target)
+            model.reloadPet(id)
         }
         if let appearance = env["BOTCHU_DRAW_PET"], let id = model.selection {
             model.setAppearance(appearance, for: id)
-            model.drawPet(id)
+            model.makePet(id)
         }
         if let tab = env["BOTCHU_TAB"].flatMap(Int.init), tab > 0, let id = model.selection {
             model.showTab(offset: tab, of: id)
@@ -135,6 +139,52 @@ enum DevHooks {
     }
 
     /// Each visible window as `<n>-<title>.png`, drawn by the app itself.
+    /// Video layers aren't in a view's cached drawing, so each pet's current frame (and where it
+    /// shows, in `root`'s coordinates) is collected to be drawn over the picture, and its player's
+    /// state is written to `pets.txt`.
+    static func petVideoFrames(in root: NSView) -> [(CGImage, CGRect)] {
+        var frames: [(CGImage, CGRect)] = []
+        var players: [String] = []
+        func visit(_ view: NSView) {
+            if let pet = view as? PetVideoLayerView {
+                let rect = pet.convert(pet.bounds, to: root)
+                players.append(pet.debugState + String(format: " at %.0f,%.0f %.0fx%.0f", rect.minX, rect.minY, rect.width, rect.height))
+                if let image = pet.currentFrame() { frames.append((image, rect)) }
+            }
+            view.subviews.forEach(visit)
+        }
+        visit(root)
+        if let dir = env["BOTCHU_SNAPSHOT"] {
+            try? (players.joined(separator: "\n") + "\n").write(to: URL(fileURLWithPath: dir).appendingPathComponent("pets.txt"),
+                                                               atomically: true, encoding: .utf8)
+        }
+        return frames
+    }
+
+    /// The window's picture with the pets' frames drawn in their circles.
+    static func composite(_ rep: NSBitmapImageRep, root: NSView) -> Data? {
+        let frames = petVideoFrames(in: root)
+        guard let base = rep.cgImage else { return nil }
+        if frames.isEmpty { return rep.representation(using: .png, properties: [:]) }
+        let width = base.width, height = base.height
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.draw(base, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let scale = CGFloat(width) / root.bounds.width
+        for (image, rect) in frames {
+            let y = root.isFlipped ? root.bounds.height - rect.maxY : rect.minY
+            let target = CGRect(x: rect.minX * scale, y: y * scale, width: rect.width * scale, height: rect.height * scale)
+            context.saveGState()
+            context.addEllipse(in: target)
+            context.clip()
+            context.draw(image, in: target)
+            context.restoreGState()
+        }
+        guard let combined = context.makeImage() else { return nil }
+        return NSBitmapImageRep(cgImage: combined).representation(using: .png, properties: [:])
+    }
+
     static func snapshot(into dir: URL) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         for (n, window) in NSApp.windows.enumerated() where window.isVisible {
@@ -142,7 +192,7 @@ enum DevHooks {
                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
             view.cacheDisplay(in: view.bounds, to: rep)
             let name = window.title.isEmpty ? "window" : window.title.replacingOccurrences(of: "/", with: "-")
-            try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("\(n)-\(name).png"))
+            try? composite(rep, root: view)?.write(to: dir.appendingPathComponent("\(n)-\(name).png"))
         }
     }
 }
