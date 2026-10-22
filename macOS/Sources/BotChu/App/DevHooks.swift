@@ -161,18 +161,27 @@ enum DevHooks {
             Text("Conversations").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.vertical, 6)
             ForEach(model.bots) { bot in
                 BotRow(bot: bot, status: model.status(of: bot), selected: model.visibleBotID == bot.id,
-                       unread: model.visibleBotID == bot.id ? 0 : model.unreadCount(of: bot.id))
+                       unread: model.unreadCount(of: bot.id), runningTasks: model.runningTaskCount(for: bot.id),
+                       openTasks: model.openTasks(of: bot.id).count, isExpanded: true)
+                ForEach(model.openTasks(of: bot.id)) { task in
+                    SidebarTaskRow(botID: bot.id, task: task)
+                        .modifier(SidebarTreeBranch())
+                }
+                SidebarNewTaskRow(botID: bot.id).modifier(SidebarTreeBranch(isLast: true))
             }
         }
         .padding(10)
         .frame(width: 240, alignment: .leading)
         .background(Color(nsColor: .windowBackgroundColor))
         .environment(model)
-        let renderer = ImageRenderer(content: rows)
-        renderer.scale = 2
-        guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
-              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
-        try? png.write(to: dir.appendingPathComponent("sidebar.png"))
+        // Native progress indicators and buttons cannot be drawn by ImageRenderer. Host the
+        // rows offscreen so sidebar snapshots include their real AppKit controls as well.
+        let host = NSHostingView(rootView: rows)
+        host.setFrameSize(host.fittingSize)
+        host.layoutSubtreeIfNeeded()
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("sidebar.png"))
     }
 
     /// Each visible window as `<n>-<title>.png`, drawn by the app itself.
