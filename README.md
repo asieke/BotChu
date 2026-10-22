@@ -24,6 +24,11 @@ the Mac, and runs in its own workspace folder on this Mac.
     and are written to the workspace's `AGENTS.md`, `CLAUDE.md` and `GEMINI.md`, so the agent keeps
     them across its own context compaction. A new session (new bot, account switch, or **New
     Session**) also gets the recent conversation, so switching accounts keeps the thread's continuity.
+  - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I), the selected bot's
+    state (idle, starting, working with the turn's running time, or the last turn's error), the
+    account, agent and model it runs on, whether the next message continues its CLI session, its
+    message and tool-call counts and last activity, what its `MEMORY.md` holds, and its workspace,
+    with Edit and New Session.
   - **Settings:** the bots folder, each account's command, the OpenRouter API key (Keychain) and
     default OpenRouter model.
 - Does not: run bots anywhere but this Mac (yet), schedule routines, ask for approval of tool calls
@@ -35,10 +40,14 @@ the Mac, and runs in its own workspace folder on this Mac.
   - `Sources/BotChuCore/` — Foundation only, unit-tested: accounts and the command line each CLI
     runs with (`Accounts.swift`), the bot and message model (`Models.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), the identity, memory and
-    recap that open a session (`BotContext.swift`), the JSON store (`Store.swift`), and the
-    `Process` runner that launches a CLI through the login shell, `zsh -l` (`AgentRun.swift`).
-  - `Sources/BotChu/` — the SwiftUI app: the window (sidebar and chat), the bot editor, Settings,
-    and the Keychain.
+    recap that open a session (`BotContext.swift`), what the status sidebar shows about a bot and
+    its `MEMORY.md` (`BotStatus.swift`), the JSON store (`Store.swift`), and the `Process` runner
+    that launches a CLI through the login shell, `zsh -l` (`AgentRun.swift`).
+  - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
+    in standard system materials: `App/` (the app, window, model, settings, Keychain, dev hooks),
+    `Sidebar/` (the bot list), `Chat/` (messages and the composer), `Inspector/` (the status
+    sidebar), `Editor/` (the bot sheet), `Settings/`, and `Shared/` (layout constants, the avatar
+    and the status badge).
   - `Sources/botchu-smoke/` — a command-line check, not shipped in the app, that runs two real
     turns on each account named the way the app does (see **Test**).
   - `Tests/BotChuCoreTests/` — parser tests against captured output of every CLI, command lines,
@@ -86,8 +95,8 @@ the Mac, and runs in its own workspace folder on this Mac.
   prints both threads. It spends the accounts' own allowance, so it is not part of `check`;
   OpenRouter needs `OPENROUTER_API_KEY` in its environment.
 - Screens: `macOS/ui-review.sh ["message"]` builds the app into a temporary folder and opens it on
-  throwaway data (`BOTCHU_DATA_DIR`) with two demo bots, optionally sending the first one a
-  message; the app writes a PNG of each of its windows into the printed folder every second
+  throwaway data (`BOTCHU_DATA_DIR`) with two demo bots, the first with a short sample
+  conversation and memory, optionally sending it a message (a real turn on Claude Dev); the app writes a PNG of each of its windows into the printed folder every second
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor` or `BOTCHU_OPEN=settings` opens the bot editor or Settings instead.
 - Smoke test after deploy: `macOS/install.sh` fails unless the installed app starts (launched hidden,

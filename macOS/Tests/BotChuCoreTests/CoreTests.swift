@@ -183,3 +183,79 @@ import Testing
         #expect(env == ["HOME": "/Users/a", "PATH": "/usr/bin", "LANG": "en_US.UTF-8"])
     }
 }
+
+@Suite struct BotStatusTests {
+    let date = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func bot(session: String? = nil, on account: String? = nil) -> Bot {
+        Bot(name: "Scout", accountID: "claude-dev", workspace: "/tmp/scout", sessionID: session, sessionAccountID: account)
+    }
+
+    @Test func idleBotCountsItsThread() {
+        let messages = [
+            ChatMessage(role: .note, text: "Scout was created on Claude Dev", date: date),
+            ChatMessage(role: .assistant, text: "Hi", date: date),
+            ChatMessage(role: .user, text: "ls", date: date.addingTimeInterval(5)),
+            ChatMessage(role: .tool, date: date.addingTimeInterval(6), toolName: "Bash"),
+            ChatMessage(role: .assistant, text: "Done", date: date.addingTimeInterval(7)),
+            ChatMessage(role: .note, text: "New session", date: date.addingTimeInterval(60)),
+        ]
+        let status = BotStatus.make(bot: bot(session: "s1", on: "claude-dev"), messages: messages, run: nil)
+        #expect(status.phase == .idle)
+        #expect(status.session == .continuing(id: "s1"))
+        #expect(status.messageCount == 3)
+        #expect(status.toolCallCount == 1)
+        #expect(status.lastActivity == date.addingTimeInterval(7))
+        #expect(status.lastError == nil)
+    }
+
+    @Test func runPhases() {
+        let started = RunState(startedAt: date, hasOutput: false)
+        #expect(BotStatus.make(bot: bot(), messages: [], run: started).phase == .starting)
+        var running = started
+        running.hasOutput = true
+        let status = BotStatus.make(bot: bot(), messages: [], run: running)
+        #expect(status.phase == .working)
+        #expect(status.runStartedAt == date)
+    }
+
+    @Test func failedTurnIgnoresLaterNotes() {
+        let messages = [ChatMessage(role: .error, text: "usage limit"), ChatMessage(role: .note, text: "Stopped")]
+        let status = BotStatus.make(bot: bot(), messages: messages, run: nil)
+        #expect(status.phase == .failed)
+        #expect(status.lastError == "usage limit")
+    }
+
+    @Test func sessionAfterAnAccountSwitchStartsNew() {
+        #expect(BotStatus.make(bot: bot(session: "s1", on: "codex-dev"), messages: [], run: nil).session == .startsNew(accountChanged: true))
+        #expect(BotStatus.make(bot: bot(), messages: [], run: nil).session == .startsNew(accountChanged: false))
+    }
+}
+
+@Suite struct MemorySnapshotTests {
+    let bot = Bot(name: "Scout", workspace: "/tmp/scout")
+
+    @Test func seededFileIsEmpty() {
+        let memory = MemorySnapshot.parse(BotContext.seedMemory(bot: bot), bot: bot, modified: nil)
+        #expect(memory.body.isEmpty)
+        #expect(memory.entryCount == 0)
+    }
+
+    @Test func countsListedFacts() {
+        let text = BotContext.seedMemory(bot: bot) + "\n- likes tea\n- 30 minutes max\n\nNotes without a bullet\n"
+        let memory = MemorySnapshot.parse(text, bot: bot, modified: nil)
+        #expect(memory.body == "- likes tea\n- 30 minutes max\n\nNotes without a bullet")
+        #expect(memory.entryCount == 2)
+    }
+
+    @Test func editedHeadingIsDropped() {
+        let memory = MemorySnapshot.parse("# Scout's notes\n\n* one", bot: bot, modified: nil)
+        #expect(memory.body == "* one")
+        #expect(memory.entryCount == 1)
+    }
+
+    @Test func missingFile() throws {
+        let gone = Bot(name: "Gone", workspace: "/nonexistent/botchu-\(UUID().uuidString)")
+        #expect(MemorySnapshot.read(bot: gone) == .missing)
+    }
+}

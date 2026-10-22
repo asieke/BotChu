@@ -39,7 +39,7 @@ public enum MarkdownBlock: Equatable, Sendable {
 
     /// Block syntax inline Markdown would show literally: headings become bold lines and list
     /// bullets become "•".
-    static func normalize(_ prose: String) -> String {
+    public static func normalize(_ prose: String) -> String {
         prose.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
             let trimmed = line.drop(while: { $0 == " " })
             let indent = String(repeating: " ", count: line.count - trimmed.count)

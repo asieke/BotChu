@@ -3,36 +3,6 @@ import Foundation
 import Observation
 import BotChuCore
 
-/// Settings kept in `defaults` (domain `local.BotChu`); the OpenRouter key is in the Keychain.
-@MainActor @Observable
-final class AppSettings {
-    private let defaults: UserDefaults
-
-    var botsRoot: String { didSet { defaults.set(botsRoot, forKey: "botsRoot") } }
-    var openRouterModel: String { didSet { defaults.set(openRouterModel, forKey: "openRouterModel") } }
-    /// Command overrides by account id; a missing or empty entry means the account's default.
-    var commands: [String: String] { didSet { defaults.set(commands, forKey: "commands") } }
-
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-        if let dev = DevHooks.dataDir {
-            botsRoot = dev.appendingPathComponent("bots").path
-        } else {
-            botsRoot = defaults.string(forKey: "botsRoot") ?? (NSHomeDirectory() as NSString).appendingPathComponent("BotChu")
-        }
-        openRouterModel = defaults.string(forKey: "openRouterModel") ?? CommandBuilder.defaultOpenRouterModel
-        commands = defaults.dictionary(forKey: "commands") as? [String: String] ?? [:]
-    }
-
-    func command(for account: Account) -> String {
-        let override = commands[account.id]?.trimmingCharacters(in: .whitespaces) ?? ""
-        return override.isEmpty ? account.defaultCommand : override
-    }
-
-    var expandedBotsRoot: String { (botsRoot as NSString).expandingTildeInPath }
-    var sharedMemoryPath: String { (expandedBotsRoot as NSString).appendingPathComponent(BotContext.memoryFile) }
-}
-
 struct EditorRequest: Identifiable {
     let id = UUID()
     var bot: Bot
@@ -43,7 +13,8 @@ struct EditorRequest: Identifiable {
 final class AppModel {
     var bots: [Bot] = []
     var threads: [UUID: [ChatMessage]] = [:]
-    var running: Set<UUID> = []
+    /// Turns in progress, by bot.
+    var runStates: [UUID: RunState] = [:]
     var selection: UUID?
     var editor: EditorRequest?
     let settings: AppSettings
@@ -64,6 +35,11 @@ final class AppModel {
 
     func bot(_ id: UUID) -> Bot? { bots.first { $0.id == id } }
     func thread(_ id: UUID) -> [ChatMessage] { threads[id] ?? [] }
+    func isRunning(_ id: UUID) -> Bool { runStates[id] != nil }
+
+    func status(of bot: Bot) -> BotStatus {
+        BotStatus.make(bot: bot, messages: thread(bot.id), run: runStates[bot.id])
+    }
 
     // MARK: Bots
 
@@ -133,7 +109,7 @@ final class AppModel {
 
     /// Starts the next turn in a fresh CLI session (with the identity, memory and recap again).
     func newSession(_ id: UUID) {
-        guard var bot = bot(id), !running.contains(id) else { return }
+        guard var bot = bot(id), !isRunning(id) else { return }
         bot.sessionID = nil
         bot.sessionAccountID = nil
         update(bot)
@@ -151,7 +127,7 @@ final class AppModel {
 
     func send(_ text: String, to id: UUID, visible: Bool = true) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !running.contains(id), let bot = bot(id) else { return }
+        guard !text.isEmpty, !isRunning(id), let bot = bot(id) else { return }
         let account = bot.account
         let history = thread(id)
         let resume = bot.resumableSessionID
@@ -198,12 +174,11 @@ final class AppModel {
         var parser = StreamParsers.make(for: account.kind)
         var assembler = ThreadAssembler()
         var ended = false
-        var heard = false
         let accountID = account.id
 
         run.onLines = { [weak self] lines in
             guard let self, self.bot(id) != nil else { return }
-            heard = true
+            if self.runStates[id]?.hasOutput == false { self.runStates[id]?.hasOutput = true }
             var messages = self.thread(id)
             for line in lines {
                 for event in parser.parse(line: line) {
@@ -223,7 +198,7 @@ final class AppModel {
         run.onExit = { [weak self, weak run] status, stderr in
             guard let self else { return }
             self.runs[id] = nil
-            self.running.remove(id)
+            self.runStates[id] = nil
             // The bot was deleted while it ran.
             guard self.bot(id) != nil else { return }
             var messages = self.thread(id)
@@ -245,12 +220,12 @@ final class AppModel {
         do {
             try run.start()
             runs[id] = run
-            running.insert(id)
+            runStates[id] = RunState()
             // A CLI that has printed nothing yet is usually blocked on a macOS prompt: as BotChu's
             // child, it needs BotChu's permission for protected folders (Desktop, Documents) its own
             // settings point into, and the prompt may be behind other windows.
             DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self, weak run] in
-                guard let self, let run, self.runs[id] === run, !heard else { return }
+                guard let self, let run, self.runs[id] === run, self.runStates[id]?.hasOutput == false else { return }
                 self.append(ChatMessage(role: .note, text: "\(account.name) hasn't started yet. If macOS is asking whether BotChu may access a folder, allow it: the CLI reads its settings from there."), to: id)
             }
         } catch {
