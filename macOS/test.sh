@@ -5,3 +5,6 @@ dir=$(cd "$(dirname "$0")" && pwd)
 (cd "$dir/Sources/BotChu/Resources/ChatRenderer" && shasum -a 256 -c SHA256SUMS --status)
 # Only the build's errors and each test's outcome; the exit status is swift test's.
 swift test --package-path "$dir" 2>&1 | { grep -vE '^\[[0-9]+ ?/ ?[0-9]+\]| started\.$' || true; }
+# The Swift 6.4 task-group regression only appears under optimization; a release build alone
+# cannot detect lost results or children completing after their group has been destroyed.
+swift test --package-path "$dir" --configuration release --filter projectLoading 2>&1 | { grep -vE '^\[[0-9]+ ?/ ?[0-9]+\]| started\.$' || true; }

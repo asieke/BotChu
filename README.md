@@ -335,6 +335,11 @@ request.
   --report` posts the `check` status a PR needs before merging. `scripts/verify-pr.sh`, given a PR
   number, tests someone else's PR on this machine and posts its `check` status; with `--no-report`
   first, it posts nothing (for reviews). There is no CI: the checks need a Mac with full Xcode.
+- `macOS/test.sh` also runs the project-loading regression tests in Release. They check every
+  repository result, the four-request limit, and completion of children when navigating away or
+  cancelling a load. Swift 6.4 has an [optimizer bug](https://github.com/swiftlang/swift/issues/93208)
+  in task-group children returning String-first tuples from `do`/`catch`; project and pet loading
+  use named results with one return to avoid it. Debug tests alone cannot detect this regression.
 - Accounts end to end: `swift run --package-path macOS botchu-smoke [account id …]` runs, for each
   account (all of them when none is named), a new session that opens with the bot's context and
   runs a shell command, then a resumed session that must recall a code word from the first, and
