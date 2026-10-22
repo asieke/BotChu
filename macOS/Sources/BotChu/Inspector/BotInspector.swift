@@ -9,7 +9,7 @@ struct BotInspector: View {
 
     var body: some View {
         if let bot = model.bot(botID), let status = model.status(of: .home(botID)) {
-            InspectorPanel {
+            InspectorPanel(badgeCounts: [.subagents: model.delegation.activeCount(.home(botID), includeTasks: true)]) {
                 InspectorSection("Status") {
                     AvatarCard(bot: bot, status: status, title: bot.name, subtitle: bot.title, account: bot.account) { model.edit(botID) }
                     PetJobStatus(botID: botID)
@@ -26,6 +26,8 @@ struct BotInspector: View {
                             StatTile(value: bot.createdAt.formatted(.dateTime.month(.abbreviated).day()), label: "Created")
                         }
                     }
+                case .subagents:
+                    SubagentsInspectorContent(target: .home(botID), includeBotTasksOverview: true)
                 case .model:
                     InspectorSection("Runs on") {
                         RunsOnCard(settings: bot, target: .home(botID))

@@ -10,7 +10,7 @@ struct TaskInspector: View {
     var body: some View {
         if let bot = model.bot(target.botID), let task = model.task(target), let status = model.status(of: target) {
             let machine = model.machineName(task.hostID, fallback: task.hostName)
-            InspectorPanel {
+            InspectorPanel(badgeCounts: [.subagents: model.delegation.activeCount(target, includeTasks: false)]) {
                 InspectorSection("Status") {
                     AvatarCard(bot: bot, status: status, title: task.title,
                                subtitle: task.isRemote ? "on \(machine)" : "",
@@ -48,6 +48,8 @@ struct TaskInspector: View {
                             StatTile(value: task.createdAt.formatted(.dateTime.month(.abbreviated).day()), label: "Started")
                         }
                     }
+                case .subagents:
+                    SubagentsInspectorContent(target: target, includeBotTasksOverview: false)
                 case .model:
                     InspectorSection("Runs on") {
                         RunsOnCard(settings: task, target: target)

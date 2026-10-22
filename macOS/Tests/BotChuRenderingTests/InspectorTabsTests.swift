@@ -30,8 +30,8 @@ extension RenderingTests {
         window.makeKeyAndOrderFront(nil)
         try await Task.sleep(for: .milliseconds(150))
         #expect(shown == .activity)
-        // The four segments share the available width; click the second, then use arrow keys.
-        let point = host.convert(NSPoint(x: 110, y: host.isFlipped ? 135 : host.bounds.height - 135), to: nil)
+        // The five segments share the available width; click the second, then use arrow keys.
+        let point = host.convert(NSPoint(x: 140, y: host.isFlipped ? 135 : host.bounds.height - 135), to: nil)
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
                                           windowNumber: window.windowNumber, context: nil, eventNumber: 1,
