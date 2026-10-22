@@ -63,6 +63,12 @@ public struct Invocation: Equatable, Sendable {
     public var arguments: [String]
     public var environment: [String: String]
     public var sessionID: String?
+
+    public init(arguments: [String], environment: [String: String] = [:], sessionID: String? = nil) {
+        self.arguments = arguments
+        self.environment = environment
+        self.sessionID = sessionID
+    }
 }
 
 public enum CommandBuilder {

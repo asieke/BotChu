@@ -11,6 +11,8 @@ final class AppSettings {
     var openRouterModel: String { didSet { defaults.set(openRouterModel, forKey: "openRouterModel") } }
     /// Command overrides by account id; a missing or empty entry means the account's default.
     var commands: [String: String] { didSet { defaults.set(commands, forKey: "commands") } }
+    /// The Codex account that draws pets for bots that don't run on Codex themselves.
+    var petAccountID: String { didSet { defaults.set(petAccountID, forKey: "petAccountID") } }
 
     init(defaults: UserDefaults? = nil) {
         // Throwaway runs (DevHooks) keep their settings apart from the real ones.
@@ -23,6 +25,7 @@ final class AppSettings {
         }
         openRouterModel = defaults.string(forKey: "openRouterModel") ?? CommandBuilder.defaultOpenRouterModel
         commands = defaults.dictionary(forKey: "commands") as? [String: String] ?? [:]
+        petAccountID = defaults.string(forKey: "petAccountID") ?? "codex-personal"
     }
 
     func command(for account: Account) -> String {

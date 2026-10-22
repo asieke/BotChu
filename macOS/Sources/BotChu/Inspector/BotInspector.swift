@@ -15,6 +15,7 @@ struct BotInspector: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     AvatarCard(bot: bot, status: status) { model.edit(botID) }
+                    PetDrawingStatus(botID: botID)
                     InspectorSection("Runs on") {
                         InspectorCard {
                             InspectorRow("Account") {

@@ -22,6 +22,9 @@ final class AppModel {
     var petSheets: [UUID: PetSheet] = [:]
     /// Short pet reactions after a turn or on selection (`greeting`, `done`), by bot.
     var reactions: [UUID: BotActivity] = [:]
+    /// Pets being drawn, or whose drawing failed, by bot (see `PetDrawing.swift`).
+    var petDrawings: [UUID: PetDrawing] = [:]
+    @ObservationIgnored var petRuns: [UUID: AgentRun] = [:]
     var editor: EditorRequest?
     let settings: AppSettings
 
@@ -133,11 +136,13 @@ final class AppModel {
 
     func delete(_ id: UUID) {
         runs[id]?.stop()
+        petRuns[id]?.stop()
         if let bot = bot(id) { BotHome(workspace: bot.workspace).trash() }
         bots.removeAll { $0.id == id }
         threads[id] = nil
         petSheets[id] = nil
         reactions[id] = nil
+        petDrawings[id] = nil
         saveIndex()
         if selection == id { selection = bots.first?.id }
     }
@@ -190,7 +195,7 @@ final class AppModel {
     }
 
     /// Shows a short reaction, unless a turn is running, then goes back to what the bot shows otherwise.
-    private func react(_ reaction: BotActivity, for id: UUID, seconds: Double) {
+    func react(_ reaction: BotActivity, for id: UUID, seconds: Double) {
         guard runStates[id] == nil else { return }
         reactions[id] = reaction
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
@@ -339,6 +344,7 @@ final class AppModel {
 
     func stopAll() {
         for run in runs.values { run.stop() }
+        for run in petRuns.values { run.stop() }
     }
 
     private func recordSession(_ sessionID: String, accountID: String, for id: UUID) {
@@ -364,7 +370,7 @@ final class AppModel {
     }
 
     /// Writes the bot's `.botchu/bot.json`, and the index of bot folders.
-    private func save(_ bot: Bot) {
+    func save(_ bot: Bot) {
         do {
             try BotHome(workspace: bot.workspace).save(bot)
         } catch {

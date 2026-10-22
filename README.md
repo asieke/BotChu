@@ -18,10 +18,23 @@ the Mac, and runs in its own workspace folder on this Mac.
     deflated after a failed one, and waves when its bot is selected. A pet is a Codex pet (the
     `hatch-pet` skill's 8 × 9 or 8 × 11 atlas of 192 × 208 cells), plus optional extra animations
     BotChu adds for these activities; missing ones fall back to the closest atlas row. **Import
-    Codex Pet…** in **Edit Bot** copies one in (for example from `~/.codex/pets/<name>`), and the
-    bot's **Appearance** text says how it looks. Frames blend into each other and a change of
-    activity cross-fades, so the motion is smooth. Reduce Motion shows a still frame. Only the
-    selected bot and busy bots move in the sidebar.
+    Codex Pet…** in **Edit Bot** copies one in (for example from `~/.codex/pets/<name>`). Frames
+    blend into each other and a change of activity cross-fades, so the motion is smooth. Reduce
+    Motion shows a still frame. Only the selected bot and busy bots move in the sidebar.
+  - **Drawing a pet:** describe the bot's look in **Appearance** in **Edit Bot** and choose **Draw
+    Pet** (or create a bot with an appearance). One `codex exec` on a Codex account follows Codex's
+    `hatch-pet` skill to draw the base and the nine atlas rows, then draws BotChu's six extra
+    animations (thinking, reading a book, browsing a tablet, coding at a laptop, testing, working
+    with a wrench) with the same skill's layout guides and frame extraction. It works in
+    `.botchu/pet-drawing/` and replaces the pet only once a valid atlas exists, so chat goes on and
+    the old pet stays meanwhile; a failed drawing stays there to inspect, and the bot's log records
+    the run. Once installed, the run's working files are removed; its prompts, contact sheet and
+    QA previews stay in `pet/run/`. Progress shows in the editor and the status sidebar, with
+    Cancel. A bot on a Codex account draws with its own; others use the account in Settings. It
+    needs the skill in that account's Codex home (or `~/.agents/skills`, `~/.codex/skills`) and
+    Python with Pillow (Xcode's `/usr/bin/python3` with `pip install --user pillow`, or
+    Homebrew's), and BotChu says which is missing. A drawing makes about 16 images on that
+    account's allowance and takes about half an hour.
   - **Accounts:** any bot can run on any account, switchable in **Edit Bot**:
     Claude Personal, Claude Dev and Claude Work (`claude-personal`, `claude-dev`, `claude-work`),
     Codex Personal, Codex Dev and Codex Work (`codex-personal`, `codex-dev`, `codex-work`), Google
@@ -69,8 +82,8 @@ the Mac, and runs in its own workspace folder on this Mac.
     message continues its CLI session (with its id to copy), its message and tool-call counts, last
     activity and creation date, what its `MEMORY.md` holds, and its workspace, with Edit and New
     Session. Its colors follow light and dark mode.
-  - **Settings:** the bots folder, each account's command, the OpenRouter API key (Keychain) and
-    default OpenRouter model.
+  - **Settings:** the bots folder, each account's command, the Codex account that draws pets, the
+    OpenRouter API key (Keychain) and default OpenRouter model.
 - Does not: run bots anywhere but this Mac (yet), schedule routines, ask for approval of tool calls
   (every CLI runs with its permission prompts bypassed, inside the bot's folder), or keep any secret
   outside the Keychain and the CLIs' own logins.
@@ -82,7 +95,8 @@ the Mac, and runs in its own workspace folder on this Mac.
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), the identity, memory and
     recap that open a session (`BotContext.swift`), what the status sidebar shows about a bot and
     its `MEMORY.md` (`BotStatus.swift`), pets: the atlas rows, BotChu's extra animations, the
-    activity a tool call means and the pet folder (`Pet.swift`), the JSON store (`Store.swift`), and the `Process` runner
+    activity a tool call means and the pet folder (`Pet.swift`), drawing a pet with Codex: the
+    prompt, prerequisites, progress and install (`PetHatching.swift`), the JSON store (`Store.swift`), and the `Process` runner
     that launches a CLI through the login shell, `zsh -l` (`AgentRun.swift`).
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
     in standard system materials: `App/` (the app, window, model, settings, Keychain, dev hooks),
@@ -154,7 +168,8 @@ the Mac, and runs in its own workspace folder on this Mac.
   Claude Dev); the app writes a PNG of each of its windows into the printed folder every second
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor` or `BOTCHU_OPEN=settings` opens the bot editor or Settings instead.
-  `BOTCHU_PET=~/.codex/pets/<name>` gives the first bot that Codex pet. The window's picture leaves
+  `BOTCHU_PET=~/.codex/pets/<name>` gives the first bot that Codex pet, and
+  `BOTCHU_DRAW_PET="<appearance>"` has Codex draw it one (a real run on the pet account). The window's picture leaves
   out the sidebar's rows, so they are drawn on their own into `sidebar.png`.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
 - Smoke test after deploy: `macOS/install.sh` fails unless the installed app starts (launched hidden,

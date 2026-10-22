@@ -65,9 +65,21 @@ struct BotEditor: View {
                             }
                     }
                     HStack {
+                        if !isNew {
+                            Button(model.petSheets[bot.id] == nil ? "Draw Pet" : "Redraw Pet") {
+                                model.setAppearance(bot.appearance ?? "", for: bot.id)
+                                model.drawPet(bot.id)
+                            }
+                            .disabled((bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                      || model.petDrawings[bot.id]?.isActive == true)
+                            .help("Have \(model.petAccount(for: bot).name) draw this bot's pet from its appearance, in the background")
+                        }
                         Button("Import Codex Pet…", action: choosePet)
                             .help("Use a pet made in Codex: a folder with pet.json and its spritesheet, such as ~/.codex/pets/<name>")
                         Spacer()
+                    }
+                    if !isNew {
+                        PetDrawingStatus(botID: bot.id)
                     }
                 } header: {
                     Text("Appearance")
@@ -77,8 +89,11 @@ struct BotEditor: View {
                     } else if let pendingPet {
                         Text("\(pendingPet.lastPathComponent) is added when you create the bot.")
                             .font(.caption).foregroundStyle(.secondary)
+                    } else if isNew {
+                        Text("With an appearance, \(model.petAccount(for: bot).name) draws the bot's pet after you create it. It stands in for the emoji and acts out what the bot is doing.")
+                            .font(.caption).foregroundStyle(.secondary)
                     } else {
-                        Text("The bot's pet stands in for its emoji, and shows what it is doing.")
+                        Text("The pet stands in for the emoji and acts out what the bot is doing. \(model.petAccount(for: bot).name) draws it with Codex's hatch-pet skill, in the background; it takes a while.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -196,7 +211,11 @@ struct BotEditor: View {
     private func save() {
         if isNew {
             model.create(bot)
-            if let pendingPet { try? model.importPet(from: pendingPet, for: bot.id) }
+            if let pendingPet {
+                try? model.importPet(from: pendingPet, for: bot.id)
+            } else if !(bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                model.drawPet(bot.id)
+            }
         } else {
             model.update(bot)
         }

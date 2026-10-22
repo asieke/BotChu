@@ -22,6 +22,7 @@ Alex, on one Mac, who has several signed-in agent accounts (three Claude, three 
 ## Goals and success
 - Create a bot, pick its account, and chat with it in a native chat view that streams its replies and shows its tool calls; the conversation and the CLI session survive relaunches.
 - Every account listed above can run a bot end to end on this Mac.
+- Each bot can have an animated pet, drawn by Codex from a free-text description, that acts out what the bot is doing.
 - First milestone: the macOS MVP — bot list and creation, chat, a minimal Settings window — built, tested and installed into `~/Applications` from `main`.
 
 ## Context

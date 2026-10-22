@@ -51,6 +51,19 @@ struct SettingsView: View {
             }
 
             Section {
+                Picker("Draw pets with", selection: $settings.petAccountID) {
+                    ForEach(Accounts.all.filter { $0.kind == .codex }) { account in
+                        Text(account.name).tag(account.id)
+                    }
+                }
+            } header: {
+                Text("Pets")
+            } footer: {
+                Text("A bot on a Codex account draws its own pet; every other bot's is drawn by this account, with its hatch-pet skill and image generation allowance. The skill's scripts need Python with Pillow.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
                 LabeledContent("API key") {
                     HStack {
                         SecureField("API key", text: $openRouterKey, prompt: Text("sk-or-…"))
@@ -72,7 +85,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 600, height: 740)
+        .frame(width: 600, height: 840)
         .task {
             await withTaskGroup(of: Void.self) { group in
                 for account in Accounts.all { group.addTask { await check(account) } }
