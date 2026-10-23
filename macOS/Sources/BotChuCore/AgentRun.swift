@@ -9,6 +9,7 @@ public final class AgentRun: @unchecked Sendable {
     private let process = Process()
     private let stdout = Pipe()
     private let stderr = Pipe()
+    private let input: Data?
     /// The CLI's stdin, while it takes input; written on `inputQueue`, in order.
     private var stdin: Pipe?
     private let initialInput: [String]
@@ -34,6 +35,7 @@ public final class AgentRun: @unchecked Sendable {
     static let pidMarker = "__BOTCHU_PID__"
 
     public init(command: String, invocation: Invocation, directory: URL) {
+        input = invocation.standardInput
         remote = nil
         initialInput = invocation.input ?? []
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -50,6 +52,7 @@ public final class AgentRun: @unchecked Sendable {
     /// A run in `folder` on a host. Only the explicit delegation context crosses SSH; credentials
     /// such as the OpenRouter key stay on this Mac, so a CLI there uses that machine's own.
     public init(command: String, invocation: Invocation, on machine: Machine, folder: String) {
+        input = invocation.standardInput
         remote = machine
         initialInput = invocation.input ?? []
         process.executableURL = URL(fileURLWithPath: Machine.ssh)
@@ -134,6 +137,9 @@ public final class AgentRun: @unchecked Sendable {
         }
         group.enter()
         process.terminationHandler = { _ in group.leave() }
+        let inputFile = try ProcessInput.file(input)
+        defer { try? inputFile?.close() }
+        if let inputFile { process.standardInput = inputFile }
         try process.run()
         for line in initialInput { send(line) }
         group.notify(queue: .main) { [self] in

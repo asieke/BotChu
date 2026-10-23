@@ -93,6 +93,8 @@ final class AppModel {
     var unread: Set<ChatTarget> = []
     /// What is typed in each conversation's message box and not sent yet.
     var drafts: [ChatTarget: String] = [:]
+    var draftImages: [ChatTarget: [ImageAttachment]] = [:]
+    var attachmentErrors: [ChatTarget: String] = [:]
     /// Unsent follow-ups and short pet reactions belong to one conversation, not the whole bot.
     var messageQueues: [ChatTarget: MessageQueue] = [:]
     var reactions: [ChatTarget: BotActivity] = [:]
@@ -359,6 +361,8 @@ final class AppModel {
         waiting = waiting.filter { $0.key.botID != id }
         unread = unread.filter { $0.botID != id }
         drafts = drafts.filter { $0.key.botID != id }
+        draftImages = draftImages.filter { $0.key.botID != id }
+        attachmentErrors = attachmentErrors.filter { $0.key.botID != id }
         openTask[id] = nil
         pets[id] = nil
         petJobs[id] = nil
@@ -773,14 +777,18 @@ final class AppModel {
     // MARK: Turns
 
     @discardableResult
-    func send(_ text: String, to target: ChatTarget, visible: Bool = true) -> Bool {
+    func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = []) -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, runSettings(of: target) != nil else { return false }
+        guard images.count <= ImageAttachment.maximumCount else {
+            attachmentErrors[target] = "Attach up to 8 images per message. Remove an image before sending."
+            return false
+        }
+        guard (!text.isEmpty || !images.isEmpty), runSettings(of: target) != nil else { return false }
         if !visible {
             return beginTurn(text, for: target, message: nil)
         }
         var queue = messageQueues[target] ?? MessageQueue()
-        queue.enqueue(ChatMessage(role: .user, text: text))
+        queue.enqueue(ChatMessage(role: .user, text: text, images: images))
         // Save before clearing the composer; a failed write must leave the owner's draft intact.
         guard saveQueue(queue, for: target) else { return false }
         messageQueues[target] = queue
@@ -809,6 +817,7 @@ final class AppModel {
         guard messageQueues[target]?.messages.contains(where: { $0.id == id }) == false else { return }
         let draft = drafts[target] ?? ""
         drafts[target] = message.text + (draft.isEmpty ? "" : "\n\n" + draft)
+        draftImages[target] = message.images + (draftImages[target] ?? [])
     }
 
     /// Whether follow-ups reach this conversation's CLI during a turn, at its next tool call, rather
@@ -841,7 +850,23 @@ final class AppModel {
     /// never takes go out as the next turn.
     private func sendFollowUps(to target: ChatTarget) {
         guard let run = runs[target], run.acceptsInput, var input = inputs[target], input.ledger.acceptsFollowUps else { return }
-        while let message = messageQueues[target]?.next, let line = CommandBuilder.inputLine(kind: input.kind, text: message.text) {
+        while let message = messageQueues[target]?.next, let textLine = CommandBuilder.inputLine(kind: input.kind, text: message.text) {
+            var line = textLine
+            if !message.images.isEmpty {
+                guard let bot = bot(target.botID) else { break }
+                do {
+                    let urls = message.images.map { BotHome(workspace: bot.workspace).imageURL($0) }
+                    let invocation = try ImageDelivery.attaching(urls, to: Invocation(arguments: [], input: [textLine]),
+                                                                kind: input.kind, prompt: message.text.isEmpty ? "Please describe the attached images." : message.text)
+                    guard let imageLine = invocation.input?.first else { break }
+                    line = imageLine
+                } catch {
+                    pauseQueue(target)
+                    append(ChatMessage(role: .error, text: "Couldn't send images: \(error.localizedDescription)"), to: target)
+                    saveThread(target)
+                    break
+                }
+            }
             guard run.send(line) else { break }
             messageQueues[target]?.markInFlight(message.id)
             input.ledger.wrote()
@@ -898,19 +923,50 @@ final class AppModel {
                         postReceipt(TaskReceipt.failed(task, error: failure.step), task: task.id, for: target.botID)
                     }
                 } else {
-                    startTurn(text, for: target, history: history, updates: nil)
+                    startTurn(text, for: target, history: history, updates: nil, images: message?.images ?? [])
                     if !isRunning(target) { pauseQueue(target) }
                 }
             }
         } else {
-            startTurn(text, for: target, history: history, updates: updates)
+            startTurn(text, for: target, history: history, updates: updates, images: message?.images ?? [])
             if !isRunning(target) { pauseQueue(target) }
         }
         return true
     }
 
     /// Runs the CLI for one turn of the conversation, in the bot's workspace or the task's worktree.
-    private func startTurn(_ text: String, for target: ChatTarget, history: [ChatMessage], updates: String?) {
+    private func startTurn(_ text: String, for target: ChatTarget, history: [ChatMessage], updates: String?, images: [ImageAttachment]) {
+        guard !images.isEmpty else { launchTurn(text, for: target, history: history, updates: updates); return }
+        guard let bot = bot(target.botID), let current = runSettings(of: target) else { return }
+        let ticket = UUID()
+        waiting[target] = ticket
+        runStates[target] = RunState()
+        Task {
+            do {
+                var urls = images.map { BotHome(workspace: bot.workspace).imageURL($0) }
+                // Inline image input travels over SSH for Claude. File-based providers
+                // need copies on the host before their CLI can open the attachments.
+                if let task = task(target), task.isRemote, current.account.kind != .claude {
+                    let machine = try self.machine(of: task).get()
+                    urls = try await machine.stageImages(urls)
+                }
+                guard waiting[target] == ticket else { return }
+                waiting[target] = nil
+                runStates[target] = nil
+                launchTurn(text.isEmpty ? "Please describe the attached images." : text, for: target, history: history, updates: updates, imageURLs: urls)
+                if !isRunning(target) { pauseQueue(target) }
+            } catch {
+                guard waiting[target] == ticket else { return }
+                waiting[target] = nil
+                runStates[target] = nil
+                append(ChatMessage(role: .error, text: "Couldn't send images: \(error.localizedDescription)"), to: target)
+                saveThread(target)
+                pauseQueue(target)
+            }
+        }
+    }
+
+    private func launchTurn(_ text: String, for target: ChatTarget, history: [ChatMessage], updates: String?, imageURLs: [URL] = []) {
         guard let bot = bot(target.botID), let current = runSettings(of: target) else { return }
         let task = task(target)
         let id = bot.id
@@ -974,6 +1030,16 @@ final class AppModel {
                     openRouterKey: account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil,
                     liveInput: liveInput)
 
+                do {
+                    invocation = try ImageDelivery.attaching(imageURLs, to: invocation, kind: account.kind, prompt: prompt)
+                } catch {
+                    delegation.endCaller(context.id)
+                    runStates[target] = nil
+                    pauseQueue(target)
+                    append(ChatMessage(role: .error, text: "Couldn't send images: \(error.localizedDescription)"), to: target)
+                    saveThread(target)
+                    return
+                }
                 invocation.environment.merge(context.environment) { _, new in new }
 
                 // On a host, the OpenRouter key stays here: the CLI there uses that machine's own.
@@ -1175,8 +1241,8 @@ final class AppModel {
         inputs[target]?.ledger.close()
         if let run = runs[target] {
             run.stop()
-        } else if runStates[target]?.preparing == true {
-            // The worktree is still being made; the turn just won't start.
+        } else if runStates[target]?.preparing == true || waiting[target] != nil {
+            // Workspace setup or image transfer may finish, but this turn must not start.
             waiting[target] = nil
             runStates[target] = nil
             append(ChatMessage(role: .note, text: "Stopped"), to: target)

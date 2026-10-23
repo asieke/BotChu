@@ -12,6 +12,9 @@ import BotChuCore
 // Each line as it is printed, also when the output goes to a file.
 setvbuf(stdout, nil, _IOLBF, 0)
 
+// Optional image fixture is attached on both the new and resumed turn.
+let smokeImage = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_IMAGE"].map { URL(fileURLWithPath: $0) }
+let imageExpected = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_IMAGE_EXPECT"]
 let usageOnly = CommandLine.arguments.dropFirst().first == "--usage"
 let requested = Array(CommandLine.arguments.dropFirst(usageOnly ? 2 : 1))
 let accounts = requested.isEmpty ? Accounts.all : requested.map { Accounts.account(id: $0) }
@@ -34,9 +37,14 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
                                      soul: Workspace.read(bot.workspace + "/SOUL.md"))
         : nil
     let kind = bot.account.kind
-    let invocation = CommandBuilder.invocation(
-        kind: kind, prompt: BotContext.prompt(for: prompt, preamble: preamble), model: bot.model, sessionID: resume, reasoningEffort: bot.reasoningEffort,
+    let fullPrompt = BotContext.prompt(for: prompt, preamble: preamble)
+    var invocation = CommandBuilder.invocation(
+        kind: bot.account.kind, prompt: fullPrompt, model: bot.model, sessionID: resume, reasoningEffort: bot.reasoningEffort,
         openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], liveInput: CommandBuilder.takesInputMidTurn(kind))
+    if let smokeImage {
+        do { invocation = try ImageDelivery.attaching([smokeImage], to: invocation, kind: bot.account.kind, prompt: fullPrompt) }
+        catch { return Turn(messages: [ChatMessage(role: .error, text: error.localizedDescription)], status: -1) }
+    }
     return await withCheckedContinuation { continuation in
         var turn = Turn()
         var parser = StreamParsers.make(for: kind)
@@ -129,10 +137,12 @@ Task {
         try? Workspace.prepare(bot: bot, sharedMemoryPath: root.appendingPathComponent("MEMORY.md").path)
         print("== \(account.name)")
         let started = Date()
-        let first = await runTurn(bot, prompt: "The code word is \(word). Use your shell tool to run `ls`, then reply with just: stored", history: [])
+        let imageRequest = smokeImage == nil ? "" : " Also read the large word in the attached image and include it in your reply."
+        let first = await runTurn(bot, prompt: "The code word is \(word). Use your shell tool to run `ls`, then reply with: stored." + imageRequest, history: [])
         show(first.messages)
         guard let session = first.session, !first.messages.contains(where: { $0.role == .error }),
-              first.messages.contains(where: { $0.role == .assistant }) else {
+              first.messages.contains(where: { $0.role == .assistant }),
+              imageExpected.map({ expected in first.messages.filter { $0.role == .assistant }.map(\.text).joined().localizedCaseInsensitiveContains(expected) }) ?? true else {
             print("    FAIL: first turn (exit \(first.status)) \(first.stderr.suffix(400))")
             failures.append(account.id)
             continue
@@ -140,10 +150,10 @@ Task {
         bot.sessionID = session
         bot.sessionAccountID = bot.accountID
         precondition(bot.resumableSessionID == session, "The second smoke turn must resume its profile’s session")
-        let second = await runTurn(bot, prompt: "What is the code word? Reply with just the word.", history: first.messages)
+        let second = await runTurn(bot, prompt: "What is the code word? Reply with the word." + imageRequest, history: first.messages)
         show(second.messages)
         let reply = second.messages.filter { $0.role == .assistant }.map(\.text).joined()
-        let ok = reply.contains(word) && !second.messages.contains(where: { $0.role == .error })
+        let ok = reply.contains(word) && !second.messages.contains(where: { $0.role == .error }) && (imageExpected.map { reply.localizedCaseInsensitiveContains($0) } ?? true)
         print("    \(ok ? "OK" : "FAIL: resumed turn did not recall \(word) (exit \(second.status)) \(second.stderr.suffix(300))") in \(Int(Date().timeIntervalSince(started)))s")
         if !ok { failures.append(account.id); continue }
         guard CommandBuilder.takesInputMidTurn(account.kind) else { continue }

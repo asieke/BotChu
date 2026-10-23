@@ -14,8 +14,20 @@ struct MessageRow: View {
         case .user:
             HStack {
                 Spacer(minLength: 80)
-                Text(message.text)
-                    .textSelection(.enabled)
+                VStack(alignment: .trailing, spacing: 8) {
+                    if !message.images.isEmpty {
+                        ForEach(message.images) { image in
+                            let url = BotHome(workspace: bot.workspace).imageURL(image)
+                            if let preview = NSImage(contentsOf: url) {
+                                Image(nsImage: preview).resizable().scaledToFit().frame(maxWidth: 320, maxHeight: 240)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8)).help(image.name)
+                                    .accessibilityLabel(image.name)
+                                    .onTapGesture { NSWorkspace.shared.open(url) }
+                            } else { Label(image.name + " (image unavailable)", systemImage: "photo") }
+                        }
+                    }
+                    if !message.text.isEmpty { Text(message.text).textSelection(.enabled) }
+                }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
                     .foregroundStyle(.white)

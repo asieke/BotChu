@@ -63,16 +63,19 @@ public struct Invocation: Equatable, Sendable {
     public var arguments: [String]
     public var environment: [String: String]
     public var sessionID: String?
+    public var standardInput: Data?
+
     /// For a CLI that takes input mid-turn, the lines written to its stdin when it starts (the
     /// prompt); its stdin then stays open for follow-ups until BotChu closes it. Nil runs the CLI
     /// with stdin closed and the prompt among its arguments.
     public var input: [String]?
 
-    public init(arguments: [String], environment: [String: String] = [:], sessionID: String? = nil, input: [String]? = nil) {
+    public init(arguments: [String], environment: [String: String] = [:], sessionID: String? = nil, input: [String]? = nil, standardInput: Data? = nil) {
         self.arguments = arguments
         self.environment = environment
         self.sessionID = sessionID
         self.input = input
+        self.standardInput = standardInput
     }
 }
 

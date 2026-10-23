@@ -29,7 +29,7 @@ public struct MessageQueue: Equatable, Sendable {
     public func isInFlight(_ id: UUID) -> Bool { inFlight.contains(id) }
 
     public mutating func enqueue(_ message: ChatMessage) {
-        guard message.role == .user, !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard message.role == .user, (!message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !message.images.isEmpty),
               !messages.contains(where: { $0.id == message.id }) else { return }
         messages.append(message)
         isPaused = false

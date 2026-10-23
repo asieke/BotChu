@@ -116,11 +116,13 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     public var toolState: ToolState?
     /// On a receipt, the task it reports on; nil for a task BotChu couldn't start.
     public var taskID: UUID?
+    public var attachments: [ImageAttachment]?
+    public var images: [ImageAttachment] { attachments ?? [] }
 
     public init(
         id: UUID = UUID(), role: Role, text: String = "", date: Date = Date(), toolID: String? = nil,
         toolName: String? = nil, toolInput: String? = nil, toolOutput: String? = nil, toolState: ToolState? = nil,
-        taskID: UUID? = nil
+        taskID: UUID? = nil, images: [ImageAttachment] = []
     ) {
         self.id = id
         self.role = role
@@ -132,6 +134,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.toolOutput = toolOutput
         self.toolState = toolState
         self.taskID = taskID
+        self.attachments = images.isEmpty ? nil : images
     }
     /// Older versions missed AGY's subagent terminal events and saved them as failures.
     /// No result was recorded, so show an unknown completion instead of inventing success or failure.

@@ -38,7 +38,7 @@ struct QueuedMessages: View {
                 VStack(spacing: 6) {
                     ForEach(queue.messages) { message in
                         HStack(alignment: .top, spacing: 8) {
-                            Text(message.text)
+                            Text(message.text + (message.images.isEmpty ? "" : "\n📎 \(message.images.count) image(s)"))
                                 .font(.system(size: 12))
                                 .lineLimit(2)
                                 .frame(maxWidth: .infinity, alignment: .leading)

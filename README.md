@@ -173,7 +173,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     each execution machine; SSH mailboxes are polled independently of CLI output. See
     [delegation protocol](docs/subagents.md) for lifecycle and persistence details.
   - **Message box:** a multiline writing area with account, model/effort and send/stop controls in
-    its bottom row. Return sends; Option-Return inserts a new line. Send stays available during a
+    its bottom row. Return sends; Shift-Return (or Option-Return) inserts a new line. The box grows with your draft, then scrolls at its maximum height. Send stays available during a
     run: follow-ups appear in a queue above the composer and reach the bot on their own, in order,
     in the same CLI session. Where the CLI takes input mid-turn (Claude Code on This Mac, through
     `--input-format stream-json`), a follow-up reaches it at its next tool call, like steering in
@@ -185,6 +185,16 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     BotChu quit go out on their own after it starts again. **Send next** resumes a paused queue.
     Each Home and task has its own queue, saved beside its thread in `queued.jsonl` (with
     `queued.paused` while paused). A worktree being prepared finishes setup before follow-ups can run.
+  - **Images:** use the **+** button, paste an image or image files, or drop them into the message box.
+    Previews can be removed before sending; image-only messages work too. Up to eight images travel
+    with each message, including queued messages restored after relaunch. Click a sent image to open it.
+    Files up to 30 MB are decoded locally, resized to at most 2048 pixels on the longest edge, and saved
+    as PNG copies (up to 5 MB each) in the bot's `.botchu/attachments/`; originals stay untouched.
+    Animated images use a still frame. Copies stay with the bot when its folder moves.
+    Claude receives image content on stdin; Codex, Muse and Pi receive image-file arguments;
+    Antigravity is asked to open the attached files with its file reader. For file-based providers
+    on SSH hosts, copies are stored in `~/.cache/botchu/attachments/` and retained for resumed sessions.
+    Image understanding depends on the selected model's vision support.
   - **Model controls:** separate model and reasoning-effort buttons below the writing area and compact
     text selectors in the status sidebar's **Runs on** card open the same pickers. Both stay in sync
     for the shown Home or task conversation; choices are saved for its next turn, including resumed sessions.
@@ -397,6 +407,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   OpenRouter needs `OPENROUTER_API_KEY` in its environment. To exercise explicit generation
   settings, prefix the command with `BOTCHU_SMOKE_EFFORT=low` and optionally
   `BOTCHU_SMOKE_MODEL=<model id>`; both settings apply to the new and resumed turns.
+  To test image delivery, set `BOTCHU_SMOKE_IMAGE=/absolute/path/to/fixture.png` and optionally
+  `BOTCHU_SMOKE_IMAGE_EXPECT=<word visible in the image>`; both turns attach the fixture and must
+  read that word as well as recall the session's code word.
 - Screens: `macOS/ui-review.sh ["message"]` builds the app into a temporary folder and opens it on
   throwaway data (`BOTCHU_DATA_DIR`, with its own settings domain, `local.BotChu.dev`) with two demo
   bots in the old layout, so every run also exercises the migration into bot folders, the first
