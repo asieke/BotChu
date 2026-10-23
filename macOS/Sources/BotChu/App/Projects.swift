@@ -69,10 +69,11 @@ extension AppModel {
         openItemsLoading = true
         defer { openItemsLoading = false }
         let busy = repositories.filter { $0.openIssues + $0.openPullRequests > 0 }.map(\.id)
-        switch busy.isEmpty ? .success([]) : await openWorkLookup(busy) {
-        case .success(let items):
-            openItems = items
-            openItemsError = nil
+        switch busy.isEmpty ? .success(GitHubLookup.OpenWork(items: [])) : await openWorkLookup(busy) {
+        case .success(let work):
+            openItems = work.items
+            openItemsError = work.unreadable.isEmpty ? nil
+                : "Couldn't read the open pull requests and issues of \(work.unreadable.map(TaskNaming.repoName).joined(separator: ", ")). Refresh to try again."
             openItemsReadAt = Date()
         case .failure(let failure):
             openItemsError = "\(failure.step). Is gh installed and signed in?"

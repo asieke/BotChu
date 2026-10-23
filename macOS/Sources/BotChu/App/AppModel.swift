@@ -112,7 +112,7 @@ final class AppModel {
     var openItemsError: String?
     var openItemsLoading = false
     @ObservationIgnored var openItemsReadAt: Date?
-    let openWorkLookup: @Sendable ([String]) async -> Result<[GitHubLookup.OpenItem], TaskWorktree.Failure>
+    let openWorkLookup: @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure>
     var githubConnection: ProjectGitHub.Connection?
     var githubChecking = false
     let projectGitHub: ProjectGitHub
@@ -121,7 +121,7 @@ final class AppModel {
     @ObservationIgnored var deployTargetCache: [String: [(machine: String, path: String)]] = [:]
 
     init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil, projectGitHub: ProjectGitHub = ProjectGitHub(),
-         openWorkLookup: @escaping @Sendable ([String]) async -> Result<[GitHubLookup.OpenItem], TaskWorktree.Failure> = { await GitHubLookup.openWork(repos: $0) }) {
+         openWorkLookup: @escaping @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure> = { await GitHubLookup.openWork(repos: $0) }) {
         self.projectGitHub = projectGitHub
         self.openWorkLookup = openWorkLookup
         DevHooks.configure()

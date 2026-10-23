@@ -33,7 +33,7 @@ extension RenderingTests {
         }, openWorkLookup: { repos in
             #expect(repos == ["octocat/BotChu", "octocat/Orbit"])
             let url = URL(string: "https://github.com/octocat/BotChu/pull/7")!
-            return .success([
+            return .success(GitHubLookup.OpenWork(items: [
                 GitHubLookup.OpenItem(repo: "octocat/BotChu", number: 7, title: "Show open pull requests in Projects", url: url, isPullRequest: true,
                                       isDraft: false, author: "octocat", authorAvatar: nil, createdAt: .now.addingTimeInterval(-7200),
                                       updatedAt: .now.addingTimeInterval(-600), comments: 1, labels: [.init(name: "enhancement", color: "a2eeef")],
@@ -42,7 +42,7 @@ extension RenderingTests {
                                       isPullRequest: false, isDraft: false, author: "hubot", authorAvatar: nil, createdAt: .now.addingTimeInterval(-90000),
                                       updatedAt: .now.addingTimeInterval(-86400), comments: 4, labels: [], reviewDecision: nil, checks: .none,
                                       branch: nil, fromFork: false, additions: 0, deletions: 0),
-            ])
+            ]))
         })
         let sample: [(String, String, ProjectMetadata.Kind, String)] = [
             ("BotChu", "Persistent agents, projects, and conversations on your Mac.", .local, "local:my-mac:~/apps/BotChu"),

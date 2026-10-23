@@ -77,21 +77,37 @@ extension GitHubLookup {
     static let openWorkBatch = 10
     static let openWorkPerRepo = 30
 
+    /// What `openWork` read: the items, and the repositories GitHub couldn't answer for.
+    public struct OpenWork: Equatable, Sendable {
+        public var items: [OpenItem]
+        public var unreadable: [String]
+        public init(items: [OpenItem], unreadable: [String] = []) { self.items = items; self.unreadable = unreadable }
+    }
+
     /// The open pull requests and issues of these repositories (`owner/name`), most recently
-    /// updated first. A repository GitHub can't resolve is left out rather than failing the rest.
-    public static func openWork(repos: [String]) async -> Result<[OpenItem], TaskWorktree.Failure> {
-        var all: [OpenItem] = []
+    /// updated first. A repository GitHub can't resolve is listed as unreadable rather than failing
+    /// the rest; it fails when it could read none of them.
+    public static func openWork(repos: [String]) async -> Result<OpenWork, TaskWorktree.Failure> {
+        var all = OpenWork(items: [], unreadable: repos.filter { !isSafeName($0) })
+        var lastRun: Shell.Result?
         let valid = repos.filter(isSafeName)
         for start in stride(from: 0, to: valid.count, by: openWorkBatch) {
             let batch = Array(valid[start..<min(start + openWorkBatch, valid.count)])
             let run = await Shell.run(["gh", "api", "graphql", "-f", "query=\(openWorkQuery(batch))"], in: NSHomeDirectory())
+            lastRun = run
             // gh exits non-zero when any repository fails, but still prints the others.
-            guard let items = parseOpenWork(run.output) else {
+            guard let read = parseOpenWork(run.output, asked: batch) else {
                 return .failure(TaskWorktree.Failure(step: "Couldn't read open pull requests and issues with gh", output: run.report("gh api graphql (open work)")))
             }
-            all += items
+            all.items += read.items
+            all.unreadable += read.unreadable
         }
-        return .success(all.sorted { $0.updatedAt > $1.updatedAt })
+        if !repos.isEmpty, all.unreadable.count == repos.count {
+            return .failure(TaskWorktree.Failure(step: "Couldn't read open pull requests and issues of any repository with gh",
+                                                 output: lastRun?.report("gh api graphql (open work)") ?? "No repository name was valid."))
+        }
+        all.items.sort { $0.updatedAt > $1.updatedAt }
+        return .success(all)
     }
 
     /// Owner and repository names GitHub allows, so they can be written into a query as they are.
@@ -118,13 +134,16 @@ extension GitHubLookup {
         return "query {\n" + fields.joined(separator: "\n") + "\n}"
     }
 
-    /// The items in a GraphQL answer to `openWorkQuery`; nil when it holds no data at all.
-    static func parseOpenWork(_ output: String) -> [OpenItem]? {
+    /// The items in a GraphQL answer to `openWorkQuery` for the repositories `asked`, and those of
+    /// them it has no answer for; nil when it holds no data at all.
+    static func parseOpenWork(_ output: String, asked: [String]) -> OpenWork? {
         guard let root = json(output) as? [String: Any], let data = root["data"] as? [String: Any] else { return nil }
         let dates = ISO8601DateFormatter()
         var items: [OpenItem] = []
+        var answered = Set<String>()
         for case let repository as [String: Any] in data.values {
             guard let repo = repository["nameWithOwner"] as? String else { continue }
+            answered.insert(repo.lowercased())
             for pullRequest in [true, false] {
                 let nodes = (repository[pullRequest ? "pullRequests" : "issues"] as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
                 for node in nodes {
@@ -156,7 +175,7 @@ extension GitHubLookup {
                 }
             }
         }
-        return items
+        return OpenWork(items: items, unreadable: asked.filter { !answered.contains($0.lowercased()) })
     }
 }
 
@@ -186,7 +205,8 @@ public struct DeployTarget: Hashable, Sendable {
 /// A repository's row in the Projects table: GitHub's facts, PROJECT.md's metadata, where its tasks
 /// work and how many are open, with a sort key for every column.
 public struct ProjectRow: Identifiable, Equatable, Sendable {
-    public enum Record: Equatable, Sendable { case loading, missing, invalid, present(ProjectMetadata) }
+    /// Not read yet; read, with no PROJECT.md; unreadable as metadata; present; or not read, with why.
+    public enum Record: Equatable, Sendable { case loading, missing, invalid, present(ProjectMetadata), failed(String) }
 
     public var repo: GitHubLookup.Repo
     public var record: Record
@@ -213,17 +233,18 @@ public struct ProjectRow: Identifiable, Equatable, Sendable {
         self.repo = repo; self.record = record; self.deploy = deploy; self.workplace = workplace; self.location = location; self.openTasks = openTasks
     }
 
-    /// The rows for these repositories, from their PROJECT.md records (missing while loading), the
+    /// The rows for these repositories, from their PROJECT.md records (or why one couldn't be read), the
     /// owner's chosen locations and hosts, and the open tasks' repositories.
-    public static func rows(repos: [GitHubLookup.Repo], records: [String: ProjectRecord], chosen: [String: RepoLocation],
-                            thisMac: String, hosts: [SSHHost], reposRoot: String, taskRepos: [String]) -> [ProjectRow] {
+    public static func rows(repos: [GitHubLookup.Repo], records: [String: ProjectRecord], errors: [String: String] = [:],
+                            chosen: [String: RepoLocation], thisMac: String, hosts: [SSHHost], reposRoot: String,
+                            taskRepos: [String]) -> [ProjectRow] {
         var tasks: [String: Int] = [:]
         for repo in taskRepos { tasks[repo.lowercased(), default: 0] += 1 }
         return repos.map { repo in
             let file = records[repo.id]
             let record: Record
             switch file {
-            case nil: record = .loading
+            case nil: record = errors[repo.id].map(Record.failed) ?? .loading
             case let file? where !file.exists: record = .missing
             case let file?: record = (try? file.metadata(repoName: repo.name)).map(Record.present) ?? .invalid
             }

@@ -31,7 +31,9 @@ import Testing
         let output = #"""
             {"data":{"r0":{"nameWithOwner":"asieke/BotChu","pullRequests":{"nodes":[{"number":41,"title":"Fix the chat not autoscrolling as replies stream in","url":"https://github.com/asieke/BotChu/pull/41","isDraft":false,"createdAt":"2026-10-23T01:37:10Z","updatedAt":"2026-10-23T01:37:10Z","author":{"login":"asieke","avatarUrl":"https://avatars.githubusercontent.com/u/4070885?s=64&v=4"},"reviewDecision":null,"headRefName":"fix/chat-autoscroll","isCrossRepository":false,"comments":{"totalCount":0},"additions":4,"deletions":1,"labels":{"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}},{"number":38,"title":"Grow the message composer and support image attachments","url":"https://github.com/asieke/BotChu/pull/38","isDraft":true,"createdAt":"2026-10-22T22:42:43Z","updatedAt":"2026-10-22T22:44:25Z","author":{"login":"asieke","avatarUrl":"https://avatars.githubusercontent.com/u/4070885?s=64&v=4"},"reviewDecision":"CHANGES_REQUESTED","headRefName":"feat/37-composer-images","isCrossRepository":true,"comments":{"totalCount":2},"additions":709,"deletions":45,"labels":{"nodes":[{"name":"enhancement","color":"a2eeef"}]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}]},"issues":{"nodes":[{"number":42,"title":"Bot instructions as INSTRUCTIONS.md + shared TEAM.md playbook","url":"https://github.com/asieke/BotChu/issues/42","createdAt":"2026-10-23T01:41:20Z","updatedAt":"2026-10-23T01:41:20Z","author":{"login":"asieke","avatarUrl":"https://avatars.githubusercontent.com/u/4070885?s=64&v=4"},"comments":{"totalCount":0},"labels":{"nodes":[]}},{"number":37,"title":"Grow the composer and support image attachments","url":"https://github.com/asieke/BotChu/issues/37","createdAt":"2026-10-22T22:31:52Z","updatedAt":"2026-10-22T22:31:52Z","author":null,"comments":{"totalCount":3},"labels":{"nodes":[]}}]}},"r1":null},"errors":[{"type":"NOT_FOUND","path":["r1"],"locations":[{"line":1,"column":688}],"message":"Could not resolve to a Repository with the name 'asieke/nope-not-here-xyz'."}]}
             """#
-        let items = try #require(GitHubLookup.parseOpenWork(output))
+        let read = try #require(GitHubLookup.parseOpenWork(output, asked: ["asieke/BotChu", "asieke/nope-not-here-xyz"]))
+        #expect(read.unreadable == ["asieke/nope-not-here-xyz"])
+        let items = read.items
         let pulls = items.filter(\.isPullRequest), issues = items.filter { !$0.isPullRequest }
         #expect(pulls.map(\.number) == [41, 38])
         #expect(issues.map(\.number) == [42, 37])
@@ -48,8 +50,10 @@ import Testing
         #expect(issues[1].author == "ghost")
         #expect(issues[1].comments == 3)
         #expect(issues[0].work == BotTask.Work(number: 42, title: issues[0].title, url: issues[0].url, isPullRequest: false))
-        #expect(GitHubLookup.parseOpenWork("gh: Bad credentials") == nil)
-        #expect(GitHubLookup.parseOpenWork(#"{"errors":[{"message":"Bad credentials"}]}"#) == nil)
+        #expect(GitHubLookup.parseOpenWork("gh: Bad credentials", asked: ["asieke/BotChu"]) == nil)
+        #expect(GitHubLookup.parseOpenWork(#"{"errors":[{"message":"Bad credentials"}]}"#, asked: ["asieke/BotChu"]) == nil)
+        // Every repository unresolved: data, but no answers at all.
+        #expect(GitHubLookup.parseOpenWork(#"{"data":{"r0":null},"errors":[{"type":"NOT_FOUND"}]}"#, asked: ["a/b"])?.unreadable == ["a/b"])
     }
 
     @Test func asksOnlyAboutSafeRepositoryNames() {
@@ -82,6 +86,7 @@ import Testing
             GitHubLookup.Repo(nameWithOwner: "asieke/new"),
             GitHubLookup.Repo(nameWithOwner: "asieke/broken"),
             GitHubLookup.Repo(nameWithOwner: "asieke/loading"),
+            GitHubLookup.Repo(nameWithOwner: "asieke/waiting"),
         ]
         let local = ProjectMetadata(name: "BotChu", kind: .local, deploy: "local:my-mac:~/apps/BotChu", merge: "agent")
         let hosted = ProjectMetadata(name: "Talent", kind: .hosted, status: .paused, deploy: "local:omarchy:~/apps/talent, vercel:talent")
@@ -91,20 +96,21 @@ import Testing
             "asieke/new": ProjectRecord(text: "", sha: nil),
             "asieke/broken": ProjectRecord(text: "---\ntype: spaceship\n---\n", sha: "c"),
         ]
-        let rows = ProjectRow.rows(repos: repos, records: records, chosen: [:], thisMac: "my-mac", hosts: [host], reposRoot: "/repos",
+        let rows = ProjectRow.rows(repos: repos, records: records, errors: ["asieke/loading": "Could not read PROJECT.md."], chosen: [:], thisMac: "my-mac", hosts: [host], reposRoot: "/repos",
                                    taskRepos: ["asieke/BotChu", "ASIEKE/botchu", "asieke/talent"])
-        #expect(rows.map(\.workplace) == ["This Mac", "Omarchy", "This Mac", "This Mac", "This Mac"])
+        #expect(rows.map(\.workplace) == ["This Mac", "Omarchy", "This Mac", "This Mac", "This Mac", "This Mac"])
         #expect(rows[0].location.path == NSHomeDirectory() + "/apps/BotChu")
         #expect(rows[1].location == RepoLocation(hostID: host.id, path: "~/apps/talent"))
         #expect(rows[2].location.path == "/repos/new")
-        #expect(rows.map(\.openTasks) == [2, 1, 0, 0, 0])
+        #expect(rows.map(\.openTasks) == [2, 1, 0, 0, 0, 0])
+        #expect(rows[5].record == .loading)
         #expect(rows[0].metadata == local)
         #expect(rows[0].mergeKey == 2)
         #expect(rows[1].deploy.map(\.kind) == [.local, .vercel])
         #expect(rows[1].statusKey > rows[0].statusKey)
         #expect(rows[2].record == .missing)
         #expect(rows[3].record == .invalid)
-        #expect(rows[4].record == .loading)
+        #expect(rows[4].record == .failed("Could not read PROJECT.md."))
         #expect(rows[4].typeKey == 0)
         #expect(rows[0].openPullRequests == 3)
         #expect(rows[0].matches("bots local"))

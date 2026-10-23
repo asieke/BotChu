@@ -21,7 +21,7 @@ struct ProjectsView: View {
     @State private var pendingTask: (UUID, String)?
 
     private var rows: [ProjectRow] {
-        ProjectRow.rows(repos: model.repositories ?? [], records: model.projectRecords, chosen: model.settings.repoLocations,
+        ProjectRow.rows(repos: model.repositories ?? [], records: model.projectRecords, errors: model.projectErrors, chosen: model.settings.repoLocations,
                         thisMac: model.settings.thisMacName, hosts: model.settings.hosts, reposRoot: model.settings.expandedReposRoot,
                         taskRepos: model.openTasks.map(\.task.repo))
         .filter { row in
@@ -161,7 +161,9 @@ struct ProjectsView: View {
                 ContentUnavailableView {
                     Label("No matching \(kind)", systemImage: "line.3.horizontal.decrease.circle")
                 } description: {
-                    Text("Nothing open matches the search\(repoFilter.map { " in \(TaskNaming.repoName($0))" } ?? "").")
+                    // The search covers only what was read; say so when that isn't everything.
+                    Text("Nothing open matches the search\(repoFilter.map { " in \(TaskNaming.repoName($0))" } ?? "")."
+                         + (truncation(pulls: pulls).map { "\n\n" + $0 } ?? ""))
                 } actions: {
                     Button("Show All") { query = ""; repoFilter = nil }
                 }

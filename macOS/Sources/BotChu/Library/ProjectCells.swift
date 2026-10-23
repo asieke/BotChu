@@ -187,6 +187,8 @@ struct DeployCell: View {
         HStack(spacing: 8) {
             if case .loading = row.record {
                 ProgressView().controlSize(.mini)
+            } else if case .failed = row.record {
+                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(GitHubColors.attention)
             } else if row.deploy.isEmpty {
                 Dash()
             }
@@ -203,7 +205,16 @@ struct DeployCell: View {
             }
         }
         .lineLimit(1)
-        .help(row.metadata?.deploy ?? (row.record == .missing ? "No PROJECT.md" : ""))
+        .help(help)
+    }
+
+    private var help: String {
+        switch row.record {
+        case .present(let metadata): metadata.deploy
+        case .missing: "No PROJECT.md"
+        case .failed(let error): "\(error) Refresh to try again."
+        case .loading, .invalid: ""
+        }
     }
 
     static func symbol(_ kind: DeployTarget.Kind) -> String {
@@ -224,6 +235,7 @@ struct TypeCell: View {
         case .loading: Dash()
         case .missing: Text("Unclassified").foregroundStyle(.tertiary).help("No PROJECT.md yet")
         case .invalid: Text("Unreadable").foregroundStyle(GitHubColors.attention).help("PROJECT.md could not be read")
+        case .failed(let error): Text("Not read").foregroundStyle(GitHubColors.attention).help("\(error) Refresh to try again.")
         case .present(let metadata):
             Text(metadata.kind.label.components(separatedBy: " · ").first ?? metadata.kind.label).lineLimit(1)
                 .foregroundStyle(metadata.status == .active ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
