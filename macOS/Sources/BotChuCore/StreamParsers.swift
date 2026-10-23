@@ -103,7 +103,8 @@ public struct ClaudeParser: StreamParser {
                     let id = block["id"] as? String ?? UUID().uuidString
                     let name = block["name"] as? String ?? "Tool"
                     toolNames[id] = name
-                    events.append(.toolStarted(id: id, name: name, input: summarizeToolInput(block["input"])))
+                    events.append(.toolStarted(id: id, name: name, input: summarizeToolInput(block["input"]),
+                                               arguments: ToolArguments.digest(block["input"])))
                 default: break
                 }
             }
@@ -151,7 +152,7 @@ public struct CodexParser: StreamParser {
                     let exit = item["exit_code"] as? Int
                     let failed = (exit.map { $0 != 0 } ?? false) || item["status"] as? String == "failed"
                     return [.toolStarted(id: id, name: "Shell", input: command),
-                            .toolFinished(id: id, name: "Shell", output: item["aggregated_output"] as? String ?? "", isError: failed)]
+                            .toolFinished(id: id, name: "Shell", output: item["aggregated_output"] as? String ?? "", isError: failed, exitCode: exit)]
                 }
                 return [.toolStarted(id: id, name: "Shell", input: command)]
             case "file_change":
@@ -167,12 +168,13 @@ public struct CodexParser: StreamParser {
             case "mcp_tool_call":
                 let name = [item["server"] as? String, item["tool"] as? String].compactMap { $0 }.joined(separator: ".")
                 let input = summarizeToolInput(item["arguments"])
+                let arguments = ToolArguments.digest(item["arguments"])
                 if completed {
                     let output = summarizeToolInput((item["result"] as? JSON)?["content"].map(contentText) ?? item["error"])
-                    return [.toolStarted(id: id, name: name, input: input),
+                    return [.toolStarted(id: id, name: name, input: input, arguments: arguments),
                             .toolFinished(id: id, name: name, output: output, isError: item["status"] as? String == "failed")]
                 }
-                return [.toolStarted(id: id, name: name, input: input)]
+                return [.toolStarted(id: id, name: name, input: input, arguments: arguments)]
             case "web_search":
                 let query = item["query"] as? String ?? ""
                 return completed
@@ -236,7 +238,8 @@ public struct AntigravityParser: StreamParser {
                 let roles = subagents?.compactMap { $0["role"] as? String }.joined(separator: "\n")
                 let parameters = info?["parameters"] as? JSON
                 let input = roles ?? parameters?["Role"] as? String ?? summarizeToolInput(info?["parameters"])
-                if state == "ACTIVE" { return [.toolStarted(id: id, name: name, input: input)] }
+                let arguments = ToolArguments.digest(parameters)
+                if state == "ACTIVE" { return [.toolStarted(id: id, name: name, input: input, arguments: arguments)] }
                 if state == "DONE" || state == "ERROR" || state == "CANCELED" {
                     let launched = subagents?.map { child in
                         let role = child["role"] as? String ?? "Subagent"
@@ -247,7 +250,7 @@ public struct AntigravityParser: StreamParser {
                         ? (info?["output"] as? String ?? launched ?? "")
                         : (info?["output"] as? String ?? "Antigravity reported \(state).")
                     let failed = state != "DONE" || output.hasPrefix("Command failed")
-                    return [.toolStarted(id: id, name: name, input: input),
+                    return [.toolStarted(id: id, name: name, input: input, arguments: arguments),
                             .toolFinished(id: id, name: name, output: output, isError: failed)]
                 }
             default: break
@@ -297,13 +300,17 @@ public struct MuseParser: StreamParser {
             let raw = payload["text"] as? String ?? ""
             var input = ""
             var output = raw
+            var arguments: String?
+            var exit: Int?
             if let detail = decode(raw) {
                 input = summarizeToolInput(detail)
                 if let out = detail["output"] as? String { output = out }
+                arguments = ToolArguments.digest(detail, dropping: ["output"])
+                exit = detail["exit_code"] as? Int
             }
             let failed = (facts?["outcome"] as? String).map { $0 != "success" } ?? false
-            events += [.toolStarted(id: id, name: name, input: input),
-                       .toolFinished(id: id, name: name, output: output, isError: failed)]
+            events += [.toolStarted(id: id, name: name, input: input, arguments: arguments),
+                       .toolFinished(id: id, name: name, output: output, isError: failed, exitCode: exit)]
         default:
             if type.hasPrefix("run.terminal") {
                 let terminal = payload["terminal"] as? String ?? ""
@@ -340,7 +347,8 @@ public struct PiParser: StreamParser {
             }
         case "tool_execution_start":
             let id = obj["toolCallId"] as? String ?? UUID().uuidString
-            return [.toolStarted(id: id, name: obj["toolName"] as? String ?? "Tool", input: summarizeToolInput(obj["args"]))]
+            return [.toolStarted(id: id, name: obj["toolName"] as? String ?? "Tool", input: summarizeToolInput(obj["args"]),
+                                 arguments: ToolArguments.digest(obj["args"]))]
         case "tool_execution_end":
             let id = obj["toolCallId"] as? String ?? UUID().uuidString
             let result = obj["result"] as? JSON

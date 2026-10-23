@@ -37,7 +37,7 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
     @Test func events() {
         #expect(run(.claude, lines) == [
             .session("51e64f5b-b2d8-4840-ba1a-81f82d98972a"),
-            .toolStarted(id: "toolu_1", name: "Bash", input: "ls"),
+            .toolStarted(id: "toolu_1", name: "Bash", input: "ls", arguments: #"{"command":"ls","description":"List files"}"#),
             .toolFinished(id: "toolu_1", name: "Bash", output: "(Bash completed with no output)", isError: false),
             .textDelta("Emp"), .textDelta("ty."), .textEnd,
             .finished,
@@ -49,6 +49,12 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         #expect(messages.map(\.role) == [.tool, .assistant])
         #expect(messages[0].toolState == .done)
         #expect(messages[1].text == "Empty.")
+    }
+
+    @Test func readArgumentsAreKept() {
+        let events = run(.claude, [#"{"type":"assistant","message":{"id":"msg_3","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Read","input":{"file_path":"/tmp/probe/notes.md","offset":40,"limit":20}}]},"parent_tool_use_id":null,"session_id":"s"}"#])
+        #expect(events == [.toolStarted(id: "toolu_2", name: "Read", input: "/tmp/probe/notes.md",
+                                        arguments: #"{"file_path":"/tmp/probe/notes.md","limit":20,"offset":40}"#)])
     }
 
     @Test func unstreamedTextIsUsedWhole() {
@@ -98,7 +104,7 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
             .text("I’ll run `ls`.\n"),
             .toolStarted(id: "item_1", name: "Shell", input: "ls"),
             .toolStarted(id: "item_1", name: "Shell", input: "ls"),
-            .toolFinished(id: "item_1", name: "Shell", output: "", isError: false),
+            .toolFinished(id: "item_1", name: "Shell", output: "", isError: false, exitCode: 0),
             .text("Done"),
             .finished,
         ])
@@ -117,7 +123,7 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         ])
         #expect(events == [
             .toolStarted(id: "i", name: "Shell", input: "false"),
-            .toolFinished(id: "i", name: "Shell", output: "", isError: true),
+            .toolFinished(id: "i", name: "Shell", output: "", isError: true, exitCode: 1),
             .failed("usage limit reached"),
         ])
     }
@@ -139,8 +145,8 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         #expect(run(.antigravity, lines) == [
             .session("ed6822af-ee2c-432f-8e59-90a27d09c369"),
             .textEnd,
-            .toolStarted(id: "step-2", name: "run_command", input: "ls"),
-            .toolStarted(id: "step-2", name: "run_command", input: "ls"),
+            .toolStarted(id: "step-2", name: "run_command", input: "ls", arguments: #"{"CommandLine":"ls"}"#),
+            .toolStarted(id: "step-2", name: "run_command", input: "ls", arguments: #"{"CommandLine":"ls"}"#),
             .toolFinished(id: "step-2", name: "run_command", output: "Command exited with code 0.\n\nNo output from the command.", isError: false),
             .textDelta("Done"),
             .textDelta("\n"), .textEnd,
@@ -173,8 +179,8 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
     @Test func events() {
         #expect(run(.muse, lines) == [
             .session("0cb4a4fa-1730-4e14-b9f2-fa6a0a2b88ab"),
-            .toolStarted(id: "call_1", name: "bash", input: "ls"),
-            .toolFinished(id: "call_1", name: "bash", output: "muse.jsonl\n", isError: false),
+            .toolStarted(id: "call_1", name: "bash", input: "ls", arguments: #"{"command":"ls","exit_code":0}"#),
+            .toolFinished(id: "call_1", name: "bash", output: "muse.jsonl\n", isError: false, exitCode: 0),
             .textDelta("banana"),
             .textEnd, .finished,
         ])
@@ -211,7 +217,7 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         #expect(run(.pi, lines) == [
             .session("01a16193-6e6e-73de-9ba8-b91fff490b56"),
             .textDelta("Running ls now."), .textEnd,
-            .toolStarted(id: "call_1", name: "bash", input: "ls"),
+            .toolStarted(id: "call_1", name: "bash", input: "ls", arguments: #"{"command":"ls"}"#),
             .toolFinished(id: "call_1", name: "bash", output: "muse.jsonl\n", isError: false),
             .textDelta("Done"), .textEnd,
             .finished,
@@ -241,6 +247,40 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         var messages = thread([.toolStarted(id: "x", name: "Bash", input: "sleep 9")])
         ThreadAssembler.closeRunningTools(&messages)
         #expect(messages[0].toolState == .interrupted)
+    }
+
+    /// The call's arguments, exit code and duration reach the thread, for the chat to describe
+    /// it; a call reported whole (Muse, Codex items seen only when complete) has no duration.
+    @Test func toolFactsReachTheThread() {
+        var assembler = ThreadAssembler()
+        var messages: [ChatMessage] = []
+        assembler.apply(.toolStarted(id: "r", name: "Read", input: "/a.swift", arguments: #"{"file_path":"/a.swift","limit":30,"offset":1}"#), to: &messages)
+        messages[0].date = Date().addingTimeInterval(-1.5)
+        assembler.apply(.toolFinished(id: "r", name: "Read", output: "ok", isError: false), to: &messages)
+        assembler.apply(.toolStarted(id: "s", name: "Shell", input: "false"), to: &messages)
+        assembler.apply(.toolFinished(id: "s", name: "Shell", output: "", isError: true, exitCode: 1), to: &messages)
+        #expect(messages[0].toolArguments == #"{"file_path":"/a.swift","limit":30,"offset":1}"#)
+        #expect((messages[0].toolDuration ?? 0) >= 1.5)
+        #expect(messages[1].toolExitCode == 1)
+        #expect(messages[1].toolDuration == nil)
+        #expect(ToolActivity.describe(messages[0]).detail == "L1–30")
+    }
+
+    /// Threads saved before these fields still load, and new ones round-trip.
+    @Test func toolFactsAreOptionalInSavedThreads() throws {
+        let old = #"{"date":"2026-10-22T03:01:03Z","id":"00000000-0000-4000-8000-000000000004","role":"tool","text":"","toolID":"t1","toolInput":"ls","toolName":"Bash","toolOutput":"a\n","toolState":"done"}"#
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let message = try decoder.decode(ChatMessage.self, from: Data(old.utf8))
+        #expect(message.toolArguments == nil && message.toolExitCode == nil && message.toolDuration == nil)
+        var updated = message
+        updated.toolArguments = #"{"command":"ls"}"#
+        updated.toolExitCode = 0
+        updated.toolDuration = 0.25
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let again = try decoder.decode(ChatMessage.self, from: encoder.encode(updated))
+        #expect(again == updated)
     }
 
     @Test func failureEndsTheOpenReply() {

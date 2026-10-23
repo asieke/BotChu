@@ -33,6 +33,6 @@ import Testing
         var parser = AntigravityParser()
         let line = lines[1].replacingOccurrences(of: "DONE", with: state)
         let events = parser.parse(line: line)
-        #expect(events.contains { if case .toolFinished(_, _, _, let error) = $0 { return error }; return false })
+        #expect(events.contains { if case .toolFinished(_, _, _, let error, _) = $0 { return error }; return false })
     }
 }

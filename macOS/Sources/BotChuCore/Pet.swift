@@ -29,7 +29,7 @@ public enum BotActivity: String, CaseIterable, Codable, Sendable {
     public static func next(after event: AgentEvent) -> BotActivity? {
         switch event {
         case .textDelta, .text, .toolFinished: .thinking
-        case let .toolStarted(_, name, input): classify(toolName: name, input: input)
+        case let .toolStarted(_, name, input, _): classify(toolName: name, input: input)
         case .session, .textEnd, .failed, .finished, .inputTaken: nil
         }
     }
