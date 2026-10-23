@@ -256,6 +256,76 @@ public enum TaskReceipt {
     }
 }
 
+/// The brief of one task over many of a repository's open issues or pull requests: its bot hands
+/// each to a parallel sub-agent of its own (`botchu-subagent spawn`, as itself) and collects them.
+/// Its first line, short, names the task and its branch.
+public enum FanOutBrief {
+    /// How many sub-agents such a task runs at once: BotChu runs twelve at most across every bot,
+    /// and each of these may build and test the repository.
+    public static let parallel = 4
+
+    /// Each issue fixed by its own sub-agent, in a worktree of its own, with a pull request that closes it.
+    /// `agent` is how `botchu-subagent` names the task's bot.
+    public static func fixIssues(_ issues: [BotTask.Work], repo: String, agent: String) -> String {
+        """
+        Fix \(count(issues, "open issue"))
+
+        Fix each issue of \(repo) below with a parallel sub-agent of its own.
+
+        \(list(issues))
+
+        1. Start one sub-agent per issue, as yourself: `botchu-subagent spawn --agent \(Shell.quote(agent)) --title 'Fix #<number>' --brief '…'`. \
+        Run at most \(parallel) at once, and collect them with `botchu-subagent wait` before starting more.
+        2. Give each its issue's number, title and link, and tell it to: read the issue and its discussion \
+        (`gh issue view <number> --repo \(repo) --comments`); fix only that issue, following the repository's AGENTS.md; work in a new \
+        worktree and branch of its own from the latest default branch on origin (`scripts/worktree.sh <type>/<number>-<slug>` when the \
+        repository has it, else `git worktree add`), never in this task's folder, so no two share files; make the smallest complete \
+        change and run the repository's checks; push, open a pull request whose description says `Closes #<number>`, and hand back its \
+        URL, or what stopped it.
+        3. Change nothing in this task's own worktree.
+        4. When every sub-agent has finished, reply with one line per issue: its pull request, or why it has none.
+        """
+    }
+
+    /// Each pull request reviewed by its own sub-agent, in a detached worktree of its own; posted on
+    /// GitHub as one review when `comment`, else only reported here.
+    public static func reviewPullRequests(_ pulls: [BotTask.Work], repo: String, agent: String, comment: Bool) -> String {
+        let posting = comment
+            ? "It also posts the review on the pull request as one review, without asking again (`gh api repos/\(repo)/pulls/<number>/reviews "
+                + "--method POST` with `\"event\": \"COMMENT\"`, the verdict and findings in its body, and each finding as an inline comment "
+                + "on its line where GitHub takes one), and hands back the review's URL."
+            : "It posts nothing to GitHub."
+        return """
+            \(comment ? "Review and comment on" : "Review") \(count(pulls, "open pull request"))
+
+            Review each pull request of \(repo) below with a parallel sub-agent of its own.
+
+            \(list(pulls))
+
+            1. Start one sub-agent per pull request, as yourself: `botchu-subagent spawn --agent \(Shell.quote(agent)) --title 'Review #<number>' \
+            --brief '…'`. Run at most \(parallel) at once, and collect them with `botchu-subagent wait` before starting more.
+            2. Give each its pull request's number, title and link, and tell it to review only that pull request, as the repository's AGENTS.md \
+            says under "Reviewing a pull request" when it has that section: read the pull request, its discussion, reviews, checks and diff \
+            (`gh pr view <number> --repo \(repo) --comments`, `gh pr diff <number> --repo \(repo)`); test it in a detached worktree of its own \
+            at the pull request's head (`git fetch origin pull/<number>/head && git worktree add --detach "$(mktemp -d)/pr-<number>" FETCH_HEAD`), \
+            never in this task's folder, and remove that worktree when done; then hand back the commit it reviewed, each finding with its \
+            severity (high, medium or low), file:line, what is wrong and how to fix it, most severe first, and a verdict: ready to merge, or \
+            what must change first. \(posting)
+            3. Change nothing in this task's own worktree.
+            4. When every sub-agent has finished, reply with each pull request's verdict and its most severe findings\(comment ? ", linking each posted review" : "").
+            """
+    }
+
+    /// "1 open issue", or "5 open issues".
+    private static func count(_ items: [BotTask.Work], _ noun: String) -> String {
+        "\(items.count) \(noun)" + (items.count == 1 ? "" : "s")
+    }
+
+    private static func list(_ items: [BotTask.Work]) -> String {
+        items.map { "- #\($0.number) \($0.title): \($0.url.absoluteString)" }.joined(separator: "\n")
+    }
+}
+
 /// A task a bot asks for from its Home conversation, by writing a JSON file into
 /// `.botchu/dispatch/` in its folder: `{"repo": "asieke/GitChu", "issue": 48, "task": "…"}`.
 public struct TaskRequest: Equatable, Sendable {

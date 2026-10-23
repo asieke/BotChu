@@ -68,6 +68,91 @@ import Testing
         #expect(query.contains("pullRequests(states: OPEN, first: 30"))
     }
 
+    @Test func filtersProjectsByStatus() {
+        func row(_ name: String, _ record: ProjectRow.Record) -> ProjectRow {
+            ProjectRow(repo: GitHubLookup.Repo(nameWithOwner: "octocat/\(name)"), record: record, deploy: [], workplace: "This Mac",
+                       location: RepoLocation(path: "/tmp/\(name)"), openTasks: 0)
+        }
+        let rows = [
+            row("Live", .present(ProjectMetadata(name: "Live"))),
+            row("Resting", .present(ProjectMetadata(name: "Resting", status: .paused))),
+            row("Old", .present(ProjectMetadata(name: "Old", status: .deprecated))),
+            row("Bare", .missing), row("Unread", .loading), row("Broken", .invalid), row("Offline", .failed("No network.")),
+        ]
+        func shown(_ filter: ProjectStatusFilter) -> [String] { rows.filter(filter.includes).map(\.repo.name) }
+        #expect(shown(.active) == ["Live"])
+        #expect(shown(.paused) == ["Resting"])
+        #expect(shown(.deprecated) == ["Old"])
+        #expect(shown(.maintenance).isEmpty)
+        // No PROJECT.md: unclassified. Not read yet, unreadable or failed: no status known, so only All.
+        #expect(shown(.unclassified) == ["Bare"])
+        #expect(shown(.all).count == rows.count)
+        #expect(ProjectStatusFilter(rawValue: "active") == .active)
+        #expect(ProjectStatusFilter.all.label == "All statuses")
+        #expect(ProjectStatusFilter.maintenance.label == "Maintenance")
+    }
+
+    @Test func readsAnIssueWithItsConversation() throws {
+        // `gh issue view 14755 --repo cli/cli --json <issueDetailFields>`, its texts trimmed.
+        let output = #"""
+            {"author": {"id": "MDQ6VXNlcjgwMzMyMjAw", "is_bot": false, "login": "samaluk", "name": "Sebastián Maluk"}, "body": "### Describe the feature or problem you’d like to solve\n\nI’d like to configure default options once and have standard `gh` commands inherit them.", "comments": [{"id": "IC_kwDODKw3uc8AAAABdjeZjA", "author": {"login": "cli-triage"}, "authorAssociation": "NONE", "body": "Thanks for the detailed write-up! This reads as a clear enhancement request.", "createdAt": "2026-10-19T21:59:46Z", "includesCreatedEdit": false, "isMinimized": false, "minimizedReason": "", "reactionGroups": [], "url": "https://github.com/cli/cli/issues/14755#issuecomment-6278322572", "viewerDidAuthor": false}, {"id": "IC_kwDODKw3uc8AAAABdjlyHg", "author": {"login": "github-actions"}, "authorAssociation": "CONTRIBUTOR", "body": "Thank you for your issue! We have categorized it as an enhancement.", "createdAt": "2026-10-19T22:07:47Z", "includesCreatedEdit": false, "isMinimized": false, "minimizedReason": "", "reactionGroups": [], "url": "https://github.com/cli/cli/issues/14755#issuecomment-6278443550", "viewerDidAuthor": false}], "createdAt": "2026-10-19T21:56:16Z", "labels": [{"id": "MDU6TGFiZWwxNjk4MDc2MTcz", "name": "enhancement", "description": "a request to improve CLI", "color": "0dd8ac"}, {"id": "LA_kwDODKw3uc8AAAABZDqY9g", "name": "gh-pr", "description": "relating to the gh pr command", "color": "DD04FD"}], "number": 14755, "state": "OPEN", "title": "Support persistent command defaults without requiring custom aliases", "updatedAt": "2026-10-19T22:07:47Z", "url": "https://github.com/cli/cli/issues/14755"}
+            """#
+        let detail = try #require(GitHubLookup.parseDetail(output, repo: "cli/cli", pullRequest: false))
+        #expect(detail.id == "cli/cli#14755")
+        #expect(detail.title == "Support persistent command defaults without requiring custom aliases")
+        #expect(detail.author == "samaluk")
+        #expect(detail.state == "OPEN")
+        #expect(detail.body.hasPrefix("### Describe the feature"))
+        #expect(detail.labels == [GitHubLookup.OpenItem.Label(name: "enhancement", color: "0dd8ac"), GitHubLookup.OpenItem.Label(name: "gh-pr", color: "DD04FD")])
+        #expect(detail.conversation.map(\.author) == ["cli-triage", "github-actions"])
+        #expect(detail.conversation.allSatisfy { $0.review == nil })
+        #expect(detail.conversation[0].date < detail.conversation[1].date)
+        #expect(detail.checks.isEmpty && detail.checksSummary == nil && detail.checksState == .none)
+        #expect(detail.work == BotTask.Work(number: 14755, title: detail.title, url: detail.url, isPullRequest: false))
+        #expect(GitHubLookup.issueDetailFields == "number,title,body,url,state,author,createdAt,updatedAt,labels,comments")
+        #expect(GitHubLookup.parseDetail("GraphQL: Could not resolve to an issue or pull request with the number of 9.", repo: "cli/cli", pullRequest: false) == nil)
+    }
+
+    @Test func readsAPullRequestWithChecksFilesAndReviews() throws {
+        // `gh pr view 14766 --repo cli/cli --json <pullRequestDetailFields>`, its texts trimmed. Added to
+        // its checks: BotChu #58's commit status, and a job still running and a failed one in the same
+        // form; to its reviews, a comment-only review with no body, which says nothing on its own.
+        let output = #"""
+            {"additions": 3, "author": {"is_bot": true, "login": "app/dependabot"}, "baseRefName": "trunk", "body": "Bumps [github.com/gabriel-vasile/mimetype](https://github.com/gabriel-vasile/mimetype) from 1.4.15 to 1.4.16.\n<details>\n<summary>Release notes</summary>", "changedFiles": 2, "comments": [{"id": "IC_kwDODKw3uc8AAAABdx0UlA", "author": {"login": "cli-triage"}, "authorAssociation": "NONE", "body": "**Recommendation: Merge, Confidence: High**", "createdAt": "2026-10-20T14:34:35Z", "includesCreatedEdit": false, "isMinimized": false, "minimizedReason": "", "reactionGroups": [], "url": "https://github.com/cli/cli/pull/14766#issuecomment-6293361812", "viewerDidAuthor": false}], "createdAt": "2026-10-20T14:03:03Z", "deletions": 3, "files": [{"path": "go.mod", "additions": 1, "deletions": 1, "changeType": "MODIFIED"}, {"path": "go.sum", "additions": 2, "deletions": 2, "changeType": "MODIFIED"}], "headRefName": "dependabot/go_modules/github.com/gabriel-vasile/mimetype-1.4.16", "isCrossRepository": false, "isDraft": false, "labels": [{"id": "LA_kwDODKw3uc8AAAABYP6ixA", "name": "dependencies", "description": "Pull requests that update a dependency file", "color": "0366d6"}], "number": 14766, "reviewDecision": "APPROVED", "reviews": [{"id": "PRR_kwDODKw3uc8AAAABTQPibw", "author": {"login": "williammartin"}, "authorAssociation": "MEMBER", "body": "", "submittedAt": "2026-10-20T15:07:53Z", "includesCreatedEdit": false, "reactionGroups": [], "state": "APPROVED", "commit": {"oid": "7d01a387524920742414a38eca9f8544193a5cbc"}}, {"id": "PRR_kwDODKw3uc8AAAABTQPicA", "author": {"login": "babakks"}, "authorAssociation": "MEMBER", "body": "", "submittedAt": "2026-10-20T15:09:00Z", "includesCreatedEdit": false, "reactionGroups": [], "state": "COMMENTED", "commit": {"oid": "7d01a387524920742414a38eca9f8544193a5cbc"}}], "state": "MERGED", "statusCheckRollup": [{"__typename": "CheckRun", "completedAt": "2026-10-20T14:03:11Z", "conclusion": "SKIPPED", "detailsUrl": "https://github.com/cli/cli/actions/runs/39435775443/job/118672277117", "name": "label-external", "startedAt": "2026-10-20T14:03:12Z", "status": "COMPLETED", "workflowName": "PR Triaging"}, {"__typename": "CheckRun", "completedAt": "2026-10-20T14:03:12Z", "conclusion": "SKIPPED", "detailsUrl": "https://github.com/cli/cli/actions/runs/39435776426/job/118672347998", "name": "label-external", "startedAt": "2026-10-20T14:03:20Z", "status": "COMPLETED", "workflowName": "PR Triaging"}, {"__typename": "CheckRun", "completedAt": "2026-10-20T14:05:46Z", "conclusion": "SUCCESS", "detailsUrl": "https://github.com/cli/cli/actions/runs/39435771269/job/118672256520", "name": "CodeQL-Build (go, manual, ./.github/codeql/codeql-config.yml)", "startedAt": "2026-10-20T14:03:14Z", "status": "COMPLETED", "workflowName": "Code Scanning"}, {"__typename": "CheckRun", "completedAt": "0001-01-01T00:00:00Z", "conclusion": "", "detailsUrl": "https://github.com/cli/cli/actions/runs/39435771270/job/118672256521", "name": "build (macos-latest)", "startedAt": "2026-10-20T14:03:14Z", "status": "IN_PROGRESS", "workflowName": "Tests"}, {"__typename": "CheckRun", "completedAt": "2026-10-20T14:04:40Z", "conclusion": "FAILURE", "detailsUrl": "https://github.com/cli/cli/actions/runs/39435771271/job/118672256522", "name": "lint", "startedAt": "2026-10-20T14:03:14Z", "status": "COMPLETED", "workflowName": "Lint"}, {"__typename": "StatusContext", "context": "check", "startedAt": "2026-10-23T11:26:09Z", "state": "SUCCESS", "targetUrl": ""}], "title": "chore(deps): bump github.com/gabriel-vasile/mimetype from 1.4.15 to 1.4.16", "updatedAt": "2026-10-21T07:45:14Z", "url": "https://github.com/cli/cli/pull/14766"}
+            """#
+        let detail = try #require(GitHubLookup.parseDetail(output, repo: "cli/cli", pullRequest: true))
+        #expect(detail.isPullRequest)
+        #expect(detail.author == "dependabot[bot]")
+        #expect(detail.state == "MERGED")
+        #expect(detail.head == "dependabot/go_modules/github.com/gabriel-vasile/mimetype-1.4.16")
+        #expect(detail.base == "trunk")
+        #expect(!detail.fromFork && !detail.isDraft)
+        #expect(detail.additions == 3 && detail.deletions == 3 && detail.changedFiles == 2)
+        #expect(detail.reviewDecision == "APPROVED")
+        #expect(detail.files == [.init(path: "go.mod", additions: 1, deletions: 1), .init(path: "go.sum", additions: 2, deletions: 2)])
+        // What needs attention first: the failure, the job still running, then by name.
+        #expect(detail.checks.map(\.state) == [.failure, .pending, .success, .success, .skipped, .skipped])
+        #expect(detail.checks.map(\.name).prefix(4) == ["lint", "build (macos-latest)", "check", "CodeQL-Build (go, manual, ./.github/codeql/codeql-config.yml)"])
+        #expect(detail.checks[0].workflow == "Lint")
+        #expect(detail.checks[0].url?.absoluteString == "https://github.com/cli/cli/actions/runs/39435771271/job/118672256522")
+        #expect(detail.checks[2].workflow == nil && detail.checks[2].url == nil)
+        #expect(detail.checksSummary == "1 failing, 1 running, 2 passed, 2 skipped")
+        #expect(detail.checksState == .failure)
+        // The approval says something without a body; the empty comment-only review doesn't.
+        #expect(detail.conversation.map(\.author) == ["cli-triage", "williammartin"])
+        #expect(detail.conversation.map(\.review) == [nil, "APPROVED"])
+        #expect(GitHubLookup.pullRequestDetailFields.hasPrefix(GitHubLookup.issueDetailFields + ",isDraft,headRefName"))
+    }
+
+    @Test func showsGitHubTextAsTheSidebarDoes() {
+        let body = "## What\r\n<!-- Describe the change -->\r\nFixes the thing.\r\n<!--\r\nA template's\r\nhints\r\n-->\r\n"
+        #expect(GitHubLookup.WorkDetail.shown(body) == "## What\n\nFixes the thing.")
+        #expect(GitHubLookup.avatar(login: "williammartin")?.absoluteString == "https://avatars.githubusercontent.com/williammartin?s=64")
+        #expect(GitHubLookup.avatar(login: "dependabot[bot]") == nil)
+        #expect(GitHubLookup.login(nil) == "ghost")
+        #expect(GitHubLookup.login(["login": "app/dependabot"]) == "dependabot[bot]")
+    }
+
     @Test func readsDeployTargetsForDisplay() {
         let targets = DeployTarget.parse("local:Alexs-MacBook-Pro-92440:~/Desktop/WORKSPACE/BotChu, vercel:rowchuk, ftp:weird")
         #expect(targets.map(\.kind) == [.local, .vercel, .unrecognized])

@@ -486,3 +486,39 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
         #expect(BotStatus.make(task: task, messages: [], run: nil).session == .startsNew(accountChanged: true))
     }
 }
+
+@Suite struct FanOutBriefTests {
+    @Test func fanOutBriefsListTheWorkAndKeepSubagentsApart() {
+        let issues = [BotTask.Work(number: 12, title: "Add a filter bar", url: URL(string: "https://github.com/octocat/Orbit/issues/12")!, isPullRequest: false),
+                      BotTask.Work(number: 9, title: "Crash on launch", url: URL(string: "https://github.com/octocat/Orbit/issues/9")!, isPullRequest: false)]
+        let fix = FanOutBrief.fixIssues(issues, repo: "octocat/Orbit", agent: "Alex's Bot")
+        #expect(fix.hasPrefix("Fix 2 open issues\n\nFix each issue of octocat/Orbit below with a parallel sub-agent of its own.\n\n"))
+        #expect(fix.contains("- #12 Add a filter bar: https://github.com/octocat/Orbit/issues/12\n- #9 Crash on launch: https://github.com/octocat/Orbit/issues/9\n"))
+        #expect(fix.contains("botchu-subagent spawn --agent 'Alex'\\''s Bot' --title 'Fix #<number>'"))
+        #expect(fix.contains("Run at most \(FanOutBrief.parallel) at once, and collect them with `botchu-subagent wait`"))
+        #expect(fix.contains("`gh issue view <number> --repo octocat/Orbit --comments`"))
+        #expect(fix.contains("never in this task's folder, so no two share files"))
+        #expect(fix.contains("`Closes #<number>`"))
+        #expect(fix.contains("Change nothing in this task's own worktree."))
+        // The first line names the task and its branch.
+        #expect(TaskNaming.title(repo: "octocat/Orbit", work: nil, brief: fix) == "Orbit · Fix 2 open issues")
+        #expect(TaskNaming.branch(issue: nil, text: fix, fallback: "fallback") == "feat/fix-2-open-issues")
+        #expect(FanOutBrief.fixIssues([issues[0]], repo: "octocat/Orbit", agent: "Scout").hasPrefix("Fix 1 open issue\n"))
+
+        let pull = BotTask.Work(number: 7, title: "Show open pull requests", url: URL(string: "https://github.com/octocat/BotChu/pull/7")!, isPullRequest: true)
+        let review = FanOutBrief.reviewPullRequests([pull], repo: "octocat/BotChu", agent: "Scout", comment: false)
+        #expect(review.hasPrefix("Review 1 open pull request\n\n"))
+        #expect(review.contains("- #7 Show open pull requests: https://github.com/octocat/BotChu/pull/7"))
+        #expect(review.contains("botchu-subagent spawn --agent 'Scout' --title 'Review #<number>' --brief"))
+        #expect(review.contains(#"git fetch origin pull/<number>/head && git worktree add --detach "$(mktemp -d)/pr-<number>" FETCH_HEAD"#))
+        #expect(review.contains("It posts nothing to GitHub."))
+        #expect(!review.contains("gh api"))
+        #expect(TaskNaming.title(repo: "octocat/BotChu", work: nil, brief: review) == "BotChu · Review 1 open pull request")
+        let comment = FanOutBrief.reviewPullRequests([pull, pull], repo: "octocat/BotChu", agent: "Scout", comment: true)
+        #expect(comment.hasPrefix("Review and comment on 2 open pull requests\n"))
+        #expect(comment.contains("`gh api repos/octocat/BotChu/pulls/<number>/reviews --method POST` with `\"event\": \"COMMENT\"`"))
+        #expect(comment.contains("without asking again"))
+        #expect(comment.hasSuffix("its most severe findings, linking each posted review."))
+        #expect(!comment.contains("It posts nothing"))
+    }
+}

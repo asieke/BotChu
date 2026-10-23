@@ -33,7 +33,8 @@ struct ContentView: View {
                 .environment(model)
         }
         .sheet(item: $model.taskSheet) { request in
-            NewTaskSheet(botID: request.botID, initialRepo: request.repo, initialWork: request.work, initialPurpose: request.purpose)
+            NewTaskSheet(botID: request.botID, initialRepo: request.repo, initialWork: request.work, initialPurpose: request.purpose,
+                         initialBrief: request.brief)
                 .environment(model)
         }
         .sheet(item: $model.documentEditor) { request in
