@@ -44,7 +44,7 @@ private struct SubagentTree: View {
                 Text("When this conversation delegates work to another bot, its progress and handoff appear here.")
                     .font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
             }
-            ForEach(runs.filter { $0.parentSubagentID == nil }) { run in
+            ForEach(model.delegation.children(of: nil, in: target)) { run in
                 node(run, ancestry: [])
             }
         }
@@ -62,7 +62,7 @@ private struct SubagentTree: View {
             SubagentCard(run: run, expanded: Binding(get: { expanded.contains(run.id) }, set: {
                 if $0 { expanded.insert(run.id) } else { expanded.remove(run.id) }
             }))
-            ForEach(runs.filter { $0.parentSubagentID == run.id }) { child in
+            ForEach(model.delegation.children(of: run.id, in: target)) { child in
                 node(child, ancestry: path)
                     .padding(.leading, 14)
                     .overlay(alignment: .leading) { Rectangle().fill(Palette.hairline).frame(width: 1) }
@@ -103,14 +103,11 @@ private struct SubagentCard: View {
                         .accessibilityLabel("Stop \(run.targetBotName)")
                 }
             }
-            TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                HStack {
-                    Text(run.phase.isActive ? activity.doing : run.phase.displayName)
-                        .foregroundStyle(run.phase == .failed ? Color.red : Palette.secondaryText)
-                    Spacer(minLength: 0)
-                    Text(BotStatus.formatElapsed(from: run.startedAt ?? run.createdAt, to: run.finishedAt ?? timeline.date))
-                        .monospacedDigit().foregroundStyle(Palette.secondaryText)
-                }.font(.system(size: 10))
+            // Only a run under way ticks; a finished one's time doesn't change.
+            if run.phase.isActive {
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in progress(now: timeline.date) }
+            } else {
+                progress(now: run.finishedAt ?? run.createdAt)
             }
             if expanded {
                 Divider()
@@ -164,6 +161,16 @@ private struct SubagentCard: View {
         .background(RoundedRectangle(cornerRadius: 9).fill(Palette.card))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(Palette.cardEdge))
         .accessibilityIdentifier("subagent-\(run.id.uuidString)")
+    }
+
+    private func progress(now: Date) -> some View {
+        HStack {
+            Text(run.phase.isActive ? activity.doing : run.phase.displayName)
+                .foregroundStyle(run.phase == .failed ? Color.red : Palette.secondaryText)
+            Spacer(minLength: 0)
+            Text(BotStatus.formatElapsed(from: run.startedAt ?? run.createdAt, to: run.finishedAt ?? now))
+                .monospacedDigit().foregroundStyle(Palette.secondaryText)
+        }.font(.system(size: 10))
     }
 
     private var callerName: String {
