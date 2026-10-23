@@ -88,18 +88,16 @@ public struct BotStatus: Equatable, Sendable {
     public var workingOn: String?
 
     public static func make(bot: Bot, messages: [ChatMessage], run: RunState?, reaction: BotActivity? = nil) -> BotStatus {
-        make(settings: bot, messages: messages, run: run, reaction: reaction)
+        make(settings: bot, summary: ThreadSummary(messages), run: run, reaction: reaction)
     }
 
     public static func make(task: BotTask, messages: [ChatMessage], run: RunState?, reaction: BotActivity? = nil) -> BotStatus {
-        make(settings: task, messages: messages, run: run, reaction: reaction)
+        make(settings: task, summary: ThreadSummary(messages), run: run, reaction: reaction)
     }
 
-    static func make(settings: some RunSettings, messages: [ChatMessage], run: RunState?, reaction: BotActivity?) -> BotStatus {
-        let lastError: String? = {
-            guard let last = messages.last(where: { !$0.role.isNote }), last.role == .error else { return nil }
-            return last.text
-        }()
+    /// From a summary kept as the thread changes, so a status costs the same however long the thread.
+    public static func make(settings: some RunSettings, summary: ThreadSummary, run: RunState?, reaction: BotActivity? = nil) -> BotStatus {
+        let lastError = summary.lastError
         let phase: Phase
         if let run {
             phase = run.preparing ? .preparing : run.hasOutput ? .working : .starting
@@ -116,9 +114,9 @@ public struct BotStatus: Equatable, Sendable {
             phase: phase,
             runStartedAt: run?.startedAt,
             session: session,
-            messageCount: messages.filter { $0.role == .user || $0.role == .assistant }.count,
-            toolCallCount: messages.filter { $0.role == .tool }.count,
-            lastActivity: messages.last(where: { !$0.role.isNote })?.date,
+            messageCount: summary.messageCount,
+            toolCallCount: summary.toolCallCount,
+            lastActivity: summary.lastActivity,
             lastError: run == nil ? lastError : nil,
             activity: run?.activity ?? reaction ?? (phase == .failed ? .failed : .idle))
     }
@@ -150,6 +148,44 @@ public struct BotStatus: Equatable, Sendable {
 extension BotStatus.Phase {
     /// A turn is under way, or about to start.
     public var isActive: Bool { self == .preparing || self == .starting || self == .working }
+}
+
+/// What a status reads from a thread: how many messages and tool calls it has, and its last word
+/// (BotChu's notes aside). Kept up to date as the thread grows (`extend`), so the sidebar and the
+/// status sidebar don't scan a long thread each time they draw.
+public struct ThreadSummary: Equatable, Sendable {
+    /// Messages from the owner and the bot.
+    public private(set) var messageCount = 0
+    public private(set) var toolCallCount = 0
+    /// When the last message that isn't a note was written.
+    public private(set) var lastActivity: Date?
+    /// That message's text, when it is an error.
+    public private(set) var lastError: String?
+
+    public init() {}
+
+    public init(_ messages: [ChatMessage]) {
+        extend(with: messages, from: 0)
+    }
+
+    /// Takes in `messages[start...]`, added since the summary was made of `messages[..<start]`. The
+    /// messages before `start` may have been written further (a reply's text, a tool's output), but
+    /// not removed, reordered or given another role; otherwise make a new summary.
+    public mutating func extend(with messages: [ChatMessage], from start: Int) {
+        let start = max(0, min(start, messages.count))
+        for index in start..<messages.count {
+            switch messages[index].role {
+            case .user, .assistant: messageCount += 1
+            case .tool: toolCallCount += 1
+            case .error, .note, .receipt: break
+            }
+        }
+        for index in (start..<messages.count).reversed() where !messages[index].role.isNote {
+            lastActivity = messages[index].date
+            lastError = messages[index].role == .error ? messages[index].text : nil
+            break
+        }
+    }
 }
 
 /// A bot's `MEMORY.md` as the status sidebar shows it: what it holds beyond the seeded heading.
