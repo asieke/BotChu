@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var openRouterKey = Keychain.get(Keychain.openRouterAccount) ?? ""
     @State private var keySaved = false
     @State private var available: [String: Bool] = [:]
+    @State private var sharedDocument: DocumentEditorRequest?
 
     var body: some View {
         @Bindable var settings = model.settings
@@ -19,8 +20,18 @@ struct SettingsView: View {
                         Button("Choose…") { chooseRoot() }
                     }
                 }
+                LabeledContent("Shared by every bot") {
+                    HStack {
+                        ForEach(SharedDocument.allCases) { document in
+                            Button("Edit \(document.rawValue)…") {
+                                sharedDocument = DocumentEditorRequest(shared: document, botsRoot: settings.botsRoot)
+                            }
+                            .help("\(document.summary), in the bots folder")
+                        }
+                    }
+                }
             } footer: {
-                Text("New bots get a folder here by default. MEMORY.md here is shared by every bot.")
+                Text("New bots get a folder here by default. MEMORY.md here is memory every bot shares, and TEAM.md, while it has anything in it, is a playbook every bot follows: stages, handoffs, who calls whom.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -110,6 +121,10 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 600, height: 840)
+        .sheet(item: $sharedDocument) { request in
+            BotDocumentEditor(request: request)
+                .frame(width: 560, height: 620)
+        }
         .task {
             await withTaskGroup(of: Void.self) { group in
                 for account in model.settings.accounts { group.addTask { await check(account) } }

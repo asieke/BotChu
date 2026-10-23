@@ -44,7 +44,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     brief request and hourly automatic limit.
   - **Bots:** create, edit and delete bots. A bot has a name, an emoji, a one-line title, private
     instructions, an account, an optional model and a workspace folder (default `~/BotChu/<name>`).
-    A new bot introduces itself in one reply, so a misread role shows up at once.
+    A new bot introduces itself in one reply, so a misread role shows up at once. Instructions are
+    the bot's role and job in Markdown, kept in `INSTRUCTIONS.md` in its workspace and edited in
+    **Edit Bot** or from the status sidebar's **Memory** tab; a bot from before that file has the
+    instructions in its `bot.json` moved into it once, after which the file is the only source. An
+    empty or missing file tells the bot to ask its owner what they need.
   - **Pets:** a bot can have an animated character in place of its emoji, shown in a circle: its
     face in the sidebar and the chat, and larger at the top of the status sidebar. It is a set of
     short looping videos, one per activity, like the character in Meta's Muse: idle; thinking;
@@ -189,16 +193,23 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     was made from) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
     is told it can search them for earlier conversations. **History & Logs** in the status sidebar
     opens the folder. Each bot needs its own workspace, and not the bots folder itself; moving a
-    bot's workspace in its editor moves its `.botchu/`, `MEMORY.md` and `SOUL.md` with it. Moving
+    bot's workspace in its editor moves its `.botchu/`, `INSTRUCTIONS.md`, `MEMORY.md` and `SOUL.md` with it. Moving
     waits until its turns finish and refuses to overwrite files at the destination. Deleting a bot
     puts only its `.botchu/` in the Trash.
   - **Memory and personality:** each bot's workspace has a `MEMORY.md` for facts and notes it keeps
     itself, and an editable `SOUL.md` for its personality and voice. New bots get a starter soul based
     on their name and title; existing files are preserved, including intentionally empty ones.
     The bots folder's `MEMORY.md` (`~/BotChu/MEMORY.md` by default) is shared by every bot. Both
-    memory files and the soul, with the bot's identity and instructions, open every new Home or task
-    CLI session (including tasks over SSH). The workspace's `AGENTS.md`, `CLAUDE.md` and `GEMINI.md`
-    also direct the agent to read them, so it keeps them across its own context compaction. A new
+    memory files and the soul, with the bot's identity and instructions, open every new Home, task
+    or sub-agent CLI session (including tasks over SSH). The workspace's `AGENTS.md`, `CLAUDE.md` and
+    `GEMINI.md` carry the bot's `INSTRUCTIONS.md` and direct the agent to read the others, so it keeps
+    them across its own context compaction; they are rewritten before every turn.
+  - **Team playbook:** `TEAM.md` in the bots folder, beside the shared `MEMORY.md`, is the process
+    every bot follows: its stages, handoffs, who calls whom with `botchu-subagent`, and when work is
+    done. Unlike memory, it is given as instructions: in every bot's Home `AGENTS.md`, and at the
+    start of every task and sub-agent session. It is left out entirely while it is missing or empty,
+    and BotChu never creates it. Edit it, or the shared `MEMORY.md`, in Settings (**Shared by every
+    bot**). Bots are told not to change `INSTRUCTIONS.md` or `TEAM.md` unless asked. A new
     session (new bot, account switch, or **New Session**) also gets the recent conversation, so
     switching accounts keeps the thread's continuity.
   - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I). A card at the top shows
@@ -221,8 +232,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and new automatic progress notes. Explicitly choosing a pull request to continue or review is
     still available in New Task. Colors follow light and dark mode.
     Sections within each area, and Status above the tabs, still collapse from their headings, with
-    their expansion remembered. **Memory** has two cards matching
-    Conversation: **MEMORY.md** and **SOUL.md**. Each opens an in-app Markdown editor at half the
+    their expansion remembered. **Memory** has three cards matching
+    Conversation: **INSTRUCTIONS.md**, **SOUL.md** and **MEMORY.md**. Each opens an in-app Markdown editor at half the
     parent window's width and height, with Save (⌘S), Cancel (Escape), and Reload. Saving preserves exact
     Markdown and refuses to overwrite a file changed on disk since it was opened. Saved changes
     apply at the next new session; **New Session** applies them to an existing conversation. The
@@ -258,8 +269,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - `Sources/BotChuCore/` — Foundation only, unit-tested: accounts and the command line each CLI
     runs with (`Accounts.swift`), generation choices and public OpenRouter model metadata
     (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model (`Models.swift`), one stream parser per
-    CLI turning its JSON lines into chat events (`StreamParsers.swift`), the identity, memory and
-    recap that open a session (`BotContext.swift`), account allowance parsing and native queries
+    CLI turning its JSON lines into chat events (`StreamParsers.swift`), the identity, instructions,
+    team playbook, memory and recap that open a session (`BotContext.swift`), the editable Markdown
+    files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
     (`UsageCache.swift`), per-conversation pending-message delivery (`MessageQueue.swift`), what
     the status sidebar shows about a bot and
