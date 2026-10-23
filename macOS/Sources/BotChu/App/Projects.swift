@@ -85,6 +85,72 @@ extension AppModel {
         bots.flatMap { bot in (tasks[bot.id] ?? []).filter { !$0.isArchived }.map { (bot, $0) } }
     }
 
+    /// The open tasks on this issue or pull request, or (for a pull request) the tasks that opened it,
+    /// among `open` (every open task when nil).
+    func tasks(on item: GitHubLookup.OpenItem, among open: [(bot: Bot, task: BotTask)]? = nil) -> [(bot: Bot, task: BotTask)] {
+        tasks(onNumber: item.number, pullRequest: item.isPullRequest, in: item.repo, among: open)
+    }
+
+    func tasks(onNumber number: Int, pullRequest: Bool, in repo: String, among open: [(bot: Bot, task: BotTask)]? = nil) -> [(bot: Bot, task: BotTask)] {
+        (open ?? openTasks).filter { pair in
+            pair.task.repo.caseInsensitiveCompare(repo) == .orderedSame
+                && (pair.task.work.map { $0.number == number && $0.isPullRequest == pullRequest } == true
+                    || pullRequest && pair.task.pullRequest == number)
+        }
+    }
+
+    // MARK: The Projects sidebar
+
+    /// Shows `repo` in the Projects sidebar: on `tab` with `item` opened there, or, without a tab, on
+    /// the tab it shows already (keeping what is opened there, for the same repository). Nil hides it.
+    func selectProject(_ repo: String?, tab: ProjectSelection.Tab? = nil, item: Int? = nil) {
+        guard let repo else { projectSelection = nil; return }
+        if let tab {
+            projectSelection = ProjectSelection(repo: repo, tab: tab, item: item)
+        } else if projectSelection?.repo != repo {
+            projectSelection = ProjectSelection(repo: repo, tab: projectSelection?.tab ?? .overview)
+        }
+    }
+
+    /// The repository's open issues, or pull requests, as read for Projects: most recently updated first.
+    func openWork(of repo: String, pulls: Bool) -> [GitHubLookup.OpenItem] {
+        (openItems ?? []).filter { $0.isPullRequest == pulls && $0.repo.caseInsensitiveCompare(repo) == .orderedSame }
+    }
+
+    /// The issues Fix All gives out: those no open task works on.
+    func issuesToFix(in repo: String) -> [GitHubLookup.OpenItem] {
+        let open = openTasks
+        return openWork(of: repo, pulls: false).filter { tasks(on: $0, among: open).isEmpty }
+    }
+
+    /// The pull requests Review All gives out: those no open task is reviewing already.
+    func pullRequestsToReview(in repo: String) -> [GitHubLookup.OpenItem] {
+        let open = openTasks
+        return openWork(of: repo, pulls: true).filter { item in !tasks(on: item, among: open).contains { $0.task.review != nil } }
+    }
+
+    /// Opens New Task for one task in which the bot fixes each issue `issuesToFix` lists with a
+    /// parallel sub-agent of its own.
+    func fixAllIssues(in repo: String, with botID: UUID) {
+        let issues = issuesToFix(in: repo)
+        guard let bot = bot(botID), !issues.isEmpty else { return }
+        newTask(for: botID, repo: repo, brief: FanOutBrief.fixIssues(issues.map(\.work), repo: repo, agent: subagentName(of: bot)))
+    }
+
+    /// Opens New Task for one task in which the bot reviews each pull request `pullRequestsToReview`
+    /// lists with a parallel sub-agent of its own, posting the reviews on GitHub when `comment`.
+    func reviewAllPullRequests(in repo: String, with botID: UUID, comment: Bool) {
+        let pulls = pullRequestsToReview(in: repo)
+        guard let bot = bot(botID), !pulls.isEmpty else { return }
+        newTask(for: botID, repo: repo,
+                brief: FanOutBrief.reviewPullRequests(pulls.map(\.work), repo: repo, agent: subagentName(of: bot), comment: comment))
+    }
+
+    /// How `botchu-subagent` finds the bot: by its name, or by its id when the name finds another too.
+    func subagentName(of bot: Bot) -> String {
+        (try? SubagentResolver.resolve(bot.name, bots: bots))?.id == bot.id ? bot.name : bot.id.uuidString
+    }
+
     func checkGitHub() async {
         guard !githubChecking else { return }
         githubChecking = true

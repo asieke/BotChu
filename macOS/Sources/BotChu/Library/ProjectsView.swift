@@ -4,7 +4,8 @@ import BotChuCore
 
 /// The owner's repositories in a sortable table (or a gallery), after GitChu's: where each deploys,
 /// its open issues and pull requests, PROJECT.md's type and merge policy, where its tasks work and
-/// how many are open; and the open pull requests and issues across them, to review or work on.
+/// how many are open; and the open pull requests and issues across them, to review or work on. The
+/// repository selected shows in a sidebar on the right (`ProjectSidebar`).
 struct ProjectsView: View {
     enum Scope: String { case repositories, pulls, issues }
 
@@ -13,12 +14,12 @@ struct ProjectsView: View {
     @AppStorage("projectsScope") private var scope = Scope.repositories
     /// Gallery or table; a new key, so the table is where everyone starts.
     @AppStorage("projectsLayoutV2") private var layout = "table"
+    /// Which statuses the repositories show: active ones, unless chosen otherwise.
+    @AppStorage("projectsStatus") private var status = ProjectStatusFilter.active
     @State private var query = ""
     @State private var category = "all"
     /// The repository the pull request and issue tables show, or nil for all.
     @State private var repoFilter: String?
-    @State private var selected: GitHubLookup.Repo?
-    @State private var pendingTask: (UUID, String)?
 
     private var rows: [ProjectRow] {
         ProjectRow.rows(repos: model.repositories ?? [], records: model.projectRecords, errors: model.projectErrors, chosen: model.settings.repoLocations,
@@ -26,7 +27,8 @@ struct ProjectsView: View {
                         taskRepos: model.openTasks.map(\.task.repo))
         .filter { row in
             let kind = row.metadata?.kind
-            return (category == "all" || category == "docs" && kind == .docs || category == "code" && kind != nil && kind != .docs) && row.matches(query)
+            return (category == "all" || category == "docs" && kind == .docs || category == "code" && kind != nil && kind != .docs)
+                && status.includes(row) && row.matches(query)
         }
     }
 
@@ -44,7 +46,8 @@ struct ProjectsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            LibraryHeading(title: "Projects", subtitle: "Your repositories, their open pull requests and issues, and where they work.", count: model.repositories?.count) {
+            LibraryHeading(title: "Projects", subtitle: "Your repositories, their open pull requests and issues, and where they work.",
+                           count: scope == .repositories && model.repositories != nil ? rows.count : model.repositories?.count) {
                 if loading { ProgressView().controlSize(.small) }
                 Button { Task { await model.refreshProjects() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                     .disabled(loading)
@@ -74,15 +77,12 @@ struct ProjectsView: View {
         .navigationTitle("Projects")
         .task { await model.loadProjects() }
         .task { await model.loadRepositories(); await model.loadOpenWork() }
-        .sheet(item: $selected, onDismiss: {
-            if let (botID, repo) = pendingTask { pendingTask = nil; model.newTask(for: botID, repo: repo) }
-        }) { repo in
-            ProjectDetail(repo: repo, showWork: { pulls in
-                selected = nil
-                repoFilter = repo.id
-                query = ""
-                scope = pulls ? .pulls : .issues
-            }) { botID in pendingTask = (botID, repo.nameWithOwner); selected = nil }.environment(model)
+        // The selected repository; closing the sidebar deselects it.
+        .inspector(isPresented: Binding(get: { model.projectSelection != nil }, set: { if !$0 { model.selectProject(nil) } })) {
+            Group {
+                if let selection = model.projectSelection { ProjectSidebar(selection: selection) }
+            }
+            .inspectorColumnWidth(min: 280, ideal: 320, max: 480)
         }
     }
 
@@ -101,6 +101,12 @@ struct ProjectsView: View {
 
     @ViewBuilder private var filters: some View {
         if scope == .repositories {
+            Picker("Status", selection: $status) {
+                Text(ProjectStatusFilter.active.label).tag(ProjectStatusFilter.active)
+                Text(ProjectStatusFilter.all.label).tag(ProjectStatusFilter.all)
+                Divider()
+                ForEach([ProjectStatusFilter.paused, .maintenance, .deprecated, .unclassified], id: \.self) { Text($0.label).tag($0) }
+            }.labelsHidden().fixedSize().help("Show projects by the status in their PROJECT.md")
             Picker("Project kind", selection: $category) {
                 Text("All projects").tag("all")
                 Text("Code").tag("code")
@@ -131,20 +137,29 @@ struct ProjectsView: View {
         let rows = rows
         if model.repositories == nil && (model.repositoriesLoading || model.projectsLoading) {
             LibraryEmpty(title: "Loading projects", subtitle: "Reading repositories with your GitHub CLI login.", symbol: "arrow.triangle.2.circlepath")
+        } else if rows.isEmpty, status != .all, model.projectsLoading {
+            // Statuses come from PROJECT.md, read after the repositories: none is known to match yet.
+            LibraryEmpty(title: "Loading projects", subtitle: "Reading each repository’s PROJECT.md for its status.", symbol: "arrow.triangle.2.circlepath")
+        } else if rows.isEmpty, status != .all, model.repositories?.isEmpty == false {
+            ContentUnavailableView {
+                Label(status == .unclassified ? "No unclassified projects" : "No \(status.label.lowercased()) projects", systemImage: "line.3.horizontal.decrease.circle")
+            } description: {
+                Text(query.isEmpty && category == "all" ? "No repository’s PROJECT.md gives it this status." : "Try another search, kind or status.")
+            } actions: {
+                Button("Show All Statuses") { status = .all }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if rows.isEmpty {
             LibraryEmpty(title: model.repositories?.isEmpty == false ? "No matching projects" : "No projects yet",
                          subtitle: model.repositories?.isEmpty == false ? "Try another search or project kind." : "Connect gh in Settings, then refresh to see your repositories.", symbol: "folder")
         } else if layout == "table" {
-            ProjectsTable(rows: rows, open: { selected = $0.repo }, showWork: { row, pulls in
-                repoFilter = row.id
-                query = ""
-                scope = pulls ? .pulls : .issues
-            })
+            ProjectsTable(rows: rows)
         } else {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 270), spacing: 16)], spacing: 16) {
                     ForEach(rows) { row in
-                        Button { selected = row.repo } label: { projectCard(row) }.buttonStyle(.plain)
+                        Button { model.selectProject(row.id) } label: { projectCard(row, selected: model.projectSelection?.repo == row.id) }
+                            .buttonStyle(.plain)
                     }
                 }.padding(.horizontal, 24).padding(.bottom, 24)
             }
@@ -189,7 +204,7 @@ struct ProjectsView: View {
         return "Showing the most recently updated \(pulls ? "pull requests" : "issues") of \(cut.map(\.name).joined(separator: ", ")). Open \(cut.count == 1 ? "it" : "them") on GitHub for the rest."
     }
 
-    private func projectCard(_ row: ProjectRow) -> some View {
+    private func projectCard(_ row: ProjectRow, selected: Bool) -> some View {
         let repo = row.repo, metadata = row.metadata
         return VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -217,8 +232,10 @@ struct ProjectsView: View {
             }
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading).libraryCard()
+        .overlay { if selected { RoundedRectangle(cornerRadius: 14).strokeBorder(Color.accentColor, lineWidth: 2) } }
         .contentShape(RoundedRectangle(cornerRadius: 14))
-        .accessibilityLabel("\(metadata?.name ?? repo.name), \(metadata?.kind.label ?? "unclassified"). Open project")
+        .accessibilityLabel("\(metadata?.name ?? repo.name), \(metadata?.kind.label ?? "unclassified"). Show project")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -232,20 +249,19 @@ private struct SavedColumns<Row: Identifiable>: DynamicProperty {
     }
 }
 
-/// The repositories, one row each, sortable by any column. Double-click opens the project.
+/// The repositories, one row each, sortable by any column. Selecting one shows it in the sidebar;
+/// its counts open the sidebar's Issues or PRs.
 struct ProjectsTable: View {
     @Environment(AppModel.self) private var model
     var rows: [ProjectRow]
-    var open: (ProjectRow) -> Void
-    var showWork: (ProjectRow, Bool) -> Void
-    @State private var selection: ProjectRow.ID?
     @State private var sortOrder = [KeyPathComparator(\ProjectRow.pushedKey, order: .reverse)]
     private let columns = SavedColumns<ProjectRow>("projectsColumns")
 
     var body: some View {
         let sorted = rows.sorted(using: sortOrder)
         let tasks = Dictionary(grouping: model.openTasks) { $0.task.repo.lowercased() }
-        Table(sorted, selection: $selection, sortOrder: $sortOrder, columnCustomization: Binding(get: { columns.customization }, set: { columns.customization = $0 })) {
+        let selection = Binding<ProjectRow.ID?>(get: { model.projectSelection?.repo }, set: { model.selectProject($0) })
+        Table(sorted, selection: selection, sortOrder: $sortOrder, columnCustomization: Binding(get: { columns.customization }, set: { columns.customization = $0 })) {
             TableColumn("Repository", value: \ProjectRow.nameKey) { (row: ProjectRow) in RepoNameCell(row: row) }
                 .width(min: 140, ideal: 190)
                 .customizationID("name")
@@ -286,14 +302,14 @@ struct ProjectsTable: View {
         .contextMenu(forSelectionType: ProjectRow.ID.self) { ids in
             if let row = sorted.first(where: { ids.contains($0.id) }) { menu(row) }
         } primaryAction: { ids in
-            if let row = sorted.first(where: { ids.contains($0.id) }) { open(row) }
+            if let row = sorted.first(where: { ids.contains($0.id) }) { model.selectProject(row.id, tab: .overview) }
         }
     }
 
-    /// An open-work count that shows those pull requests or issues.
+    /// An open-work count that shows those pull requests or issues in the sidebar.
     private func countButton(_ row: ProjectRow, pulls: Bool) -> some View {
         let value = pulls ? row.openPullRequests : row.openIssues
-        return Button { showWork(row, pulls) } label: {
+        return Button { model.selectProject(row.id, tab: pulls ? .pulls : .issues) } label: {
             CountView(value: value, systemImage: pulls ? "arrow.triangle.pull" : "smallcircle.filled.circle", tint: GitHubColors.open)
         }
         .buttonStyle(.plain)
@@ -308,11 +324,11 @@ struct ProjectsTable: View {
     }
 
     @ViewBuilder private func menu(_ row: ProjectRow) -> some View {
-        Button("Open Project…") { open(row) }
+        Button("Show Overview") { model.selectProject(row.id, tab: .overview) }
         Button("Open on GitHub") { NSWorkspace.shared.open(URL(string: "https://github.com/\(row.id)")!) }
         Divider()
-        Button("Show Pull Requests") { showWork(row, true) }.disabled(row.openPullRequests == 0)
-        Button("Show Issues") { showWork(row, false) }.disabled(row.openIssues == 0)
+        Button("Show Pull Requests") { model.selectProject(row.id, tab: .pulls) }.disabled(row.openPullRequests == 0)
+        Button("Show Issues") { model.selectProject(row.id, tab: .issues) }.disabled(row.openIssues == 0)
         Divider()
         Menu("Start Task with") {
             ForEach(model.bots) { bot in Button("\(bot.emoji) \(bot.name)") { model.newTask(for: bot.id, repo: row.id) } }
@@ -321,13 +337,13 @@ struct ProjectsTable: View {
     }
 }
 
-/// Open pull requests or issues across the repositories. Double-click opens one on GitHub; its
-/// menu reviews it or starts a task on it with a bot, or opens the task already on it.
+/// Open pull requests or issues across the repositories. Selecting one opens it in the sidebar, and
+/// double-click on GitHub; its menu reviews it or starts a task on it with a bot, or opens the task
+/// already on it.
 struct WorkTable: View {
     @Environment(AppModel.self) private var model
     var items: [GitHubLookup.OpenItem]
     var pulls: Bool
-    @State private var selection: GitHubLookup.OpenItem.ID?
     @State private var sortOrder = [KeyPathComparator(\GitHubLookup.OpenItem.updatedAt, order: .reverse)]
     private let pullColumns = SavedColumns<GitHubLookup.OpenItem>("projectsPullColumns")
     private let issueColumns = SavedColumns<GitHubLookup.OpenItem>("projectsIssueColumns")
@@ -337,7 +353,15 @@ struct WorkTable: View {
         let repos = Dictionary((model.repositories ?? []).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let open = model.openTasks
         let columns = pulls ? pullColumns : issueColumns
-        Table(sorted, selection: $selection, sortOrder: $sortOrder, columnCustomization: Binding(get: { columns.customization }, set: { columns.customization = $0 })) {
+        let selection = Binding<GitHubLookup.OpenItem.ID?>(get: {
+            model.projectSelection.flatMap { chosen in
+                chosen.tab == (pulls ? .pulls : .issues) ? chosen.item.map { "\(chosen.repo)#\($0)" } : nil
+            }
+        }, set: { id in
+            guard let id else { return model.selectProject(nil) }
+            if let item = sorted.first(where: { $0.id == id }) { model.selectProject(item.repo, tab: pulls ? .pulls : .issues, item: item.number) }
+        })
+        Table(sorted, selection: selection, sortOrder: $sortOrder, columnCustomization: Binding(get: { columns.customization }, set: { columns.customization = $0 })) {
             TableColumn("Title", value: \GitHubLookup.OpenItem.titleKey) { (item: GitHubLookup.OpenItem) in WorkTitleCell(item: item) }
                 .width(min: 180, ideal: 300)
                 .customizationID("title")
@@ -373,7 +397,7 @@ struct WorkTable: View {
             TableColumn("Author", value: \GitHubLookup.OpenItem.authorKey) { (item: GitHubLookup.OpenItem) in PersonCell(login: item.author, avatar: item.authorAvatar) }
                 .width(min: 80, ideal: 120)
                 .customizationID("author")
-            TableColumn("Task") { (item: GitHubLookup.OpenItem) in TasksCell(tasks: tasks(on: item, in: open)) }
+            TableColumn("Task") { (item: GitHubLookup.OpenItem) in TasksCell(tasks: model.tasks(on: item, among: open)) }
                 .width(min: 42, ideal: 56, max: 110)
                 .customizationID("task")
             TableColumn("Opened", value: \GitHubLookup.OpenItem.createdAt) { (item: GitHubLookup.OpenItem) in DateCell(date: item.createdAt) }
@@ -383,18 +407,9 @@ struct WorkTable: View {
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
         .contextMenu(forSelectionType: GitHubLookup.OpenItem.ID.self) { ids in
-            if let item = sorted.first(where: { ids.contains($0.id) }) { menu(item, tasks: tasks(on: item, in: open)) }
+            if let item = sorted.first(where: { ids.contains($0.id) }) { menu(item, tasks: model.tasks(on: item, among: open)) }
         } primaryAction: { ids in
             for item in sorted where ids.contains(item.id) { NSWorkspace.shared.open(item.url) }
-        }
-    }
-
-    /// The open tasks on this issue or pull request, or (for a pull request) the tasks that opened it.
-    private func tasks(on item: GitHubLookup.OpenItem, in open: [(bot: Bot, task: BotTask)]) -> [(bot: Bot, task: BotTask)] {
-        open.filter { pair in
-            pair.task.repo.caseInsensitiveCompare(item.repo) == .orderedSame
-                && (pair.task.work.map { $0.number == item.number && $0.isPullRequest == item.isPullRequest } == true
-                    || item.isPullRequest && pair.task.pullRequest == item.number)
         }
     }
 
@@ -430,89 +445,11 @@ struct WorkTable: View {
     }
 }
 
-private struct ProjectEditRequest: Identifiable {
+/// PROJECT.md to edit: as read, and its metadata.
+struct ProjectEditRequest: Identifiable {
     let id = UUID()
     let record: ProjectRecord
     let metadata: ProjectMetadata
-}
-
-struct ProjectDetail: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let repo: GitHubLookup.Repo
-    /// Shows the repository's open pull requests (true) or issues in the Projects tables.
-    var showWork: (Bool) -> Void = { _ in }
-    var startTask: (UUID) -> Void
-    @State private var editor: ProjectEditRequest?
-    @State private var location: RepoLocation?
-    private var record: ProjectRecord? { model.projectRecords[repo.id] }
-    private var metadata: ProjectMetadata? { record.flatMap { try? $0.metadata(repoName: repo.name) } }
-    private var parseError: String? {
-        do { _ = try record?.metadata(repoName: repo.name); return nil } catch { return error.localizedDescription }
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(alignment: .top) {
-                LibraryIcon(symbol: metadata?.kind.symbol ?? "folder", color: .indigo)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(metadata?.name ?? repo.name).font(.title2.bold())
-                    Text(repo.nameWithOwner).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
-            if !repo.description.isEmpty { Text(repo.description).foregroundStyle(.secondary) }
-            if let error = model.projectErrors[repo.id] ?? parseError {
-                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
-                Button("Retry") { Task { await model.loadProjects(force: true) } }.disabled(model.projectsLoading)
-            }
-            Grid(alignment: .leading, horizontalSpacing: 30, verticalSpacing: 12) {
-                GridRow { Text("Type").foregroundStyle(.secondary); Text(record?.exists == true ? metadata?.kind.label ?? "Unknown" : "Unclassified") }
-                GridRow { Text("Status").foregroundStyle(.secondary); Text(record?.exists == true ? metadata?.status.rawValue.capitalized ?? "Unknown" : "—") }
-                GridRow { Text("Visibility").foregroundStyle(.secondary); Text(repo.isPrivate ? "Private" : "Public") }
-                GridRow { Text("Deployment").foregroundStyle(.secondary); Text(metadata?.deploy ?? "—").textSelection(.enabled) }
-                GridRow {
-                    Text("Open").foregroundStyle(.secondary)
-                    HStack(spacing: 14) {
-                        Button("\(repo.openPullRequests) pull request\(repo.openPullRequests == 1 ? "" : "s")") { showWork(true) }
-                            .disabled(repo.openPullRequests == 0)
-                        Button("\(repo.openIssues) issue\(repo.openIssues == 1 ? "" : "s")") { showWork(false) }
-                            .disabled(repo.openIssues == 0)
-                    }.buttonStyle(.link)
-                }
-                if let location {
-                    GridRow { Text("Work happens on").foregroundStyle(.secondary); Text(model.machineName(location.hostID)) }
-                    GridRow { Text("Checkout").foregroundStyle(.secondary); Text(location.path).textSelection(.enabled) }
-                }
-            }.font(.callout)
-            if let warning = model.projectPlacementProblem(repo.id) {
-                Label(warning, systemImage: "network.badge.shield.half.filled").font(.callout).foregroundStyle(.orange)
-            }
-            if let record, !record.exists {
-                Text("No PROJECT.md yet. Add a project record to describe its type and deployment.").font(.callout).foregroundStyle(.secondary)
-            }
-            Divider()
-            HStack {
-                Link("Open on GitHub", destination: URL(string: "https://github.com/\(repo.id)")!)
-                Spacer()
-                Button(record?.exists == true ? "Edit Metadata…" : "Add Metadata…") {
-                    if let record, let metadata { editor = ProjectEditRequest(record: record, metadata: metadata) }
-                }
-                    .disabled(record == nil || parseError != nil || model.projectErrors[repo.id] != nil)
-                Menu("Start Task with…") {
-                    ForEach(model.bots) { bot in
-                        Button(bot.name) { startTask(bot.id) }
-                    }
-                }.disabled(model.bots.isEmpty)
-            }
-            if model.bots.isEmpty { Text("Create an agent to work on this project.").font(.caption).foregroundStyle(.secondary) }
-        }
-        .padding(24).frame(width: 600).background(Color(nsColor: .windowBackgroundColor))
-        .task(id: record?.sha) { location = await model.location(of: repo.nameWithOwner) }
-        .sheet(item: $editor) { request in
-            ProjectMetadataEditor(repo: repo, original: request.record, metadata: request.metadata).environment(model)
-        }
-    }
 }
 
 struct ProjectMetadataEditor: View {

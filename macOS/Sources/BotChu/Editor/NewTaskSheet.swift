@@ -43,11 +43,14 @@ struct NewTaskSheet: View {
     /// - Parameters:
     ///   - initialWork: an issue or pull request of `initialRepo` to work on, and `initialPurpose`,
     ///     what to do with a pull request.
-    init(botID: UUID, initialRepo: String? = nil, initialWork: BotTask.Work? = nil, initialPurpose: Purpose = .work) {
+    ///   - initialBrief: what to tell the bot, written already: a task over many issues or pull requests.
+    init(botID: UUID, initialRepo: String? = nil, initialWork: BotTask.Work? = nil, initialPurpose: Purpose = .work,
+         initialBrief: String = "") {
         self.botID = botID
         self.initialRepo = initialRepo
         _work = State(initialValue: initialRepo == nil ? nil : initialWork)
         _purpose = State(initialValue: initialWork?.isPullRequest == true ? initialPurpose : .work)
+        _brief = State(initialValue: initialBrief)
     }
 
     private var botName: String { model.bot(botID)?.name ?? "the bot" }

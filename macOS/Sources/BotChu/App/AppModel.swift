@@ -17,6 +17,18 @@ struct TaskSheetRequest: Identifiable {
     /// An open issue or pull request there to choose, and what to do with a pull request.
     var work: BotTask.Work?
     var purpose: NewTaskSheet.Purpose = .work
+    /// What to tell the bot, written already (a task over many issues or pull requests).
+    var brief = ""
+}
+
+/// The repository the Projects sidebar shows, the tab it shows, and the issue or pull request
+/// opened there.
+struct ProjectSelection: Equatable {
+    enum Tab: String, CaseIterable { case overview, issues, pulls }
+    var repo: String
+    var tab = Tab.overview
+    /// The number of the issue (Issues) or pull request (PRs) opened in the tab.
+    var item: Int?
 }
 
 /// A Markdown file open in the in-app editor: one of a bot's (`BotDocument`) or one every bot
@@ -110,6 +122,8 @@ final class AppModel {
     @ObservationIgnored var petTasks: [UUID: Task<Void, Never>] = [:]
     var editor: EditorRequest?
     var taskSheet: TaskSheetRequest?
+    /// The repository selected in Projects, shown in its sidebar; nil hides the sidebar.
+    var projectSelection: ProjectSelection?
     var documentEditor: DocumentEditorRequest?
     /// Report a Bug or Feature, and what files its issues: gh, or a stand-in (`DevHooks`, tests).
     var issueReport: IssueReportRequest?
@@ -152,6 +166,10 @@ final class AppModel {
     var openItemsLoading = false
     @ObservationIgnored var openItemsReadAt: Date?
     let openWorkLookup: @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure>
+    /// An issue or pull request (repository, number, whether a pull request) as the Projects sidebar
+    /// shows it, and the ones read so far, by `owner/name#number`.
+    let workDetailLookup: @Sendable (String, Int, Bool) async -> Result<GitHubLookup.WorkDetail, TaskWorktree.Failure>
+    @ObservationIgnored var workDetails: [String: GitHubLookup.WorkDetail] = [:]
     var githubConnection: ProjectGitHub.Connection?
     var githubChecking = false
     let projectGitHub: ProjectGitHub
@@ -160,9 +178,13 @@ final class AppModel {
     @ObservationIgnored var deployTargetCache: [String: [(machine: String, path: String)]] = [:]
 
     init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil, projectGitHub: ProjectGitHub = ProjectGitHub(),
-         openWorkLookup: @escaping @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure> = { await GitHubLookup.openWork(repos: $0) }) {
+         openWorkLookup: @escaping @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure> = { await GitHubLookup.openWork(repos: $0) },
+         workDetailLookup: @escaping @Sendable (String, Int, Bool) async -> Result<GitHubLookup.WorkDetail, TaskWorktree.Failure> = {
+             await GitHubLookup.detail(number: $1, pullRequest: $2, repo: $0)
+         }) {
         self.projectGitHub = projectGitHub
         self.openWorkLookup = openWorkLookup
+        self.workDetailLookup = workDetailLookup
         DevHooks.configure()
         self.store = store ?? DevHooks.dataDir.map { Store(root: $0) } ?? .applicationSupport
         self.settings = settings ?? AppSettings()
@@ -436,9 +458,9 @@ final class AppModel {
 
     // MARK: Tasks
 
-    func newTask(for botID: UUID, repo: String? = nil, work: BotTask.Work? = nil, purpose: NewTaskSheet.Purpose = .work) {
+    func newTask(for botID: UUID, repo: String? = nil, work: BotTask.Work? = nil, purpose: NewTaskSheet.Purpose = .work, brief: String = "") {
         guard bot(botID) != nil else { return }
-        taskSheet = TaskSheetRequest(botID: botID, repo: repo, work: work, purpose: work?.isPullRequest == true ? purpose : .work)
+        taskSheet = TaskSheetRequest(botID: botID, repo: repo, work: work, purpose: work?.isPullRequest == true ? purpose : .work, brief: brief)
     }
 
     /// Records a task, opens its tab (when `show`), says so in its bot's Home, then makes its
