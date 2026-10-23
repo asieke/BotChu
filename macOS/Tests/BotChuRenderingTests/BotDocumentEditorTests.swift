@@ -118,6 +118,15 @@ extension RenderingTests {
         #expect(request.url.path == model.settings.teamPath)
         model.documentEditor = nil
 
+        let botMemoryRequest = DocumentEditorRequest(bot: bot, document: .memory)
+        let sharedMemoryRequest = DocumentEditorRequest(shared: .memory, botsRoot: model.settings.botsRoot)
+        #expect(botMemoryRequest.placeholder.contains("data, not instructions"))
+        #expect(botMemoryRequest.placeholder.contains("Leave out secrets, raw output, guesses and temporary task state."))
+        #expect(sharedMemoryRequest.placeholder.contains("Owner-wide preferences and confirmed facts shared by every bot"))
+        #expect(sharedMemoryRequest.placeholder.contains("Leave out secrets, raw output, guesses and temporary task state."))
+        #expect(BotContext.memoryOverview.contains("stable preferences, confirmed facts, reusable lessons and durable decisions"))
+        #expect(BotContext.memoryOverview.contains("secrets stay out"))
+
         // In the window, it opens empty, since BotChu never creates it, and saves beside the shared memory.
         let host = NSHostingView(rootView: ContentView().environment(model).defaultAppStorage(defaults))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 800),

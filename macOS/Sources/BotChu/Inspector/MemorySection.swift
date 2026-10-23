@@ -7,10 +7,19 @@ struct MemorySection: View {
 
     var body: some View {
         InspectorSection("Memory") {
+            Text(BotContext.memoryOverview)
+                .font(.system(size: 11))
+                .foregroundStyle(Palette.secondaryText)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
+                .padding(.bottom, 2)
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 ForEach(BotDocument.allCases) { document in
                     DocumentCard(name: document.rawValue, summary: document.summary,
-                                 help: "Edit \(document.rawValue) for this bot") {
+                                 help: document == .memory
+                                     ? "Edit MEMORY.md for this bot: stable preferences, confirmed facts, reusable lessons and durable decisions"
+                                     : "Edit \(document.rawValue) for this bot") {
                         model.editDocument(document, for: botID)
                     }
                 }
