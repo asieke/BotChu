@@ -77,7 +77,14 @@ struct ChatView: View {
                         .frame(maxWidth: .infinity)
                     }
                     .followsNewestMessage(following)
-                    .tracksFollowing($following)
+                    .tracksFollowing($following) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    // Opening a conversation shows its newest message, also when the first layout
+                    // didn't land there.
+                    .onAppear { DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) } }
+                    // A card the reader opens stays where they clicked it, growing downward.
+                    .onChange(of: transcript.overrides) { old, new in
+                        if new.count(where: { $0.value }) > old.count(where: { $0.value }) { following = false }
+                    }
                     // A reply streams in by growing its text in place, so the follow watches the last
                     // message, not the count, and keeps up with every delta.
                     .onChange(of: messages.last) { if following { proxy.scrollTo("bottom", anchor: .bottom) } }
@@ -403,16 +410,21 @@ extension View {
     }
 
     /// Whether the reader is at the newest content. Only their own scrolling changes it: content
-    /// that grows, or a window that resizes, leaves it as it was. Before macOS 15 the chat always
-    /// follows.
-    @ViewBuilder func tracksFollowing(_ following: Binding<Bool>) -> some View {
+    /// that grows, or a window that resizes, leaves it as it was, and while they follow,
+    /// `keepAtBottom` takes them back to the newest content after any such change (a reply's web
+    /// view or an image that grows after the first layout). Before macOS 15 the chat always follows.
+    @ViewBuilder func tracksFollowing(_ following: Binding<Bool>, keepAtBottom: @escaping () -> Void) -> some View {
         if #available(macOS 15, *) {
             onScrollGeometryChange(for: ChatScrollPosition.self) { geometry in
                 ChatScrollPosition(content: geometry.contentSize.height, viewport: geometry.containerSize.height,
                                    below: geometry.contentSize.height - geometry.visibleRect.maxY)
             } action: { old, new in
                 // While the window lays out, the scroll view briefly reports no height at all.
-                guard new.viewport > 120, abs(old.content - new.content) < 0.5, abs(old.viewport - new.viewport) < 0.5 else { return }
+                guard new.viewport > 120 else { return }
+                if abs(old.content - new.content) >= 0.5 || abs(old.viewport - new.viewport) >= 0.5 {
+                    if following.wrappedValue, new.below > 1 { keepAtBottom() }
+                    return
+                }
                 let atBottom = new.below < 40
                 if following.wrappedValue != atBottom { following.wrappedValue = atBottom }
             }
