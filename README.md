@@ -202,8 +202,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     session (new bot, account switch, or **New Session**) also gets the recent conversation, so
     switching accounts keeps the thread's continuity.
   - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I). A card at the top shows
-    a large character (its pet, playing, or its emoji) on the left, beside the bot name, task title
-    and current activity. The ring says its state (grey when idle, a spinning violet arc while it
+    a large character (its pet, playing, or its emoji) on the left, beside the bot name and current
+    activity. Tasks show the repository as a larger title, with the issue or task title beneath it
+    in smaller text. The ring says its state (grey when idle, a spinning violet arc while it
     works, red after a failed turn); plain text gives its activity and running time, last activity,
     or error. The character and ring convey status
     without a dot or status pill. The card and pet animation reflect only the shown Home or task;
