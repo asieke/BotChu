@@ -31,6 +31,10 @@ import BotChuCore
 /// - `BOTCHU_PET`: give the selected bot this pet folder at launch (`video.json`, `stills/`, `clips/`).
 /// - `BOTCHU_DRAW_PET`: give the selected bot this appearance and make its pet at launch (a real Codex
 ///   run, then real clips on OpenRouter, which cost OpenRouter credit).
+/// - `BOTCHU_REPORT_GH`: with `BOTCHU_DATA_DIR`, the program BotChu runs as `gh` to file reports (Report
+///   a Bug or Feature). A throwaway run without one files nothing, so a review never creates a real issue.
+/// - `BOTCHU_OPEN=report`: open Report a Bug or Feature; `BOTCHU_REPORT`, with `BOTCHU_DATA_DIR`: open it
+///   with this report and file it, with the stand-in `gh`.
 @MainActor
 enum DevHooks {
     static let env = ProcessInfo.processInfo.environment
@@ -63,6 +67,16 @@ enum DevHooks {
     /// Settings a throwaway run needs before the model loads: the stand-in `ssh` (`BOTCHU_SSH`).
     static func configure() {
         if dataDir != nil, let ssh = env["BOTCHU_SSH"] { Machine.ssh = ssh }
+    }
+
+    /// What files reports: gh, except in a throwaway run, which files with the stand-in `gh` it was
+    /// given (`BOTCHU_REPORT_GH`) or not at all.
+    static var issueFiler: IssueFiler {
+        guard dataDir != nil else { return IssueFiler() }
+        if let gh = env["BOTCHU_REPORT_GH"], !gh.isEmpty { return IssueFiler(gh: gh) }
+        return IssueFiler { _, _ in
+            .failed("This copy of BotChu runs on throwaway data and files no issues; macOS/ui-review.sh gives it a stand-in gh.")
+        }
     }
 
     static var usageFetch: UsageCache.Fetch? {
@@ -146,6 +160,15 @@ enum DevHooks {
             let task = BotTask(for: bot, repo: repo, checkout: folder, work: nil,
                                brief: parts.count > 1 ? parts[1] : "Look around and say what this repository is.", host: host)
             model.startTask(task, for: id, show: true)
+        }
+        // Last, so the report's app state has what the hooks above showed.
+        let report = dataDir == nil ? nil : env["BOTCHU_REPORT"]
+        if env["BOTCHU_OPEN"] == "report" || report != nil {
+            model.reportIssue(text: report ?? "")
+            if report != nil, let request = model.issueReport {
+                let filer = model.issueFiler
+                Task { await request.submit(with: filer) }
+            }
         }
     }
 

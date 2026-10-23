@@ -51,6 +51,10 @@ struct BotChuApp: App {
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(model.visibleBotID == nil)
             }
+            CommandGroup(after: .help) {
+                Button("Report a Bug or Feature…") { model.reportIssue() }
+                    .disabled(!model.canReportIssue)
+            }
         }
 
         Settings {
