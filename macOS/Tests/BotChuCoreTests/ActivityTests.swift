@@ -358,6 +358,9 @@ private func describe(_ message: ChatMessage, root: String? = "/work/BotChu") ->
         #expect(group.counts.searches == 1)
         #expect(group.summary == "20 files · 1 search")
         #expect(group.location == "BotChu/App, Chat, Inspector, Sidebar · BotChuCore")
+        let searched = items(messages.dropLast(9) + [call("Grep", "x", arguments: ["pattern": "x", "path": "\(root)/macOS/Sources"])])
+        guard case .exploration(let wide) = searched.first else { Issue.record("no group"); return }
+        #expect(wide.location == "BotChu/App, Chat, Inspector, Sidebar · BotChuCore")
         #expect(group.files.first == FileChip(path: "\(root)/macOS/Sources/BotChu/App/File0.swift", name: "File0.swift", reads: 2))
         #expect(group.failures.map(\.reason) == ["not found", "permission denied"])
         #expect(group.failures[0].count == 7)
@@ -484,6 +487,10 @@ private func describe(_ message: ChatMessage, root: String? = "/work/BotChu") ->
         let placed = SubagentPlacement.assign(launches: launches, runs: runs, now: start.addingTimeInterval(20))
         #expect(placed[launches[0].messageID] == [printed])
         #expect(placed[launches[1].messageID] == [byTime, byTitle])
+        // A call dated after now (the clock moved back) places nothing, and doesn't trap.
+        let future = SubagentPlacement.Launch(messageID: UUID(), started: start.addingTimeInterval(9_999), finished: nil, printedIDs: [],
+                                              launches: [.init(agent: "qa", title: nil, waits: true)])
+        #expect(SubagentPlacement.assign(launches: [future], runs: runs, now: start)[future.messageID] == [])
         let items = [(id: UUID(), date: start), (id: UUID(), date: start.addingTimeInterval(400))]
         #expect(SubagentPlacement.anchors(for: [runs[3]], items: items) == [items[1].id: [stray]])
     }
@@ -519,5 +526,11 @@ private func describe(_ message: ChatMessage, root: String? = "/work/BotChu") ->
         #expect(FolderSummary.describe(files: ["\(root)/x/one/a.swift", "\(root)/y/b.swift", "\(root)/z/c.swift", "\(root)/w/d.swift"],
                                        root: root) == "x/one · y · z · +1 more")
         #expect(FolderSummary.describe(files: [NSHomeDirectory() + "/Desktop/a.png"], root: root) == "~/Desktop")
+        // A searched folder holding the others adds nothing; the busiest folder comes first.
+        let sources = "\(root)/macOS/Sources"
+        #expect(FolderSummary.describe(files: ["\(sources)/BotChuCore/BotStatus.swift", "\(sources)/BotChu/App/A.swift", "\(sources)/BotChu/Chat/B.swift",
+                                              "\(sources)/BotChu/App/C.swift"], folders: [sources], root: root) == "BotChu/App, Chat · BotChuCore")
+        #expect(FolderSummary.describe(files: ["\(root)/.botchu/tasks/2DB14BE2-49F0-4D1F-B8C5-3F35D2397220/thread.jsonl"], root: root)
+                == "tasks/…F35D2397220")
     }
 }

@@ -137,7 +137,16 @@ public struct ExplorationGroup: Equatable, Sendable, Identifiable {
         }
         // A file only some failed calls tried to read isn't a file the group read.
         let readOK = Set(calls.filter { $0.activity.failure == nil }.flatMap { $0.activity.reads.map { Self.normalized($0.path) } })
-        self.files = chips.filter { readOK.contains(Self.normalized($0.path)) }
+        chips = chips.filter { readOK.contains(Self.normalized($0.path)) }
+        // Files of the same name say which folder they're in.
+        let names = Dictionary(grouping: chips.indices, by: { chips[$0].name })
+        for (_, indices) in names where indices.count > 1 {
+            for index in indices {
+                let folder = ((chips[index].path as NSString).deletingLastPathComponent as NSString).lastPathComponent
+                if !folder.isEmpty { chips[index].name = Self.shortened(folder) + "/" + chips[index].name }
+            }
+        }
+        self.files = chips
         counts.files = self.files.count
         counts.folders = folders.count
         self.entries = entries
@@ -154,6 +163,11 @@ public struct ExplorationGroup: Equatable, Sendable, Identifiable {
 
     static func normalized(_ path: String) -> String {
         (path as NSString).standardizingPath
+    }
+
+    /// A long folder name (a UUID) by its end: `…F35D2397220`.
+    static func shortened(_ name: String) -> String {
+        name.count > 14 ? "…" + name.suffix(11) : name
     }
 }
 
@@ -320,39 +334,64 @@ public struct ActivityTranscript: Sendable {
 public enum FolderSummary {
     public static func describe(files: [String], folders given: [String] = [], root: String?, limit: Int = 3) -> String {
         var folders: [[String]] = []
+        var weight: [[String]: Int] = [:]
         let all = files.map { ($0 as NSString).deletingLastPathComponent } + given
         for path in all where !path.isEmpty {
-            let folder = ToolActivity.display(folder: (path as NSString).standardizingPath, root: root)
+            let folder = ToolActivity.display(folder: path, root: root)
             let parts = folder.split(separator: "/").map(String.init).filter { $0 != "." }
-            if !folders.contains(parts) { folders.append(parts) }
+            guard !parts.isEmpty else { continue }
+            if weight[parts] == nil { folders.append(parts) }
+            weight[parts, default: 0] += 1
         }
-        folders.removeAll { $0.isEmpty }
+        // A folder that holds others the group touched (a search of `Sources`) adds nothing.
+        let touched = folders
+        folders.removeAll { folder in touched.contains { $0.count > folder.count && Array($0.prefix(folder.count)) == folder } }
         guard !folders.isEmpty else { return "" }
         if folders.count == 1 { return tail(folders[0]) }
-        // Strip the start every folder shares, then name each top folder with its subfolders.
+        // Strip the start every folder shares, then name each top folder with its subfolders,
+        // the most used first.
         var common = 0
         while folders.allSatisfy({ $0.count > common + 1 }), Set(folders.map { $0[common] }).count == 1 { common += 1 }
         var order: [String] = []
         var children: [String: [String]] = [:]
+        var used: [String: Int] = [:]
+        var childUse: [String: Int] = [:]
         for folder in folders {
             let rest = Array(folder.dropFirst(common))
             let top = rest.first ?? ""
+            let uses = weight[folder] ?? 1
             if children[top] == nil { order.append(top); children[top] = [] }
-            if rest.count > 1, !children[top]!.contains(rest.last!) { children[top]!.append(rest.last!) }
+            used[top, default: 0] += uses
+            if rest.count > 1 {
+                let child = rest.last!
+                if !children[top]!.contains(child) { children[top]!.append(child) }
+                childUse[top + "/" + child, default: 0] += uses
+            }
         }
-        var parts = order.prefix(limit).map { top -> String in
-            let subs = children[top] ?? []
-            guard !subs.isEmpty else { return top }
-            let shown = subs.prefix(4).joined(separator: ", ")
-            return "\(top)/\(shown)" + (subs.count > 4 ? " +\(subs.count - 4)" : "")
+        let tops = order.enumerated().sorted { a, b in
+            let (x, y) = (used[a.element] ?? 0, used[b.element] ?? 0)
+            return x != y ? x > y : a.offset < b.offset
+        }.map(\.element)
+        var parts = tops.prefix(limit).map { top -> String in
+            let subs = (children[top] ?? []).enumerated().sorted { a, b in
+                let (x, y) = (childUse[top + "/" + a.element] ?? 0, childUse[top + "/" + b.element] ?? 0)
+                return x != y ? x > y : a.offset < b.offset
+            }.map { short($0.element) }
+            guard !subs.isEmpty else { return short(top) }
+            return "\(short(top))/" + subs.prefix(4).joined(separator: ", ") + (subs.count > 4 ? " +\(subs.count - 4)" : "")
         }
-        if order.count > limit { parts.append("+\(order.count - limit) more") }
+        if tops.count > limit { parts.append("+\(tops.count - limit) more") }
         return parts.joined(separator: " · ")
     }
 
     /// A long folder by its last two names.
     static func tail(_ parts: [String]) -> String {
-        parts.count > 2 ? parts.suffix(2).joined(separator: "/") : parts.joined(separator: "/")
+        (parts.count > 2 ? Array(parts.suffix(2)) : parts).map(short).joined(separator: "/")
+    }
+
+    /// A folder named by an id: its end is enough to tell it apart.
+    static func short(_ name: String) -> String {
+        name.count > 24 ? "…" + name.suffix(11) : name
     }
 }
 
@@ -404,7 +443,8 @@ public enum SubagentPlacement {
             guard missing > 0 else { continue }
             // A run is admitted a moment after its request: within the call, or just after it for
             // `spawn`, which returns at once.
-            let window = launch.started.addingTimeInterval(-2)...(launch.finished ?? now).addingTimeInterval(6)
+            let lower = launch.started.addingTimeInterval(-2)
+            let window = lower...max(lower, (launch.finished ?? now).addingTimeInterval(6))
             let candidates = runs.filter { !claimed.contains($0.id) && window.contains($0.createdAt) }
                 .sorted { a, b in
                     let (x, y) = (score(a, launch), score(b, launch))

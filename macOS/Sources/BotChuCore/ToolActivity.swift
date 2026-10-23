@@ -68,6 +68,11 @@ public struct NativeSubagent: Hashable, Sendable {
     /// The kind of agent (`Explore`, `general-purpose`), when the CLI names it.
     public var kind: String
     public var task: String
+
+    public init(kind: String, task: String) {
+        self.kind = kind
+        self.task = task
+    }
 }
 
 /// One tool call, described for people: its file names, folders, line ranges and patterns rather
@@ -375,58 +380,71 @@ public struct ToolActivity: Equatable, Sendable {
     static func strippingHeaders(_ output: String) -> Substring {
         var text = output[...]
         for pattern in [#"^Exit code \d+\n?"#, #"^Command exited with code \d+\.?\n?"#, #"^Command failed with exit code \d+\.?\n?"#, #"^\s*Output:\n"#] {
-            if let range = text.range(of: pattern, options: .regularExpression) { text = text[range.upperBound...] }
+            // Headers are short: look at the start only, never through a long output.
+            let head = text.prefix(160)
+            if let range = head.range(of: pattern, options: .regularExpression) { text = text[range.upperBound...] }
         }
         return text
     }
 
+    static let emptyResults: Set<String> = ["No matches found", "No files found", "No output from the command.", "(Bash completed with no output)",
+                                            "(no output)", "Found 0 files", "No matches found."]
+
     static func isEmptyResult(_ output: Substring) -> Bool {
+        guard output.utf8.count < 200 else { return !output.contains { !$0.isWhitespace } }
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty || ["No matches found", "No files found", "No output from the command.", "(Bash completed with no output)",
-                                   "(no output)", "Found 0 files", "No matches found."].contains(trimmed)
+        return trimmed.isEmpty || emptyResults.contains(trimmed)
     }
 
     static func isEmptyResult(_ output: String) -> Bool { isEmptyResult(output[...]) }
 
-    /// The first line of a command's output, and how many follow.
+    /// The first line of a command's output, and how many follow. Counting walks the bytes once,
+    /// so an output of a megabyte takes about a millisecond.
     static func preview(_ output: String) -> OutputPreview? {
         let body = strippingHeaders(output)
         if isEmptyResult(body) { return nil }
-        // Counting lines walks the bytes once; outputs of a megabyte stay fast.
-        var lines = 0
-        var first: Substring?
-        var lineStart = body.startIndex
-        var index = body.startIndex
-        let utf8 = body.utf8
-        var byte = utf8.startIndex
-        while byte != utf8.endIndex {
-            if utf8[byte] == UInt8(ascii: "\n") {
-                index = byte
-                let line = body[lineStart..<index]
-                if first == nil, !line.trimmingCharacters(in: .whitespaces).isEmpty { first = line } else if first != nil { lines += 1 }
-                lineStart = body.index(after: index)
+        var text = String(body)
+        return text.withUTF8 { bytes -> OutputPreview? in
+            let newline = UInt8(ascii: "\n")
+            var index = 0
+            var first: Range<Int>?
+            var lines = 0
+            var lineStart = 0
+            var lastContent = -1
+            func blank(_ range: Range<Int>) -> Bool {
+                for i in range where bytes[i] != UInt8(ascii: " ") && bytes[i] != UInt8(ascii: "\t") && bytes[i] != UInt8(ascii: "\r") { return false }
+                return true
             }
-            byte = utf8.index(after: byte)
+            while index < bytes.count {
+                if bytes[index] == newline {
+                    let line = lineStart..<index
+                    if first == nil {
+                        if !blank(line) { first = line; lastContent = 0 }
+                    } else {
+                        lines += 1
+                        if !blank(line) { lastContent = lines }
+                    }
+                    lineStart = index + 1
+                }
+                index += 1
+            }
+            if lineStart < bytes.count {
+                let line = lineStart..<bytes.count
+                if first == nil { if !blank(line) { first = line; lastContent = 0 } } else {
+                    lines += 1
+                    if !blank(line) { lastContent = lines }
+                }
+            }
+            guard let first else { return nil }
+            let line = String(decoding: UnsafeBufferPointer(rebasing: bytes[first.lowerBound..<min(first.upperBound, first.lowerBound + 600)]), as: UTF8.self)
+            // Blank lines at the end aren't more output.
+            return OutputPreview(firstLine: String(line.prefix(300)).trimmingCharacters(in: .whitespaces), moreLines: max(0, lastContent))
         }
-        let last = body[lineStart...]
-        if !last.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if first == nil { first = last } else { lines += 1 }
-        }
-        guard let first else { return nil }
-        // Trailing blank lines aren't more output.
-        var trailing = 0
-        var cursor = body.endIndex
-        while cursor > body.startIndex {
-            let before = body.index(before: cursor)
-            if body[before] == "\n" { trailing += 1; cursor = before } else if body[before] == " " || body[before] == "\t" || body[before] == "\r" { cursor = before } else { break }
-        }
-        return OutputPreview(firstLine: String(first.prefix(300)).trimmingCharacters(in: .whitespaces),
-                             moreLines: max(0, lines - max(0, trailing - 1)))
     }
 
     /// Why a call failed, worded so that the same problem reads the same for every file.
     public static func failureReason(output: String, exitCode: Int? = nil) -> String {
-        let text = output.lowercased()
+        let text = output.prefix(4_000).lowercased()
         let checks: [(String, [String])] = [
             ("not found", ["does not exist", "no such file", "not found", "enoent", "cannot find", "couldn't find", "could not find", "doesn't exist", "file not exist"]),
             ("permission denied", ["permission denied", "eacces", "operation not permitted", "not permitted"]),
@@ -447,6 +465,9 @@ public struct ToolActivity: Equatable, Sendable {
     }
 
     // MARK: Names
+
+    /// Whether a tool, by its name, runs shell commands.
+    public static func isShell(toolName: String) -> Bool { shellTools.contains(toolKey(toolName)) }
 
     static let shellTools: Set<String> = ["bash", "shell", "run_command", "run_shell_command", "exec_command", "command", "terminal",
                                           "local_shell", "execute_command", "run_terminal_cmd", "shell_command", "run_in_terminal", "exec"]
@@ -545,8 +566,9 @@ public struct ToolActivity: Equatable, Sendable {
     /// from `~`.
     public static func display(folder: String, root: String?) -> String {
         if folder.isEmpty || folder == "." { return "" }
+        let folder = folder.hasPrefix("/") ? standardized(folder) : folder
         if let root, !root.isEmpty {
-            let base = root.hasSuffix("/") ? String(root.dropLast()) : root
+            let base = standardized(root)
             if folder == base { return "" }
             if folder.hasPrefix(base + "/") { return String(folder.dropFirst(base.count + 1)) }
         }
@@ -556,12 +578,25 @@ public struct ToolActivity: Equatable, Sendable {
         return folder.hasPrefix("./") ? String(folder.dropFirst(2)) : folder
     }
 
-    /// A shell word as a row shows it: paths relative to the conversation's folder.
+    /// Without `//`, `/./` or a trailing slash; unlike `standardizingPath`, `/private` stays.
+    static func standardized(_ path: String) -> String {
+        guard path.contains("//") || path.contains("/./") || path.hasSuffix("/") else { return path }
+        var parts: [Substring] = []
+        for part in path.split(separator: "/", omittingEmptySubsequences: true) where part != "." { parts.append(part) }
+        return (path.hasPrefix("/") ? "/" : "") + parts.joined(separator: "/")
+    }
+
+    /// A shell word as a row shows it: paths relative to the conversation's folder, and words with
+    /// spaces or patterns in quotes again.
     static func humanize(word: String, directory: String?, root: String?) -> String {
-        guard word.contains("/"), !word.contains("://"), !word.contains(" ") else { return word }
-        let full = ShellPaths.join(directory, word)
-        let shown = display(folder: full, root: root)
-        return shown.isEmpty ? "." : shown
+        if word.contains("/"), !word.contains("://"), !word.contains(" "), !word.contains("*") {
+            let shown = display(folder: ShellPaths.join(directory, word), root: root)
+            return shown.isEmpty ? "." : shown
+        }
+        if word.isEmpty || word.contains(where: { " *?|&;<>()[]{}$'".contains($0) }) {
+            return "\"" + word + "\""
+        }
+        return word
     }
 
     static func shortURL(_ url: String) -> String {
