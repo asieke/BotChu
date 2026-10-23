@@ -8,6 +8,8 @@ import WebKit
 /// a diagram as it streams gets that library then. A reply drawn again starts at the height it
 /// was last drawn at. A new web view is invisible until its reply has rendered, so the bubble
 /// shows, not WebKit's white page or the reply's source, and the reply fades in at its final height.
+/// A rendered reply's web view outlives its conversation's view for a while (`RichReplyPool`), so
+/// showing the conversation again shows the reply at once.
 struct RichMarkdownText: View {
     let html: String
     @State private var height: CGFloat
@@ -53,7 +55,7 @@ enum RichMarkdownLibrary: String, CaseIterable, Comparable {
     static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
-private struct RichMarkdownWebView: NSViewRepresentable {
+struct RichMarkdownWebView: NSViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     let html: String
     @Binding var height: CGFloat
@@ -79,29 +81,35 @@ private struct RichMarkdownWebView: NSViewRepresentable {
 
     static func dismantleNSView(_ container: ReplyWebContainer, coordinator: Coordinator) {
         container.makeWebView = nil
-        guard let view = container.webView else { return }
-        view.stopLoading()
+        guard let view = container.webView as? ChatWebView else { return }
         view.navigationDelegate = nil
-        view.configuration.userContentController.removeAllScriptMessageHandlers()
+        view.messages.coordinator = nil
+        if !RichReplyPool.park(view) { view.discard() }
     }
 
-    @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+    @MainActor final class Coordinator: NSObject, WKNavigationDelegate {
         var height: Binding<CGFloat>
         var html = ""
-        var loaded = false
         var dark = false
-        /// The libraries the web view has, or is evaluating.
-        private var libraries: Set<RichMarkdownLibrary> = []
 
         init(height: Binding<CGFloat>) { self.height = height }
 
+        /// The reply's rendered web view from the pool when it has one, else a new one.
         func makeWebView() -> WKWebView {
+            let view = RichReplyPool.take(html: html, dark: dark) ?? newWebView()
+            view.messages.coordinator = self
+            view.navigationDelegate = self
+            return view
+        }
+
+        private func newWebView() -> ChatWebView {
             let controller = WKUserContentController()
-            controller.add(self, contentWorld: .defaultClient, name: "layout")
-            controller.add(self, contentWorld: .defaultClient, name: "copyCode")
+            let messages = ReplyMessages()
+            controller.add(messages, contentWorld: .defaultClient, name: "layout")
+            controller.add(messages, contentWorld: .defaultClient, name: "copyCode")
             controller.addUserScript(WKUserScript(source: RichMarkdownWebView.script("renderer.js"), injectionTime: .atDocumentEnd,
                                                  forMainFrameOnly: true, in: .defaultClient))
-            libraries = RichMarkdownLibrary.needed(by: html)
+            let libraries = RichMarkdownLibrary.needed(by: html)
             for library in libraries.sorted() {
                 controller.addUserScript(WKUserScript(source: RichMarkdownWebView.script(library.rawValue), injectionTime: .atDocumentStart,
                                                      forMainFrameOnly: true, in: .defaultClient))
@@ -109,23 +117,28 @@ private struct RichMarkdownWebView: NSViewRepresentable {
             let configuration = WKWebViewConfiguration()
             configuration.websiteDataStore = RichMarkdownWebView.dataStore
             configuration.userContentController = controller
-            let view = ChatWebView(frame: .zero, configuration: configuration)
+            let view = ChatWebView(frame: .zero, configuration: configuration, messages: messages)
+            view.libraries = libraries
             view.underPageBackgroundColor = .clear
-            // Shown by the reply's first height (`userContentController`).
+            // Without WebKit's white behind the page, which a web view put back in a window shows
+            // until its page has painted there (kept ones stay in theirs, `RichReplyPool`). The
+            // setting is WebKit's own but not public, hence the check; without it, that's white.
+            if view.responds(to: NSSelectorFromString("_setDrawsBackground:")) { view.setValue(false, forKey: "drawsBackground") }
+            // Shown by the reply's first height (`received`).
             view.alphaValue = 0
-            view.navigationDelegate = self
             view.setContentHuggingPriority(.defaultLow, for: .horizontal)
             view.loadFileURL(RichMarkdownWebView.document, allowingReadAccessTo: RichMarkdownWebView.assets)
             return view
         }
 
         func render(in view: WKWebView) {
-            guard loaded else { return }
-            let missing = RichMarkdownLibrary.needed(by: html).subtracting(libraries)
+            guard let view = view as? ChatWebView, view.loaded else { return }
+            view.rendered = RichReplyPool.Key(html: html, dark: dark)
+            let missing = RichMarkdownLibrary.needed(by: html).subtracting(view.libraries)
             guard !missing.isEmpty else { return renderReply(in: view) }
             // The reply gained math or a diagram: its library first, in the renderer's world. Later
             // renders queue behind it, as WebKit runs one view's scripts in order.
-            libraries.formUnion(missing)
+            view.libraries.formUnion(missing)
             let source = missing.sorted().map { RichMarkdownWebView.script($0.rawValue) }.joined(separator: "\n;\n") + "\n;true"
             view.evaluateJavaScript(source, in: nil, in: .defaultClient) { [weak self, weak view] _ in
                 guard let self, let view else { return }
@@ -140,11 +153,11 @@ private struct RichMarkdownWebView: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            loaded = true
+            (webView as? ChatWebView)?.loaded = true
             render(in: webView)
         }
 
-        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        func received(_ message: WKScriptMessage) {
             guard message.frameInfo.isMainFrame else { return }
             if message.name == "layout", let value = message.body as? Double, value.isFinite, value > 0 {
                 let measured = ceil(value)
@@ -252,10 +265,132 @@ final class ReplyWebContainer: NSView {
     }
 }
 
-/// The outer chat owns vertical scrolling. Horizontal gestures still reach wide tables and code.
-private final class ChatWebView: WKWebView {
+/// A reply's web view, with what it has rendered: what goes with it into the pool and back. The
+/// outer chat owns vertical scrolling. Horizontal gestures still reach wide tables and code.
+final class ChatWebView: WKWebView {
+    let messages: ReplyMessages
+    /// The document has loaded, so replies can be rendered into it.
+    var loaded = false
+    /// The libraries it has, or is evaluating.
+    var libraries: Set<RichMarkdownLibrary> = []
+    /// The reply and appearance it last rendered.
+    var rendered: RichReplyPool.Key?
+
+    init(frame: NSRect, configuration: WKWebViewConfiguration, messages: ReplyMessages) {
+        self.messages = messages
+        super.init(frame: frame, configuration: configuration)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
     override func scrollWheel(with event: NSEvent) {
         if abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) { nextResponder?.scrollWheel(with: event) }
         else { super.scrollWheel(with: event) }
+    }
+
+    /// Done with for good: stops it and lets go of its renderer.
+    func discard() {
+        removeFromSuperview()
+        stopLoading()
+        navigationDelegate = nil
+        configuration.userContentController.removeAllScriptMessageHandlers()
+    }
+}
+
+/// Passes a web view's messages to the view showing it now, which changes when the web view is
+/// shown again from the pool. Weak, as the web view's controller keeps its handlers.
+@MainActor final class ReplyMessages: NSObject, WKScriptMessageHandler {
+    weak var coordinator: RichMarkdownWebView.Coordinator?
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        coordinator?.received(message)
+    }
+}
+
+/// Rendered replies' web views, kept once their conversation's view goes, so showing that
+/// conversation again shows its math and diagrams at once rather than loading and rendering each
+/// again. They wait hidden in their window: a web view taken out of its window and put back draws
+/// nothing until its page has painted there again, a frame or two. Each has a WebKit process of its
+/// own, about 85 MB of memory with Mermaid and 20 MB with KaTeX alone (`footprint`, macOS 27), so
+/// the pool keeps only the most recent within `budget`, each for at most `keep` without being
+/// shown, and none under memory pressure.
+@MainActor enum RichReplyPool {
+    struct Key: Hashable {
+        var html: String
+        var dark: Bool
+    }
+
+    private struct Parked {
+        let view: ChatWebView
+        let since: Date
+    }
+
+    /// Oldest first.
+    private static var parked: [Parked] = []
+    /// What the kept web views may take together, in MB.
+    static let budget = 200
+    static let keep: TimeInterval = 10 * 60
+    private static var expiry: Timer?
+    private static var pressure: DispatchSourceMemoryPressure?
+
+    static var count: Int { parked.count }
+    static var cost: Int { parked.reduce(0) { $0 + cost(of: $1.view) } }
+    static func cost(of view: ChatWebView) -> Int { view.libraries.contains(.mermaid) ? 85 : 20 }
+
+    /// Keeps a web view whose reply has rendered; false when it isn't kept.
+    static func park(_ view: ChatWebView, now: Date = Date()) -> Bool {
+        guard view.loaded, view.rendered != nil, view.alphaValue == 1, !view.isLoading,
+              let content = view.window?.contentView else { return false }
+        holder(in: content).addSubview(view)
+        parked.append(Parked(view: view, since: now))
+        while cost > budget { parked.removeFirst().view.discard() }
+        watch()
+        return parked.last?.view === view
+    }
+
+    /// A kept web view that last rendered this reply in this appearance, no longer kept.
+    static func take(html: String, dark: Bool) -> ChatWebView? {
+        let key = Key(html: html, dark: dark)
+        guard let index = parked.lastIndex(where: { $0.view.rendered == key }) else { return nil }
+        return parked.remove(at: index).view
+    }
+
+    /// Lets go of the web views kept longer than `keep`.
+    static func expire(now: Date = Date()) {
+        while let oldest = parked.first, now.timeIntervalSince(oldest.since) > keep { parked.removeFirst().view.discard() }
+        if parked.isEmpty {
+            expiry?.invalidate()
+            expiry = nil
+        }
+    }
+
+    static func removeAll() {
+        let views = parked.map(\.view)
+        parked.removeAll()
+        views.forEach { $0.discard() }
+        expire()
+    }
+
+    /// Where kept web views wait: in their window, hidden, so out of sight, focus and accessibility.
+    private static func holder(in content: NSView) -> NSView {
+        if let holder = content.subviews.first(where: { $0 is ReplyHolder }) { return holder }
+        let holder = ReplyHolder(frame: content.bounds)
+        holder.isHidden = true
+        holder.autoresizingMask = [.width, .height]
+        content.addSubview(holder, positioned: .below, relativeTo: nil)
+        return holder
+    }
+
+    private final class ReplyHolder: NSView {}
+
+    private static func watch() {
+        if expiry == nil {
+            expiry = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in MainActor.assumeIsolated { expire() } }
+        }
+        guard pressure == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { MainActor.assumeIsolated { removeAll() } }
+        source.activate()
+        pressure = source
     }
 }
