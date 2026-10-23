@@ -26,17 +26,32 @@ public struct ShellCommand: Equatable, Sendable {
     public var commands: [Simple]
     /// What `$(…)` and backticks run.
     public var substitutions: [ShellCommand]
+    /// Only part of it was read: it was longer than `longest`, or its substitutions nested deeper
+    /// than `deepest`. What the rest does isn't known, so it never counts as only reading.
+    public var truncated = false
+
+    /// The most of a command line that is read, in characters: a script in a heredoc can be long.
+    public static let longest = 100_000
+    /// The deepest `$(…)` inside `$(…)` that is followed.
+    public static let deepest = 16
 
     public init(_ line: String) {
-        var parser = ShellParser(Array(line), start: 0, closing: nil)
+        self.init(line, level: 0)
+    }
+
+    init(_ line: String, level: Int) {
+        let text = line.utf8.count > Self.longest ? String(line.prefix(Self.longest)) : line
+        var parser = ShellParser(Array(text), start: 0, closing: nil, level: level)
         parser.run()
         commands = parser.commands
         substitutions = parser.substitutions
+        truncated = parser.tooDeep || text.utf8.count < line.utf8.count
     }
 
-    init(commands: [Simple], substitutions: [ShellCommand]) {
+    init(commands: [Simple], substitutions: [ShellCommand], truncated: Bool = false) {
         self.commands = commands
         self.substitutions = substitutions
+        self.truncated = truncated
     }
 
     /// Every simple command, including those inside substitutions.
@@ -48,6 +63,10 @@ struct ShellParser {
     let chars: [Character]
     var index: Int
     let closing: Character?
+    /// How many substitutions this one is inside.
+    let level: Int
+    /// A substitution nested deeper than `ShellCommand.deepest` was read as plain text.
+    var tooDeep = false
     var commands: [ShellCommand.Simple] = []
     var substitutions: [ShellCommand] = []
     private var current = ShellCommand.Simple()
@@ -61,10 +80,11 @@ struct ShellParser {
 
     private enum Redirect { case write, input, heredoc(stripTabs: Bool), hereString, duplicate }
 
-    init(_ chars: [Character], start: Int, closing: Character?) {
+    init(_ chars: [Character], start: Int, closing: Character?, level: Int = 0) {
         self.chars = chars
         index = start
         self.closing = closing
+        self.level = level
     }
 
     private func peek(_ offset: Int = 1) -> Character? {
@@ -161,17 +181,23 @@ struct ShellParser {
         inWord = true
         if peek() == "(" && peek(2) == "(" {
             // Arithmetic: kept as text up to the matching `))`.
-            var level = 0
+            var parens = 0
             while index < chars.count {
                 let c = chars[index]
                 word.append(c)
                 index += 1
-                if c == "(" { level += 1 } else if c == ")" { level -= 1; if level == 0 { break } }
+                if c == "(" { parens += 1 } else if c == ")" { parens -= 1; if parens == 0 { break } }
             }
+        } else if peek() == "(", level >= ShellCommand.deepest {
+            // Too deep to follow (and to recurse into): read on as text.
+            tooDeep = true
+            word += "$("
+            index += 2
         } else if peek() == "(" {
-            var inner = ShellParser(chars, start: index + 2, closing: ")")
+            var inner = ShellParser(chars, start: index + 2, closing: ")", level: level + 1)
             inner.run()
-            substitutions.append(ShellCommand(commands: inner.commands, substitutions: inner.substitutions))
+            tooDeep = tooDeep || inner.tooDeep
+            substitutions.append(ShellCommand(commands: inner.commands, substitutions: inner.substitutions, truncated: inner.tooDeep))
             word += "$(…)"
             index = inner.index + 1
         } else if peek() == "{" {
@@ -187,8 +213,14 @@ struct ShellParser {
         inWord = true
         var end = index + 1
         while end < chars.count, chars[end] != "`" { end += chars[end] == "\\" ? 2 : 1 }
-        let body = String(chars[(index + 1)..<min(end, chars.count)])
-        substitutions.append(ShellCommand(body))
+        let body = String(chars[min(index + 1, chars.count)..<min(end, chars.count)])
+        if level >= ShellCommand.deepest {
+            tooDeep = true
+        } else {
+            let inner = ShellCommand(body, level: level + 1)
+            tooDeep = tooDeep || inner.truncated
+            substitutions.append(inner)
+        }
         word += "$(…)"
         index = min(end + 1, chars.count)
     }
@@ -325,6 +357,7 @@ public struct ShellFacts: Equatable, Sendable {
     private var loops: [String: [String]] = [:]
 
     public init(_ command: ShellCommand) {
+        if command.truncated { changes = true }
         for simple in command.commands { add(simple) }
         for substitution in command.substitutions {
             let inner = ShellFacts(substitution)
@@ -334,7 +367,7 @@ public struct ShellFacts: Equatable, Sendable {
             searches += inner.searches
             fetches += inner.fetches
             inspections += inner.inspections
-            if inner.delegation != nil { delegation = (delegation ?? DelegationCall()).merged(with: inner.delegation!) }
+            if let call = inner.delegation { delegation = (delegation ?? DelegationCall()).merged(with: call) }
         }
     }
 
@@ -512,6 +545,12 @@ public struct ShellFacts: Equatable, Sendable {
             }
         }
         return rest
+    }
+
+    /// A line number or count in a command, if it's a sane one, so the range after it can't overflow.
+    static func lineNumber(_ text: some StringProtocol) -> Int? {
+        guard let value = Int(text), (0...1_000_000_000).contains(value) else { return nil }
+        return value
     }
 
     /// `-n`, `-En`: short options run together, one of them among `letters`.
@@ -709,7 +748,7 @@ public struct ShellFacts: Equatable, Sendable {
                 files.append(word)
             }
             if let value {
-                if value.hasPrefix("+"), let n = Int(value.dropFirst()) { fromStart = n } else { count = Int(value) }
+                if value.hasPrefix("+"), let n = lineNumber(value.dropFirst()) { fromStart = n } else { count = lineNumber(value) }
             }
             index += 1
         }
@@ -976,8 +1015,8 @@ public struct LineRange: Hashable, Sendable {
         let text = String(script[match]).trimmingCharacters(in: .whitespaces).replacingOccurrences(of: " ", with: "")
         let body = text.trimmingCharacters(in: CharacterSet(charactersIn: "p;"))
         let parts = body.split(separator: ",").map(String.init)
-        guard let first = parts.first.flatMap({ Int($0) }) else { return nil }
-        if parts.count == 1 { self.init(start: first, end: first) } else { self.init(start: first, end: parts[1] == "$" ? nil : Int(parts[1])) }
+        guard let first = parts.first.flatMap({ ShellFacts.lineNumber($0) }) else { return nil }
+        if parts.count < 2 { self.init(start: first, end: first) } else { self.init(start: first, end: parts[1] == "$" ? nil : ShellFacts.lineNumber(parts[1])) }
     }
 
     /// `NR>=10 && NR<=40`, `NR==7`, `NR>5`.
@@ -985,7 +1024,7 @@ public struct LineRange: Hashable, Sendable {
         let compact = program.replacingOccurrences(of: " ", with: "")
         func number(after marker: String) -> Int? {
             guard let range = compact.range(of: marker) else { return nil }
-            return Int(compact[range.upperBound...].prefix { $0.isNumber })
+            return ShellFacts.lineNumber(compact[range.upperBound...].prefix { $0.isASCII && $0.isNumber })
         }
         if let line = number(after: "NR==") {
             self.init(start: line, end: line)

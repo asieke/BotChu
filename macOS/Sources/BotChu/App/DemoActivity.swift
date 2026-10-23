@@ -92,8 +92,9 @@ enum DemoActivity {
             var run = SubagentRun(id: id, rootBotID: target.botID, rootTaskID: target.taskID, depth: 1, targetBot: helper, title: title,
                                   brief: "Look into it and report back.", workingDirectory: root, phase: phase,
                                   createdAt: spawn.date.addingTimeInterval(0.4))
-            run.startedAt = run.createdAt.addingTimeInterval(1)
-            if phase != .running { run.finishedAt = run.startedAt!.addingTimeInterval(phase == .failed ? 41 : 272) }
+            let started = run.createdAt.addingTimeInterval(1)
+            run.startedAt = started
+            if phase != .running { run.finishedAt = started.addingTimeInterval(phase == .failed ? 41 : 272) }
             if phase == .completed { run.handoffOutput = "The chat stays responsive: 17 calm cards, no tool rows in the parent." }
             if phase == .failed { run.errorMessage = "Codex Dev exited with status 1 without replying." }
             runs.append(run)

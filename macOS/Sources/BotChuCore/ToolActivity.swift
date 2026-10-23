@@ -503,15 +503,17 @@ public struct ToolActivity: Equatable, Sendable {
         return ["get_", "list_", "search_", "read_", "fetch_", "view_", "find_", "query_", "describe_", "lookup_", "show_"].contains { tool.hasPrefix($0) }
     }
 
-    /// `mcp__linear__get_issue` → `linear: get_issue`.
+    /// `mcp__linear__get_issue` → `linear: get_issue`, `github.search_issues` → `github: search_issues`;
+    /// any other name as it is (also one that is only dots or underscores).
     static func serviceName(_ name: String) -> String {
         if name.hasPrefix("mcp__") {
-            let parts = name.components(separatedBy: "__").dropFirst()
-            return parts.count >= 2 ? "\(parts.dropLast().joined(separator: " ")): \(parts.last!)" : name
+            let parts = name.components(separatedBy: "__").dropFirst().filter { !$0.isEmpty }
+            if parts.count >= 2, let tool = parts.last { return "\(parts.dropLast().joined(separator: " ")): \(tool)" }
+            return name
         }
         if name.contains("."), !name.contains(" ") {
             let parts = name.split(separator: ".")
-            return "\(parts.dropLast().joined(separator: ".")): \(parts.last!)"
+            if parts.count >= 2, let tool = parts.last { return "\(parts.dropLast().joined(separator: ".")): \(tool)" }
         }
         return name
     }
@@ -531,11 +533,21 @@ public struct ToolActivity: Equatable, Sendable {
         return nil
     }
 
+    /// A number from a call's arguments, if it's a sane one: a huge or fractional value from a
+    /// CLI never traps the conversion, nor the arithmetic of a line range after it.
     static func number(_ value: Any) -> Int? {
-        if let value = value as? Int { return value }
-        if let value = value as? Double { return Int(value) }
-        if let value = value as? String { return Int(value) }
-        return nil
+        let result: Int?
+        if let value = value as? Int {
+            result = value
+        } else if let value = value as? Double, value.isFinite, abs(value) < 1e12 {
+            result = Int(value)
+        } else if let value = value as? String {
+            result = Int(value.trimmingCharacters(in: .whitespaces))
+        } else {
+            result = nil
+        }
+        guard let result, (-1_000_000_000_000...1_000_000_000_000).contains(result) else { return nil }
+        return result
     }
 
     static func firstLine(_ text: String) -> String {
@@ -631,9 +643,34 @@ public enum ToolArguments {
         return nil
     }
 
+    /// The arguments as a dictionary. JSON nested deeper than `deepest` isn't parsed: parsing
+    /// recurses once for each level, and BotChu's own digests are a few levels deep.
     public static func parse(_ text: String?) -> [String: Any]? {
-        guard let text, text.hasPrefix("{"), let data = text.data(using: .utf8) else { return nil }
+        guard let text, text.hasPrefix("{"), text.utf8.count <= 1_000_000, nesting(of: text) <= deepest,
+              let data = text.data(using: .utf8) else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    static let deepest = 32
+
+    /// How deeply a JSON text nests, read without parsing it.
+    static func nesting(of text: String) -> Int {
+        var depth = 0, deepest = 0, inString = false, escaped = false
+        for byte in text.utf8 {
+            if inString {
+                if escaped { escaped = false } else if byte == UInt8(ascii: "\\") { escaped = true } else if byte == UInt8(ascii: "\"") { inString = false }
+                continue
+            }
+            switch byte {
+            case UInt8(ascii: "\""): inString = true
+            case UInt8(ascii: "{"), UInt8(ascii: "["):
+                depth += 1
+                deepest = max(deepest, depth)
+            case UInt8(ascii: "}"), UInt8(ascii: "]"): depth -= 1
+            default: break
+            }
+        }
+        return deepest
     }
 
     /// The digest's `_diff`, else lines counted from edit text still in the arguments.

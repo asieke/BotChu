@@ -12,14 +12,21 @@ public struct ExplorationCall: Equatable, Sendable, Identifiable {
 /// A row of an open exploration group: one call, or the same file read again right after it,
 /// shown once (`×2`) with the ranges of both reads merged.
 public struct ExplorationEntry: Equatable, Sendable, Identifiable {
+    /// The first call's, which is the row's.
+    public let id: UUID
+    public let activity: ToolActivity
     public var calls: [ExplorationCall]
-    public var id: UUID { calls[0].id }
-    public var activity: ToolActivity { calls[0].activity }
     public var count: Int { calls.count }
+
+    public init(_ first: ExplorationCall) {
+        id = first.id
+        activity = first.activity
+        calls = [first]
+    }
 
     public var state: ChatMessage.ToolState {
         if calls.contains(where: { $0.state == .running }) { return .running }
-        return calls.last!.state
+        return calls.last?.state ?? .done
     }
 
     /// `×2 · L1–60`, a range, `no matches`.
@@ -69,9 +76,10 @@ public struct ExplorationGroup: Equatable, Sendable, Identifiable {
     public var failures: [FailureSummary]
     /// Nothing follows it yet: while its turn runs, more calls may join it.
     public var isOpen: Bool
-    public var id: UUID { calls[0].id }
+    /// Its first call's, so the group keeps its place as calls join it.
+    public let id: UUID
 
-    public var started: Date { calls[0].message.date }
+    public var started: Date { calls.first?.message.date ?? .distantPast }
 
     /// When its last call ended, as far as the calls say.
     public var finished: Date {
@@ -97,6 +105,7 @@ public struct ExplorationGroup: Equatable, Sendable, Identifiable {
     public init(calls: [ExplorationCall], isOpen: Bool, root: String?) {
         self.calls = calls
         self.isOpen = isOpen
+        id = calls.first?.id ?? UUID()
         var entries: [ExplorationEntry] = []
         var chips: [FileChip] = []
         var chipIndex: [String: Int] = [:]
@@ -105,10 +114,10 @@ public struct ExplorationGroup: Equatable, Sendable, Identifiable {
         for call in calls {
             let activity = call.activity
             // The same single file read again right away is one row.
-            if let last = entries.last, Self.sameRead(last.calls.last!, call) {
+            if let previous = entries.last?.calls.last, Self.sameRead(previous, call) {
                 entries[entries.count - 1].calls.append(call)
             } else {
-                entries.append(ExplorationEntry(calls: [call]))
+                entries.append(ExplorationEntry(call))
             }
             for read in activity.reads {
                 let key = Self.normalized(read.path)
@@ -215,7 +224,7 @@ public enum ActivityItem: Equatable, Sendable, Identifiable {
     }
 
     var lastMessageID: UUID {
-        if case .exploration(let group) = self { return group.calls.last!.id }
+        if case .exploration(let group) = self { return group.calls.last?.id ?? group.id }
         return id
     }
 
@@ -360,13 +369,14 @@ public enum FolderSummary {
             let rest = Array(folder.dropFirst(common))
             let top = rest.first ?? ""
             let uses = weight[folder] ?? 1
-            if children[top] == nil { order.append(top); children[top] = [] }
+            if children[top] == nil { order.append(top) }
             used[top, default: 0] += uses
-            if rest.count > 1 {
-                let child = rest.last!
-                if !children[top]!.contains(child) { children[top]!.append(child) }
+            var subs = children[top] ?? []
+            if rest.count > 1, let child = rest.last {
+                if !subs.contains(child) { subs.append(child) }
                 childUse[top + "/" + child, default: 0] += uses
             }
+            children[top] = subs
         }
         let tops = order.enumerated().sorted { a, b in
             let (x, y) = (used[a.element] ?? 0, used[b.element] ?? 0)

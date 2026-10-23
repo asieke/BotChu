@@ -545,3 +545,132 @@ private func describe(_ message: ChatMessage, root: String? = "/work/BotChu") ->
                 == "tasks/…F35D2397220")
     }
 }
+
+/// Whatever a CLI wrote, or a saved thread holds, describing and grouping it never traps: a
+/// thread that did would crash BotChu every time it showed that conversation.
+@Suite struct HostileInputTests {
+    static let names = ["", ".", "..", "...", "mcp__", "mcp____", "mcp__x__", "mcp__x", "mcp__.__.", "a.", ".b", "a..b", " ", "\n",
+                        "Tool", "Edit files", "Task", "Read", "Bash", "Shell", "run_command", "bash", "read_file", "write_file",
+                        "TodoWrite", "AskUserQuestion", "WebFetch", "WebSearch", "Grep", "Glob", "LS", "invoke_subagent",
+                        "🛠️", String(repeating: "x", count: 10_000)]
+    static let shells: Set<String> = ["Bash", "Shell", "run_command", "bash"]
+    static let commands = [
+        "", " ", "\t\n", "'", "\"", "\\", "$", "${", "$(", "$((", "`", "``", "<", "<<", "<<EOF", "<<<", ">", ">>", "&>", "2>", "&",
+        "&&", "||", "|", ";", ";;", "(", ")", "((", "))", "#", "cat <<'EOF'\nno end", "a && && b", "| | |", ";;;;", "for", "for x in",
+        "do done", "if [ ]; then fi", "sed -n", "sed -n '1,'", "head -n", "tail -n +", "tail -n", "find", "find . -exec", "git", "git -C",
+        "gh", "gh api -X", "curl -X", "curl -o", "xargs -n", "awk", "awk -F", "nl -ba | sed -n '1,'", "botchu-subagent",
+        "botchu-subagent spawn --agent", "botchu-subagent wait", "cd", "cd ..; cd", "x=", "=", "=x", "env -u", "timeout", "nice -n",
+        "echo \"unterminated $(ls", "echo $(echo $(echo", "cat <<A <<B\nx\nA", "'''", "\"\"\"\"", "x\u{0}y", "ls 😀/🦝.swift",
+        "/bin/zsh -lc", "/bin/zsh -lc '", "\"", "\"cat a", "for f in; do cat \"$f\"; done", "cat \"$\"", "cat \"${}\"",
+    ]
+    /// Too long or too deep to read whole; shell tools only, they're costly.
+    static let monsters = [
+        String(repeating: "$(", count: 5_000), String(repeating: "\"$(", count: 3_000), String(repeating: "(", count: 10_000),
+        String(repeating: ")", count: 10_000), String(repeating: "`", count: 1_001), String(repeating: "a ", count: 300_000),
+        String(repeating: "cat a; ", count: 20_000), "cat <<EOF\n" + String(repeating: "line\n", count: 50_000),
+    ]
+    static let arguments: [String?] = [
+        nil, "", "{}", "{", "[]", "null", #"{"file_path": null}"#, #"{"offset": "abc", "limit": []}"#, #"{"limit": -5, "offset": -10}"#,
+        #"{"StartLine": 9999999999999999999999}"#, #"{"view_range": [1]}"#, #"{"view_range": ["a", null]}"#, #"{"edits": [{}]}"#,
+        #"{"edits": 5}"#, #"{"todos": [{}]}"#, #"{"todos": 7}"#, #"{"_diff": [1]}"#, #"{"_diff": "x"}"#, #"{"command": ""}"#,
+        #"{"command": [""]}"#, #"{"CommandLine": 5}"#, #"{"url": "::::"}"#, #"{"url": ""}"#, #"{"Path": ""}"#, #"{"pattern": ""}"#,
+        String(repeating: "[", count: 2_000),
+        #"{"a":"# + String(repeating: #"{"a":"#, count: 600) + "1" + String(repeating: "}", count: 601),
+    ]
+    static let outputs: [String?] = [
+        nil, "", "\n\n\n", "Exit code", "Exit code \n", "Exit code 99999999999999999999", "Command exited with code",
+        "Command exited with code -1.", "\r\n\r\n", "=== Sub-agent: (not-a-uuid) ===", "Output:\n", "Output:",
+        String(repeating: "x", count: 2_000_000), String(repeating: "\n", count: 100_000), String(repeating: "/a/b ", count: 10_000),
+    ]
+    static let states: [ChatMessage.ToolState?] = [nil, .running, .done, .failed, .interrupted]
+
+    private func message(_ name: String?, _ input: String?, arguments: String? = nil, output: String? = nil,
+                         state: ChatMessage.ToolState? = .done) -> ChatMessage {
+        var message = ChatMessage(role: .tool, toolID: UUID().uuidString, toolName: name, toolInput: input, toolOutput: output,
+                                  toolState: state, toolArguments: arguments)
+        message.toolExitCode = state == .failed ? Int.max : nil
+        return message
+    }
+
+    private func check(_ message: ChatMessage, root: String? = "/work") {
+        let activity = ToolActivity.describe(message, root: root)
+        // A title comes back, bounded however long the input.
+        #expect(activity.title.utf8.count <= 300_000)
+    }
+
+    @Test func degenerateNamesInputsAndCommands() {
+        for name in Self.names {
+            check(message(name, nil))
+            for command in Self.commands { check(message(name, command)) }
+        }
+        for name in Self.shells {
+            for command in Self.monsters { check(message(name, command, arguments: ToolArguments.digest(["command": command]))) }
+        }
+    }
+
+    @Test func degenerateArgumentsOutputsAndStates() {
+        for name in ["Read", "Bash", "Edit", "MultiEdit", "Grep", "Task", "TodoWrite", "read_file", "WebFetch", "mcp__x__get_y", "Edit files"] {
+            for arguments in Self.arguments { check(message(name, "x", arguments: arguments)) }
+            for output in Self.outputs {
+                for state in Self.states { check(message(name, "rg -n x", output: output, state: state)) }
+            }
+        }
+        // Arguments as a CLI might send them, kept as BotChu keeps them.
+        // Deeper than the digest goes (three levels), not so deep the test's own value overflows a
+        // test thread's stack when it's freed.
+        var deep: Any = ["leaf": String(repeating: "y", count: 100_000)]
+        for _ in 0..<200 { deep = ["a": deep, "list": [deep]] as [String: Any] }
+        for value in [deep, ["old_string": String(repeating: "a\n", count: 50_000), "new_string": String(repeating: "b\n", count: 50_000)],
+                      ["edits": Array(repeating: ["oldText": "", "newText": ""], count: 5_000)], ["content": ""], NSNull(), [String: Any]()] as [Any] {
+            let digest = ToolArguments.digest(value)
+            #expect((digest?.utf8.count ?? 0) <= 20_000)
+            check(message("Edit", "x", arguments: digest))
+        }
+    }
+
+    @Test func tooLongOrTooDeepCommandsAreNeverReadOnly() {
+        for command in Self.monsters.prefix(2) + [String(repeating: "a", count: ShellCommand.longest + 1)] {
+            let parsed = ShellCommand(command)
+            #expect(parsed.truncated)
+            #expect(!ShellFacts(parsed).readOnly)
+        }
+        #expect(ShellCommand(String(repeating: "$(", count: ShellCommand.deepest) + "cat a" + String(repeating: ")", count: ShellCommand.deepest)).truncated == false)
+        #expect(ToolActivity.describe(message("Bash", String(repeating: "cat a; ", count: 20_000))).intent == .command)
+        // Subshell parentheses don't nest substitutions: plain, however many.
+        #expect(!ShellCommand(String(repeating: "(", count: 10_000)).truncated)
+        // JSON nested too deep to parse safely isn't parsed.
+        #expect(ToolArguments.parse(#"{"a":"# + String(repeating: "[", count: 5_000)) == nil)
+        #expect(ToolArguments.nesting(of: #"{"a": "[[[{{{", "b": [{"c": 1}]}"#) == 3)
+    }
+
+    @Test func groupingSurvivesEverythingAtOnce() {
+        var messages: [ChatMessage] = []
+        for (index, name) in Self.names.enumerated() {
+            let command = Self.commands[index % Self.commands.count]
+            messages.append(message(name, command, arguments: Self.arguments[index % Self.arguments.count],
+                                    output: Self.outputs[index % Self.outputs.count], state: Self.states[index % Self.states.count]))
+            if index % 4 == 0 { messages.append(ChatMessage(role: .assistant, text: "")) }
+            if index % 7 == 0 { messages.append(ChatMessage(role: .note, text: "")) }
+        }
+        messages += messages.suffix(5)  // Duplicate ids, as a damaged file could have.
+        for root in [nil, "", "/", "/work", "~", "//"] as [String?] {
+            var transcript = ActivityTranscript(root: root)
+            transcript.update(messages)
+            #expect(!transcript.items.isEmpty)
+            messages[messages.count - 1].toolState = .running
+            transcript.update(messages)
+            transcript.update(Array(messages.reversed()))
+            transcript.update([])
+            #expect(transcript.items.isEmpty)
+        }
+        #expect(ExplorationGroup(calls: [], isOpen: true, root: nil).summary == "")
+        for paths in [[""], ["/"], ["//"], ["~"], ["."], [".."], ["/a/../../b"], ["a//b/"], ["", "/", "~/x"]] {
+            _ = FolderSummary.describe(files: paths, folders: paths, root: "/")
+        }
+        #expect(SubagentPlacement.assign(launches: [], runs: []).isEmpty)
+        #expect(DelegationCall.runIDs(in: String(repeating: "0000-", count: 100_000)).isEmpty)
+        #expect(LineRange.merged([LineRange(start: nil, end: nil), LineRange(start: Int.max, end: Int.max), LineRange(last: 0)]).count <= 3)
+        for script in ["", "p", ",p", "1,p", "99999999999999999999,1p", "$p"] { _ = LineRange(sedScript: script) }
+        for program in ["", "NR==", "NR>=x", "NR<0", "NR>=99999999999999999999"] { _ = LineRange(awkProgram: program) }
+    }
+}
