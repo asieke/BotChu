@@ -15,7 +15,8 @@ Names and slugs are case insensitive. Ambiguous names require a bot UUID from `l
 `call` and `wait` return the child's handoff on stdout and exit nonzero for failure or Stop.
 Progress goes to stderr. A caller must collect its children before its turn ends; an ended
 parent stops remaining descendants. A child is a fresh session using its target bot's account,
-model, effort, instructions, soul and memory. It never resumes or appends to that bot's Home.
+model, effort, instructions (`INSTRUCTIONS.md`), soul and memory, with the shared `TEAM.md`
+playbook when it has one. It never resumes or appends to that bot's Home.
 Explicit `<remember>` notes in a successful handoff are saved to the target bot's local memory.
 
 The default `shared` workspace is the caller's directory and machine, including for nested

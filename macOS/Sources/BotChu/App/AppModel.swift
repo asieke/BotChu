@@ -16,10 +16,36 @@ struct TaskSheetRequest: Identifiable {
     var repo: String?
 }
 
+/// A Markdown file open in the in-app editor: one of a bot's (`BotDocument`) or one every bot
+/// shares (`SharedDocument`, from Settings).
 struct DocumentEditorRequest: Identifiable {
     let id = UUID()
-    let bot: Bot
-    let document: BotDocument
+    let name: String
+    let subtitle: String
+    let url: URL
+    let seed: String
+    /// Shown over an empty draft, saying what the file is for.
+    let placeholder: String
+
+    init(bot: Bot, document: BotDocument) {
+        name = document.rawValue
+        subtitle = "\(bot.name) · \(document.summary)"
+        url = document.url(for: bot)
+        seed = document.seed(for: bot)
+        placeholder = document == .instructions
+            ? "\(bot.name)'s role and job, in Markdown: what it works on, with whom, and how it hands work on."
+            : ""
+    }
+
+    init(shared document: SharedDocument, botsRoot: String) {
+        name = document.rawValue
+        subtitle = "Every bot · \(document.summary)"
+        url = document.url(botsRoot: botsRoot)
+        seed = document.seed
+        placeholder = document == .team
+            ? "The process every bot follows, in Markdown: its stages, handoffs, who calls whom with botchu-subagent, and when work is done. Left out of every bot's context while empty."
+            : ""
+    }
 }
 
 /// A conversation in the window: a bot's own (its Home), or one of its tasks.
@@ -829,7 +855,9 @@ final class AppModel {
         prepareWorkspace(bot)
         let memory = Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.memoryFile))
         let soul = Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.soulFile))
+        let instructions = Workspace.read(BotDocument.instructions.url(for: bot).path)
         let sharedMemory = Workspace.read(settings.sharedMemoryPath)
+        let team = Workspace.read(settings.teamPath)
         let directory: String
         var machine = Machine.thisMac
         var preamble: String?
@@ -847,13 +875,15 @@ final class AppModel {
                 // A task on a host can't open the bot's folder, so it hears the recent Home conversation.
                 preamble = BotContext.taskPreamble(bot: bot, task: task, memory: memory, sharedMemory: sharedMemory, history: history,
                                                    machine: machineDescription(of: task),
-                                                   home: machine.isRemote ? thread(.home(id)) : [], soul: soul)
+                                                   home: machine.isRemote ? thread(.home(id)) : [], soul: soul,
+                                                   instructions: instructions, team: team)
             }
         } else {
             directory = bot.workspace
             if resume == nil {
                 preamble = BotContext.sessionPreamble(bot: bot, memory: memory, sharedMemory: sharedMemory, history: history,
-                                                      tasks: openTasks(of: id).map { report(on: $0, of: id, replyLimit: 240) }, soul: soul)
+                                                      tasks: openTasks(of: id).map { report(on: $0, of: id, replyLimit: 240) }, soul: soul,
+                                                      instructions: instructions, team: team)
             }
         }
         let ticket = UUID()
@@ -1099,6 +1129,12 @@ final class AppModel {
 
     private func prepareWorkspace(_ bot: Bot) {
         do {
+            // Instructions from an older bot.json move into INSTRUCTIONS.md once.
+            var bot = bot
+            if try Workspace.migrateInstructions(of: &bot), let i = bots.firstIndex(where: { $0.id == bot.id }) {
+                bots[i].instructions = bot.instructions
+                save(bots[i])
+            }
             try Workspace.prepare(bot: bot, sharedMemoryPath: settings.sharedMemoryPath, repositoriesPath: settings.expandedReposRoot,
                                   machines: settings.hosts.map(\.nickname), availableBots: delegation.roster)
             try BotHome(workspace: bot.workspace).prepareDispatch()

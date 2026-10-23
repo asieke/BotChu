@@ -30,7 +30,9 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var emoji: String
     /// The public one-liner shown under the name.
     public var title: String
-    /// Private instructions, given to the agent at the start of every session.
+    /// Private instructions, from before they moved to `INSTRUCTIONS.md` in the workspace. Still
+    /// decoded from older bot.json, and set by the New Bot sheet: `Workspace.migrateInstructions`
+    /// writes them into that file once and clears this.
     public var instructions: String
     public var accountID: String
     /// Custom profiles travel with the bot so its CLI family survives relaunch and workspace moves.

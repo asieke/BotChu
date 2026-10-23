@@ -216,7 +216,9 @@ final class SubagentRuntime {
             let prompt = BotContext.subagentPreamble(bot: targetBot, run: record,
                 callerDescription: caller.parent.flatMap { run($0)?.targetBotName } ?? model.bot(target.botID)?.name ?? "Bot",
                 memory: Workspace.read(targetBot.workspace + "/MEMORY.md"), sharedMemory: Workspace.read(model.settings.sharedMemoryPath),
-                soul: Workspace.read(targetBot.workspace + "/SOUL.md"), availableBots: roster)
+                soul: Workspace.read(targetBot.workspace + "/SOUL.md"),
+                instructions: Workspace.read(BotDocument.instructions.url(for: targetBot).path),
+                team: Workspace.read(model.settings.teamPath), availableBots: roster)
             var invocation = CommandBuilder.invocation(kind: account.kind, prompt: prompt,
                 model: GenerationOptions.effectiveModel(record.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel),
                 sessionID: nil, reasoningEffort: record.reasoningEffort, openRouterKey: key)
