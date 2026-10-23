@@ -94,7 +94,13 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
 func show(_ messages: [ChatMessage]) {
     for m in messages {
         switch m.role {
-        case .tool: print("    [\(m.toolState?.rawValue ?? "?")] \(m.toolName ?? "") \(m.toolInput?.prefix(60) ?? "")")
+        case .tool:
+            // How the chat files the call: its intent, what it names, and the facts it kept.
+            let activity = ToolActivity.describe(m)
+            let facts = [activity.detail, m.toolExitCode.map { "exit \($0)" }, m.toolArguments == nil ? nil : "arguments kept",
+                         m.toolDuration.map { String(format: "%.1fs", $0) }].compactMap { $0 }
+            print("    [\(m.toolState?.rawValue ?? "?")] \(m.toolName ?? "") \(m.toolInput?.prefix(60) ?? "")")
+            print("      → \(activity.intent.rawValue): \(activity.title)" + (facts.isEmpty ? "" : " · " + facts.joined(separator: " · ")))
         default: print("    \(m.role.rawValue): \(m.text.replacingOccurrences(of: "\n", with: " ").prefix(160))")
         }
     }

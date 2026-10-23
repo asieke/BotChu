@@ -5,6 +5,7 @@ import BotChuCore
 struct BotChuApp: App {
     @State private var model = AppModel()
     @AppStorage("showsStatus") private var showsStatus = true
+    @AppStorage(ChatDensity.storageKey) private var chatDensity: ChatDensity = .detailed
 
     var body: some Scene {
         WindowGroup("BotChu", id: "main") {
@@ -20,6 +21,9 @@ struct BotChuApp: App {
             CommandGroup(after: .sidebar) {
                 Button(showsStatus ? "Hide Status" : "Show Status") { showsStatus.toggle() }
                     .keyboardShortcut("i", modifiers: [.command, .option])
+                Picker("Chat Density", selection: $chatDensity) {
+                    ForEach(ChatDensity.allCases) { Text($0.title).tag($0) }
+                }
             }
             CommandMenu("Bot") {
                 // The shown conversation, the selected bot's Home or its open task tab, as the menu

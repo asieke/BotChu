@@ -21,6 +21,9 @@ import BotChuCore
 ///   (`repo` is `owner/name` or a checkout's folder in the repositories folder, `host` an optional
 ///   host's nickname, where the checkout is in its repositories folder; a real turn).
 /// - `BOTCHU_TAB`: show the selected bot's tab with this number at launch (0 is Home, 1 its first task).
+/// - `BOTCHU_DEMO=activity`: with `BOTCHU_DATA_DIR`, make the shown conversation a long agent run
+///   in memory (`DemoActivity`), to review the chat's activity cards without a real turn.
+/// - `BOTCHU_DENSITY`: with `BOTCHU_DATA_DIR`, the chat density (`compact`, `detailed` or `raw`).
 /// - `BOTCHU_HOST`: with `BOTCHU_DATA_DIR`, the hosts in Settings ▸ Hosts, from
 ///   `nickname|ssh destination|repositories folder|machine name|account=command,…`, several
 ///   separated by `;`.
@@ -102,6 +105,10 @@ enum DevHooks {
                                              height: max(600, window.contentMinSize.height)))
             }
         }
+        if dataDir != nil, let density = env["BOTCHU_DENSITY"].flatMap(ChatDensity.init(rawValue:)) {
+            // Registered, not saved: review copies share the installed app's preferences.
+            UserDefaults.standard.register(defaults: [ChatDensity.storageKey: density.rawValue])
+        }
         if dataDir != nil, let appearance = env["BOTCHU_APPEARANCE"], ["light", "dark"].contains(appearance) {
             NSApp.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
         }
@@ -144,6 +151,9 @@ enum DevHooks {
         }
         if let tab = env["BOTCHU_TAB"].flatMap(Int.init), tab > 0, let id = model.selection {
             model.showTab(offset: tab, of: id)
+        }
+        if dataDir != nil, env["BOTCHU_DEMO"] == "activity", let id = model.selection {
+            DemoActivity.install(in: model, target: model.tab(of: id))
         }
         if let text = env["BOTCHU_SEND"], let id = model.selection {
             model.send(text, to: model.tab(of: id))

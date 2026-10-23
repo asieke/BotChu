@@ -116,13 +116,20 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     public var toolState: ToolState?
     /// On a receipt, the task it reports on; nil for a task BotChu couldn't start.
     public var taskID: UUID?
+    /// A tool call's structured arguments, as compact JSON with long strings shortened
+    /// (`ToolArguments.digest`), when its CLI reports them. Nil in threads saved before.
+    public var toolArguments: String?
+    /// A shell command's exit status, when its CLI reports one.
+    public var toolExitCode: Int?
+    /// Seconds from a tool call's start to its result, when both were seen.
+    public var toolDuration: Double?
     public var attachments: [ImageAttachment]?
     public var images: [ImageAttachment] { attachments ?? [] }
 
     public init(
         id: UUID = UUID(), role: Role, text: String = "", date: Date = Date(), toolID: String? = nil,
         toolName: String? = nil, toolInput: String? = nil, toolOutput: String? = nil, toolState: ToolState? = nil,
-        taskID: UUID? = nil, images: [ImageAttachment] = []
+        taskID: UUID? = nil, images: [ImageAttachment] = [], toolArguments: String? = nil, toolExitCode: Int? = nil
     ) {
         self.id = id
         self.role = role
@@ -135,6 +142,8 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.toolState = toolState
         self.taskID = taskID
         self.attachments = images.isEmpty ? nil : images
+        self.toolArguments = toolArguments
+        self.toolExitCode = toolExitCode
     }
     /// Older versions missed AGY's subagent terminal events and saved them as failures.
     /// No result was recorded, so show an unknown completion instead of inventing success or failure.
@@ -155,8 +164,9 @@ public enum AgentEvent: Equatable, Sendable {
     case text(String)
     /// The reply being written is complete; the next text starts a new message.
     case textEnd
-    case toolStarted(id: String, name: String, input: String)
-    case toolFinished(id: String, name: String, output: String, isError: Bool)
+    /// `arguments` is the call's structured input as `ToolArguments.digest` keeps it.
+    case toolStarted(id: String, name: String, input: String, arguments: String? = nil)
+    case toolFinished(id: String, name: String, output: String, isError: Bool, exitCode: Int? = nil)
     case failed(String)
     case finished
     /// The CLI took the next message written to its stdin (Claude Code's replay of it). The
@@ -199,23 +209,30 @@ public struct ThreadAssembler {
                 messages[i].text = messages[i].text.trimmingCharacters(in: .whitespacesAndNewlines)
             }
             openTextID = nil
-        case let .toolStarted(id, name, input):
+        case let .toolStarted(id, name, input, arguments):
             apply(.textEnd, to: &messages)
             if let i = messages.lastIndex(where: { $0.toolID == id }) {
                 messages[i].toolName = name
                 if !input.isEmpty { messages[i].toolInput = input }
+                if let arguments { messages[i].toolArguments = arguments }
             } else {
-                messages.append(ChatMessage(role: .tool, toolID: id, toolName: name, toolInput: input, toolState: .running))
+                messages.append(ChatMessage(role: .tool, toolID: id, toolName: name, toolInput: input, toolState: .running,
+                                            toolArguments: arguments))
             }
-        case let .toolFinished(id, name, output, isError):
+        case let .toolFinished(id, name, output, isError, exitCode):
             apply(.textEnd, to: &messages)
             let state: ChatMessage.ToolState = isError ? .failed : .done
             if let i = messages.lastIndex(where: { $0.toolID == id }) {
                 messages[i].toolOutput = output
                 messages[i].toolState = state
+                if let exitCode { messages[i].toolExitCode = exitCode }
+                // Only a call seen starting earlier has a duration; one reported whole has none.
+                let elapsed = Date().timeIntervalSince(messages[i].date)
+                if messages[i].toolDuration == nil, elapsed > 0.05 { messages[i].toolDuration = elapsed }
                 if messages[i].toolName?.isEmpty ?? true { messages[i].toolName = name }
             } else {
-                messages.append(ChatMessage(role: .tool, toolID: id, toolName: name, toolInput: "", toolOutput: output, toolState: state))
+                messages.append(ChatMessage(role: .tool, toolID: id, toolName: name, toolInput: "", toolOutput: output, toolState: state,
+                                            toolExitCode: exitCode))
             }
         case .failed(let reason):
             apply(.textEnd, to: &messages)

@@ -1,5 +1,10 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    /// Scrolls the status sidebar's selected area, to show something in it (a sub-agent the chat opened).
+    @Entry var inspectorScroll: ScrollViewProxy?
+}
+
 enum InspectorTab: String, CaseIterable, Identifiable {
     case activity, subagents, model, session, memory
 
@@ -43,15 +48,18 @@ struct InspectorPanel<Header: View, Content: View, Actions: View>: View {
                 InspectorTabBar(selection: $selection, badgeCounts: badgeCounts)
             }
             .padding(EdgeInsets(top: 8, leading: 16, bottom: 16, trailing: 16))
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    content(selection)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) {
+                        content(selection)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(EdgeInsets(top: 4, leading: 16, bottom: 24, trailing: 16))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(EdgeInsets(top: 4, leading: 16, bottom: 24, trailing: 16))
+                // Start each area at the top without recreating the character or moving keyboard focus.
+                .id(selection)
+                .environment(\.inspectorScroll, proxy)
             }
-            // Start each area at the top without recreating the character or moving keyboard focus.
-            .id(selection)
             actions
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
