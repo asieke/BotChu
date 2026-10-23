@@ -139,6 +139,101 @@ extension RenderingTests {
         #expect(model.sidebarSelection == .botTask(botID: bot.id, taskID: fixture.tasks[0].id))
     }
 
+    // Selection and model changes only: no native clicks, so it can share the test process.
+    @Test func botWithoutOpenTasksIsASingleRowUntilItsFirstTask() async throws {
+        _ = NSApplication.shared
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, quiet = fixture.quiet
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 640),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let host = NSHostingView(rootView: SidebarView().environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        let table = try #require(sidebarTable(in: host))
+        let rowCount = table.numberOfRows, quietRow = rowCount - 1
+        func quietButtons() throws -> [NSButton] {
+            try sidebarButtons(in: #require(table.view(atColumn: 0, row: quietRow, makeIfNecessary: false)))
+        }
+        // No arrow, and opening its Home, as a click on the row does, reveals nothing beneath it.
+        #expect(try quietButtons().isEmpty)
+        table.selectRowIndexes(IndexSet(integer: quietRow), byExtendingSelection: false)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.sidebarSelection == .botHome(quiet.id))
+        #expect(table.numberOfRows == rowCount)
+        // New Task stays one command away (⌘T and the row's menu both ask for it).
+        model.newTask(for: quiet.id)
+        #expect(model.taskSheet?.botID == quiet.id)
+        model.taskSheet = nil
+        // Its first task brings the arrow, with the task revealed and New task beneath it.
+        let first = BotTask(repo: "fixture/quiet", checkout: fixture.root.path)
+        model.tasks[quiet.id, default: []].append(first)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(table.numberOfRows == rowCount + 2)
+        #expect(try quietButtons().count == 1)
+        // Closing its last task takes the arrow and the nested rows away again.
+        model.closeTask(.task(first.id, of: quiet.id))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(model.openTasks(of: quiet.id).isEmpty)
+        #expect(table.numberOfRows == rowCount)
+        #expect(try quietButtons().isEmpty)
+    }
+
+    @Test func darkSidebarTakesTheStatusShadeWithAnEdgeAndFollowsAppearance() async throws {
+        _ = NSApplication.shared
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 640),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        // The status sidebar's shade as this window draws it: the display's color profile shifts
+        // the values, so the sidebar is compared with this swatch rather than with numbers.
+        window.appearance = NSAppearance(named: .darkAqua)
+        let swatch = NSHostingView(rootView: Palette.sidebar)
+        window.contentView = swatch
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(150))
+        let shade = try sidebarPixel(in: swatch, x: 10, fromTop: 10)
+        let host = NSHostingView(rootView: SidebarView().environment(fixture.model).defaultAppStorage(fixture.defaults))
+        window.contentView = host
+        // Dark, light, then dark again in one window: each change shows without a relaunch.
+        for dark in [true, false, true] {
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            try await Task.sleep(for: .milliseconds(250))
+            window.layoutIfNeeded()
+            // The bottom bar's empty middle shows the sidebar's background; its last point, the edge.
+            let fromTop = host.bounds.height - 20
+            let fill = try sidebarPixel(in: host, x: host.bounds.width / 2, fromTop: fromTop)
+            let edge = try sidebarPixel(in: host, x: host.bounds.width - 0.5, fromTop: fromTop)
+            if dark {
+                #expect(sameColor(fill, shade))
+                #expect(edge.alphaComponent > 0.99 && edge.brightnessComponent > fill.brightnessComponent + 0.04)
+            } else {
+                // The standard sidebar: no shade of BotChu's own, and no edge line.
+                #expect(fill.alphaComponent < 0.01 || fill.brightnessComponent > 0.5)
+                #expect(sameColor(edge, fill))
+            }
+        }
+    }
+
+    /// One point of the view's own drawing, in sRGB, measured from its top-left corner.
+    private func sidebarPixel(in view: NSView, x: CGFloat, fromTop y: CGFloat) throws -> NSColor {
+        let rep = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        let scale = CGFloat(rep.pixelsWide) / view.bounds.width
+        let color = try #require(rep.colorAt(x: Int(x * scale), y: Int(y * scale)))
+        return try #require(color.usingColorSpace(.sRGB))
+    }
+
+    private func sameColor(_ a: NSColor, _ b: NSColor) -> Bool {
+        [a.redComponent - b.redComponent, a.greenComponent - b.greenComponent,
+         a.blueComponent - b.blueComponent, a.alphaComponent - b.alphaComponent].allSatisfy { abs($0) < 0.02 }
+    }
+
     private func sidebarButtons(in view: NSView) -> [NSButton] {
         ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(sidebarButtons)
     }
@@ -154,12 +249,15 @@ extension RenderingTests {
     let domain = "BotChu.SidebarTests.\(UUID().uuidString)"
     let defaults: UserDefaults
     let bot: Bot
+    /// A second bot, listed after the first, without any tasks.
+    let quiet: Bot
     let tasks: [BotTask]
     let model: AppModel
 
     init() throws {
         defaults = try #require(UserDefaults(suiteName: domain))
         bot = Bot(name: "10x Engineer", emoji: "🦊", workspace: root.appendingPathComponent("bot").path)
+        quiet = Bot(name: "Scout", emoji: "🔭", workspace: root.appendingPathComponent("quiet").path)
         let checkout = root.path
         tasks = (41...43).map { number in
             BotTask(title: number == 41 ? "ScreenTimeDaddy repository improvements" : "Task \(number)",
@@ -170,8 +268,10 @@ extension RenderingTests {
         let home = BotHome(workspace: bot.workspace)
         try home.save(bot)
         for task in tasks { try home.save(task) }
+        try BotHome(workspace: quiet.workspace).save(quiet)
         let store = Store(root: root.appendingPathComponent("index"))
-        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace),
+                             Store.Entry(id: quiet.id, workspace: quiet.workspace)])
         model = AppModel(store: store, settings: AppSettings(defaults: defaults),
                          usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
     }

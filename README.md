@@ -11,7 +11,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
 - Does:
   - **Workspace:** the left sidebar has **Projects**, **Agents**, and **Providers**, followed by
     the bots’ conversations. Opening a gallery keeps the selected conversation and unsent draft;
-    turns that finish while a gallery is shown still get an unread badge.
+    turns that finish while a gallery is shown still get an unread badge. In dark mode the sidebar
+    takes the status sidebar's darker shade, with a hairline along its edge, so it stands apart from
+    the chat; light mode keeps the standard sidebar.
   - **Projects:** one project per non-archived GitHub repository returned by `gh` for your account
     and organizations, in a sortable table modeled on GitChu's (or a gallery of cards). Columns show
     where it deploys (local machines by their BotChu name, Vercel, registry), the owner, open issues
@@ -129,10 +131,12 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     taken, so tasks never share a worktree. The main checkout stays on its branch, and BotChu writes
     nothing into the repository: a task's first message opens with the bot's identity, instructions
     and memory (which stays in the bot's folder), where the task is and what it is, as the workspace
-    standard hands work to an agent. Tasks nest below an expandable bot row in the left sidebar
+    standard hands work to an agent. Open tasks nest below their bot's row in the left sidebar
     (⌃Tab moves between Home and its open tasks). Each row shows activity, elapsed time while running, failure or unread state;
-    the bot row counts running tasks. The disclosure arrow expands without changing the conversation,
-    the bot row opens Home, and **+ New task** starts another task. Task context menus keep workspace,
+    the bot row counts running tasks. Only a bot with open tasks has a disclosure arrow, which expands
+    without changing the conversation; a bot without any is a single row, whose first task comes from
+    **New Task** (⌘T or the row's menu). The bot row opens Home, and **+ New task** after its tasks
+    starts another. Task context menus keep workspace,
     browser, new-session and close actions. Closing a task keeps its record, conversation and worktree;
     Home's status lists closed tasks to open again. A worktree goes once its pull request merges, with the repository's
     `scripts/worktree.sh --tidy`; if it is gone, the task's next message makes it again.
@@ -437,8 +441,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   here).
   `BOTCHU_PET=<pet folder>` gives the first bot that pet (`video.json`, `stills/`, `clips/`), and
   `BOTCHU_DRAW_PET="<appearance>"` makes it one (a real Codex run and real OpenRouter clips, which
-  cost credit). The window's picture leaves out the sidebar's rows and video layers, so the rows
-  are drawn on their own into `sidebar.png`, each pet's current frame is drawn into its circle, and
+  cost credit). The window's picture leaves out the sidebar's rows and background, and video layers,
+  so the rows are drawn on their own, on the sidebar's background, into `sidebar.png`, each pet's
+  current frame is drawn into its circle, and
   `pets.txt` lists each pet player's clip, state and time.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
