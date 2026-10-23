@@ -312,6 +312,11 @@ final class AppModel {
         documentEditor = DocumentEditorRequest(bot: bot, document: document)
     }
 
+    /// Opens a file every bot shares, in the bots folder, as Settings does.
+    func editSharedDocument(_ document: SharedDocument) {
+        documentEditor = DocumentEditorRequest(shared: document, botsRoot: settings.botsRoot)
+    }
+
     /// Why a bot can't use `path` as its workspace, or nil when it can.
     func workspaceProblem(_ path: String, for id: UUID) -> String? {
         if let bot = bot(id), isBusy(id),
@@ -452,8 +457,8 @@ final class AppModel {
     }
 
     /// Records a task, opens its tab (when `show`), says so in its bot's Home, then makes its
-    /// worktree and sends its first message.
-    func startTask(_ task: BotTask, for botID: UUID, show: Bool) {
+    /// worktree and sends its first message, with `images` (already in the bot's folder).
+    func startTask(_ task: BotTask, for botID: UUID, show: Bool, images: [ImageAttachment] = []) {
         guard bot(botID) != nil else { return }
         let target = ChatTarget.task(task.id, of: botID)
         tasks[botID, default: []].append(task)
@@ -461,7 +466,7 @@ final class AppModel {
         saveTask(task, of: botID)
         postReceipt(TaskReceipt.started(task), task: task.id, for: botID)
         if show { self.show(target) }
-        send(task.opening, to: target)
+        send(task.opening, to: target, images: images)
     }
 
     /// Closes a task's tab. Its record, conversation and worktree stay, and it can be opened again;

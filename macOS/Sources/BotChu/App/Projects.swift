@@ -167,6 +167,6 @@ extension AppModel {
         guard !targets.isEmpty else { return nil }
         let known = [settings.thisMacName] + settings.hosts.map(\.machine)
         guard !targets.contains(where: { target in known.contains { $0.caseInsensitiveCompare(target.machine) == .orderedSame } }) else { return nil }
-        return "This project deploys on \(targets.map(\.machine).joined(separator: ", ")), which isn’t connected in Settings ▸ Hosts. Connect it there, or choose a workspace override."
+        return "This project deploys on \(targets.map(\.machine).joined(separator: ", ")), which isn’t connected in Settings ▸ Hosts. Connect it there, or work on it on This Mac."
     }
 }

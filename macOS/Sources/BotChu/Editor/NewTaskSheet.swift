@@ -1,9 +1,10 @@
 import SwiftUI
 import BotChuCore
 
-/// Starts a task for a bot: one of the owner's GitHub repositories, the computer and folder it is
-/// worked on (where it lives, by default), an open issue or pull request there (or something new),
-/// what to do and the account it runs on. Branches are managed when the task starts.
+/// Starts a task for a bot: one of the owner's GitHub repositories, and what to do, in words and
+/// images. It works where the repository lives (`AppModel.location(of:)`), on the bot's account,
+/// and branches are managed when it starts. Opened for an issue or pull request (from Projects), it
+/// works on that, and the words add to it.
 struct NewTaskSheet: View {
     /// What a task on a pull request does with it.
     enum Purpose: Hashable {
@@ -21,31 +22,38 @@ struct NewTaskSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let botID: UUID
-    var initialRepo: String? = nil
-    /// An open issue or pull request of `initialRepo` to choose once it is read, and what to do with it.
-    var initialWork: BotTask.Work? = nil
-    var initialPurpose = Purpose.work
-    /// What to tell the bot, written already: a task over many issues or pull requests.
-    var initialBrief = ""
+    let initialRepo: String?
     /// The repository a task started in last time, chosen again first.
     @AppStorage("newTaskRepo") private var lastRepo = ""
-    @State private var showsLocation = false
-    @State private var overridesPlacement = false
-    @State private var placementProblem: String?
     @State private var query = ""
     @State private var repo: String?
-    @State private var hostID: UUID?
-    @State private var folder = ""
-    /// Where the repository is worked on when the owner hasn't chosen.
-    @State private var usual: RepoLocation?
-    @State private var openWork: [GitHubLookup.Found] = []
-    @State private var loading = false
-    @State private var lookupError: String?
-    /// The issue or pull request chosen (`issue-48`, `pr-12`), or "" for something new.
-    @State private var workKey = ""
-    @State private var purpose = Purpose.work
+    /// Where the repository is worked on, once read.
+    @State private var location: RepoLocation?
+    /// Why it isn't worked on where it deploys: that computer isn't in Settings ▸ Hosts.
+    @State private var placementProblem: String?
+    /// The owner chose to work on this Mac all the same, which is remembered for the repository.
+    @State private var worksHere = false
+    /// The issue or pull request the task works on, if any.
+    @State private var work: BotTask.Work?
+    @State private var purpose: Purpose
     @State private var brief = ""
-    @State private var accountID = ""
+    @State private var editing = true
+    @State private var images = DraftImages()
+
+    /// - Parameters:
+    ///   - initialWork: an issue or pull request of `initialRepo` to work on, and `initialPurpose`,
+    ///     what to do with a pull request.
+    ///   - initialBrief: what to tell the bot, written already: a task over many issues or pull requests.
+    init(botID: UUID, initialRepo: String? = nil, initialWork: BotTask.Work? = nil, initialPurpose: Purpose = .work,
+         initialBrief: String = "") {
+        self.botID = botID
+        self.initialRepo = initialRepo
+        _work = State(initialValue: initialRepo == nil ? nil : initialWork)
+        _purpose = State(initialValue: initialWork?.isPullRequest == true ? initialPurpose : .work)
+        _brief = State(initialValue: initialBrief)
+    }
+
+    private var botName: String { model.bot(botID)?.name ?? "the bot" }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,112 +69,17 @@ struct NewTaskSheet: View {
                 } header: {
                     Text("Project")
                 } footer: {
-                    Group {
-                        if let error = model.repositoriesError, model.repositories == nil {
-                            Text(error).foregroundStyle(.red)
-                        } else {
-                            Text("Your GitHub repositories, and your organizations', as gh lists them.")
-                        }
-                    }
-                    .font(.caption).foregroundStyle(.secondary)
+                    placeFooter
                 }
-                if repo != nil {
-                    Section {
-                        LabeledContent("Works on", value: model.machineName(hostID))
-                        Text(folder).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                        if let placementProblem, !overridesPlacement {
-                            Text(placementProblem).font(.caption).foregroundStyle(.orange)
-                            Button("Use selected workspace instead") { overridesPlacement = true; showsLocation = true }
-                        }
-                        DisclosureGroup("Workspace options", isExpanded: $showsLocation) {
-                        Picker("Computer", selection: Binding(get: { hostID }, set: { nextHost in
-                            hostID = nextHost
-                            guard let selectedRepo = repo else { return }
-                            Task {
-                                let path = await model.folder(of: selectedRepo, on: nextHost)
-                                guard repo == selectedRepo, hostID == nextHost else { return }
-                                folder = displayed(path, on: nextHost)
-                            }
-                        })) {
-                            Label("This Mac", systemImage: "laptopcomputer").tag(UUID?.none)
-                            ForEach(model.settings.hosts) { host in
-                                Label(host.nickname, systemImage: "network").tag(UUID?.some(host.id))
-                            }
-                        }
-                        LabeledContent("Folder") {
-                            TextField("Folder", text: $folder)
-                                .labelsHidden()
-                                .font(.system(.body, design: .monospaced))
-                        }
-                        }
-                    } header: {
-                        Text("Project workspace")
-                    } footer: {
-                        locationFooter
-                    }
-                    Section {
-                        Picker("Work on", selection: $workKey) {
-                            Text("Something new").tag("")
-                            let issues = openWork.filter { !$0.work.isPullRequest }
-                            let pulls = openWork.filter(\.work.isPullRequest)
-                            if !issues.isEmpty {
-                                Section("Issues") {
-                                    ForEach(issues, id: \.work.number) { found in
-                                        Text("#\(found.work.number) \(found.work.title)").tag("issue-\(found.work.number)")
-                                    }
-                                }
-                            }
-                            if !pulls.isEmpty {
-                                Section("Pull requests") {
-                                    ForEach(pulls, id: \.work.number) { found in
-                                        Text("#\(found.work.number) \(found.work.title)\(found.fromFork ? " (from a fork)" : "")")
-                                            .tag("pr-\(found.work.number)")
-                                    }
-                                }
-                            }
-                        }
-                        .disabled(loading)
-                        if chosen?.work.isPullRequest == true {
-                            Picker("Do", selection: $purpose) {
-                                Text("Continue it").tag(Purpose.work)
-                                Text("Review it").tag(Purpose.review)
-                                Text("Review and comment").tag(Purpose.comment)
-                            }
-                            .pickerStyle(.segmented)
-                        }
-                    } footer: {
-                        workFooter
-                    }
-                    Section {
-                        TextEditor(text: $brief)
-                            .font(.body)
-                            .frame(minHeight: 90)
-                            .scrollContentBackground(.hidden)
-                            .overlay(alignment: .topLeading) {
-                                if brief.isEmpty {
-                                    Text(chosen == nil ? "What should \(model.bot(botID)?.name ?? "the bot") do?" : "Anything to add? (optional)")
-                                        .foregroundStyle(.tertiary)
-                                        .padding(.leading, 5)
-                                        .allowsHitTesting(false)
-                                }
-                            }
-                    } header: {
-                        Text(chosen == nil ? "Task" : "Notes")
-                    } footer: {
-                        Text("The task's first message. It starts with \(model.bot(botID)?.name ?? "the bot")'s instructions and memory, in a session of its own.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Section {
-                        Picker("Account", selection: $accountID) {
-                            ForEach(model.settings.accounts) { account in
-                                ProviderMenuLabel(account).tag(account.id)
-                            }
-                        }
-                    } header: {
-                        Text("Runs on")
-                    } footer: {
-                        taskFooter
-                    }
+                Section {
+                    if let work { workRow(work) }
+                    DraftEditor(text: $brief, focused: $editing, images: images,
+                                placeholder: work == nil ? "What should \(botName) do?" : "Anything to add? (optional)",
+                                maxHeight: 200, identifier: "task-brief")
+                } header: {
+                    Text("Task")
+                } footer: {
+                    taskFooter
                 }
             }
             .formStyle(.grouped)
@@ -177,22 +90,18 @@ struct NewTaskSheet: View {
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Start Task") { start() }
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .buttonStyle(.borderedProminent)
                     .disabled(problem != nil)
-                    .help(problem ?? "Prepare the task and send its first message")
+                    .help(problem ?? "Prepare the task and send its first message (⌘↩)")
             }
             .padding(16)
         }
         .frame(width: 560, height: 720)
         .task {
-            accountID = model.bot(botID)?.accountID ?? Accounts.defaultID
-            if brief.isEmpty { brief = initialBrief }
             await model.loadRepositories()
             let wanted = initialRepo ?? (DevHooks.dataDir == nil ? lastRepo : DevHooks.env["BOTCHU_TASK_REPO"] ?? "")
             if repo == nil, let last = model.repositories?.first(where: { $0.nameWithOwner == wanted }) { choose(last.nameWithOwner) }
-        }
-        .onChange(of: workKey) {
-            if chosen?.work.isPullRequest != true { purpose = .work }
         }
     }
 
@@ -261,97 +170,90 @@ struct NewTaskSheet: View {
     private func choose(_ nameWithOwner: String) {
         guard nameWithOwner != repo else { return }
         repo = nameWithOwner
-        overridesPlacement = false
+        // The issue or pull request the sheet was opened for is its repository's.
+        if nameWithOwner != initialRepo {
+            work = nil
+            purpose = .work
+        }
+        location = nil
         placementProblem = nil
-        openWork = []
-        workKey = ""
-        purpose = .work
-        lookupError = nil
-        loading = true
+        worksHere = false
         Task {
-            let location = await model.location(of: nameWithOwner)
-            usual = await model.defaultLocation(of: nameWithOwner)
+            let found = await model.location(of: nameWithOwner)
             guard repo == nameWithOwner else { return }
+            location = found
             placementProblem = model.projectPlacementProblem(nameWithOwner)
-            hostID = location.hostID
-            folder = displayed(location.path, on: location.hostID)
-            let result = await GitHubLookup.openWork(repo: nameWithOwner)
-            guard repo == nameWithOwner else { return }
-            switch result {
-            case .success(var found):
-                // The issue or pull request this sheet was opened for may be beyond the list's first
-                // hundred: read it on its own, so it is still the one chosen.
-                if nameWithOwner == initialRepo, let wanted = initialWork,
-                   !found.contains(where: { $0.work.number == wanted.number && $0.work.isPullRequest == wanted.isPullRequest }) {
-                    switch await GitHubLookup.work(number: wanted.number, pullRequest: wanted.isPullRequest, repo: nameWithOwner) {
-                    case .success(let item) where item.state == "OPEN": found.append(item)
-                    case .success: lookupError = "\(wanted.isPullRequest ? "Pull request" : "Issue") #\(wanted.number) isn't open any more."
-                    case .failure(let failure): lookupError = "\(failure.step). Is gh installed and signed in?"
-                    }
-                    guard repo == nameWithOwner else { return }
-                }
-                openWork = found
-                if nameWithOwner == initialRepo, let wanted = initialWork,
-                   found.contains(where: { $0.work.number == wanted.number && $0.work.isPullRequest == wanted.isPullRequest }) {
-                    workKey = (wanted.isPullRequest ? "pr-" : "issue-") + "\(wanted.number)"
-                    purpose = wanted.isPullRequest ? initialPurpose : .work
-                }
-            case .failure(let failure): lookupError = "\(failure.step). Is gh installed and signed in?"
-            }
-            loading = false
         }
     }
 
-    /// A folder as the field shows it: with `~` for this Mac's home.
-    private func displayed(_ path: String, on hostID: UUID?) -> String {
-        hostID == nil ? (path as NSString).abbreviatingWithTildeInPath : path
-    }
-
-    @ViewBuilder private var locationFooter: some View {
+    @ViewBuilder private var placeFooter: some View {
         Group {
-            if let folderProblem {
-                Text(folderProblem).foregroundStyle(.red)
-            } else if hostID != nil {
-                Text("BotChu connects over SSH, clones the repository there if it isn't yet, and runs the task there. The task keeps \(model.bot(botID)?.name ?? "the bot")'s context from this Mac.")
+            if let error = model.repositoriesError, model.repositories == nil {
+                Text(error).foregroundStyle(.red)
+            } else if let placementProblem, !worksHere {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(placementProblem).foregroundStyle(.orange)
+                    Button("Work on This Mac") { worksHere = true }
+                        .help("Work on it in \(location.map(displayed) ?? "the repositories folder") on this Mac, from now on")
+                }
+            } else if let location {
+                Text("Works on \(model.machineName(location.hostID))\(location.hostID == nil ? "" : " over SSH"), in \(displayed(location)). BotChu clones it there if it isn't yet.")
+                    .textSelection(.enabled)
+            } else if repo != nil {
+                Text("Finding where it’s worked on…")
             } else {
-                Text("BotChu clones the repository here if it isn't yet.")
+                Text("Your GitHub repositories, and your organizations', as gh lists them.")
             }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+    }
+
+    /// A folder as the sheet shows it: with `~` for this Mac's home.
+    private func displayed(_ location: RepoLocation) -> String {
+        location.hostID == nil ? (location.path as NSString).abbreviatingWithTildeInPath : location.path
     }
 
     // MARK: Work
 
-    /// The issue or pull request chosen.
-    private var chosen: GitHubLookup.Found? {
-        openWork.first { ($0.work.isPullRequest ? "pr-" : "issue-") + "\($0.work.number)" == workKey }
+    /// The issue or pull request, as what the task does with it.
+    private func workRow(_ work: BotTask.Work) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: work.isPullRequest ? "arrow.triangle.pull" : "smallcircle.filled.circle")
+                .foregroundStyle(.secondary)
+            Text(verbatim: workSummary(work))
+                .lineLimit(2)
+            Spacer(minLength: 4)
+            Button {
+                self.work = nil
+                purpose = .work
+            } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Start something new instead")
+            .accessibilityLabel("Remove \(work.reference)")
+        }
     }
 
-    @ViewBuilder private var workFooter: some View {
-        Group {
-            if loading {
-                Text("Reading open issues and pull requests…")
-            } else if let lookupError {
-                Text(lookupError).foregroundStyle(.red)
-            } else if purpose == .comment {
-                Text("The bot reviews the changes and posts one review on GitHub.")
-            } else if purpose == .review {
-                Text("The bot reviews the changes and gives its review here; it posts nothing.")
-            } else {
-                Text("Or describe something new below.")
-            }
+    private func workSummary(_ work: BotTask.Work) -> String {
+        switch purpose {
+        case .review: "Review \(work.reference)"
+        case .comment: "Review and comment on \(work.reference)"
+        case .work: (work.isPullRequest ? "Continue " : "Work on ") + work.reference
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
     }
 
     @ViewBuilder private var taskFooter: some View {
         Group {
             if let conflict {
                 Text(conflict).foregroundStyle(.red)
+            } else if purpose == .comment {
+                Text("\(botName) reviews the changes and posts one review on GitHub.")
+            } else if purpose == .review {
+                Text("\(botName) reviews the changes and gives its review here; it posts nothing.")
             } else {
-                Text("Each task has its own workspace and conversation.")
+                Text("The task's first message, after \(botName)'s instructions and memory. It has a workspace and conversation of its own, on \(model.bot(botID)?.account.name ?? "the bot's account").")
             }
         }
         .font(.caption)
@@ -362,43 +264,39 @@ struct NewTaskSheet: View {
 
     /// Why the task can't start yet, or nil when it can.
     private var problem: String? {
-        guard repo != nil else { return "Choose a project" }
-        if let placementProblem, !overridesPlacement { return placementProblem }
-        if loading { return "Reading the project workspace and open work…" }
-        if chosen == nil, brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Say what to do, or choose an issue or pull request"
-        }
-        if chosen?.fromFork == true, purpose == .work { return "This pull request comes from a fork. Choose Review it or Review and comment." }
-        return folderProblem ?? conflict
-    }
-
-    private var folderProblem: String? {
-        let folder = folder.trimmingCharacters(in: .whitespaces)
-        if hostID == nil, !folder.hasPrefix("/"), !folder.hasPrefix("~") { return "The folder on this Mac starts with / or ~/." }
-        return hostID == nil ? nil : SSHHost.folderProblem(folder)
+        guard let repo else { return "Choose a project" }
+        if let placementProblem, !worksHere { return placementProblem }
+        guard let location else { return "Finding where \(repo) is worked on…" }
+        if work == nil, brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Say what \(botName) should do" }
+        if location.hostID != nil, let folder = SSHHost.folderProblem(location.path) { return folder }
+        return conflict
     }
 
     /// Prevent two tasks working on the same issue or pull request. Fresh tasks get unique
     /// branches automatically during preparation, even when their briefs happen to match.
     private var conflict: String? {
-        guard let repo, let other = model.taskAlreadyWorking(on: repo, hostID: hostID, work: chosen?.work,
+        guard let repo, let other = model.taskAlreadyWorking(on: repo, hostID: location?.hostID, work: work,
                                                              review: purpose.review, branch: "") else { return nil }
         return "“\(other.title)” already works on this. Send it a message there."
     }
 
     private func start() {
-        guard problem == nil, let bot = model.bot(botID), let repo else { return }
-        var path = folder.trimmingCharacters(in: .whitespaces)
-        if hostID == nil { path = (path as NSString).expandingTildeInPath }
-        let location = RepoLocation(hostID: hostID, path: path)
-        // A computer or folder other than the usual one is remembered for this repository.
-        model.settings.repoLocations[repo] = !overridesPlacement && location == usual ? nil : location
-        var task = BotTask(for: bot, repo: repo, checkout: location.path, work: chosen?.work,
+        guard problem == nil, let bot = model.bot(botID), let repo, var location else { return }
+        if location.hostID == nil { location.path = (location.path as NSString).expandingTildeInPath }
+        let attachments: [ImageAttachment]
+        do {
+            let home = BotHome(workspace: bot.workspace)
+            attachments = try images.images.map { try home.saveImage($0.png, name: $0.name) }
+        } catch {
+            images.problem = "Couldn't keep the images in \(bot.name)'s folder: \(error.localizedDescription)"
+            return
+        }
+        if worksHere { model.settings.repoLocations[repo] = location }
+        let task = BotTask(for: bot, repo: repo, checkout: location.path, work: work,
                            brief: brief.trimmingCharacters(in: .whitespacesAndNewlines),
-                           host: model.settings.host(hostID), review: purpose.review)
-        if accountID != bot.accountID { task.selectAccount(model.settings.account(accountID)) }
+                           host: model.settings.host(location.hostID), review: purpose.review)
         lastRepo = repo
-        model.startTask(task, for: botID, show: true)
+        model.startTask(task, for: botID, show: true, images: attachments)
         dismiss()
     }
 }

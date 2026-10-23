@@ -80,7 +80,7 @@ enum DevHooks {
     static var issueFiler: IssueFiler {
         guard dataDir != nil else { return IssueFiler() }
         if let gh = env["BOTCHU_REPORT_GH"], !gh.isEmpty { return IssueFiler(gh: gh) }
-        return IssueFiler { _, _ in
+        return IssueFiler { _, _, _ in
             .failed("This copy of BotChu runs on throwaway data and files no issues; macOS/ui-review.sh gives it a stand-in gh.")
         }
     }

@@ -71,6 +71,79 @@ extension RenderingTests {
         #expect(model.documentEditor == nil)
     }
 
+    /// TEAM.md sits beside the bot's own files in the Memory tab, and edits the bots folder's
+    /// playbook that every bot's sessions read, not a file in the bot's folder.
+    @Test func memoryTabEditsTheTeamPlaybookEveryBotShares() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-team-\(UUID().uuidString)")
+        let domain = "local.BotChu.tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: domain)
+        }
+        defaults.set(root.appendingPathComponent("bots").path, forKey: "botsRoot")
+        let bot = Bot(name: "Scout", workspace: root.appendingPathComponent("bots/scout").path)
+        let store = Store(root: root.appendingPathComponent("Support"))
+        try BotHome(workspace: bot.workspace).save(bot)
+        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        let model = AppModel(store: store, settings: AppSettings(defaults: defaults),
+                             usage: UsageCache { _, _ in throw UsageFailure("No usage in tests") })
+
+        // The fourth card, at the bottom right of the tab's two columns, at the status sidebar's widest.
+        let section = NSHostingView(rootView: MemorySection(botID: bot.id).environment(model)
+            .padding().frame(width: 380).defaultAppStorage(defaults))
+        let cards = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 200),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+        cards.isReleasedWhenClosed = false
+        cards.contentView = section
+        defer { cards.contentView = nil; cards.close() }
+        cards.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(100))
+        cards.setContentSize(section.fittingSize)
+        cards.layoutIfNeeded()
+        let cardWidth = (section.bounds.width - 16 * 2 - 8) / 2
+        let fromBottom = 16.0 + 58 / 2
+        let point = section.convert(NSPoint(x: section.bounds.width - 16 - cardWidth / 2,
+                                            y: section.isFlipped ? section.bounds.height - fromBottom : fromBottom), to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                                          windowNumber: cards.windowNumber, context: nil, eventNumber: 1,
+                                          clickCount: 1, pressure: 1)!
+            cards.sendEvent(event)
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        let request = try #require(model.documentEditor)
+        #expect(request.name == SharedDocument.team.rawValue)
+        #expect(request.url.path == model.settings.teamPath)
+        model.documentEditor = nil
+
+        // In the window, it opens empty, since BotChu never creates it, and saves beside the shared memory.
+        let host = NSHostingView(rootView: ContentView().environment(model).defaultAppStorage(defaults))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 800),
+                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(200))
+        model.editSharedDocument(.team)
+        try await Task.sleep(for: .milliseconds(350))
+        let sheet = try #require(window.attachedSheet)
+        let size = try #require(sheet.contentView?.bounds.size)
+        #expect(abs(size.width - host.bounds.width * 0.5) < 3)
+        let editor = try #require(sheet.firstResponder as? NSTextView)
+        #expect(editor.string.isEmpty)
+        let playbook = "# Team\n\n1. Roadmap files the issue.\n2. Scout builds it, then calls QA Duck.\n"
+        editor.insertText(playbook, replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await Task.sleep(for: .milliseconds(50))
+        sendDocumentKey("s", code: 1, modifiers: .command, to: sheet)
+        try await Task.sleep(for: .milliseconds(350))
+        #expect(model.documentEditor == nil)
+        #expect(try String(contentsOfFile: model.settings.teamPath, encoding: .utf8) == playbook)
+        #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: bot.workspace).appendingPathComponent("TEAM.md").path))
+    }
+
     @Test func inspectorSectionsCollapseFromTheirHeadingAndRememberTheirState() async throws {
         _ = NSApplication.shared
         let domain = "local.BotChu.sections.\(UUID().uuidString)"

@@ -2,9 +2,10 @@ import Foundation
 import Testing
 @testable import BotChuCore
 
-/// A stand-in for `gh` that keeps what it was given beside itself (its arguments, one a line, and
-/// what it read on standard input) and answers as gh does: with the new issue's address, or, when it
-/// `fails`, with what gh says when it isn't signed in. Filing is tested without reaching GitHub.
+/// A stand-in for `gh` that keeps what it was given beside itself (its arguments, one a line, what
+/// it read on standard input, the folder it ran in and a copy of each file it was to attach) and
+/// answers as gh does: with the new issue's address, or, when it `fails`, with what gh says when it
+/// isn't signed in. Filing is tested without reaching GitHub.
 private struct FakeGH {
     let folder: URL
     var path: String { folder.appendingPathComponent("gh").path }
@@ -20,6 +21,10 @@ private struct FakeGH {
             dir=$(dirname "$0")
             printf '%s\\n' "$@" > "$dir/arguments"
             cat > "$dir/body"
+            pwd > "$dir/ran-in"
+            for arg in "$@"; do
+              case "$arg" in --attach=*) file=${arg#--attach=}; file=${file%%#*}; cp "$file" "$dir/attached-$(basename "$file")" ;; esac
+            done
             \(answer)
 
             """.write(toFile: path, atomically: true, encoding: .utf8)
@@ -32,6 +37,12 @@ private struct FakeGH {
     }
 
     var body: String? { try? String(contentsOf: folder.appendingPathComponent("body"), encoding: .utf8) }
+
+    var ranIn: String? {
+        (try? String(contentsOf: folder.appendingPathComponent("ran-in"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func attached(_ name: String) -> Data? { try? Data(contentsOf: folder.appendingPathComponent("attached-" + name)) }
 }
 
 @Suite struct IssueReportTests {
@@ -60,6 +71,9 @@ private struct FakeGH {
         // The title is one word, so one that starts with "-" is never read as an option.
         #expect(IssueReport.arguments(title: "-v crashes")
                 == ["gh", "issue", "create", "--repo", "asieke/BotChu", "--title=-v crashes", "--body-file", "-"])
+        // Images are attached by a count, never their own names, from the folder gh runs in.
+        #expect(IssueReport.arguments(title: "Glitch", images: 2).suffix(2)
+                == ["--attach=./image-1.png#Image 1", "--attach=./image-2.png#Image 2"])
         #expect(IssueReport.issueURL(in: "\nhttps://github.com/asieke/BotChu/issues/53\n") == URL(string: "https://github.com/asieke/BotChu/issues/53"))
         #expect(IssueReport.issueURL(in: "http://github.com/asieke/botchu/issues/7") == URL(string: "https://github.com/asieke/BotChu/issues/7"))
         #expect(IssueReport.issueURL(in: "https://github.com/someone/else/issues/9") == nil)
@@ -79,6 +93,18 @@ private struct FakeGH {
         // Nothing shaped like a token is shown.
         #expect(IssueReport.outcome(of: Shell.Result(status: 1, output: "", errors: "bad token gho_abcdefghijklmnopqrst"))
                 == .failed("gh couldn't create the issue:\nbad token [token hidden]"))
+
+        // An image that didn't upload: gh makes the issue with the others, prints its address and fails.
+        #expect(IssueReport.outcome(of: Shell.Result(status: 1, output: "https://github.com/asieke/BotChu/issues/6\n",
+                                                     errors: "failed to upload ./image-2.png: unexpected EOF\n"), images: 2)
+                == .filed(URL(string: "https://github.com/asieke/BotChu/issues/6"), problem: "Not every image was attached:\nfailed to upload ./image-2.png: unexpected EOF"))
+        // A gh from before --attach, and an account that can't attach to the repository.
+        let usage = "unknown flag: --attach\n\nUsage:  gh issue create [flags]\n\nFlags:\n"
+            + ["assignee", "body", "body-file", "editor", "label", "milestone", "project", "title", "web"].map { "      --\($0) string   …\n" }.joined()
+        #expect(IssueReport.outcome(of: Shell.Result(status: 1, output: "", errors: usage), images: 1)
+                == .failed("This gh can't attach images: that takes gh 2.99 or later. Update gh (brew upgrade gh, if Homebrew installed it), or remove the images to file the report without them."))
+        #expect(IssueReport.outcome(of: Shell.Result(status: 1, output: "", errors: "attaching files requires write access to the repository\n"), images: 1)
+                == .failed("gh couldn't create the issue:\nattaching files requires write access to the repository\n\nRemove the images to file the report without them."))
     }
 
     @Test func filesThroughGhWithTheBodyOnStandardInput() async throws {
@@ -91,6 +117,23 @@ private struct FakeGH {
         #expect(gh.body == IssueReport.body(report: report, snapshot: snapshot))
     }
 
+    @Test func attachesImagesFromAFolderThatGoesAfterwards() async throws {
+        let gh = try FakeGH()
+        defer { try? FileManager.default.removeItem(at: gh.folder) }
+        let snapshot = IssueSnapshot(info: nil, screen: .projects, bots: 1, runningTurns: 0)
+        let images = [Data("first image".utf8), Data("second image".utf8)]
+        #expect(await IssueFiler(gh: gh.path).file("The table overflows.", images: images, snapshot: snapshot)
+                == .filed(URL(string: "https://github.com/asieke/BotChu/issues/4242")))
+        #expect(gh.arguments.suffix(2) == ["--attach=./image-1.png#Image 1", "--attach=./image-2.png#Image 2"])
+        #expect(gh.body == IssueReport.body(report: "The table overflows.", images: 2, snapshot: snapshot))
+        #expect(gh.attached("image-1.png") == images[0])
+        #expect(gh.attached("image-2.png") == images[1])
+        // gh ran in a folder of BotChu's own, which is gone.
+        let ranIn = try #require(gh.ranIn)
+        #expect(ranIn.contains("botchu-report-"))
+        #expect(!FileManager.default.fileExists(atPath: ranIn))
+    }
+
     @Test func aReportThatIsNotFiledSaysWhy() async throws {
         let gh = try FakeGH(fails: true)
         defer { try? FileManager.default.removeItem(at: gh.folder) }
@@ -100,12 +143,14 @@ private struct FakeGH {
         // Without gh at all.
         let missing = await IssueFiler(gh: gh.folder.appendingPathComponent("missing").path).file("It crashed", snapshot: snapshot)
         #expect(missing == .failed("BotChu couldn't run gh, the GitHub CLI. Install it and sign in with gh auth login in Terminal, then try again."))
-        // An empty report, or one too long for GitHub, never reaches gh.
-        let never = IssueFiler { _, _ in
+        // An empty report, one with too many images, or one too long for GitHub, never reaches gh.
+        let never = IssueFiler { _, _, _ in
             Issue.record("gh ran")
             return .filed(nil)
         }
         #expect(await never.file(" \n ", snapshot: snapshot) == .failed("Write the report first."))
+        #expect(await never.file("It crashed", images: Array(repeating: Data([1]), count: 9), snapshot: snapshot)
+                == .failed("Attach up to 8 images."))
         if case .failed(let why) = await never.file(String(repeating: "a", count: IssueReport.bodyLimit), snapshot: snapshot) {
             #expect(why.contains("too long"))
         } else {
@@ -119,6 +164,9 @@ private struct FakeGH {
         let body = IssueReport.body(report: "  Add a dark icon.\n", snapshot: snapshot)
         #expect(body.hasPrefix("Add a dark icon.\n\n### App state\n\n- Version: 0.1\n- System: macOS 27.0.1, "))
         #expect(body.hasSuffix("\n- Screen: no bot selected\n- Bots: 0, no turns running\n\n_Filed from BotChu. The app state holds categories and counts only: no conversations, instructions, memory, paths or names._\n"))
+        // Images come after the report, each as the file gh attaches, which it points at its upload.
+        #expect(IssueReport.body(report: "Add a dark icon.", images: 2, snapshot: snapshot)
+            .hasPrefix("Add a dark icon.\n\n![Image 1](./image-1.png)\n\n![Image 2](./image-2.png)\n\n### App state\n\n- Version: 0.1\n"))
     }
 }
 

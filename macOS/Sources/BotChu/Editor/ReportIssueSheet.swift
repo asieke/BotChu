@@ -1,13 +1,13 @@
 import SwiftUI
 import BotChuCore
 
-/// Report a Bug or Feature: one field for the report, filed as a public issue in BotChu's
-/// repository with gh, beneath it the title it gets and the app state that goes with it, so nothing
-/// is posted unseen.
+/// Report a Bug or Feature: one field for the report, which takes images, filed as a public issue
+/// in BotChu's repository with gh, beneath it the title it gets and the app state that goes with
+/// it, so nothing is posted unseen.
 struct ReportIssueSheet: View {
     @Environment(AppModel.self) private var model
     @Bindable var request: IssueReportRequest
-    @FocusState private var editing: Bool
+    @State private var editing = true
     @State private var showsState = true
 
     var body: some View {
@@ -19,8 +19,8 @@ struct ReportIssueSheet: View {
             }
             .padding(16)
             Divider()
-            if case .filed(let url) = request.state {
-                filed(url)
+            if case .filed(let url, let problem) = request.state {
+                filed(url, problem: problem)
             } else {
                 form
             }
@@ -31,23 +31,11 @@ struct ReportIssueSheet: View {
 
     private var form: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TextEditor(text: $request.text)
-                .font(.system(size: 13))
-                .padding(10)
-                .frame(height: 170)
-                .focused($editing)
-                .disabled(request.state == .filing)
-                .overlay(alignment: .topLeading) {
-                    if request.text.isEmpty {
-                        Text("What went wrong, or what would you like BotChu to do? The first line becomes the title.")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 15)
-                            .padding(.vertical, 10)
-                            .allowsHitTesting(false)
-                    }
-                }
-                .accessibilityLabel("Report")
+            DraftEditor(text: $request.text, focused: $editing, images: request.images,
+                        placeholder: "What went wrong, or what would you like BotChu to do? The first line becomes the title.",
+                        editable: request.state != .filing, minHeight: 170, maxHeight: 170, identifier: "report-input")
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             Divider()
             VStack(alignment: .leading, spacing: 12) {
                 LabeledContent("Title") {
@@ -82,7 +70,7 @@ struct ReportIssueSheet: View {
                     .foregroundStyle(.red)
                 }
                 HStack(spacing: 12) {
-                    Text("Anyone can read the issue on GitHub.")
+                    Text(request.images.images.isEmpty ? "Anyone can read the issue on GitHub." : "Anyone can read the issue, and see its images, on GitHub.")
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                     if request.state == .filing {
@@ -101,10 +89,9 @@ struct ReportIssueSheet: View {
             }
             .padding(16)
         }
-        .task { editing = true }
     }
 
-    private func filed(_ url: URL?) -> some View {
+    private func filed(_ url: URL?, problem: String?) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label {
                 // Verbatim: an issue number is never written "#1,234".
@@ -118,6 +105,17 @@ struct ReportIssueSheet: View {
             } else {
                 Text("gh didn't print the issue's link.").font(.callout).foregroundStyle(.secondary)
                 Link("Open BotChu's issues on GitHub", destination: IssueReport.issuesURL)
+            }
+            if let problem {
+                Label {
+                    Text(problem + "\n\nAdd what's missing to the issue on GitHub.")
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                }
+                .font(.callout)
+                .foregroundStyle(.orange)
             }
             HStack {
                 Spacer()
