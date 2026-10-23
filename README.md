@@ -368,7 +368,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
 - `macOS/` is a Swift package (Swift 6 toolchain, macOS 14+):
   - `Sources/BotChuCore/` — Foundation only, unit-tested: accounts and the command line each CLI
     runs with (`Accounts.swift`), generation choices and public OpenRouter model metadata
-    (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model (`Models.swift`), one stream parser per
+    (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model (`Models.swift`), the
+    sections the sidebar groups bots into (`BotSections.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
     (`ToolActivity.swift`, reading shell command lines with `ShellCommand.swift`), the chat's activity
@@ -390,8 +391,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     review worktrees, and what `gh` says about your repositories, issues and pull requests
     (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
     or proposing it through GitHub with retryable, metadata-only PRs (`ProjectGitHub.swift`), the Projects
-    tables' rows and the open pull requests and issues across repositories (`ProjectOverview.swift`), the sections the sidebar
-    groups bots into (`BotSections.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
+    tables' rows and the open pull requests and issues across repositories (`ProjectOverview.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
     `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (transcripts saved off the main thread
@@ -404,7 +404,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, and what a report says about the app, `IssueReports.swift`),
-    `Sidebar/` (workspace destinations, and bot conversations in their sections), `Library/` (Projects, Agents and Providers), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
+    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
     the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -416,22 +416,22 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - `Sources/botchu-smoke/` — a command-line check, not shipped in the app, that runs two real
     turns on each account named the way the app does (see **Test**).
   - `Tests/BotChuCoreTests/` — parser tests against captured output of every CLI, command lines,
-    context and store, the sidebar's sections, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
+    context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
     made in throwaway repositories; and hosts: their `ssh` command lines, deploy targets, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
     from a remote task; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
     and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
     commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
-    streamed update regroups only the tail.
+    streamed update regroups only the tail; and the sidebar's sections of bots.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
     saves, model-picker keyboard interaction and persisted choices,
-    Markdown editor sizing and Save/Cancel, collapsing status sections, inspector tab navigation and
+    Markdown editor sizing and Save/Cancel, collapsing status sections, the sidebar's sections of
+    bots (their menus, the alert that names them, collapsing and revealing), inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
-    main window's layout at its narrowest, the sidebar's sections (their menus, the alert that
-    names them, collapsing and revealing), galleries that preserve conversation state, custom
+    main window's layout at its narrowest, galleries that preserve conversation state, custom
     profile persistence, provider logos in both appearances and in account menus, the report
     sheet, filing with a stand-in, images pasted with Edit ▸ Paste into the composer, the report
     and New Task (through a stand-in for the general pasteboard, so no test touches the clipboard)
