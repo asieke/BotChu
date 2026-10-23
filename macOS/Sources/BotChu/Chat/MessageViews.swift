@@ -1,7 +1,7 @@
 import SwiftUI
 import BotChuCore
 
-struct MessageRow: View {
+struct MessageRow: View, Equatable {
     let message: ChatMessage
     let bot: Bot
     /// The CLI of the conversation's account, whose tool calls these are.
@@ -128,6 +128,8 @@ struct BotTurnRow<Content: View>: View {
     }
 }
 
+/// One tool call as it was before grouping, and as Raw density shows every call: its name and
+/// input, opening to its arguments and output.
 struct ToolCard: View {
     let message: ChatMessage
     let kind: AgentKind
@@ -160,24 +162,9 @@ struct ToolCard: View {
             .buttonStyle(.plain)
 
             if expanded {
-                VStack(alignment: .leading, spacing: 8) {
-                    if message.displayedToolState(for: kind) == .interrupted {
-                        Text("No completion was recorded for this tool call.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let input = message.toolInput, !input.isEmpty {
-                        detail(input)
-                    }
-                    if let output = message.toolOutput, !output.isEmpty {
-                        Divider()
-                        ScrollView {
-                            detail(String(output.prefix(20_000)))
-                        }
-                        .frame(maxHeight: 260)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 9)
+                ToolDetail(message: message, kind: kind)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 9)
             }
         }
         .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Color.primary.opacity(0.04)))
@@ -193,13 +180,6 @@ struct ToolCard: View {
             Image(systemName: "questionmark.circle").foregroundStyle(.secondary).frame(width: 14)
                 .help("No completion was recorded")
         }
-    }
-
-    private func detail(_ text: String) -> some View {
-        Text(text)
-            .font(.system(.caption, design: .monospaced))
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func firstLine(_ text: String) -> String {

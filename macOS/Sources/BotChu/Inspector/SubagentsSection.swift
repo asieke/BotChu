@@ -30,6 +30,7 @@ struct SubagentsInspectorContent: View {
 
 private struct SubagentTree: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.inspectorScroll) private var scroll
     let target: ChatTarget
     @State private var expanded: Set<UUID> = []
     @State private var seen: Set<UUID> = []
@@ -51,6 +52,18 @@ private struct SubagentTree: View {
         .onChange(of: runs.map(\.id), initial: true) { _, _ in
             for run in runs where seen.insert(run.id).inserted && run.phase.isActive { expanded.insert(run.id) }
         }
+        // The chat's Open on a sub-agent card: expand that run (and those above it) and scroll to it.
+        .onChange(of: SubagentFocus.shared.ticket, initial: true) { _, _ in
+            guard let id = SubagentFocus.shared.take(from: runs) else { return }
+            // Three levels at most; the bound also stops a malformed saved tree from looping.
+            var next: UUID? = id
+            for _ in 0..<SubagentLimits.maxDepth + 1 {
+                guard let current = next, let run = runs.first(where: { $0.id == current }) else { break }
+                expanded.insert(run.id)
+                next = run.parentSubagentID
+            }
+            DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.2)) { scroll?.scrollTo(id, anchor: .top) } }
+        }
     }
 
     // Type erasure breaks the recursive View type. An ancestry guard also keeps a malformed
@@ -62,6 +75,7 @@ private struct SubagentTree: View {
             SubagentCard(run: run, expanded: Binding(get: { expanded.contains(run.id) }, set: {
                 if $0 { expanded.insert(run.id) } else { expanded.remove(run.id) }
             }))
+            .id(run.id)
             ForEach(runs.filter { $0.parentSubagentID == run.id }) { child in
                 node(child, ancestry: path)
                     .padding(.leading, 14)
