@@ -37,12 +37,14 @@ never occupy a child queue that could deadlock their descendants.
 
 Each request is atomically published, persisted before acknowledgment, and deduplicated by UUID
 within its invocation. Each child's transcript and final record are saved before returning its
-handoff. Result writes are atomic and retry transient delivery failures. An unrecoverable delivery
+handoff. While a child streams, its transcript is checkpointed off the main thread at most once a
+second, and checkpoints still waiting are written when BotChu quits. Result writes are atomic and retry transient delivery failures. An unrecoverable delivery
 closes the mailbox so the helper fails; startup republishes persisted results. Stop interrupts
 running processes and waits for their exit before completing the child. A parent handoff waits
 for its descendants to finish stopping. Active records found on restart become stopped.
 
-The helper checks the coordinator heartbeat and fails after thirty seconds without one. Its
+BotChu refreshes the heartbeat every two seconds; the helper checks it and fails after thirty
+seconds without one. Its
 overall wait limit is two hours. It does not reconnect a crashed CLI session or automatically
 repeat work after an app restart.
 
@@ -59,11 +61,13 @@ The standalone helper is installed in `~/.botchu/bin`. Each turn also receives a
 its mailbox's `bin` directory, prepended to PATH after login-shell initialization. Local mailboxes
 are under `~/.botchu/ipc/subagents/<invocation id>`. A remote mailbox is under
 `~/.botchu/ipc/subagents/<app namespace>/<invocation id>` on the host. Each contains `roster.json`,
-`heartbeat.json`, `requests/<id>.json`, `status/<id>.status.json` and `results/<id>.result.json`.
+`heartbeat.json`, `requests/<id>.json`, `status/<id>.status.json` (rewritten only when the child's
+phase or activity changes) and `results/<id>.result.json`.
 The app namespace survives relaunch. Isolated tests and development runs use their own data root.
 
 SSH mailbox polling uses an independent connection through the existing ControlMaster, so a
-provider that buffers a shell tool's output cannot block delivery. Remote filesystem operations
+provider that buffers a shell tool's output cannot block delivery. Mailboxes are polled off the
+main thread, and on a host a poll refreshes the heartbeat in the same round trip. Remote filesystem operations
 have bounded requests, timeouts and cancellation; results go through stdin to avoid argument-size
 limits. Only the exact delegation environment keys cross SSH. The OpenRouter key and the local
 provider environment stay on this Mac; remote children use the host's own account commands and
