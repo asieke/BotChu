@@ -10,6 +10,7 @@
 #   BOTCHU_PET=<pet folder> macOS/ui-review.sh           # and give the first bot this pet
 #   BOTCHU_DRAW_PET="a brass robot" macOS/ui-review.sh  # or make it one (real runs; costs OpenRouter credit)
 #   BOTCHU_TAB=1 macOS/ui-review.sh        # show the first bot's first task tab (0 is Home)
+#   BOTCHU_SECTION=Research macOS/ui-review.sh  # move the first bot into a sidebar section of that name
 #   BOTCHU_DEMO=activity BOTCHU_TAB=1 macOS/ui-review.sh  # that tab as a long agent run (in memory)
 #   BOTCHU_FAKE_HOST=1 BOTCHU_TASK="hello-world|<task>|Far Mac" macOS/ui-review.sh
 #                                          # a task on a host, "Far Mac", whose ssh is a stand-in that
@@ -96,8 +97,9 @@ path.write_text(json.dumps(bots))
 PY
 "$dir/build.sh" "$data" >/dev/null
 args=(--env "BOTCHU_DATA_DIR=$data" --env "BOTCHU_SNAPSHOT=$data/snapshots")
-# Reports go to a stand-in gh, never to GitHub: it keeps each one in $data/reports and prints a
-# made-up issue's address, or, with BOTCHU_REPORT_FAIL=1, fails as gh does when it isn't signed in.
+# Reports go to a stand-in gh, never to GitHub: it keeps each one in $data/reports, with the images
+# it attaches, and prints a made-up issue's address, or, with BOTCHU_REPORT_FAIL=1, fails as gh does
+# when it isn't signed in.
 mkdir -p "$data/reports"
 cat > "$data/fake-gh" <<'SH'
 #!/bin/sh
@@ -105,6 +107,9 @@ dir="$(dirname "$0")/reports"
 n=$(ls "$dir" | grep -c '\.md$')
 printf '%s\n' "$@" > "$dir/$n.args"
 cat > "$dir/$n.md"
+for arg in "$@"; do
+  case "$arg" in --attach=*) file=${arg#--attach=}; file=${file%%#*}; cp "$file" "$dir/$n-$(basename "$file")" ;; esac
+done
 if [ -e "$(dirname "$0")/fake-gh-fails" ]; then
   echo 'To get started with GitHub CLI, please run:  gh auth login' >&2
   exit 4
@@ -143,6 +148,7 @@ fi
 [ -n "${BOTCHU_WINDOW:-}" ] && args+=(--env "BOTCHU_WINDOW=$BOTCHU_WINDOW")
 [ -n "${BOTCHU_DEMO:-}" ] && args+=(--env "BOTCHU_DEMO=$BOTCHU_DEMO")
 [ -n "${BOTCHU_DENSITY:-}" ] && args+=(--env "BOTCHU_DENSITY=$BOTCHU_DENSITY")
+[ -n "${BOTCHU_SECTION:-}" ] && args+=(--env "BOTCHU_SECTION=$BOTCHU_SECTION")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
 # Without restoring windows: after any copy of BotChu crashed, macOS would otherwise stop at a
 # dialog asking whether to reopen them.

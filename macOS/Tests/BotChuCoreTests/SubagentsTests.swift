@@ -135,6 +135,35 @@ private final class SubagentFixture {
         #expect(home.loadSubagents(taskID: taskID) == [child])
     }
 
+    @Test func tabListsRunsUnderWayFirstAndFoldsFinishedOnesNewestFirst() {
+        let bot = Bot(name: "QA Bot", workspace: "/test")
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        func run(_ title: String, _ phase: SubagentPhase, minute: Double, parent: SubagentRun? = nil) -> SubagentRun {
+            SubagentRun(rootBotID: bot.id, parentSubagentID: parent?.id, depth: parent == nil ? 1 : 2, targetBot: bot, title: title,
+                        brief: title, workingDirectory: "/test", phase: phase, createdAt: start.addingTimeInterval(minute * 60))
+        }
+        let audit = run("Audit", .completed, minute: 0)
+        let build = run("Build", .running, minute: 1)
+        let checks = run("Checks", .completed, minute: 2, parent: build)
+        let docs = run("Docs", .failed, minute: 3)
+        let review = run("Review", .stopped, minute: 4)
+        let runs = [audit, build, checks, docs, review]
+
+        // A finished run beneath one under way stays in that run's tree.
+        let sections = SubagentSections(runs)
+        #expect(sections.current.map(\.title) == ["Build"])
+        #expect(sections.finished.map(\.title) == ["Review", "Docs", "Audit"])
+        #expect(sections.failedCount == 1)
+
+        // Finished runs the tab keeps in view stay with those under way, in the order delegated.
+        let kept = SubagentSections(runs, keeping: [audit.id, docs.id])
+        #expect(kept.current.map(\.title) == ["Audit", "Build", "Docs"])
+        #expect(kept.finished.map(\.title) == ["Review"])
+        #expect(kept.failedCount == 0)
+        #expect(SubagentSections([]) == SubagentSections([], keeping: [audit.id]))
+        #expect(SubagentSections([]).current.isEmpty && SubagentSections([]).finished.isEmpty)
+    }
+
     @Test func contextUsesTargetIdentityAndEnforcesDepthLimit() throws {
         let fixture = try SubagentFixture()
         let roster = [BotRosterEntry(bot: fixture.bot)]

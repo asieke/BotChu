@@ -6,14 +6,15 @@ import BotChuCore
 
 /// What a stand-in filer was given, in place of gh: no test files a real issue.
 private actor Filings {
-    private(set) var all: [(title: String, body: String)] = []
-    func add(_ title: String, _ body: String) { all.append((title, body)) }
+    private(set) var all: [(title: String, body: String, images: [Data])] = []
+    func add(_ title: String, _ body: String, _ images: [Data]) { all.append((title, body, images)) }
 }
 
 extension RenderingTests {
     /// Report a Bug or Feature, from the toolbar: its app state leaves the bot's name, folder and
-    /// conversation out; ⌘Return files the report; one that isn't filed stays, with why; once filed,
-    /// the sheet gives the issue's link, and Done closes it.
+    /// conversation out; a pasted screenshot goes with the report; ⌘Return files it; one that isn't
+    /// filed stays, with why; once filed, the sheet gives the issue's link (and says when an image
+    /// didn't make it), and Done closes it.
     @Test func reportSheetFilesTheReportOrKeepsItWithWhy() async throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-report-\(UUID().uuidString)")
@@ -33,8 +34,8 @@ extension RenderingTests {
         let model = AppModel(store: store, settings: AppSettings(defaults: defaults),
                              usage: UsageCache { _, _ in throw UsageFailure("No usage in tests") })
         let filings = Filings()
-        model.issueFiler = IssueFiler { title, body in
-            await filings.add(title, body)
+        model.issueFiler = IssueFiler { title, body, images in
+            await filings.add(title, body, images)
             return .failed("gh couldn't create the issue:\nHTTP 401: Bad credentials")
         }
         let host = NSHostingView(rootView: ContentView().environment(model).defaultAppStorage(defaults))
@@ -73,6 +74,21 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(request.text == report)
         #expect(request.title == "The sidebar flickers")
+        // Only a screenshot on the pasteboard: Edit ▸ Paste stays on, and the image goes after the text.
+        let pasteboard = StandInPasteboard()
+        defer { pasteboard.restore() }
+        let picture = NSImage(size: NSSize(width: 24, height: 16))
+        picture.lockFocus(); NSColor.systemOrange.setFill(); NSRect(x: 0, y: 0, width: 24, height: 16).fill(); picture.unlockFocus()
+        pasteboard.board.clearContents()
+        pasteboard.board.setData(try #require(picture.tiffRepresentation), forType: .tiff)
+        #expect(editor.validateMenuItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")))
+        editor.paste(nil)
+        #expect(request.images.images.count == 1)
+        #expect(editor.string == report)
+        try await Task.sleep(for: .milliseconds(200))
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("report-sheet"))
+        }
         Self.sendKey("\r", code: 36, modifiers: .command, to: sheet)
         try await Task.sleep(for: .milliseconds(300))
         #expect(request.state == .failed("gh couldn't create the issue:\nHTTP 401: Bad credentials"))
@@ -81,13 +97,23 @@ extension RenderingTests {
         let filed = await filings.all
         #expect(filed.count == 1)
         #expect(filed.first?.title == "The sidebar flickers")
-        #expect(filed.first?.body == IssueReport.body(report: report, snapshot: request.snapshot))
+        #expect(filed.first?.body == IssueReport.body(report: report, images: 1, snapshot: request.snapshot))
+        #expect(filed.first?.images.count == 1)
+        #expect(filed.first?.images.first.flatMap(NSImage.init(data:)) != nil)
+        #expect(request.images.images.count == 1)
 
-        // Tried again, it is filed: the sheet links the issue, and Done closes it.
-        model.issueFiler = IssueFiler { _, _ in .filed(URL(string: "https://github.com/asieke/BotChu/issues/52")) }
+        // Tried again, it is filed, though gh couldn't upload the image: the sheet links the issue
+        // and says so, and Done closes it.
+        let partly = IssueFiler.Outcome.filed(URL(string: "https://github.com/asieke/BotChu/issues/52"),
+                                              problem: "Not every image was attached:\nfailed to upload ./image-1.png: unexpected EOF")
+        model.issueFiler = IssueFiler { _, _, _ in partly }
         Self.sendKey("\r", code: 36, modifiers: .command, to: sheet)
         try await Task.sleep(for: .milliseconds(300))
-        #expect(request.state == .filed(URL(string: "https://github.com/asieke/BotChu/issues/52")))
+        #expect(request.state == .filed(URL(string: "https://github.com/asieke/BotChu/issues/52"),
+                                        problem: "Not every image was attached:\nfailed to upload ./image-1.png: unexpected EOF"))
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("report-filed"))
+        }
         Self.sendKey("\r", code: 36, to: sheet)
         try await Task.sleep(for: .milliseconds(400))
         #expect(model.issueReport == nil)

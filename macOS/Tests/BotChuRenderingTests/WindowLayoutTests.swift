@@ -62,6 +62,36 @@ extension RenderingTests {
         #expect(window.frame.width >= window.contentMinSize.width)
     }
 
+    /// The status sidebar opens at its widest, in a window with room for it.
+    @Test func statusSidebarOpensAtItsWidest() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-status-width-\(UUID().uuidString)", isDirectory: true)
+        let suite = "local.BotChu.tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let bot = Bot(name: "Scout", workspace: root.appendingPathComponent("Scout").path)
+        try BotHome(workspace: bot.workspace).save(bot)
+        let store = Store(root: root.appendingPathComponent("Support", isDirectory: true))
+        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        let model = AppModel(store: store, settings: AppSettings(defaults: defaults),
+                             usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
+        let host = NSHostingView(rootView: ContentView().environment(model).defaultAppStorage(defaults))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 800),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        try await settle(window)
+        let splits = splitViews(in: host)
+        try #require(splits.count == 2)
+        let status = try #require(splits[1].arrangedSubviews.last)
+        #expect(abs(status.frame.width - 380) <= 1, "The status sidebar opened \(status.frame.width) points wide")
+    }
+
     /// Runs the window's layout and a few turns of the run loop, where AppKit lays it out again.
     private func settle(_ window: NSWindow) async throws {
         for _ in 0..<5 {
