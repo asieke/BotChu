@@ -430,8 +430,8 @@ final class AppModel {
     }
 
     /// Records a task, opens its tab (when `show`), says so in its bot's Home, then makes its
-    /// worktree and sends its first message.
-    func startTask(_ task: BotTask, for botID: UUID, show: Bool) {
+    /// worktree and sends its first message, with `images` (already in the bot's folder).
+    func startTask(_ task: BotTask, for botID: UUID, show: Bool, images: [ImageAttachment] = []) {
         guard bot(botID) != nil else { return }
         let target = ChatTarget.task(task.id, of: botID)
         tasks[botID, default: []].append(task)
@@ -439,7 +439,7 @@ final class AppModel {
         saveTask(task, of: botID)
         postReceipt(TaskReceipt.started(task), task: task.id, for: botID)
         if show { self.show(target) }
-        send(task.opening, to: target)
+        send(task.opening, to: target, images: images)
     }
 
     /// Closes a task's tab. Its record, conversation and worktree stay, and it can be opened again;

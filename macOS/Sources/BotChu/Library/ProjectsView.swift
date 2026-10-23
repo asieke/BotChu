@@ -414,7 +414,9 @@ struct WorkTable: View {
         if item.isPullRequest {
             botMenu("Review with") { model.newTask(for: $0, repo: item.repo, work: item.work, purpose: .review) }
             botMenu("Review and Comment with") { model.newTask(for: $0, repo: item.repo, work: item.work, purpose: .comment) }
+            // A fork's branch isn't on origin: it can be reviewed, not continued.
             botMenu("Continue with") { model.newTask(for: $0, repo: item.repo, work: item.work) }
+                .disabled(item.fromFork)
         } else {
             botMenu("Start Task with") { model.newTask(for: $0, repo: item.repo, work: item.work) }
         }

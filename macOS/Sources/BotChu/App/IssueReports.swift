@@ -1,15 +1,16 @@
 import AppKit
 import BotChuCore
 
-/// The Report a Bug or Feature sheet: the report being written, the app's state as it was when the
-/// sheet opened (what the sheet shows is what the issue gets), and how filing went.
+/// The Report a Bug or Feature sheet: the report being written, with its images, the app's state as
+/// it was when the sheet opened (what the sheet shows is what the issue gets), and how filing went.
 @MainActor @Observable
 final class IssueReportRequest: Identifiable {
     enum State: Equatable {
         case writing
         case filing
-        /// The new issue's address; nil when gh made it without printing one.
-        case filed(URL?)
+        /// The new issue's address (nil when gh made it without printing one), and what went wrong
+        /// once it was made, such as an image that didn't upload.
+        case filed(URL?, problem: String? = nil)
         /// Why it wasn't filed; the report stays, to try again.
         case failed(String)
     }
@@ -17,6 +18,7 @@ final class IssueReportRequest: Identifiable {
     let id = UUID()
     let snapshot: IssueSnapshot
     var text = ""
+    let images = DraftImages()
     private(set) var state = State.writing
 
     init(snapshot: IssueSnapshot, text: String = "") {
@@ -35,8 +37,8 @@ final class IssueReportRequest: Identifiable {
     func submit(with filer: IssueFiler) async {
         guard canSubmit else { return }
         state = .filing
-        switch await filer.file(text, snapshot: snapshot) {
-        case .filed(let url): state = .filed(url)
+        switch await filer.file(text, images: images.images.map(\.png), snapshot: snapshot) {
+        case .filed(let url, let problem): state = .filed(url, problem: problem)
         case .failed(let problem): state = .failed(problem)
         }
     }

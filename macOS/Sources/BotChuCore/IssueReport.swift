@@ -1,8 +1,8 @@
 import Foundation
 
 /// A bug report or feature request filed from inside BotChu: an issue in BotChu's own repository,
-/// made with `gh issue create` as gh is signed in, with a snapshot of the app (`IssueSnapshot`).
-/// The repository is public, and so is everything filed there.
+/// made with `gh issue create` as gh is signed in, with the images the report adds and a snapshot
+/// of the app (`IssueSnapshot`). The repository is public, and so is everything filed there.
 public enum IssueReport {
     /// Where reports go.
     public static let repository = "asieke/BotChu"
@@ -11,6 +11,10 @@ public enum IssueReport {
     public static let titleLimit = 72
     /// GitHub refuses a longer description.
     public static let bodyLimit = 65_536
+    /// As many images as a message takes.
+    public static let imageLimit = ImageAttachment.maximumCount
+    /// What an image's address on GitHub, put in place of its file's name, may add to the description.
+    static let imageAddressAllowance = 100
     static let fallbackTitle = "Report from BotChu"
 
     /// A short title from the report: its first line with words in it (not a rule or a code fence),
@@ -25,17 +29,26 @@ public enum IssueReport {
         return title.isEmpty ? fallbackTitle : title
     }
 
-    /// The issue's description: the report as written, then the app's state.
-    public static func body(report: String, snapshot: IssueSnapshot) -> String {
-        report.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n### App state\n\n"
+    /// The issue's description: the report as written, its images, then the app's state. Each image
+    /// is its file as gh attaches it (`imageFile(_:)`), which gh puts its address on GitHub in place of.
+    public static func body(report: String, images: Int = 0, snapshot: IssueSnapshot) -> String {
+        ([report.trimmingCharacters(in: .whitespacesAndNewlines)] + stride(from: 1, through: images, by: 1).map { "![Image \($0)](./\(imageFile($0)))" })
+            .joined(separator: "\n\n")
+            + "\n\n### App state\n\n"
             + snapshot.lines.map { "- " + $0 }.joined(separator: "\n")
             + "\n\n_Filed from BotChu. The app state holds categories and counts only: no conversations, instructions, memory, paths or names._\n"
     }
 
-    /// `gh issue create` in BotChu's repository, with the body on standard input. The title is
-    /// one `--title=…` word, so a title that starts with `-` is never read as an option.
-    public static func arguments(title: String) -> [String] {
+    /// The name the report's `n`th image has while gh attaches it, in the folder gh runs in: a
+    /// count, never the image's own name.
+    public static func imageFile(_ n: Int) -> String { "image-\(n).png" }
+
+    /// `gh issue create` in BotChu's repository, with the body on standard input and each image
+    /// attached from the folder gh runs in (`--attach`, in gh 2.99 and later). The title is one
+    /// `--title=…` word, so a title that starts with `-` is never read as an option.
+    public static func arguments(title: String, images: Int = 0) -> [String] {
         ["gh", "issue", "create", "--repo", repository, "--title=" + title, "--body-file", "-"]
+            + stride(from: 1, through: images, by: 1).map { "--attach=./\(imageFile($0))#Image \($0)" }
     }
 
     /// The new issue's address in what `gh issue create` printed, rebuilt from its number.
@@ -51,16 +64,28 @@ public enum IssueReport {
     public static func number(of url: URL) -> Int? { Int(url.lastPathComponent) }
 
     /// What a run of `gh issue create` came to: the issue, or why there is none in gh's own words
-    /// (the last lines it printed), or how to get gh when it couldn't be run.
-    static func outcome(of result: Shell.Result) -> IssueFiler.Outcome {
-        if result.ok { return .filed(issueURL(in: result.output)) }
+    /// (the last lines it printed), or how to get a gh that runs, or one that attaches images. When
+    /// an image doesn't upload, gh makes the issue with those that did, exits with an error and
+    /// still prints the issue's address: that is filed, with what gh said.
+    static func outcome(of result: Shell.Result, images: Int = 0) -> IssueFiler.Outcome {
+        let url = issueURL(in: result.output)
+        if result.ok { return .filed(url) }
         if result.status == 127 {
             return .failed("BotChu couldn't run gh, the GitHub CLI. Install it and sign in with gh auth login in Terminal, then try again.")
         }
         let printed = result.errors.contains(where: { !$0.isWhitespace }) ? result.errors : result.output
         let lines = printed.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let said = masked(lines.suffix(6).joined(separator: "\n"))
+        if let url {
+            return .filed(url, problem: (images > 0 ? "Not every image was attached" : "gh made the issue, then failed") + (said.isEmpty ? "." : ":\n" + said))
+        }
+        // Before its usage, which is longer than what is shown.
+        if images > 0, printed.contains("unknown flag: --attach") {
+            return .failed("This gh can't attach images: that takes gh 2.99 or later. Update gh (brew upgrade gh, if Homebrew installed it), or remove the images to file the report without them.")
+        }
         guard !lines.isEmpty else { return .failed("gh couldn't create the issue (exit status \(result.status)).") }
-        return .failed("gh couldn't create the issue:\n" + masked(lines.suffix(6).joined(separator: "\n")))
+        let attaching = images > 0 && said.range(of: "attach|upload", options: [.regularExpression, .caseInsensitive]) != nil
+        return .failed("gh couldn't create the issue:\n" + said + (attaching ? "\n\nRemove the images to file the report without them." : ""))
     }
 
     /// The text with anything shaped like a GitHub token hidden, before it is shown.
@@ -124,23 +149,38 @@ public enum IssueReport {
 public struct IssueFiler: Sendable {
     /// What filing came to.
     public enum Outcome: Equatable, Sendable {
-        /// The new issue's address; nil when gh made it without printing one.
-        case filed(URL?)
+        /// The new issue's address (nil when gh made it without printing one), and what went wrong
+        /// once it was made, such as an image that didn't upload.
+        case filed(URL?, problem: String? = nil)
         /// Why it wasn't filed, for the owner to read. The report stays, to try again.
         case failed(String)
     }
 
-    /// Files a title and body.
-    public typealias File = @Sendable (_ title: String, _ body: String) async -> Outcome
+    /// Files a title and body, with the images (PNG) the body shows as `IssueReport.imageFile(_:)`.
+    public typealias File = @Sendable (_ title: String, _ body: String, _ images: [Data]) async -> Outcome
 
     private let file: File
 
     /// Files with `gh` as the login shell finds it, or with the program at a path in its place: a
     /// stand-in, in tests and throwaway runs (`macOS/ui-review.sh`), so they never file a real issue.
+    /// gh attaches images from a private folder it runs in, which goes once it is done.
     public init(gh: String = "gh") {
-        file = { title, body in
-            let arguments = [gh] + IssueReport.arguments(title: title).dropFirst()
-            return IssueReport.outcome(of: await Shell.run(arguments, in: NSHomeDirectory(), input: Data(body.utf8)))
+        file = { title, body, images in
+            let arguments = [gh] + IssueReport.arguments(title: title, images: images.count).dropFirst()
+            guard !images.isEmpty else {
+                return IssueReport.outcome(of: await Shell.run(arguments, in: NSHomeDirectory(), input: Data(body.utf8)))
+            }
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-report-" + UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+                for (i, image) in images.enumerated() {
+                    try image.write(to: folder.appendingPathComponent(IssueReport.imageFile(i + 1)))
+                }
+            } catch {
+                return .failed("BotChu couldn't get the images ready for gh: \(error.localizedDescription)")
+            }
+            return IssueReport.outcome(of: await Shell.run(arguments, in: folder.path, input: Data(body.utf8)), images: images.count)
         }
     }
 
@@ -148,15 +188,16 @@ public struct IssueFiler: Sendable {
         self.file = file
     }
 
-    /// Files the report, titled from its first line, with the snapshot.
-    public func file(_ report: String, snapshot: IssueSnapshot) async -> Outcome {
+    /// Files the report, titled from its first line, with its images and the snapshot.
+    public func file(_ report: String, images: [Data] = [], snapshot: IssueSnapshot) async -> Outcome {
         let report = report.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !report.isEmpty else { return .failed("Write the report first.") }
-        let body = IssueReport.body(report: report, snapshot: snapshot)
-        guard body.count <= IssueReport.bodyLimit else {
+        guard images.count <= IssueReport.imageLimit else { return .failed("Attach up to \(IssueReport.imageLimit) images.") }
+        let body = IssueReport.body(report: report, images: images.count, snapshot: snapshot)
+        guard body.count + images.count * IssueReport.imageAddressAllowance <= IssueReport.bodyLimit else {
             return .failed("This report is too long for a GitHub issue, which holds \(IssueReport.bodyLimit.formatted()) characters with the app state. Shorten it, then try again.")
         }
-        return await file(IssueReport.title(from: report), body)
+        return await file(IssueReport.title(from: report), body, images)
     }
 }
 
