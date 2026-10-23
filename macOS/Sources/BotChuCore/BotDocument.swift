@@ -37,7 +37,7 @@ public enum SharedDocument: String, CaseIterable, Identifiable, Sendable {
     case memory = "MEMORY.md"
 
     public var id: String { rawValue }
-    public var summary: String { self == .team ? "Playbook every bot follows" : "Memory every bot keeps" }
+    public var summary: String { self == .team ? "Shared playbook" : "Shared memory" }
 
     public func url(botsRoot: String) -> URL {
         URL(fileURLWithPath: (botsRoot as NSString).expandingTildeInPath, isDirectory: true).appendingPathComponent(rawValue)
