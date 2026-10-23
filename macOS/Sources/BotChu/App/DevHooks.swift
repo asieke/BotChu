@@ -160,14 +160,17 @@ enum DevHooks {
             }
             Text("Conversations").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.vertical, 6)
             ForEach(model.bots) { bot in
+                let tasks = model.openTasks(of: bot.id)
                 BotRow(bot: bot, status: model.status(of: bot), selected: model.visibleBotID == bot.id,
                        unread: model.unreadCount(of: bot.id), runningTasks: model.runningTaskCount(for: bot.id),
-                       openTasks: model.openTasks(of: bot.id).count, isExpanded: true)
-                ForEach(model.openTasks(of: bot.id)) { task in
-                    SidebarTaskRow(botID: bot.id, task: task)
-                        .modifier(SidebarTreeBranch())
+                       openTasks: tasks.count, isExpanded: !tasks.isEmpty)
+                if !tasks.isEmpty {
+                    ForEach(tasks) { task in
+                        SidebarTaskRow(botID: bot.id, task: task)
+                            .modifier(SidebarTreeBranch())
+                    }
+                    SidebarNewTaskRow(botID: bot.id).modifier(SidebarTreeBranch(isLast: true))
                 }
-                SidebarNewTaskRow(botID: bot.id).modifier(SidebarTreeBranch(isLast: true))
             }
         }
         .padding(10)
