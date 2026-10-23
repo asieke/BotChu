@@ -248,6 +248,93 @@ import BotChuCore
         #expect(heights.allSatisfy { $0 <= final + 1 })
     }
 
+    /// A rendered reply shown again, as when its conversation is opened again, is its kept web
+    /// view, shown at once rather than loaded and rendered again, and told of its new width. In
+    /// the other appearance it gets a web view of its own.
+    @Test func aRichReplyShownAgainIsItsKeptWebViewAtOnce() async throws {
+        _ = NSApplication.shared
+        RichReplyPool.removeAll()
+        defer { RichReplyPool.removeAll() }
+        let source = "Reply \(UUID().uuidString): $\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}$ for every $n$. "
+            + String(repeating: "This sentence goes on to take several lines in a narrow chat. ", count: 4)
+        func reply(width: CGFloat, dark: Bool = false) -> AnyView {
+            AnyView(MarkdownText(text: source).frame(width: width).environment(\.colorScheme, dark ? .dark : .light))
+        }
+        let host = NSHostingView(rootView: reply(width: 600))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 800), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        func settle(until condition: () -> Bool) async throws {
+            for _ in 0..<150 where !condition() {
+                try await Task.sleep(for: .milliseconds(20))
+                host.layoutSubtreeIfNeeded()
+            }
+        }
+        host.layoutSubtreeIfNeeded()
+        let web = try #require(findWebView(in: host))
+        try await settle { web.alphaValue == 1 }
+        try await Task.sleep(for: .milliseconds(150))
+        host.layoutSubtreeIfNeeded()
+        let wide = web.frame.height
+        #expect(web.alphaValue == 1)
+
+        // Its conversation goes: the web view waits, hidden, in its window.
+        host.rootView = AnyView(Color.clear)
+        try await settle { RichReplyPool.count == 1 }
+        #expect(RichReplyPool.count == 1)
+        #expect(web.window === window && web.isHiddenOrHasHiddenAncestor)
+
+        // Shown again, narrower: that web view, shown at once, and it reports its new height.
+        host.rootView = reply(width: 320)
+        try await settle { RichReplyPool.count == 0 }
+        #expect(RichReplyPool.count == 0)
+        #expect(web.superview is ReplyWebContainer && !web.isHiddenOrHasHiddenAncestor && web.alphaValue == 1)
+        try await settle { web.frame.height > wide + 1 }
+        #expect(web.frame.height > wide + 1)
+
+        // In the other appearance, a web view of its own, while the kept one stays kept.
+        host.rootView = AnyView(Color.clear)
+        try await settle { RichReplyPool.count == 1 }
+        host.rootView = reply(width: 320, dark: true)
+        try await settle { webViews(in: host).contains { $0.superview is ReplyWebContainer } }
+        let dark = try #require(webViews(in: host).first { $0.superview is ReplyWebContainer })
+        #expect(dark !== web)
+        #expect(RichReplyPool.count == 1)
+    }
+
+    /// Kept web views stay within their memory budget, the most recent kept, and go once they have
+    /// waited longer than `keep`.
+    @Test func keptRichRepliesStayWithinTheirBudgetAndExpire() async throws {
+        _ = NSApplication.shared
+        RichReplyPool.removeAll()
+        defer { RichReplyPool.removeAll() }
+        let replies = (0..<3).map { "Diagram \($0) \(UUID().uuidString):\n\n```mermaid\nflowchart LR\n  A[Start \($0)] --> B[Done]\n```" }
+        let host = NSHostingView(rootView: AnyView(VStack { ForEach(replies, id: \.self) { MarkdownText(text: $0) } }.frame(width: 600)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 900), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        for _ in 0..<300 where !(webViews(in: host).count == 3 && webViews(in: host).allSatisfy { $0.alphaValue == 1 }) {
+            try await Task.sleep(for: .milliseconds(20))
+            host.layoutSubtreeIfNeeded()
+        }
+        #expect(webViews(in: host).filter { $0.alphaValue == 1 }.count == 3)
+        host.rootView = AnyView(Color.clear)
+        for _ in 0..<150 where RichReplyPool.count == 0 {
+            try await Task.sleep(for: .milliseconds(20))
+            host.layoutSubtreeIfNeeded()
+        }
+        // Three diagrams would take 255 MB: the two kept last take 170.
+        #expect(RichReplyPool.count == 2)
+        #expect(RichReplyPool.cost == 170 && RichReplyPool.cost <= RichReplyPool.budget)
+        #expect(webViews(in: host).count == 2)
+        RichReplyPool.expire(now: Date().addingTimeInterval(RichReplyPool.keep + 1))
+        #expect(RichReplyPool.count == 0)
+        #expect(webViews(in: host).isEmpty)
+    }
+
     private func webViews(in view: NSView) -> [WKWebView] {
         (view as? WKWebView).map { [$0] } ?? view.subviews.flatMap { webViews(in: $0) }
     }

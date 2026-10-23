@@ -140,7 +140,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     source/copy and fit/actual-size controls. Both render offline in system WebKit, including inside
     tables and lists; a reply's web view is made as it nears the visible part of the chat, with only
     the renderer it uses, and shows once the reply has rendered, at its final height, so neither a
-    blank page nor the source flashes first. Unsupported or incomplete expressions and diagrams stay
+    blank page nor the source flashes first. Rendered replies' web views are kept, hidden, when
+    their conversation closes, so opening it again shows them at once: up to about 200 MB of them
+    (a reply with a diagram takes about 85, one with math alone about 20), each for ten minutes,
+    and none once macOS reports memory pressure. Unsupported or incomplete expressions and diagrams stay
     readable as source. While a turn works and nothing of its reply shows yet, three dots in a
     bubble rise and brighten in turn (with Reduce Motion they only brighten). Switching
     conversations redraws only the conversation: the toolbar's buttons stay as they are, the
@@ -434,7 +437,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, and what a report says about the app, `IssueReports.swift`),
-    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects with its repository sidebar, Agents and Providers), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
+    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects with its repository sidebar, Agents and Providers), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
     the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -472,8 +475,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     narrowest, a chat that follows new content only for a reader at the bottom, a Sub-agents
     tab that folds finished runs and scrolls to one the chat opens, and switching without a flash:
     the toolbar kept, the message box focused in the same update, the chat at its very end, pets
-    that never blink out while a clip loads, rich replies shown only once rendered, and typing
-    dots that move. Set
+    that never blink out while a clip loads, rich replies shown only once rendered and shown
+    again at once from those kept, within their budget, and typing dots that move. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, or `activityChatRendersGroupsCardsAndLiveWork`)
