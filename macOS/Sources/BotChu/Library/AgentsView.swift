@@ -26,7 +26,7 @@ struct AgentsView: View {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(bot.name).font(.title3.weight(.semibold))
                                     Text(bot.title.isEmpty ? "Ready for your next idea." : bot.title).font(.callout).foregroundStyle(.secondary).lineLimit(2).frame(height: 36, alignment: .topLeading)
-                                    Label(bot.account.name, systemImage: bot.account.symbol).font(.caption).foregroundStyle(.secondary)
+                                    ProviderLabel(bot.account).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Divider()
                                 HStack {

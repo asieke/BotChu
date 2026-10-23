@@ -22,7 +22,7 @@ struct ModelPicker: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(showsCustom ? "Custom model" : "Choose model").font(.system(size: 15, weight: .semibold))
                 Spacer()
-                Text(accountName).font(.system(size: 11)).foregroundStyle(.secondary)
+                ProviderLabel(title: accountName, kind: data.kind, size: 12).font(.system(size: 11)).foregroundStyle(.secondary)
             }
             .padding(16)
             if showsCustom {

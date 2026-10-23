@@ -79,6 +79,10 @@ final class ConversationState {
         model.conversations.compactMap { $0.value[keyPath: field] == nil ? nil : $0.key }
     }
 
+    /// How many conversations have one; like `keys`, not for views.
+    var count: Int { model.conversations.values.filter { $0[keyPath: field] != nil }.count }
+    var isEmpty: Bool { count == 0 }
+
     func removeAll() {
         for conversation in model.conversations.values where conversation[keyPath: field] != nil {
             conversation[keyPath: field] = nil
