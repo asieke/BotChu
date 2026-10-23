@@ -418,7 +418,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     SwiftPM's default build system records the deployment target there instead, and macOS then
     runs the app with the old window design, whose toolbar overhangs the sidebar. It also records the commit it
     was built from (`BotChuCommit` in Info.plist, `-dirty` with uncommitted changes), which reports name. `install.sh` builds into `~/Applications`, restarts BotChu if it was running, and
-    smoke-tests that it starts. `test.sh` runs the unit tests. `ui-review.sh` opens a build on
+    smoke-tests that it starts; it goes by the installed copy's path, so review copies and builds run
+    from a checkout are neither counted nor quit. `test.sh` runs the unit tests. `ui-review.sh` opens a build on
     throwaway data for checking its screens (see **Test**).
 - Data: each bot's `.botchu/` folder in its workspace (above), and `index.json` in
   `~/Library/Application Support/BotChu/`, which only lists the bots' workspaces in sidebar order.
@@ -533,7 +534,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   usage fields, never raw CLI output or credentials. Muse makes its brief usage request; OpenRouter
   needs `OPENROUTER_API_KEY` in the environment. This is separate from the two-turn conversation smoke.
 - Smoke test after deploy: `macOS/install.sh` fails unless the installed app starts (launched hidden,
-  checked with `pgrep -x BotChu`, and quit again unless it was already open).
+  found by its executable's path in `ps`, so a review copy running meanwhile doesn't count, and
+  quit again unless it was already open).
 
 ## Deploy
 - **Host machine:** `Alexs-MacBook-Pro-92440`. The live checkout is `~/Desktop/WORKSPACE/BotChu`, which always stays on `main`; the app is installed to `~/Applications/BotChu.app`.
