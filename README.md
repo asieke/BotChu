@@ -45,7 +45,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - **Agents:** a searchable gallery of the existing bots, showing their personality summary,
     provider, activity and task count, with **Open Chat**, **Edit…** and **New Agent**. A bot’s own
     conversation continues to work without a project.
-  - **Providers:** gallery/list views of CLI profiles with their command, availability and usage,
+  - **Providers:** gallery/list views of CLI profiles with their logo, command, availability and usage,
     sharing the same allowance cache and refresh limits as the conversation inspector. **Add CLI**
     adds a named profile of Claude Code, Codex, Antigravity, Muse or Pi, with an installed command or
     wrapper and **Test Command**. Sign in through that CLI in Terminal; BotChu does not create its
@@ -96,6 +96,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     Codex Personal, Codex Dev and Codex Work (`codex-personal`, `codex-dev`, `codex-work`), Google
     (Antigravity, `agy`), Muse (`muse`), and OpenRouter (the Pi agent, `pi`, with an OpenRouter key
     and any OpenRouter model). Each account's command can be changed in Settings.
+    Wherever an account or a CLI family is shown, so is the family's logo, as in GitChu: Claude's
+    spark, OpenAI's knot for Codex, Google's G for Antigravity, Facebook's f for Muse, and π for Pi.
   - **Chat:** one continuous thread per bot (its **Home**), and one per task. Replies stream in, rendered as Markdown; each tool the
     agent runs shows as a collapsible card with its input and output. Headings, nested lists, quotes,
     tables and fenced code use native block layouts; code has a Copy button. Replies have soft rounded
@@ -324,7 +326,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (messages and the composer), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown and New Task sheets), `Settings/` (with
     the hosts), and
-    `Shared/` (layout constants, the avatar, the status badge, and the pet's looping video).
+    `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
+    providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
+    only to identify the CLI an account runs).
     `Resources/ChatRenderer/` bundles pinned Mermaid and KaTeX distributions, their fonts and licenses. Its README records provenance and update steps; no JavaScript package
     install or network access is needed at runtime. The rendering document blocks remote resources
     and model-supplied scripts, uses Mermaid's strict mode and disables trusted TeX commands.
@@ -339,8 +343,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     fallback and offline restrictions, model-picker keyboard interaction and persisted choices,
     Markdown editor sizing and Save/Cancel, collapsing status sections, inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
-    main window's layout at its narrowest, galleries that preserve conversation state, and custom
-    profile persistence. Set `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
+    main window's layout at its narrowest, galleries that preserve conversation state, custom
+    profile persistence, and provider logos in both appearances and in account menus.
+    Set `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     to render isolated gallery/table screenshots with sample project metadata and usage. These
     share a serialized suite because AppKit
