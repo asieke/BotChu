@@ -440,9 +440,3 @@ struct ChatScrollPosition: Equatable {
     /// How far the content goes on below what's visible.
     var below: CGFloat
 }
-
-extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
-    }
-}
