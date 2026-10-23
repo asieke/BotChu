@@ -200,8 +200,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     in the caller's workspace, on the same machine; `--workspace bot_home` uses the called bot's
     folder on this Mac. Shared-workspace delegates should own separate files or review without editing.
     The **Sub-agents** inspector shows expandable nested runs, live tools/replies, duration, handoffs,
-    Copy and Stop. Home also groups delegations belonging to its tasks. These runs never add left
-    sidebar rows. Stop cascades through descendants; callers must wait before finishing their turn.
+    Copy and Stop. Runs under way come first; finished ones fold into one **Finished** row, newest
+    first, which counts any failures. A run that finishes while the tab shows it stays in view until
+    the tab is shown again, as does one opened from the chat. Home also groups delegations
+    belonging to its tasks. These runs never add left sidebar rows. Stop cascades through
+    descendants; callers must wait before finishing their turn.
     Three nesting levels, twelve concurrent children and sixty-four delegations per root turn bound
     runaway fan-out. Interrupted records become stopped on relaunch. The helper needs Python 3 on
     each execution machine; SSH mailboxes are polled independently of CLI output. See
@@ -409,7 +412,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     main window's layout at its narrowest, galleries that preserve conversation state, custom
     profile persistence, provider logos in both appearances and in account menus, the report
     sheet, filing with a stand-in, the activity chat at every density, light and dark and at its
-    narrowest, and a chat that follows new content only for a reader at the bottom. Set
+    narrowest, a chat that follows new content only for a reader at the bottom, and a Sub-agents
+    tab that folds finished runs and scrolls to one the chat opens. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `activityChatRendersGroupsCardsAndLiveWork`)

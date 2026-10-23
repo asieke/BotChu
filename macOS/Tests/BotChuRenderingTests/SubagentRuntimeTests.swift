@@ -349,6 +349,107 @@ extension RenderingTests {
         restored.delegation.clear(parent.id)
         #expect(restored.delegation.all.isEmpty)
     }
+
+    /// The tab leads with runs under way and folds the rest into Finished. A run that finishes while
+    /// the tab shows it stays in view, and the chat's Open brings a finished one back out.
+    @Test func subagentsTabFoldsFinishedRunsAndOpenBringsOneOut() async throws {
+        _ = NSApplication.shared
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        func run(_ title: String, _ phase: SubagentPhase) -> SubagentRun {
+            var run = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID, depth: 1, targetBot: fixture.worker,
+                                  title: title, brief: "Report back on \(title.lowercased()).", workingDirectory: fixture.folder.path,
+                                  phase: phase)
+            run.startedAt = .now.addingTimeInterval(-90)
+            if !phase.isActive { run.finishedAt = .now }
+            return run
+        }
+        var live = run("Build the app", .running)
+        let finished = ["Audit the parser", "Check the docs", "Review the tests"].enumerated().map { index, title in
+            run(title, index == 0 ? .failed : .completed)
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 300),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.makeKeyAndOrderFront(nil)
+        // The tab's height: in a new view, as showing the tab again makes one, or in the same view after a change.
+        func height(fresh: Bool, snapshot: String? = nil) async throws -> CGFloat {
+            if fresh {
+                window.contentView = NSHostingView(rootView: SubagentsInspectorContent(target: fixture.target)
+                    .environment(fixture.app).padding().frame(width: 340))
+            }
+            try await Task.sleep(for: .milliseconds(200))
+            let size = window.contentView?.fittingSize ?? .zero
+            if let snapshot, let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+                window.setContentSize(size)
+                try await Task.sleep(for: .milliseconds(100))
+                DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent(snapshot))
+            }
+            return size.height
+        }
+
+        fixture.app.delegation.records[fixture.target] = [live]
+        let running = try await height(fresh: true)
+        // Finished runs add one folded row, not a card each.
+        fixture.app.delegation.records[fixture.target] = [live] + finished
+        let withFinished = try await height(fresh: true, snapshot: "subagents-folded")
+        #expect(withFinished > running && withFinished - running < 40)
+        // A run that finishes while the tab shows it stays where it was, now with its handoff.
+        live.phase = .completed
+        live.finishedAt = .now
+        live.handoffOutput = "The app builds."
+        fixture.app.delegation.records[fixture.target] = [live] + finished
+        let justFinished = try await height(fresh: false, snapshot: "subagents-just-finished")
+        #expect(justFinished > withFinished)
+        // Shown again, it is folded with the others.
+        let folded = try await height(fresh: true)
+        #expect(folded + 60 < justFinished)
+        // The chat's Open on a finished run brings it out above the folded rest, opened: in the tab
+        // as it shows, and in a new one, as when Open switches to the tab.
+        SubagentFocus.shared.focus(finished[1].id)
+        let opened = try await height(fresh: false, snapshot: "subagents-opened")
+        #expect(opened > folded + 60)
+        SubagentFocus.shared.focus(finished[2].id)
+        let openedAnew = try await height(fresh: true)
+        #expect(openedAnew > folded + 60)
+    }
+
+    /// Open scrolls the status sidebar to a finished run it brings out below the fold.
+    @Test func openScrollsToAFinishedRunBelowTheFold() async throws {
+        _ = NSApplication.shared
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        func run(_ title: String, _ phase: SubagentPhase) -> SubagentRun {
+            var run = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID, depth: 1, targetBot: fixture.worker,
+                                  title: title, brief: "Keep going.", workingDirectory: fixture.folder.path, phase: phase)
+            run.startedAt = .now
+            if !phase.isActive { run.finishedAt = .now }
+            return run
+        }
+        let done = run("Done last", .completed)
+        fixture.app.delegation.records[fixture.target] = (0..<3).map { run("Running \($0)", .running) } + [done]
+        let defaults = UserDefaults(suiteName: fixture.domain)!
+        defaults.set("subagents", forKey: InspectorTab.storageKey)
+        fixture.app.show(fixture.target)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 640),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: TaskInspector(target: fixture.target).environment(fixture.app).defaultAppStorage(defaults))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(200))
+        func scrollView(in view: NSView) -> NSScrollView? {
+            (view as? NSScrollView) ?? view.subviews.lazy.compactMap { scrollView(in: $0) }.first
+        }
+        let content = try #require(window.contentView)
+        let scroll = try #require(scrollView(in: content))
+        #expect(scroll.documentVisibleRect.minY < 1)
+        SubagentFocus.shared.focus(done.id)
+        try await Task.sleep(for: .milliseconds(500))
+        // Three running cards, opened, come first; the finished one is now below them, in view.
+        #expect(scroll.documentVisibleRect.minY > 200)
+    }
 }
 
 /// Counts the sub-agent archive's writes, then writes them.

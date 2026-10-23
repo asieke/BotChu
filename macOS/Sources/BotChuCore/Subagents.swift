@@ -88,6 +88,25 @@ public struct SubagentRun: Identifiable, Codable, Equatable, Sendable, RunSettin
     }
 }
 
+/// How the Sub-agents tab lists a conversation's own runs, each with the runs it delegated to
+/// beneath it: those under way, and finished ones it keeps in view, first, in the order they were
+/// delegated; every other one in Finished, newest first.
+public struct SubagentSections: Equatable, Sendable {
+    public var current: [SubagentRun]
+    public var finished: [SubagentRun]
+
+    /// `runs` are a conversation's, oldest first. A run finishes only after the runs beneath it,
+    /// so its own phase says whether anything in its tree is under way.
+    public init(_ runs: [SubagentRun], keeping kept: Set<UUID> = []) {
+        let own = runs.filter { $0.parentSubagentID == nil }
+        current = own.filter { $0.phase.isActive || kept.contains($0.id) }
+        finished = own.filter { !$0.phase.isActive && !kept.contains($0.id) }
+            .sorted { ($0.createdAt, $0.id.uuidString) > ($1.createdAt, $1.id.uuidString) }
+    }
+
+    public var failedCount: Int { finished.filter { $0.phase == .failed }.count }
+}
+
 /// Caller metadata is descriptive only. The app resolves invocationID against its active turns
 /// and uses that registered context, never a helper-supplied path, identity or depth.
 public struct SubagentRequest: Codable, Equatable, Sendable {
