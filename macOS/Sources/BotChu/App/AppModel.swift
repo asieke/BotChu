@@ -14,6 +14,9 @@ struct TaskSheetRequest: Identifiable {
     let id = UUID()
     var botID: UUID
     var repo: String?
+    /// An open issue or pull request there to choose, and what to do with a pull request.
+    var work: BotTask.Work?
+    var purpose: NewTaskSheet.Purpose = .work
 }
 
 struct DocumentEditorRequest: Identifiable {
@@ -104,6 +107,12 @@ final class AppModel {
     var projectRecords: [String: ProjectRecord] = [:]
     var projectErrors: [String: String] = [:]
     var projectsLoading = false
+    /// The open pull requests and issues across the repositories, once read (`loadOpenWork`).
+    var openItems: [GitHubLookup.OpenItem]?
+    var openItemsError: String?
+    var openItemsLoading = false
+    @ObservationIgnored var openItemsReadAt: Date?
+    let openWorkLookup: @Sendable ([String]) async -> Result<[GitHubLookup.OpenItem], TaskWorktree.Failure>
     var githubConnection: ProjectGitHub.Connection?
     var githubChecking = false
     let projectGitHub: ProjectGitHub
@@ -111,8 +120,10 @@ final class AppModel {
     /// PROJECT.md's `local:` deploy targets, by repository, once read.
     @ObservationIgnored var deployTargetCache: [String: [(machine: String, path: String)]] = [:]
 
-    init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil, projectGitHub: ProjectGitHub = ProjectGitHub()) {
+    init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil, projectGitHub: ProjectGitHub = ProjectGitHub(),
+         openWorkLookup: @escaping @Sendable ([String]) async -> Result<[GitHubLookup.OpenItem], TaskWorktree.Failure> = { await GitHubLookup.openWork(repos: $0) }) {
         self.projectGitHub = projectGitHub
+        self.openWorkLookup = openWorkLookup
         DevHooks.configure()
         self.store = store ?? DevHooks.dataDir.map { Store(root: $0) } ?? .applicationSupport
         self.settings = settings ?? AppSettings()
@@ -347,9 +358,9 @@ final class AppModel {
 
     // MARK: Tasks
 
-    func newTask(for botID: UUID, repo: String? = nil) {
+    func newTask(for botID: UUID, repo: String? = nil, work: BotTask.Work? = nil, purpose: NewTaskSheet.Purpose = .work) {
         guard bot(botID) != nil else { return }
-        taskSheet = TaskSheetRequest(botID: botID, repo: repo)
+        taskSheet = TaskSheetRequest(botID: botID, repo: repo, work: work, purpose: work?.isPullRequest == true ? purpose : .work)
     }
 
     /// Records a task, opens its tab (when `show`), says so in its bot's Home, then makes its

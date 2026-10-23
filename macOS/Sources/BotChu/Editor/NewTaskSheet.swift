@@ -22,6 +22,9 @@ struct NewTaskSheet: View {
     @Environment(\.dismiss) private var dismiss
     let botID: UUID
     var initialRepo: String? = nil
+    /// An open issue or pull request of `initialRepo` to choose once it is read, and what to do with it.
+    var initialWork: BotTask.Work? = nil
+    var initialPurpose = Purpose.work
     /// The repository a task started in last time, chosen again first.
     @AppStorage("newTaskRepo") private var lastRepo = ""
     @State private var showsLocation = false
@@ -273,7 +276,13 @@ struct NewTaskSheet: View {
             guard repo == nameWithOwner else { return }
             loading = false
             switch result {
-            case .success(let found): openWork = found
+            case .success(let found):
+                openWork = found
+                if nameWithOwner == initialRepo, let wanted = initialWork,
+                   found.contains(where: { $0.work.number == wanted.number && $0.work.isPullRequest == wanted.isPullRequest }) {
+                    workKey = (wanted.isPullRequest ? "pr-" : "issue-") + "\(wanted.number)"
+                    purpose = wanted.isPullRequest ? initialPurpose : .work
+                }
             case .failure(let failure): lookupError = "\(failure.step). Is gh installed and signed in?"
             }
         }

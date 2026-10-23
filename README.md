@@ -12,12 +12,24 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - **Workspace:** the left sidebar has **Projects**, **Agents**, and **Providers**, followed by
     the bots’ conversations. Opening a gallery keeps the selected conversation and unsent draft;
     turns that finish while a gallery is shown still get an unread badge.
-  - **Projects:** searchable gallery and table views, one project per non-archived GitHub repository
-    returned by `gh` for your account and organizations. Cards show the description and visibility
+  - **Projects:** one project per non-archived GitHub repository returned by `gh` for your account
+    and organizations, in a sortable table modeled on GitChu's (or a gallery of cards). Columns show
+    where it deploys (local machines by their BotChu name, Vercel, registry), the owner, open issues
+    and pull requests, last push, type, merge policy, the computer its tasks work on (with whether
+    the checkout exists on this Mac), and the bots' open tasks there; columns can be hidden,
+    reordered and resized, and that is remembered. Cards show the description and visibility
     from GitHub, and the name, type and status from `PROJECT.md` on the default branch. **Docs** is
     non-code; **Library**, **Local app**, and **Hosted app** are code. Unclassified repositories can
     get a minimal project record, without claiming the repository meets the workspace standard.
-    Open a card for deployment and resolved workspace details, GitHub, or **Start Task with…** to
+    **Pull Requests** and **Issues** list the open ones across the repositories (up to 30 most
+    recently updated per repository, saying so when there are more), with checks, review state,
+    labels, author and any bot's task on them, filtered by repository or search. Double-click opens
+    one on GitHub; its menu reviews a pull request (**Review with**, **Review and Comment with**),
+    continues it or starts a task on an issue with a bot, opening New Task with it chosen, or opens
+    the task already on it. An issue or pull request count in the table shows that repository's.
+    These are read with one GraphQL query per page of repositories and one per ten busy
+    repositories, at most every ten minutes unless refreshed.
+    Open a project for deployment and resolved workspace details, GitHub, or **Start Task with…** to
     choose an agent and open New Task with that project selected. **Workspace options** in New Task
     reveals computer/folder overrides; the project’s deployment and saved location choose them by
     default. An unconfigured deployment host needs connection in Settings or an explicit override.
@@ -272,7 +284,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     a command on this Mac or a host, the checkouts in the repositories folder, cloning, task and
     review worktrees, and what `gh` says about your repositories, issues and pull requests
     (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
-    or proposing it through GitHub with retryable, metadata-only PRs (`ProjectGitHub.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
+    or proposing it through GitHub with retryable, metadata-only PRs (`ProjectGitHub.swift`), the Projects
+    tables' rows and the open pull requests and issues across repositories (`ProjectOverview.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh` (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
     `Subagents.swift`, `Store.swift`, `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
     handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
