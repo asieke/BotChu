@@ -58,9 +58,7 @@ struct ModelMenu: View {
                 InspectorChoiceLabel(title: data.title)
             } else {
                 HStack(spacing: 7) {
-                    Image(systemName: settings.account.symbol)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Palette.violet)
+                    ProviderLogo(kind: settings.account.kind, size: 14)
                     Text(data.title)
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1).truncationMode(.middle)

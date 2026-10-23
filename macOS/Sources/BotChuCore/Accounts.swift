@@ -23,7 +23,8 @@ public struct Account: Identifiable, Codable, Hashable, Sendable {
     public let name: String
     public let kind: AgentKind
     public let defaultCommand: String
-    /// The SF Symbol shown beside the account.
+    /// The SF Symbol earlier versions showed beside the account. The app now shows its CLI family's
+    /// logo (`ProviderLogo`, by `kind`); this is still saved so profiles stay readable by them.
     public let symbol: String
 
     public init(id: String, name: String, kind: AgentKind, defaultCommand: String, symbol: String) {

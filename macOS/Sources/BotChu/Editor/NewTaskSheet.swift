@@ -157,7 +157,7 @@ struct NewTaskSheet: View {
                     Section {
                         Picker("Account", selection: $accountID) {
                             ForEach(model.settings.accounts) { account in
-                                Label(account.name, systemImage: account.symbol).tag(account.id)
+                                ProviderMenuLabel(account).tag(account.id)
                             }
                         }
                     } header: {
