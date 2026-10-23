@@ -9,7 +9,9 @@ struct SubagentsInspectorContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            SubagentTree(target: target)
+            // One per conversation: Home's inspector stays as the bot changes, and what one bot's
+            // tab folded or kept shouldn't carry over to the next.
+            SubagentTree(target: target).id(target)
             if includeBotTasksOverview {
                 ForEach(model.tasks[target.botID] ?? []) { task in
                     let scope = ChatTarget.task(task.id, of: target.botID)
@@ -34,6 +36,10 @@ private struct SubagentTree: View {
     let target: ChatTarget
     @State private var expanded: Set<UUID> = []
     @State private var seen: Set<UUID> = []
+    /// Runs that stay with those under way after they finish, until the tab is shown again: they
+    /// were running when it showed them, or the chat's Open asked for them.
+    @State private var kept: Set<UUID> = []
+    @State private var showsFinished = false
     private var runs: [SubagentRun] { model.delegation.records[target] ?? [] }
 
     var body: some View {
@@ -45,14 +51,36 @@ private struct SubagentTree: View {
                 Text("When this conversation delegates work to another bot, its progress and handoff appear here.")
                     .font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
             }
-            ForEach(model.delegation.children(of: nil, in: target)) { run in
+            let sections = SubagentSections(runs, keeping: kept)
+            ForEach(sections.current) { run in
                 node(run, ancestry: [])
+            }
+            if !sections.finished.isEmpty {
+                DisclosureGroup(isExpanded: $showsFinished) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(sections.finished) { run in node(run, ancestry: []) }
+                    }
+                } label: {
+                    HStack(spacing: 0) {
+                        Text("Finished · \(sections.finished.count)")
+                        if sections.failedCount > 0 {
+                            Text(" · \(sections.failedCount) failed").foregroundStyle(Color.red)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                }
+                .disclosureGroupStyle(InspectorDisclosureStyle())
             }
         }
         .onChange(of: runs.map(\.id), initial: true) { _, _ in
-            for run in runs where seen.insert(run.id).inserted && run.phase.isActive { expanded.insert(run.id) }
+            for run in runs where seen.insert(run.id).inserted && run.phase.isActive {
+                expanded.insert(run.id)
+                kept.insert(run.id)
+            }
         }
-        // The chat's Open on a sub-agent card: expand that run (and those above it) and scroll to it.
+        // The chat's Open on a sub-agent card: expand that run (and those above it), keep it in
+        // view if it has finished, and scroll to it.
         .onChange(of: SubagentFocus.shared.ticket, initial: true) { _, _ in
             guard let id = SubagentFocus.shared.take(from: runs) else { return }
             // Three levels at most; the bound also stops a malformed saved tree from looping.
@@ -60,6 +88,7 @@ private struct SubagentTree: View {
             for _ in 0..<SubagentLimits.maxDepth + 1 {
                 guard let current = next, let run = runs.first(where: { $0.id == current }) else { break }
                 expanded.insert(run.id)
+                kept.insert(run.id)
                 next = run.parentSubagentID
             }
             DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.2)) { scroll?.scrollTo(id, anchor: .top) } }
