@@ -41,7 +41,10 @@ struct ChatView: View {
                         .frame(maxWidth: .infinity)
                     }
                     .followsNewestMessage()
-                    .onChange(of: messages.count) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    // The chat follows its newest message. Watch the last message, not the count: a
+                    // reply streams in by growing its text in place, which is a content change and not
+                    // a new message, and the follow has to keep up with every delta.
+                    .onChange(of: messages.last) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
                 VStack(spacing: 8) {
                     if let queue = model.messageQueues[target], !queue.messages.isEmpty {
