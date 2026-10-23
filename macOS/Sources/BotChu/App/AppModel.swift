@@ -70,6 +70,9 @@ enum LibraryDestination: String, CaseIterable {
 @MainActor @Observable
 final class AppModel {
     var bots: [Bot] = [] { didSet { try? delegation?.refreshRoster() } }
+    /// The section each bot is in, by bot (`BotSections`); `bots` is in sidebar order, with the
+    /// bots in no section first. See `SidebarSections.swift`.
+    var sections: [UUID: String] = [:]
     var delegation: SubagentRuntime!
     /// Each bot's tasks, open and closed, oldest first.
     var tasks: [UUID: [BotTask]] = [:]
@@ -117,7 +120,7 @@ final class AppModel {
 
     private let store: Store
     /// Index entries whose folders don't hold their bot right now; kept so the bot returns with it.
-    @ObservationIgnored private var missing: [Store.Entry] = []
+    @ObservationIgnored var missing: [Store.Entry] = []
     @ObservationIgnored private var delegationSessions: [ChatTarget: Set<String>] = [:]
     @ObservationIgnored private var runs: [ChatTarget: AgentRun] = [:]
     /// What each running CLI that takes input mid-turn has been given and has taken back.
@@ -168,6 +171,8 @@ final class AppModel {
         let loaded = self.store.loadBots()
         bots = loaded.bots
         missing = loaded.missing
+        sections = loaded.sections
+        arrange(botSections, save: false)
         for bot in bots {
             conversation(.home(bot.id)).load(self.store.loadThread(for: bot))
             let home = BotHome(workspace: bot.workspace)
@@ -323,7 +328,8 @@ final class AppModel {
         if bot.workspace.trimmingCharacters(in: .whitespaces).isEmpty { bot.workspace = defaultWorkspace(for: bot.name) }
         bot.workspace = (bot.workspace as NSString).expandingTildeInPath
         if bot.emoji.isEmpty { bot.emoji = "🤖" }
-        bots.append(bot)
+        // In no section: last among the bots in none, above the sections.
+        bots.insert(bot, at: bots.firstIndex { sections[$0.id] != nil } ?? bots.endIndex)
         conversation(.home(bot.id)).load([])
         tasks[bot.id] = []
         save(bot)
@@ -385,6 +391,7 @@ final class AppModel {
         dispatchTimers.removeValue(forKey: id)?.invalidate()
         if let bot = bot(id) { BotHome(workspace: bot.workspace).trash() }
         bots.removeAll { $0.id == id }
+        sections[id] = nil
         tasks[id] = nil
         // Its threads, turns, queues and reactions, and how its chats were shown.
         conversations = conversations.filter { $0.key.botID != id }
@@ -1406,8 +1413,10 @@ final class AppModel {
         }
     }
 
-    private func saveIndex() {
-        try? store.saveIndex(bots.map { Store.Entry(id: $0.id, workspace: $0.workspace) } + missing)
+    /// Writes `index.json`: the bots in sidebar order, with their sections, then the entries whose
+    /// folders are missing.
+    func saveIndex() {
+        try? store.saveIndex(bots.map { Store.Entry(id: $0.id, workspace: $0.workspace, section: sections[$0.id]) } + missing)
     }
 
     @discardableResult
