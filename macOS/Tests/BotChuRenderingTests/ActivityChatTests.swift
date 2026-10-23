@@ -146,6 +146,25 @@ extension RenderingTests {
         #expect(below < 40)
     }
 
+    /// A closed task's transcript and a deleted bot's go, and the cache keeps only recent ones.
+    @Test func transcriptsOfClosedTasksAndDeletedBotsAreForgotten() throws {
+        let fixture = try ActivityChatFixture()
+        defer { fixture.cleanUp() }
+        let home = ChatTarget.home(fixture.task.botID)
+        _ = TranscriptCache.model(for: home)
+        _ = TranscriptCache.model(for: fixture.task)
+        #expect(TranscriptCache.contains(fixture.task))
+        fixture.app.closeTask(fixture.task)
+        #expect(!TranscriptCache.contains(fixture.task))
+        #expect(TranscriptCache.contains(home))
+        fixture.app.delete(fixture.task.botID)
+        #expect(!TranscriptCache.contains(home))
+        let oldest = ChatTarget.home(UUID())
+        _ = TranscriptCache.model(for: oldest)
+        for _ in 0..<TranscriptCache.capacity { _ = TranscriptCache.model(for: .home(UUID())) }
+        #expect(!TranscriptCache.contains(oldest))
+    }
+
     /// The chat's scroll view: the widest one holding more than `minimum` points of content.
     static func chatScrollView(in view: NSView, minimum: CGFloat = 1_000) -> NSScrollView? {
         var best: NSScrollView?

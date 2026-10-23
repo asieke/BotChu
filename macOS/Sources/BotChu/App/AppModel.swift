@@ -381,8 +381,9 @@ final class AppModel {
         if let bot = bot(id) { BotHome(workspace: bot.workspace).trash() }
         bots.removeAll { $0.id == id }
         tasks[id] = nil
-        // Its threads, turns, queues and reactions.
+        // Its threads, turns, queues and reactions, and how its chats were shown.
         conversations = conversations.filter { $0.key.botID != id }
+        TranscriptCache.forget(bot: id)
         waiting = waiting.filter { $0.key.botID != id }
         unread = unread.filter { $0.botID != id }
         drafts = drafts.filter { $0.key.botID != id }
@@ -450,6 +451,7 @@ final class AppModel {
         let task = tasks[target.botID]![i]
         saveTask(task, of: target.botID)
         unread.remove(target)
+        TranscriptCache.forget(target)
         if openTask[target.botID] == target.taskID { openTask[target.botID] = nil }
         if task.review != nil, let folder = task.folder, case .success(let machine) = machine(of: task) {
             Task {

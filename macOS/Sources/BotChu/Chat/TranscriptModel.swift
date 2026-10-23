@@ -111,17 +111,37 @@ final class TranscriptModel {
     }
 }
 
-/// Each conversation's transcript, kept while BotChu runs: switching back to a conversation
-/// regroups only what arrived meanwhile, and its opened cards stay open.
+/// Recent conversations' transcripts: switching back to one regroups only what arrived
+/// meanwhile, and its opened cards stay open. A deleted bot's and a closed task's go, and so does
+/// the least recently shown beyond `capacity`; one shown again is simply grouped again.
 @MainActor
 enum TranscriptCache {
     private static var models: [ChatTarget: TranscriptModel] = [:]
+    /// The least recently shown first.
+    private static var order: [ChatTarget] = []
+    static let capacity = 48
 
     static func model(for target: ChatTarget) -> TranscriptModel {
+        order.removeAll { $0 == target }
+        order.append(target)
         if let model = models[target] { return model }
         let model = TranscriptModel()
         models[target] = model
+        while order.count > capacity { models[order.removeFirst()] = nil }
         return model
+    }
+
+    static func contains(_ target: ChatTarget) -> Bool { models[target] != nil }
+
+    static func forget(_ target: ChatTarget) {
+        models[target] = nil
+        order.removeAll { $0 == target }
+    }
+
+    /// Every conversation of a bot: its Home and its tasks.
+    static func forget(bot id: UUID) {
+        for target in order where target.botID == id { models[target] = nil }
+        order.removeAll { $0.botID == id }
     }
 }
 
