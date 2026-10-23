@@ -89,10 +89,13 @@ extension RenderingTests {
         let image = NSImage(size: NSSize(width: 40, height: 20))
         image.lockFocus(); NSColor.systemRed.setFill(); NSRect(x: 0, y: 0, width: 40, height: 20).fill(); image.unlockFocus()
         let bytes = try #require(image.tiffRepresentation)
-        let board = NSPasteboard.withUniqueName()
-        defer { board.releaseGlobally() }
-        board.setData(bytes, forType: .tiff)
-        #expect(editor.onPasteImages(board))
+        // Only an image on the pasteboard, as after a screenshot is copied: a plain-text view turns
+        // Edit ▸ Paste (⌘V) off for it, so the composer must keep it on.
+        let pasteboard = StandInPasteboard()
+        defer { pasteboard.restore() }
+        pasteboard.board.setData(bytes, forType: .tiff)
+        #expect(editor.validateMenuItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")))
+        editor.paste(nil)
         let attachment = try #require(app.draftImages[target]?.first)
         #expect(app.draftImages[.home(fixture.bot.id)] == nil)
         let copy = try Data(contentsOf: fixture.home.imageURL(attachment))

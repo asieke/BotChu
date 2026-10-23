@@ -27,14 +27,15 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     recently updated per repository, saying so when there are more), with checks, review state,
     labels, author and any bot's task on them, filtered by repository or search. Double-click opens
     one on GitHub; its menu reviews a pull request (**Review with**, **Review and Comment with**),
-    continues it or starts a task on an issue with a bot, opening New Task with it chosen, or opens
-    the task already on it. An issue or pull request count in the table shows that repository's.
+    continues it (unless it comes from a fork) or starts a task on an issue with a bot, opening New
+    Task with it chosen, or opens the task already on it. An issue or pull request count in the
+    table shows that repository's.
     These are read with one GraphQL query per page of repositories and one per ten busy
     repositories, at most every ten minutes unless refreshed.
     Open a project for deployment and resolved workspace details, GitHub, or **Start Task with…** to
-    choose an agent and open New Task with that project selected. **Workspace options** in New Task
-    reveals computer/folder overrides; the project’s deployment and saved location choose them by
-    default. An unconfigured deployment host needs connection in Settings or an explicit override.
+    choose an agent and open New Task with that project selected. Its tasks work where the project
+    deploys; when that computer isn't connected in Settings ▸ Hosts, New Task says so and offers
+    **Work on This Mac**, which is remembered for the project.
   - **Project metadata:** **Edit Metadata…** edits the name, type, status, deployment, and merge
     policy in `PROJECT.md`. **Create Metadata PR** uses `gh api` to create a documentation branch,
     commit only that file, and open a PR; it never clones the repo or runs its test suite. Repository
@@ -143,10 +144,12 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - **Tasks:** besides its Home, a bot can work on tasks, several at once: each in one of your
     GitHub repositories, with its own conversation and CLI session, in its own git worktree, so
     tasks never share files. BotChu does all of this itself, with no other app. **New Task** (⌘T)
-    picks the repository (from the ones `gh` lists for your account and your organizations, newest
-    push first), the computer and folder it is worked on, an open issue or pull request there or
-    something new, and the account. BotChu names and manages branches automatically. A repository
-    is worked on where you last chose for it
+    asks only for the repository (from the ones `gh` lists for your account and your organizations,
+    newest push first) and what to do, in one box that takes images as the message box does; they
+    go with the task's first message, and ⌘↩ starts it. Opened from Projects for an issue or pull
+    request, it works on that, and the box adds to it. The task runs on its bot's account (change
+    it in the status sidebar), and BotChu names and manages branches automatically. A repository
+    is worked on where you chose for it
     (Settings lists those choices), else where its `PROJECT.md` deploys it (`local:<machine>:<path>`,
     on this Mac or a host of that machine name), else in the repositories folder on this Mac
     (`~/Desktop/WORKSPACE` by default); BotChu clones it there if it isn't yet (`gh repo clone`, or
@@ -168,8 +171,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     browser, new-session and close actions. Closing a task keeps its record, conversation and worktree;
     Home's status lists closed tasks to open again. A worktree goes once its pull request merges, with the repository's
     `scripts/worktree.sh --tidy`; if it is gone, the task's next message makes it again.
-  - **Pull request reviews:** for a pull request, New Task can also **Review it** or **Review and
-    comment**. The review works in a temporary worktree detached at the pull request's head (also
+  - **Pull request reviews:** a pull request's menu in Projects ▸ Pull Requests can also **Review
+    with** or **Review and Comment with** a bot, opening New Task for that review. The review works
+    in a temporary worktree detached at the pull request's head (also
     from a fork), records that commit, and follows the workspace standard's review steps: the first
     gives the review in the task's conversation and posts nothing; the second also posts it on the
     pull request as one review, without asking again. Closing a review task removes its worktree.
@@ -222,7 +226,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     BotChu quit go out on their own after it starts again. **Send next** resumes a paused queue.
     Each Home and task has its own queue, saved beside its thread in `queued.jsonl` (with
     `queued.paused` while paused). A worktree being prepared finishes setup before follow-ups can run.
-  - **Images:** use the **+** button, paste an image or image files, or drop them into the message box.
+  - **Images:** use the **+** button, paste an image (⌘V, such as a copied screenshot) or image
+    files, or drop them into the message box. Copied text still pastes as text when its app adds a
+    picture of it after the text (as spreadsheets do), and other files paste as text too.
     Previews can be removed before sending; image-only messages work too. Up to eight images travel
     with each message, including queued messages restored after relaunch. Click a sent image to open it.
     Files up to 30 MB are decoded locally, resized to at most 2048 pixels on the longest edge, and saved
@@ -329,10 +335,15 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
     and default OpenRouter model.
   - **Reporting bugs and features:** the ladybug button at the toolbar's trailing end, on every
-    screen, or **Help ▸ Report a Bug or Feature…** opens a sheet with one field. **Submit** (⌘↩)
+    screen, or **Help ▸ Report a Bug or Feature…** opens a sheet with one field, which takes up to
+    eight images as the message box does. **Submit** (⌘↩)
     files it as an issue in `asieke/BotChu` with `gh issue create`, titled from its first line or
-    sentence (cut at a word, 72 characters at most), and links the new issue; when gh fails, the
-    report stays, with gh's reason. The repository is public, so the issue adds only the app state
+    sentence (cut at a word, 72 characters at most), with its images after the text, and links the
+    new issue; when gh fails, the report stays, with gh's reason. gh attaches the images itself
+    (`--attach`, gh 2.99 or later, which needs write access to the repository), each as
+    `image-<n>.png` from a private folder that goes afterwards; if one doesn't upload, the issue is
+    made without it, and the sheet says so. The repository is public, so besides the images you add,
+    the issue adds only the app state
     the sheet shows before it goes, as categories and counts: the version and commit, macOS, the
     screen and status sidebar area, the conversation's kind (Home, or a task on this Mac or a host
     and its kind of work), CLI family, starter model and effort, its turn's state (an error by kind
@@ -383,7 +394,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, and what a report says about the app, `IssueReports.swift`),
-    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, and the composer), `Inspector/` (the
+    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
     the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -398,7 +409,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
     made in throwaway repositories; and hosts: their `ssh` command lines, deploy targets, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
-    from a remote task; reports: their titles, app state, and filing through a stand-in `gh`;
+    from a remote task; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
     and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
     commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
@@ -411,7 +422,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
     main window's layout at its narrowest, galleries that preserve conversation state, custom
     profile persistence, provider logos in both appearances and in account menus, the report
-    sheet, filing with a stand-in, the activity chat at every density, light and dark and at its
+    sheet, filing with a stand-in, images pasted with Edit ▸ Paste into the composer, the report
+    and New Task (through a stand-in for the general pasteboard, so no test touches the clipboard)
+    and what pastes as text instead, New Task starting a task from a project and a brief with an
+    image, the activity chat at every density, light and dark and at its
     narrowest, a chat that follows new content only for a reader at the bottom, and a Sub-agents
     tab that folds finished runs and scrolls to one the chat opens. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
@@ -523,7 +537,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
   `BOTCHU_WINDOW=compact` checks the minimum window width.
   `BOTCHU_OPEN=report` opens Report a Bug or Feature, and `BOTCHU_REPORT="<report>"` files one at
-  launch. A review copy files reports only with a stand-in `gh`, which keeps them in `reports/` in
+  launch. A review copy files reports only with a stand-in `gh`, which keeps them (and the images it
+  attaches) in `reports/` in
   its data folder and prints a made-up issue's link (with `BOTCHU_REPORT_FAIL=1`, it fails as a
   signed-out gh does), so no review creates a real issue.
   `BOTCHU_DEMO=activity` makes the shown conversation a long agent run, in memory (exploration with
