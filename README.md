@@ -96,8 +96,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     Codex Personal, Codex Dev and Codex Work (`codex-personal`, `codex-dev`, `codex-work`), Google
     (Antigravity, `agy`), Muse (`muse`), and OpenRouter (the Pi agent, `pi`, with an OpenRouter key
     and any OpenRouter model). Each account's command can be changed in Settings.
-  - **Chat:** one continuous thread per bot (its **Home**), and one per task. Replies stream in, rendered as Markdown; each tool the
-    agent runs shows as a collapsible card with its input and output. Headings, nested lists, quotes,
+  - **Chat:** one continuous thread per bot (its **Home**), and one per task. Replies stream in, rendered as Markdown; the
+    agent's tool work shows as activity (below). Headings, nested lists, quotes,
     tables and fenced code use native block layouts; code has a Copy button. Replies have soft rounded
     bubbles. Inline and display math use bundled KaTeX; Mermaid code fences display diagrams with
     source/copy and fit/actual-size controls. Both render offline in system WebKit, including inside
@@ -108,6 +108,30 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     A turn can be stopped. The
     thread and the CLI's session id are saved, so the next message (also after a relaunch) resumes
     the same CLI session.
+  - **Agent activity:** tool calls, of every CLI, are folded by what they are for. Consecutive
+    read-only calls (reading, listing, searching, fetching, and shell commands known only to read,
+    such as `cat`, `tail`, `sed -n`, `rg`, `find`, `ls` or `git status`) form one **Explored** group
+    that names its counts, the folders it touched and its duration, with chips for the first seven
+    files (`+N more`); a file read again right away shows once, `×2`, with the line ranges merged.
+    Reply text, a command with side effects (builds, tests, git writes, redirects, and unknown or
+    long commands), an edit, a sub-agent or a question ends a group. Failed calls keep a line of their
+    own even in a folded group, merged by cause (`7 not found` and the files); a search that finds
+    nothing isn't a failure. Commands stand alone with what ran, the exit code and time, the first
+    line of output and `+N lines`; edits with the file and the lines added and removed. Each sub-agent
+    BotChu runs (`botchu-subagent`) is one card where it was started, with its identity, task,
+    status, time and tool calls, whose **Open** shows its thread in the Sub-agents tab; Claude
+    Code's and Antigravity's own sub-agents are cards too. While a turn explores, its group stays open
+    with its last three calls and a spinner on the current one, then folds into its summary in place.
+    **View ▸ Chat Density** (also in the toolbar) chooses Compact (headers only), Detailed (the
+    default: headers, files and errors) or Raw (every call with its arguments, as before); a click on
+    a group or card opens or closes it whatever the density, and an opened card shows each call's
+    arguments and output (the first 20 KB, with Copy for all of it). For this, each tool call keeps its
+    arguments (long text shortened, an edit's text as the lines it adds and removes), exit code and
+    duration; older threads show what they recorded. The chat opens at its newest items, as many as
+    lay out quickly, with **Show earlier** above them. Only the messages after the last settled item
+    are regrouped as a turn streams in, and a conversation shown again keeps its grouping and opened
+    cards. A reader at the bottom follows new content; one reading earlier content keeps their place
+    while a turn goes on, and **Follow Live** takes them back.
   - **Tasks:** besides its Home, a bot can work on tasks, several at once: each in one of your
     GitHub repositories, with its own conversation and CLI session, in its own git worktree, so
     tasks never share files. BotChu does all of this itself, with no other app. **New Task** (⌘T)
@@ -297,7 +321,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - `Sources/BotChuCore/` — Foundation only, unit-tested: accounts and the command line each CLI
     runs with (`Accounts.swift`), generation choices and public OpenRouter model metadata
     (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model (`Models.swift`), one stream parser per
-    CLI turning its JSON lines into chat events (`StreamParsers.swift`), the identity, instructions,
+    CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
+    the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
+    (`ToolActivity.swift`, reading shell command lines with `ShellCommand.swift`), the chat's activity
+    items, with exploration folded into groups and kept up to date at the tail
+    (`ActivityTranscript.swift`), the identity, instructions,
     team playbook, memory and recap that open a session (`BotContext.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
@@ -321,7 +349,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     in standard system materials: `App/` (the app, window, model, settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`),
-    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (messages and the composer), `Inspector/` (the
+    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, and the composer), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown and New Task sheets), `Settings/` (with
     the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, and the pet's looping video).
@@ -334,15 +362,20 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
     made in throwaway repositories; and hosts: their `ssh` command lines, deploy targets, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
-    from a remote task.
+    from a remote task; and the chat's activity: how each CLI's tool calls (and shell commands) are
+    described and grouped, failures, repeated reads, sub-agent cards, and that a streamed update
+    regroups only the tail.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, model-picker keyboard interaction and persisted choices,
     Markdown editor sizing and Save/Cancel, collapsing status sections, inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
-    main window's layout at its narrowest, galleries that preserve conversation state, and custom
-    profile persistence. Set `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
+    main window's layout at its narrowest, galleries that preserve conversation state, custom
+    profile persistence, the activity chat at every density, light and dark and at its narrowest,
+    and a chat that follows new content only for a reader at the bottom. Set
+    `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
-    to render isolated gallery/table screenshots with sample project metadata and usage. These
+    (or `activityChatRendersGroupsCardsAndLiveWork`)
+    to render isolated gallery/table (or chat) screenshots with sample data. These
     share a serialized suite because AppKit
     window focus is global; all use isolated windows and no real bot data.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
@@ -444,6 +477,17 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   `BOTCHU_INSPECTOR=activity`, `subagents`, `model`, `session` or `memory` selects a status sidebar tab;
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
   `BOTCHU_WINDOW=compact` checks the minimum window width.
+  `BOTCHU_DEMO=activity` makes the shown conversation a long agent run, in memory (exploration with
+  failures, a build, an edit, three sub-agents and a live group), and `BOTCHU_DENSITY=compact` (or
+  `detailed`, `raw`) chooses the chat density for the run.
+- Chat latency: `BOTCHU_BENCHMARK=<file> swift test --configuration release --package-path macOS
+  --filter chatBenchmark` times, from the change until the window has drawn it, switching to long
+  conversations (1,500 messages; outputs of 200 KB to 1 MB; a 400-call exploration; seventeen running
+  sub-agents), a streamed delta, a new call in a live exploration, a sub-agent's update, and opening
+  a large group or output, and writes the table to the file. `BOTCHU_BENCHMARK_SCOPE=chat` times the
+  chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
+  part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
+  new call within a frame (16 ms), opening a group under 100 ms.
 - Account allowance end to end: `swift run --package-path macOS botchu-smoke --usage [account id …]`
   reads each account's usage through the same client as the inspector. It prints only the normalized
   usage fields, never raw CLI output or credentials. Muse makes its brief usage request; OpenRouter
