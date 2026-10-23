@@ -6,10 +6,14 @@
     let revision = 0;
     let nextID = 0;
     let diagramQueue = Promise.resolve();
+    // The app shows the reply at the first height reported, so nothing is reported until the
+    // first render is complete, its math typeset and diagrams drawn (or a second and a half has
+    // passed): a reply never shows its source first, or grows and shrinks as it renders.
+    let complete = false;
+    const report = () => window.webkit.messageHandlers.layout.postMessage(content.getBoundingClientRect().height);
+    const finish = () => { if (!complete) { complete = true; report(); } };
 
-    new ResizeObserver(() => {
-        window.webkit.messageHandlers.layout.postMessage(content.getBoundingClientRect().height);
-    }).observe(content);
+    new ResizeObserver(() => { if (complete) report(); }).observe(content);
 
     function showDiagram(section, svg) {
         const diagram = section.querySelector('.diagram');
@@ -24,6 +28,7 @@
 
     window.renderReply = async (html, dark) => {
         const current = ++revision;
+        if (current === 1) setTimeout(finish, 1500);
         document.documentElement.dataset.appearance = dark ? 'dark' : 'light';
         document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
         content.innerHTML = html;
@@ -75,7 +80,7 @@
         };
         // Mermaid has shared configuration. Serialize renders and discard stale streamed replies.
         diagramQueue = diagramQueue.then(render, render);
-        await diagramQueue;
+        try { await diagramQueue; } finally { finish(); }
     };
 
     document.addEventListener('click', event => {

@@ -8,7 +8,6 @@ import BotChuCore
 /// earlier content keeps their place while it arrives.
 struct ChatView: View {
     @Environment(AppModel.self) private var model
-    @AppStorage("showsStatus") private var showsStatus = true
     @AppStorage(ChatDensity.storageKey) private var density: ChatDensity = .detailed
     let target: ChatTarget
     @State private var composerFocused = false
@@ -69,10 +68,12 @@ struct ChatView: View {
                             } else if running, messages.last?.role != .assistant, !(shown.last.map { Self.showsProgress($0) } ?? false) {
                                 TypingIndicator(bot: bot, showsAvatar: !(shown.last?.isBotTurn ?? false))
                             }
-                            Color.clear.frame(height: 1).id("bottom")
+                            // The chat's bottom margin, so scrolling to it lands at the very end, where
+                            // the chat opens, rather than the margin short of it.
+                            Color.clear.frame(height: 21).id("bottom")
                         }
                         .padding(.horizontal, 24)
-                        .padding(.vertical, 20)
+                        .padding(.top, 20)
                         .frame(maxWidth: Theme.chatWidth)
                         .frame(maxWidth: .infinity)
                     }
@@ -154,27 +155,6 @@ struct ChatView: View {
             .frame(minWidth: 300)
             .navigationTitle(bot.name)
             .navigationSubtitle(task?.title ?? "")
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Menu {
-                        Picker("Chat Density", selection: $density) {
-                            ForEach(ChatDensity.allCases) { Label($0.title, systemImage: $0.symbol).tag($0) }
-                        }
-                        .pickerStyle(.inline)
-                    } label: {
-                        Label("Chat Density", systemImage: density.symbol)
-                    }
-                    .help("How much tool work the chat shows: Compact (headers), Detailed (files and errors) or Raw (every call)")
-                    Button { model.newTask(for: bot.id) } label: {
-                        Label("New Task", systemImage: "plus.rectangle.on.rectangle")
-                    }
-                    .help("Start a task for \(bot.name) in a repository (⌘T)")
-                    Button { showsStatus.toggle() } label: {
-                        Label(showsStatus ? "Hide Status" : "Show Status", systemImage: "sidebar.right")
-                    }
-                    .help("Show or hide the status sidebar (⌥⌘I)")
-                }
-            }
             .onAppear { composerFocused = true }
             // Opening the conversation again starts from its newest items.
             .onDisappear { transcript.windowStart = nil }
@@ -200,6 +180,40 @@ struct ChatView: View {
         case .exploration(let group): group.isOpen
         case .tool(let tool): tool.state == .running
         case .message: false
+        }
+    }
+}
+
+/// The chat's toolbar buttons. They go on the chat column, which stays as conversations change,
+/// not on `ChatView`, which is made anew for each: toolbar items made anew on every switch had
+/// AppKit rebuild and lay out the toolbar each time, a third of the switch. Nothing in them
+/// depends on the conversation shown, so a switch leaves the toolbar as it is.
+struct ChatToolbar: ViewModifier {
+    @Environment(AppModel.self) private var model
+    @AppStorage("showsStatus") private var showsStatus = true
+    @AppStorage(ChatDensity.storageKey) private var density: ChatDensity = .detailed
+
+    func body(content: Content) -> some View {
+        content.toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Menu {
+                    Picker("Chat Density", selection: $density) {
+                        ForEach(ChatDensity.allCases) { Label($0.title, systemImage: $0.symbol).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Label("Chat Density", systemImage: density.symbol)
+                }
+                .help("How much tool work the chat shows: Compact (headers), Detailed (files and errors) or Raw (every call)")
+                Button { if let id = model.visibleBotID { model.newTask(for: id) } } label: {
+                    Label("New Task", systemImage: "plus.rectangle.on.rectangle")
+                }
+                .help("Start a task for this bot in a repository (⌘T)")
+                Button { showsStatus.toggle() } label: {
+                    Label(showsStatus ? "Hide Status" : "Show Status", systemImage: "sidebar.right")
+                }
+                .help("Show or hide the status sidebar (⌥⌘I)")
+            }
         }
     }
 }

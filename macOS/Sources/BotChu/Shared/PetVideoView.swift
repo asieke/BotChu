@@ -66,17 +66,45 @@ private struct PetVideoPlayer: NSViewRepresentable {
     }
 }
 
-/// Plays clips in layers: a new clip fades in over the one before, which is then let go.
+/// Plays clips in layers over the requested clip's still. A clip shows once its video has a
+/// frame: the first at once, over the still, which is that clip's first frame; a later one fading
+/// in over the clip before, which is then let go. Until then the clip before stays, or the still,
+/// so the pet never blinks out while a clip loads (a fresh player draws nothing at first).
 final class PetVideoLayerView: NSView {
-    private struct Playing {
+    private final class Playing {
         let clipID: String
         let player: AVQueuePlayer
         let layer: AVPlayerLayer
         var looper: AVPlayerLooper?
         var observer: NSObjectProtocol?
+        var readiness: NSKeyValueObservation?
+
+        init(clipID: String, player: AVQueuePlayer, layer: AVPlayerLayer) {
+            self.clipID = clipID
+            self.player = player
+            self.layer = layer
+        }
+
+        /// Stops it and takes its layer away.
+        func release() {
+            readiness?.invalidate()
+            player.pause()
+            looper?.disableLooping()
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            player.removeAllItems()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.removeFromSuperlayer()
+            CATransaction.commit()
+        }
     }
 
+    /// The clip asked for last, perhaps still loading.
     private var current: Playing?
+    /// The clip on screen: `current` once it has a frame, until then the one before; nil until a
+    /// clip has shown, when only the still does.
+    private var shown: Playing?
+    private let still = CALayer()
     private var package: PetVideoPackage?
     /// The requested activity can still be a reaction after its player has returned to idle.
     private var requestedClipID: String?
@@ -86,6 +114,9 @@ final class PetVideoLayerView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         layer?.masksToBounds = true
+        still.contentsGravity = .resizeAspectFill
+        still.frame = bounds
+        layer?.addSublayer(still)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -103,6 +134,10 @@ final class PetVideoLayerView: NSView {
         self.package = package
         guard !samePackage || requestedClipID != clipID else { return }
         requestedClipID = clipID
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        still.contents = PetStillImage.image(package.stillURL(package.clip(clipID)?.still ?? "idle"))
+        CATransaction.commit()
         guard !samePackage || current?.clipID != clipID else { return }
         // Let a one-shot reaction finish before idle, including time spent loading the video.
         // A new activity or a different pet can still take over immediately.
@@ -111,10 +146,15 @@ final class PetVideoLayerView: NSView {
     }
 
     func stop() {
-        if let current { release(current) }
+        current?.release()
+        if shown !== current { shown?.release() }
         current = nil
+        shown = nil
         requestedClipID = nil
     }
+
+    /// Whether the clip asked for last is on screen, rather than the clip before it or the still.
+    var showsCurrentClip: Bool { current != nil && current === shown }
 
     /// The clip playing and its player's state, for review snapshots.
     var debugState: String {
@@ -148,13 +188,15 @@ final class PetVideoLayerView: NSView {
         let layer = AVPlayerLayer(player: player)
         layer.videoGravity = .resizeAspectFill
         layer.frame = bounds
+        // Hidden until it has a frame (`reveal`).
         layer.opacity = 0
-        var playing = Playing(clipID: clipID, player: player, layer: layer)
+        let playing = Playing(clipID: clipID, player: player, layer: layer)
         if clip.loops {
             playing.looper = AVPlayerLooper(player: player, templateItem: item)
         } else {
+            // A reaction plays once, holding its last frame until idle shows, then idle loops.
+            player.actionAtItemEnd = .pause
             player.insert(item, after: nil)
-            // A reaction plays once, then idle loops.
             playing.observer = NotificationCenter.default.addObserver(
                 forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main
             ) { [weak self, weak player] _ in
@@ -164,30 +206,48 @@ final class PetVideoLayerView: NSView {
                 }
             }
         }
-        self.layer?.addSublayer(layer)
-        player.play()
-
-        let previous = current
+        // A clip replaced before it had a frame was never seen.
+        if let current, current !== shown { current.release() }
         current = playing
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0
-        fade.toValue = 1
-        fade.duration = previous == nil ? 0 : Self.fade
         CATransaction.begin()
-        CATransaction.setCompletionBlock { [weak self] in
-            MainActor.assumeIsolated { if let previous { self?.release(previous) } }
-        }
-        layer.add(fade, forKey: "fade")
-        layer.opacity = 1
+        // Without the fade a layer gets when it joins the tree.
+        CATransaction.setDisableActions(true)
+        self.layer?.addSublayer(layer)
         CATransaction.commit()
+        player.play()
+        playing.readiness = layer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+            guard layer.isReadyForDisplay else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.reveal(layer) }
+            }
+        }
     }
 
-    private func release(_ playing: Playing) {
-        playing.player.pause()
-        playing.looper?.disableLooping()
-        if let observer = playing.observer { NotificationCenter.default.removeObserver(observer) }
-        playing.player.removeAllItems()
-        playing.layer.removeFromSuperlayer()
+    /// Shows the current clip once its layer has a frame: at once in place of the still, or fading
+    /// in over the clip on screen, which is let go when the fade ends.
+    private func reveal(_ layer: AVPlayerLayer) {
+        guard let current, current.layer === layer, shown !== current else { return }
+        let previous = shown
+        shown = current
+        CATransaction.begin()
+        if let previous {
+            CATransaction.setCompletionBlock { [weak self] in
+                MainActor.assumeIsolated {
+                    if let self, previous === self.shown || previous === self.current { return }
+                    previous.release()
+                }
+            }
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0
+            fade.toValue = 1
+            fade.duration = Self.fade
+            layer.add(fade, forKey: "fade")
+        } else {
+            // Explicitly no animation: an animation with no duration takes Core Animation's default.
+            CATransaction.setDisableActions(true)
+        }
+        layer.opacity = 1
+        CATransaction.commit()
     }
 }
 

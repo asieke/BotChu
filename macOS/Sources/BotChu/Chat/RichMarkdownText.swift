@@ -6,7 +6,8 @@ import WebKit
 /// A reply's web view is made only once the reply comes near the visible part of the chat, and it
 /// gets only the libraries its reply uses (Mermaid alone is over 5 MB); a reply that gains math or
 /// a diagram as it streams gets that library then. A reply drawn again starts at the height it
-/// was last drawn at.
+/// was last drawn at. A new web view is invisible until its reply has rendered, so the bubble
+/// shows, not WebKit's white page or the reply's source, and the reply fades in at its final height.
 struct RichMarkdownText: View {
     let html: String
     @State private var height: CGFloat
@@ -110,6 +111,8 @@ private struct RichMarkdownWebView: NSViewRepresentable {
             configuration.userContentController = controller
             let view = ChatWebView(frame: .zero, configuration: configuration)
             view.underPageBackgroundColor = .clear
+            // Shown by the reply's first height (`userContentController`).
+            view.alphaValue = 0
             view.navigationDelegate = self
             view.setContentHuggingPriority(.defaultLow, for: .horizontal)
             view.loadFileURL(RichMarkdownWebView.document, allowingReadAccessTo: RichMarkdownWebView.assets)
@@ -147,6 +150,16 @@ private struct RichMarkdownWebView: NSViewRepresentable {
                 let measured = ceil(value)
                 if abs(height.wrappedValue - measured) > 0.5 { height.wrappedValue = measured }
                 RichMarkdownHeights.remember(measured, for: html)
+                // The first height comes once the reply has rendered: it fades in after the chat
+                // has taken that height.
+                if let view = message.webView, view.alphaValue == 0 {
+                    DispatchQueue.main.async { [weak view] in
+                        NSAnimationContext.runAnimationGroup { context in
+                            context.duration = 0.15
+                            view?.animator().alphaValue = 1
+                        }
+                    }
+                }
             } else if message.name == "copyCode", let code = message.body as? String {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(code, forType: .string)

@@ -6,7 +6,6 @@ import BotChuCore
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openSettings) private var openSettings
-    @AppStorage("showsStatus") private var showsStatus = true
     @State private var hooksStarted = false
     @State private var contentSize = CGSize(width: 1240, height: 800)
 
@@ -16,7 +15,7 @@ struct ContentView: View {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 210, ideal: 240, max: 320)
         } detail: {
-            detail
+            DetailColumn()
         }
         // No minimum width of our own: the window's narrowest is what the columns need, which grows
         // with the sidebar's and the status's widths (the split view counts the sidebar twice). A
@@ -45,21 +44,34 @@ struct ContentView: View {
             ReportIssueSheet(request: request)
                 .environment(model)
         }
-        // Report a Bug or Feature, at the toolbar's trailing end on every screen, so a bug can be
-        // reported wherever it shows: in the glass that floats over the content (macOS 26 and
-        // later), beside a conversation's own buttons, it never covers the composer, the sidebar or
-        // the status sidebar, at any window width.
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) { ReportIssueButton() }
-        }
         .task {
             guard !hooksStarted else { return }
             hooksStarted = true
             DevHooks.start(model: model, openSettings: { openSettings() })
         }
     }
+}
 
-    @ViewBuilder private var detail: some View {
+/// The gallery or conversation shown beside the sidebar: a view of its own, so a switch between
+/// conversations redraws only this column.
+private struct DetailColumn: View {
+    @Environment(AppModel.self) private var model
+    @AppStorage("showsStatus") private var showsStatus = true
+
+    var body: some View {
+        content
+            // Report a Bug or Feature, at the toolbar's trailing end on every screen, so a bug can be
+            // reported wherever it shows: in the glass that floats over the content (macOS 26 and
+            // later), beside a conversation's own buttons, it never covers the composer, the sidebar
+            // or the status sidebar, at any window width. It is declared on this column, which stays
+            // as conversations change: declared on the window's split view, it was made anew at every
+            // switch, and every toolbar button blinked out and faded back in.
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) { ReportIssueButton() }
+            }
+    }
+
+    @ViewBuilder private var content: some View {
         if let destination = model.destination {
             switch destination {
             case .projects: ProjectsView()
@@ -72,6 +84,7 @@ struct ContentView: View {
                 ChatView(target: tab)
                     .id(tab)
             }
+            .modifier(ChatToolbar())
             .inspector(isPresented: $showsStatus) {
                 Group {
                     if tab.taskID != nil {

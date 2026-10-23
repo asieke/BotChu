@@ -187,28 +187,54 @@ struct ToolCard: View {
     }
 }
 
+/// While a turn works and nothing of its reply shows yet: three dots rising and brightening in a
+/// wave, drawn from the clock.
 struct TypingIndicator: View {
     let bot: Bot
     let showsAvatar: Bool
-    @State private var phase = 0.0
 
     var body: some View {
         BotTurnRow(bot: bot, showsAvatar: showsAvatar) {
-            HStack(spacing: 5) {
-                ForEach(0..<3) { i in
-                    Circle()
-                        .fill(Color.secondary)
-                        .frame(width: 7, height: 7)
-                        .opacity(0.3 + 0.7 * max(0, sin(phase - Double(i) * 0.8)))
-                }
+            TimelineView(.animation(minimumInterval: 1 / 60)) { context in
+                TypingDots(date: context.date)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 13)
             .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.replyBackground))
         }
-        .onAppear {
-            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = .pi * 2 }
-        }
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Working")
+    }
+}
+
+/// The dots at one moment: each rises and brightens in turn, then all three rest before the next
+/// wave. With Reduce Motion they only brighten, in place.
+struct TypingDots: View {
+    let date: Date
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    static let period: TimeInterval = 1.3
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3) { dot in
+                let lift = Self.lift(dot: dot, at: date)
+                Circle()
+                    .fill(Color.secondary)
+                    .frame(width: 7, height: 7)
+                    .opacity(0.35 + 0.65 * lift)
+                    .scaleEffect(reduceMotion ? 1 : 1 + 0.15 * lift)
+                    .offset(y: reduceMotion ? 0 : -3 * lift)
+            }
+        }
+    }
+
+    /// How far a dot is through its rise, 0 at rest and 1 at the top: a smooth bump over the
+    /// first half of its turn, each dot starting a little after the one before it.
+    static func lift(dot: Int, at date: Date) -> Double {
+        var phase = (date.timeIntervalSinceReferenceDate / period - Double(dot) * 0.15).truncatingRemainder(dividingBy: 1)
+        if phase < 0 { phase += 1 }
+        guard phase < 0.5 else { return 0 }
+        return (1 - cos(2 * .pi * phase / 0.5)) / 2
     }
 }

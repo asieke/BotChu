@@ -72,7 +72,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and a deflated loop after a failed turn. Selection gives the wave five seconds, and reactions
     finish their full clip before returning to idle. The activity comes from each tool call the CLI reports,
     and a tool's clip shows for at least 2.5 seconds. Clips loop without a seam, cross-fade when the
-    activity changes, and play muted. A missing clip falls back to a close one, then idle. Only the
+    activity changes, and play muted. A clip shows once its video has a frame; until then the clip
+    before it stays, or the pose's still, so a pet never blinks out, as when its bot is selected.
+    A missing clip falls back to a close one, then idle. Only the
     selected bot and busy bots move in the sidebar, the chat shows still frames, and Reduce Motion
     shows stills everywhere.
   - **Making a pet:** describe the bot's look in **Appearance** in **Edit Bot** and choose **Make
@@ -107,7 +109,12 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     bubbles. Inline and display math use bundled KaTeX; Mermaid code fences display diagrams with
     source/copy and fit/actual-size controls. Both render offline in system WebKit, including inside
     tables and lists; a reply's web view is made as it nears the visible part of the chat, with only
-    the renderer it uses. Unsupported or incomplete expressions and diagrams stay readable as source.
+    the renderer it uses, and shows once the reply has rendered, at its final height, so neither a
+    blank page nor the source flashes first. Unsupported or incomplete expressions and diagrams stay
+    readable as source. While a turn works and nothing of its reply shows yet, three dots in a
+    bubble rise and brighten in turn (with Reduce Motion they only brighten). Switching
+    conversations redraws only the conversation: the toolbar's buttons stay as they are, the
+    message box takes focus as the conversation appears, and a long chat opens at its very end.
     Antigravity subagent
     launch cards finish when the CLI acknowledges the launch; the bot reports the workers' results
     in its replies. A missing completion record shows a neutral question mark, not a tool failure.
@@ -405,7 +412,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     main window's layout at its narrowest, galleries that preserve conversation state, custom
     profile persistence, provider logos in both appearances and in account menus, the report
     sheet, filing with a stand-in, the activity chat at every density, light and dark and at its
-    narrowest, and a chat that follows new content only for a reader at the bottom. Set
+    narrowest, a chat that follows new content only for a reader at the bottom, and switching
+    without a flash: the toolbar kept, the message box focused in the same update, the chat at its
+    very end, pets that never blink out while a clip loads, rich replies shown only once rendered,
+    and typing dots that move. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `activityChatRendersGroupsCardsAndLiveWork`)
