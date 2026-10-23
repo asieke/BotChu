@@ -251,6 +251,8 @@ extension RenderingTests {
         app.editQueuedMessage(id, in: target)
         #expect(app.messageQueues[target]?.messages.count == 1)
         #expect(fixture.home.loadQueuedMessages(task: target.taskID).map(\.id) == [id])
+        // The tool call ends once the CLI has the follow-up, so it takes it at that call.
+        try await fixture.wait { FileManager.default.fileExists(atPath: fixture.folder(target).appendingPathComponent("received").path) }
         try fixture.release(target)
         try await fixture.wait { !app.isRunning(target) }
         let thread = app.thread(target).filter { !$0.role.isNote }
@@ -518,6 +520,7 @@ extension RenderingTests {
             line = read_line(0.02)
             if line:
                 pending.append(line)
+                Path("received").touch()
         emit({"type":"user", "message":{"role":"user", "content":[{"tool_use_id":"toolu_1", "type":"tool_result",
               "content":"done", "is_error":False}]}, "parent_tool_use_id":None})
         for line in pending:
