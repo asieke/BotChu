@@ -82,7 +82,8 @@ struct ContentView: View {
                         BotInspector(botID: id)
                     }
                 }
-                .inspectorColumnWidth(min: 280, ideal: 320, max: 380)
+                // Opens at its widest, and narrows from there.
+                .inspectorColumnWidth(min: 280, ideal: 380, max: 380)
             }
         } else {
             ContentUnavailableView {

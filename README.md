@@ -269,11 +269,13 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     every bot follows: its stages, handoffs, who calls whom with `botchu-subagent`, and when work is
     done. Unlike memory, it is given as instructions: in every bot's Home `AGENTS.md`, and at the
     start of every task and sub-agent session. It is left out entirely while it is missing or empty,
-    and BotChu never creates it. Edit it, or the shared `MEMORY.md`, in Settings (**Shared by every
-    bot**). Bots are told not to change `INSTRUCTIONS.md` or `TEAM.md` unless asked. A new
+    and BotChu never creates it. Edit it from any bot's **Memory** tab or in Settings (**Shared by
+    every bot**), where the shared `MEMORY.md` is edited too. Bots are told not to change
+    `INSTRUCTIONS.md` or `TEAM.md` unless asked. A new
     session (new bot, account switch, or **New Session**) also gets the recent conversation, so
     switching accounts keeps the thread's continuity.
-  - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I). A card at the top shows
+  - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I). It opens at its widest,
+    380 points; drag its edge to narrow it, down to 280. A card at the top shows
     a large character (its pet, playing, or its emoji) on the left, beside the bot name and current
     activity. Tasks show the repository as a larger title, with the issue or task title beneath it
     in smaller text. The ring says its state (grey when idle, a spinning violet arc while it
@@ -283,7 +285,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     the bot list still shows activity across its tasks. Five icon tabs sit below the character,
     in a rounded bar with a raised selected segment: **Activity** (tasks and conversation stats), **Sub-agents** (delegated work),
     **Model & Usage** (account, agent, model, reasoning and allowance), **Session** (the CLI session
-    and workspace controls), and **Memory** (memory and personality). Hover for tab names, or
+    and workspace controls), and **Memory** (instructions, personality, memory and the team
+    playbook). Hover for tab names, or
     focus the bar and use Left/Right arrows. The selected area is remembered across conversations
     and launches; its data always belongs to the shown Home or task. The character, tabs and bottom
     actions stay visible while the selected area's content scrolls. Home keeps Edit and New Session;
@@ -294,8 +297,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and new automatic progress notes. Explicitly choosing a pull request to continue or review is
     still available in New Task. Colors follow light and dark mode.
     Sections within each area, and Status above the tabs, still collapse from their headings, with
-    their expansion remembered. **Memory** has three cards matching
-    Conversation: **INSTRUCTIONS.md**, **SOUL.md** and **MEMORY.md**. Each opens an in-app Markdown editor at half the
+    their expansion remembered. **Memory** has four cards matching
+    Conversation: the bot's **INSTRUCTIONS.md**, **SOUL.md** and **MEMORY.md**, and **TEAM.md**, the
+    playbook every bot shares (the same file as in Settings). Each opens an in-app Markdown editor at half the
     parent window's width and height, with Save (⌘S), Cancel (Escape), and Reload. Saving preserves exact
     Markdown and refuses to overwrite a file changed on disk since it was opened. Saved changes
     apply at the next new session; **New Session** applies them to an existing conversation. The
