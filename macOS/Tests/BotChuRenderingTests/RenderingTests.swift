@@ -159,6 +159,66 @@ import BotChuCore
         #expect(state?["svg"] as? Int == 0)
     }
 
+    /// #46: a long chat makes web views only for the rich replies near what is visible, and makes
+    /// the rest as they scroll into view.
+    @Test func richRepliesFarFromViewWaitForTheirWebViews() async throws {
+        _ = NSApplication.shared
+        let replies = (0..<24).map { "Reply \($0): $x_{\($0)}^2$ is math." }
+        let host = NSHostingView(rootView: ScrollView {
+            VStack(spacing: 40) {
+                ForEach(replies, id: \.self) { MarkdownText(text: $0).frame(height: 120) }
+            }
+        }.frame(width: 600, height: 400))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let near = webViews(in: host).count
+        #expect(near > 0)
+        #expect(near < replies.count / 2)
+        let scroll = try #require(scrollView(in: host))
+        let document = try #require(scroll.documentView)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.frame.height - scroll.contentView.bounds.height)))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(webViews(in: host).count > near)
+    }
+
+    /// #46: Mermaid, over 5 MB, goes only into a reply with a diagram, also one that gains it as
+    /// it streams.
+    @Test func aReplyGetsMermaidOnlyOnceItHasADiagram() async throws {
+        _ = NSApplication.shared
+        let math = "The sum is $a + b$."
+        let host = NSHostingView(rootView: MarkdownText(text: math).frame(width: 600))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 800), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        let web = try #require(findWebView(in: host))
+        try await waitFor(web, script: "document.querySelectorAll('.katex').length === 1")
+        let before = try await web.callAsyncJavaScript("return [typeof katex, typeof mermaid];", in: nil, contentWorld: .defaultClient) as? [String]
+        #expect(before == ["object", "undefined"])
+        host.rootView = MarkdownText(text: math + "\n\n```mermaid\nflowchart LR\n  A[Start] --> B[Done]\n```").frame(width: 600)
+        host.layoutSubtreeIfNeeded()
+        try await waitFor(web, script: "document.querySelector('.diagram svg') !== null")
+        #expect(findWebView(in: host) === web)
+        let after = try await web.callAsyncJavaScript("return typeof mermaid;", in: nil, contentWorld: .defaultClient) as? String
+        #expect(after == "object")
+    }
+
+    private func webViews(in view: NSView) -> [WKWebView] {
+        (view as? WKWebView).map { [$0] } ?? view.subviews.flatMap { webViews(in: $0) }
+    }
+
+    private func scrollView(in view: NSView) -> NSScrollView? {
+        if let scroll = view as? NSScrollView { return scroll }
+        return view.subviews.lazy.compactMap { scrollView(in: $0) }.first
+    }
+
     private func findWebView(in view: NSView) -> WKWebView? {
         if let web = view as? WKWebView { return web }
         return view.subviews.lazy.compactMap { findWebView(in: $0) }.first

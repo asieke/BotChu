@@ -1,14 +1,17 @@
 import SwiftUI
 import BotChuCore
 
+/// A reply's Markdown, parsed once per text (`MarkdownCache`): drawing a conversation again, or a
+/// reply that didn't change, doesn't parse it again.
 struct MarkdownText: View {
     let text: String
 
     var body: some View {
-        if let html = RichMarkdown.html(text) {
+        switch MarkdownCache.shared.rendering(for: text) {
+        case .rich(let html):
             RichMarkdownText(html: html)
-        } else {
-            MarkdownBlocks(blocks: MarkdownBlock.split(text))
+        case .blocks(let blocks):
+            MarkdownBlocks(blocks: blocks)
                 .textSelection(.enabled)
         }
     }
