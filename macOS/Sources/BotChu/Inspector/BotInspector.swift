@@ -502,7 +502,7 @@ struct InspectorSection<Content: View>: View {
 }
 
 /// Keeps the cards full-width and makes the entire heading a keyboard-accessible toggle.
-private struct InspectorDisclosureStyle: DisclosureGroupStyle {
+struct InspectorDisclosureStyle: DisclosureGroupStyle {
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Button { configuration.isExpanded.toggle() } label: {

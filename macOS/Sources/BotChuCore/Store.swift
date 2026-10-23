@@ -264,16 +264,21 @@ public struct BotHome: Sendable {
     }()
 }
 
-/// Where BotChu finds its bots: `index.json`, the bots' ids and workspaces in sidebar order, under
-/// `~/Library/Application Support/BotChu`. Everything else about a bot is in its `BotHome`.
+/// Where BotChu finds its bots: `index.json`, the bots' ids, workspaces and sidebar sections in
+/// sidebar order, under `~/Library/Application Support/BotChu`. Everything else about a bot is in
+/// its `BotHome`.
 public struct Store: Sendable {
     public struct Entry: Codable, Equatable, Sendable {
         public var id: UUID
         public var workspace: String
+        /// The sidebar section the bot is in (`BotSections`); nil for none, and in indexes from
+        /// before sections.
+        public var section: String?
 
-        public init(id: UUID, workspace: String) {
+        public init(id: UUID, workspace: String, section: String? = nil) {
             self.id = id
             self.workspace = workspace
+            self.section = section
         }
     }
 
@@ -325,21 +330,24 @@ public struct Store: Sendable {
         try Self.encoder.encode(entries).write(to: indexURL, options: .atomic)
     }
 
-    /// The bots in the index whose folders hold them, in order, and the entries whose folders don't
-    /// (moved, deleted, or on a drive that isn't connected), kept so they come back with their folder.
-    public func loadBots() -> (bots: [Bot], missing: [Entry]) {
+    /// The bots in the index whose folders hold them, in order, with the sections they are in, and
+    /// the entries whose folders don't (moved, deleted, or on a drive that isn't connected), kept so
+    /// they come back with their folder, in their section.
+    public func loadBots() -> (bots: [Bot], missing: [Entry], sections: [UUID: String]) {
         var bots: [Bot] = []
         var missing: [Entry] = []
+        var sections: [UUID: String] = [:]
         for entry in loadIndex() {
             let folderExists = FileManager.default.fileExists(atPath: entry.workspace)
             if var bot = BotHome(workspace: entry.workspace).loadBot() ?? (folderExists ? backedUpBot(entry.id) : nil) {
                 bot.workspace = entry.workspace
                 bots.append(bot)
+                sections[bot.id] = entry.section
             } else {
                 missing.append(entry)
             }
         }
-        return (bots, missing)
+        return (bots, missing, sections)
     }
 
     public func loadThread(for bot: Bot) -> [ChatMessage] {
