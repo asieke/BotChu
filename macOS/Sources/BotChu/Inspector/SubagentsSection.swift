@@ -151,8 +151,9 @@ private struct SubagentCard: View {
                     }.padding(8).background(RoundedRectangle(cornerRadius: 6).fill(Palette.accent.opacity(0.08)))
                 }
                 if let error = run.errorMessage { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
-                Text([run.account.name, run.model.isEmpty ? "Default model" : run.model,
-                      run.workspaceMode == .sharedCallerWorkspace ? "Shared workspace" : "Bot workspace"].joined(separator: " · "))
+                ProviderLabel(title: [run.account.name, run.model.isEmpty ? "Default model" : run.model,
+                                      run.workspaceMode == .sharedCallerWorkspace ? "Shared workspace" : "Bot workspace"].joined(separator: " · "),
+                              kind: run.account.kind, size: 11)
                     .font(.system(size: 10)).foregroundStyle(Palette.secondaryText)
                 Text(run.workingDirectory).font(.system(size: 10, design: .monospaced))
                     .fixedSize(horizontal: false, vertical: true)

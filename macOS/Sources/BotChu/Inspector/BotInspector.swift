@@ -196,12 +196,12 @@ struct RunsOnCard: View {
                 Menu {
                     Picker("Account", selection: Binding(get: { settings.accountID }, set: { model.setAccount($0, for: target) })) {
                         ForEach(model.settings.accounts) { account in
-                            Label(account.name, systemImage: account.symbol).tag(account.id)
+                            ProviderMenuLabel(account).tag(account.id)
                         }
                     }
                     .pickerStyle(.inline)
                 } label: {
-                    Label(settings.account.name, systemImage: settings.account.symbol)
+                    ProviderMenuLabel(settings.account)
                         .labelStyle(.titleAndIcon)
                 }
                 .menuStyle(.borderlessButton)
