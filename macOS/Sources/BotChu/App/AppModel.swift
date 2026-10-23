@@ -107,6 +107,9 @@ final class AppModel {
     var editor: EditorRequest?
     var taskSheet: TaskSheetRequest?
     var documentEditor: DocumentEditorRequest?
+    /// Report a Bug or Feature, and what files its issues: gh, or a stand-in (`DevHooks`, tests).
+    var issueReport: IssueReportRequest?
+    @ObservationIgnored var issueFiler = DevHooks.issueFiler
     let settings: AppSettings
     let usage: UsageCache
     let modelCatalog = ModelCatalog()

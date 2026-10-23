@@ -293,6 +293,17 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     on repositories, each account's command, the Codex account that draws pets' stills, the
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
     and default OpenRouter model.
+  - **Reporting bugs and features:** the ladybug button at the toolbar's trailing end, on every
+    screen, or **Help ▸ Report a Bug or Feature…** opens a sheet with one field. **Submit** (⌘↩)
+    files it as an issue in `asieke/BotChu` with `gh issue create`, titled from its first line or
+    sentence (cut at a word, 72 characters at most), and links the new issue; when gh fails, the
+    report stays, with gh's reason. The repository is public, so the issue adds only the app state
+    the sheet shows before it goes, as categories and counts: the version and commit, macOS, the
+    screen and status sidebar area, the conversation's kind (Home, or a task on this Mac or a host
+    and its kind of work), CLI family, starter model and effort, its turn's state (an error by kind
+    only), message and queue counts, the window's size and appearance, and how many bots and turns
+    there are. Conversations, instructions, memory, prompts, tool calls, error text, paths and the
+    names of bots, tasks, accounts, hosts and repositories never go into it.
 - Does not: run a bot's Home anywhere but this Mac, or tasks anywhere but this Mac and SSH hosts
   (no containers or cloud), schedule routines, ask for approval of tool calls (every CLI runs with
   its permission prompts bypassed, inside the bot's folder or the task's worktree), or keep any
@@ -323,12 +334,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     a CLI through the login shell, `zsh -l`, or on a host over `ssh` (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
     `Subagents.swift`, `Store.swift`, `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
     handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
+    Reports filed from the app (their title, description, app state and `gh issue create`) are in
+    `IssueReport.swift`.
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
     in standard system materials: `App/` (the app, window, model, settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
-    computers, `TaskPlaces.swift`),
+    computers, `TaskPlaces.swift`, and what a report says about the app, `IssueReports.swift`),
     `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (messages and the composer), `Inspector/` (the
-    status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown and New Task sheets), `Settings/` (with
+    status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
     the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
@@ -342,14 +355,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
     made in throwaway repositories; and hosts: their `ssh` command lines, deploy targets, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
-    from a remote task.
+    from a remote task; and reports: their titles, app state, and filing through a stand-in `gh`.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, model-picker keyboard interaction and persisted choices,
     Markdown editor sizing and Save/Cancel, collapsing status sections, inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
     main window's layout at its narrowest, galleries that preserve conversation state, custom
-    profile persistence, and provider logos in both appearances and in account menus.
-    Set `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
+    profile persistence, provider logos in both appearances and in account menus, and the report
+    sheet, filing with a stand-in. Set `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     to render isolated gallery/table screenshots with sample project metadata and usage. These
     share a serialized suite because AppKit
@@ -358,7 +371,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `macOS/build/`), signed with the local "Apple Development" certificate when there is one, ad hoc
     otherwise. It records the SDK the app was linked against in the binary (`vtool`), because
     SwiftPM's default build system records the deployment target there instead, and macOS then
-    runs the app with the old window design, whose toolbar overhangs the sidebar. `install.sh` builds into `~/Applications`, restarts BotChu if it was running, and
+    runs the app with the old window design, whose toolbar overhangs the sidebar. It also records the commit it
+    was built from (`BotChuCommit` in Info.plist, `-dirty` with uncommitted changes), which reports name. `install.sh` builds into `~/Applications`, restarts BotChu if it was running, and
     smoke-tests that it starts. `test.sh` runs the unit tests. `ui-review.sh` opens a build on
     throwaway data for checking its screens (see **Test**).
 - Data: each bot's `.botchu/` folder in its workspace (above), and `index.json` in
@@ -454,6 +468,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   `BOTCHU_INSPECTOR=activity`, `subagents`, `model`, `session` or `memory` selects a status sidebar tab;
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
   `BOTCHU_WINDOW=compact` checks the minimum window width.
+  `BOTCHU_OPEN=report` opens Report a Bug or Feature, and `BOTCHU_REPORT="<report>"` files one at
+  launch. A review copy files reports only with a stand-in `gh`, which keeps them in `reports/` in
+  its data folder and prints a made-up issue's link (with `BOTCHU_REPORT_FAIL=1`, it fails as a
+  signed-out gh does), so no review creates a real issue.
 - Account allowance end to end: `swift run --package-path macOS botchu-smoke --usage [account id …]`
   reads each account's usage through the same client as the inspector. It prints only the normalized
   usage fields, never raw CLI output or credentials. Muse makes its brief usage request; OpenRouter

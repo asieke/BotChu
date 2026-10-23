@@ -41,6 +41,17 @@ struct ContentView: View {
             BotDocumentEditor(request: request)
                 .frame(width: contentSize.width * 0.5, height: contentSize.height * 0.5)
         }
+        .sheet(item: $model.issueReport) { request in
+            ReportIssueSheet(request: request)
+                .environment(model)
+        }
+        // Report a Bug or Feature, at the toolbar's trailing end on every screen, so a bug can be
+        // reported wherever it shows: in the glass that floats over the content (macOS 26 and
+        // later), beside a conversation's own buttons, it never covers the composer, the sidebar or
+        // the status sidebar, at any window width.
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) { ReportIssueButton() }
+        }
         .task {
             guard !hooksStarted else { return }
             hooksStarted = true
