@@ -42,6 +42,8 @@ private struct FakeGH {
         #expect(IssueReport.title(from: "> **Feature:** let me pin a bot") == "Feature: let me pin a bot")
         #expect(IssueReport.title(from: "1. Open Projects") == "Open Projects")
         #expect(IssueReport.title(from: "#123 crashes on launch") == "#123 crashes on launch")
+        // A line without words, like a rule or a code fence, is passed over.
+        #expect(IssueReport.title(from: "---\n```\nThe app crashes on launch\n```") == "The app crashes on launch")
         // A long line gives its first sentence, run on past one too short to say anything.
         #expect(IssueReport.title(from: "Bug! The status sidebar shows the wrong account after switching. It happens every time I switch a task's account.")
                 == "Bug! The status sidebar shows the wrong account after switching")

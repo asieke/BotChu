@@ -13,10 +13,12 @@ public enum IssueReport {
     public static let bodyLimit = 65_536
     static let fallbackTitle = "Report from BotChu"
 
-    /// A short title from the report: its first line without Markdown's leading marks, or that
-    /// line's first sentence when the line is long, cut at a word (with "…") when still too long.
+    /// A short title from the report: its first line with words in it (not a rule or a code fence),
+    /// without Markdown's leading marks, or that line's first sentence when the line is long, cut at
+    /// a word (with "…") when still too long.
     public static func title(from report: String) -> String {
-        var title = report.split(whereSeparator: \.isNewline).lazy.map { plain(String($0)) }.first { !$0.isEmpty } ?? ""
+        var title = report.split(whereSeparator: \.isNewline).lazy.map { plain(String($0)) }
+            .first { $0.contains { $0.isLetter || $0.isNumber } } ?? ""
         if title.count > titleLimit, let sentence = firstSentence(of: title) { title = sentence }
         if title.count > titleLimit { title = cut(title, to: titleLimit) }
         title = trimmingTrailing(title)
