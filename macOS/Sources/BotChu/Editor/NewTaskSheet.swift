@@ -22,6 +22,9 @@ struct NewTaskSheet: View {
     @Environment(\.dismiss) private var dismiss
     let botID: UUID
     var initialRepo: String? = nil
+    /// An open issue or pull request of `initialRepo` to choose once it is read, and what to do with it.
+    var initialWork: BotTask.Work? = nil
+    var initialPurpose = Purpose.work
     /// The repository a task started in last time, chosen again first.
     @AppStorage("newTaskRepo") private var lastRepo = ""
     @State private var showsLocation = false
@@ -271,11 +274,28 @@ struct NewTaskSheet: View {
             folder = displayed(location.path, on: location.hostID)
             let result = await GitHubLookup.openWork(repo: nameWithOwner)
             guard repo == nameWithOwner else { return }
-            loading = false
             switch result {
-            case .success(let found): openWork = found
+            case .success(var found):
+                // The issue or pull request this sheet was opened for may be beyond the list's first
+                // hundred: read it on its own, so it is still the one chosen.
+                if nameWithOwner == initialRepo, let wanted = initialWork,
+                   !found.contains(where: { $0.work.number == wanted.number && $0.work.isPullRequest == wanted.isPullRequest }) {
+                    switch await GitHubLookup.work(number: wanted.number, pullRequest: wanted.isPullRequest, repo: nameWithOwner) {
+                    case .success(let item) where item.state == "OPEN": found.append(item)
+                    case .success: lookupError = "\(wanted.isPullRequest ? "Pull request" : "Issue") #\(wanted.number) isn't open any more."
+                    case .failure(let failure): lookupError = "\(failure.step). Is gh installed and signed in?"
+                    }
+                    guard repo == nameWithOwner else { return }
+                }
+                openWork = found
+                if nameWithOwner == initialRepo, let wanted = initialWork,
+                   found.contains(where: { $0.work.number == wanted.number && $0.work.isPullRequest == wanted.isPullRequest }) {
+                    workKey = (wanted.isPullRequest ? "pr-" : "issue-") + "\(wanted.number)"
+                    purpose = wanted.isPullRequest ? initialPurpose : .work
+                }
             case .failure(let failure): lookupError = "\(failure.step). Is gh installed and signed in?"
             }
+            loading = false
         }
     }
 

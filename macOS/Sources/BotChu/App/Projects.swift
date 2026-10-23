@@ -12,9 +12,24 @@ private struct ProjectLoadResult: Sendable {
 extension AppModel {
     func loadProjects(force: Bool = false) async {
         guard !projectsLoading else { return }
+        await loadRepositories(force: force)
+        await loadProjectRecords(force: force)
+    }
+
+    /// Reads the repositories again, then their PROJECT.md records and open work side by side.
+    func refreshProjects() async {
+        guard !projectsLoading else { return }
+        await loadRepositories(force: true)
+        let work = Task { await loadOpenWork(force: true) }
+        await loadProjectRecords(force: true)
+        await work.value
+    }
+
+    /// Reads the PROJECT.md of each repository not read yet (of every one, when `force`).
+    func loadProjectRecords(force: Bool = false) async {
+        guard !projectsLoading else { return }
         projectsLoading = true
         defer { projectsLoading = false }
-        await loadRepositories(force: force)
         guard let repositories else { return }
         let pending = repositories.filter { force || projectRecords[$0.id] == nil && projectErrors[$0.id] == nil }
         // A small bounded batch prevents a large catalog from launching hundreds of gh processes.
@@ -43,6 +58,31 @@ extension AppModel {
                 }
             }
         }
+    }
+
+    /// Reads the open pull requests and issues of the repositories GitHub counts any in, unless they
+    /// were read in the last ten minutes.
+    func loadOpenWork(force: Bool = false) async {
+        guard !openItemsLoading else { return }
+        if !force, openItems != nil, let read = openItemsReadAt, Date().timeIntervalSince(read) < 600 { return }
+        guard let repositories else { return }
+        openItemsLoading = true
+        defer { openItemsLoading = false }
+        let busy = repositories.filter { $0.openIssues + $0.openPullRequests > 0 }.map(\.id)
+        switch busy.isEmpty ? .success(GitHubLookup.OpenWork(items: [])) : await openWorkLookup(busy) {
+        case .success(let work):
+            openItems = work.items
+            openItemsError = work.unreadable.isEmpty ? nil
+                : "Couldn't read the open pull requests and issues of \(work.unreadable.map(TaskNaming.repoName).joined(separator: ", ")). Refresh to try again."
+            openItemsReadAt = Date()
+        case .failure(let failure):
+            openItemsError = "\(failure.step). Is gh installed and signed in?"
+        }
+    }
+
+    /// The open tasks, of every bot, as (bot, task) pairs.
+    var openTasks: [(bot: Bot, task: BotTask)] {
+        bots.flatMap { bot in (tasks[bot.id] ?? []).filter { !$0.isArchived }.map { (bot, $0) } }
     }
 
     func checkGitHub() async {
