@@ -60,11 +60,10 @@ struct ComposerEditor: NSViewRepresentable {
             editor.string = text
             editor.setSelectedRange(NSRange(location: min(selection.location, (text as NSString).length), length: 0))
         }
+        // In this update, not after it: a frame drawn before the composer takes focus would show the
+        // sidebar row just clicked in its focused, accent color for a moment.
         if focused.wrappedValue, let window = editor.window, window.firstResponder !== editor {
-            DispatchQueue.main.async { [weak editor] in
-                guard let editor, editor.wantsFocus else { return }
-                editor.window?.makeFirstResponder(editor)
-            }
+            window.makeFirstResponder(editor)
         }
     }
 
@@ -100,10 +99,7 @@ final class ComposerTextView: NSTextView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard wantsFocus else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.wantsFocus else { return }
-            self.window?.makeFirstResponder(self)
-        }
+        window?.makeFirstResponder(self)
     }
 
     override func keyDown(with event: NSEvent) {

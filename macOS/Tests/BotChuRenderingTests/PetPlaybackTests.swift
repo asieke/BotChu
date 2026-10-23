@@ -56,6 +56,67 @@ extension RenderingTests {
         #expect(view.debugState.hasPrefix("greeting "))
     }
 
+    /// #63: a pet never blinks out, as it did whenever a bot was selected. Until a clip has a frame
+    /// (a new player draws nothing at first) its still shows; the first clip then shows at once,
+    /// without fading in from nothing; a later one waits for its frame with the clip before still
+    /// on screen, then fades in over it; and a clip replaced before it had a frame goes at once.
+    @Test func petShowsItsStillUntilAClipHasAFrameAndNeverBlinksOut() async throws {
+        _ = NSApplication.shared
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-pet-frames-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("clips"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("stills"), withIntermediateDirectories: true)
+        let wave = folder.appendingPathComponent("clips/greeting.mp4")
+        try await writeWaveVideo(to: wave)
+        for name in ["idle", "thinking"] {
+            try FileManager.default.copyItem(at: wave, to: folder.appendingPathComponent("clips/\(name).mp4"))
+        }
+        let still = NSImage(size: NSSize(width: 32, height: 32))
+        still.lockFocus(); NSColor.systemGreen.setFill(); NSRect(x: 0, y: 0, width: 32, height: 32).fill(); still.unlockFocus()
+        let png = try #require(still.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?.representation(using: .png, properties: [:]))
+        for name in ["idle", "thinking"] { try png.write(to: folder.appendingPathComponent("stills/\(name).png")) }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(PetVideoManifest(model: "fixture", clips: [
+            .init(id: "idle", still: "idle", loops: true),
+            .init(id: "greeting", still: "idle", loops: false),
+            .init(id: "thinking", still: "thinking", loops: true),
+        ])).write(to: folder.appendingPathComponent("video.json"))
+        let package = try #require(PetVideoPackage.load(from: folder))
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 120, height: 120), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let view = PetVideoLayerView(frame: NSRect(x: 0, y: 0, width: 64, height: 64))
+        window.contentView?.addSubview(view)
+        window.makeKeyAndOrderFront(nil)
+        defer { view.stop(); window.contentView = nil; window.close() }
+        func players() -> [AVPlayerLayer] { (view.layer?.sublayers ?? []).compactMap { $0 as? AVPlayerLayer } }
+        func waitUntil(_ condition: () -> Bool) async throws {
+            for _ in 0..<300 where !condition() { try await Task.sleep(for: .milliseconds(10)) }
+            try #require(condition())
+        }
+
+        view.show(package: package, clipID: "idle")
+        #expect(view.layer?.sublayers?.first?.contents != nil)
+        #expect(players().map(\.opacity) == [0])
+        #expect(!view.showsCurrentClip)
+        try await waitUntil { view.showsCurrentClip }
+        let idle = try #require(players().last)
+        #expect(idle.opacity == 1)
+        #expect(idle.animation(forKey: "fade") == nil && idle.animation(forKey: "opacity") == nil)
+
+        view.show(package: package, clipID: "thinking")
+        #expect(players().map(\.opacity) == [1, 0])
+        view.show(package: package, clipID: "greeting")
+        #expect(players().count == 2)
+        #expect(players().first === idle && idle.opacity == 1)
+        try await waitUntil { view.showsCurrentClip }
+        let greeting = try #require(players().last)
+        #expect(greeting.opacity == 1 && greeting.animation(forKey: "fade") != nil)
+        try await waitUntil { players().count == 1 }
+        #expect(players().first === greeting)
+    }
+
     private func waitForPet(_ prefix: String, in view: PetVideoLayerView, timeout: TimeInterval = 3) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {

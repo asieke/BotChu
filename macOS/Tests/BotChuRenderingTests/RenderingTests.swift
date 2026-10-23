@@ -41,7 +41,9 @@ import BotChuCore
         #expect((value?["width"] as? Double ?? 0) > 500)
         #expect((value?["text"] as? String)?.contains("38,645,211") == true)
         #expect((value?["text"] as? String)?.contains("\\mathbf") == false)
-        // Wait for the height bridge, then verify the outer chat receives the document's full size.
+        // Wait for the height bridge (the reply shows once it reports), then verify the outer chat
+        // receives the document's full size.
+        for _ in 0..<150 where web.alphaValue == 0 { try await Task.sleep(for: .milliseconds(20)) }
         try await Task.sleep(for: .milliseconds(100))
         #expect(web.frame.height >= (value?["height"] as? Double ?? 0))
         host.rootView = MarkdownText(text: source).frame(width: 320)
@@ -208,6 +210,42 @@ import BotChuCore
         #expect(findWebView(in: host) === web)
         let after = try await web.callAsyncJavaScript("return typeof mermaid;", in: nil, contentWorld: .defaultClient) as? String
         #expect(after == "object")
+    }
+
+    /// #63: a rich reply shows only once it has rendered, at its final height. Before, a new web
+    /// view showed WebKit's white page, then the diagram's source, taller than the diagram, so the
+    /// reply grew and shrank and moved the chat each time its conversation was shown.
+    @Test func aRichReplyShowsOnlyOnceRenderedAtItsFinalHeight() async throws {
+        _ = NSApplication.shared
+        let source = "Reply \(UUID().uuidString):\n\n```mermaid\nflowchart LR\n  A[Start] --> B[Work]\n  B --> C[Review]\n  C --> D[Done]\n```"
+        let host = NSHostingView(rootView: MarkdownText(text: source).frame(width: 600))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 800), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        let web = try #require(findWebView(in: host))
+        #expect(web.alphaValue == 0)
+        var heights: [CGFloat] = []
+        var shownBeforeDrawn = false
+        for _ in 0..<300 {
+            host.layoutSubtreeIfNeeded()
+            heights.append(web.frame.height)
+            if web.alphaValue > 0 {
+                let drawn = try await web.callAsyncJavaScript("return document.querySelector('.diagram svg') !== null;",
+                                                              in: nil, contentWorld: .defaultClient) as? Bool
+                shownBeforeDrawn = drawn != true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(web.alphaValue > 0)
+        #expect(!shownBeforeDrawn)
+        try await Task.sleep(for: .milliseconds(300))
+        host.layoutSubtreeIfNeeded()
+        let final = web.frame.height
+        #expect(final > 60)
+        #expect(heights.allSatisfy { $0 <= final + 1 })
     }
 
     private func webViews(in view: NSView) -> [WKWebView] {
