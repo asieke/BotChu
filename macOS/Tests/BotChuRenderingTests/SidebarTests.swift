@@ -182,6 +182,58 @@ extension RenderingTests {
         #expect(try quietButtons().isEmpty)
     }
 
+    @Test func darkSidebarTakesTheStatusShadeWithAnEdgeAndFollowsAppearance() async throws {
+        _ = NSApplication.shared
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 640),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        // The status sidebar's shade as this window draws it: the display's color profile shifts
+        // the values, so the sidebar is compared with this swatch rather than with numbers.
+        window.appearance = NSAppearance(named: .darkAqua)
+        let swatch = NSHostingView(rootView: Palette.sidebar)
+        window.contentView = swatch
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(150))
+        let shade = try sidebarPixel(in: swatch, x: 10, fromTop: 10)
+        let host = NSHostingView(rootView: SidebarView().environment(fixture.model).defaultAppStorage(fixture.defaults))
+        window.contentView = host
+        // Dark, light, then dark again in one window: each change shows without a relaunch.
+        for dark in [true, false, true] {
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            try await Task.sleep(for: .milliseconds(250))
+            window.layoutIfNeeded()
+            // The bottom bar's empty middle shows the sidebar's background; its last point, the edge.
+            let fromTop = host.bounds.height - 20
+            let fill = try sidebarPixel(in: host, x: host.bounds.width / 2, fromTop: fromTop)
+            let edge = try sidebarPixel(in: host, x: host.bounds.width - 0.5, fromTop: fromTop)
+            if dark {
+                #expect(sameColor(fill, shade))
+                #expect(edge.alphaComponent > 0.99 && edge.brightnessComponent > fill.brightnessComponent + 0.04)
+            } else {
+                // The standard sidebar: no shade of BotChu's own, and no edge line.
+                #expect(fill.alphaComponent < 0.01 || fill.brightnessComponent > 0.5)
+                #expect(sameColor(edge, fill))
+            }
+        }
+    }
+
+    /// One point of the view's own drawing, in sRGB, measured from its top-left corner.
+    private func sidebarPixel(in view: NSView, x: CGFloat, fromTop y: CGFloat) throws -> NSColor {
+        let rep = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        let scale = CGFloat(rep.pixelsWide) / view.bounds.width
+        let color = try #require(rep.colorAt(x: Int(x * scale), y: Int(y * scale)))
+        return try #require(color.usingColorSpace(.sRGB))
+    }
+
+    private func sameColor(_ a: NSColor, _ b: NSColor) -> Bool {
+        [a.redComponent - b.redComponent, a.greenComponent - b.greenComponent,
+         a.blueComponent - b.blueComponent, a.alphaComponent - b.alphaComponent].allSatisfy { abs($0) < 0.02 }
+    }
+
     private func sidebarButtons(in view: NSView) -> [NSButton] {
         ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(sidebarButtons)
     }

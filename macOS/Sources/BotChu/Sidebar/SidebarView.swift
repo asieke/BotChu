@@ -76,12 +76,38 @@ struct SidebarView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
         }
+        .modifier(SidebarShade())
         .confirmationDialog("Delete \(pendingDelete?.name ?? "bot")?", isPresented: Binding(
             get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { bot in
             Button("Delete", role: .destructive) { model.delete(bot.id) }
         } message: { bot in
             Text("Its conversation and tasks are deleted. Its workspace folder, \(bot.workspace), and its tasks' worktrees are kept.")
         }
+    }
+}
+
+/// In dark mode the sidebar's material blends into the chat beside it, so the sidebar takes the
+/// status sidebar's darker shade instead, with a hairline along its trailing edge. Light mode keeps
+/// the standard sidebar. Both follow appearance changes as they happen.
+struct SidebarShade: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        let dark = colorScheme == .dark
+        content
+            // The split view's sidebar already leaves the list's own background out, so hiding it in
+            // both appearances changes nothing there; only the material shows, or the shade over it.
+            .scrollContentBackground(.hidden)
+            .background(dark ? Palette.sidebar : .clear)
+            .overlay(alignment: .trailing) {
+                if dark {
+                    Rectangle().fill(Palette.hairline)
+                        .frame(width: 1)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
     }
 }
 

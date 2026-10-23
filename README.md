@@ -11,7 +11,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
 - Does:
   - **Workspace:** the left sidebar has **Projects**, **Agents**, and **Providers**, followed by
     the bots’ conversations. Opening a gallery keeps the selected conversation and unsent draft;
-    turns that finish while a gallery is shown still get an unread badge.
+    turns that finish while a gallery is shown still get an unread badge. In dark mode the sidebar
+    takes the status sidebar's darker shade, with a hairline along its edge, so it stands apart from
+    the chat; light mode keeps the standard sidebar.
   - **Projects:** one project per non-archived GitHub repository returned by `gh` for your account
     and organizations, in a sortable table modeled on GitChu's (or a gallery of cards). Columns show
     where it deploys (local machines by their BotChu name, Vercel, registry), the owner, open issues
@@ -434,8 +436,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   here).
   `BOTCHU_PET=<pet folder>` gives the first bot that pet (`video.json`, `stills/`, `clips/`), and
   `BOTCHU_DRAW_PET="<appearance>"` makes it one (a real Codex run and real OpenRouter clips, which
-  cost credit). The window's picture leaves out the sidebar's rows and video layers, so the rows
-  are drawn on their own into `sidebar.png`, each pet's current frame is drawn into its circle, and
+  cost credit). The window's picture leaves out the sidebar's rows and background, and video layers,
+  so the rows are drawn on their own, on the sidebar's background, into `sidebar.png`, each pet's
+  current frame is drawn into its circle, and
   `pets.txt` lists each pet player's clip, state and time.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without

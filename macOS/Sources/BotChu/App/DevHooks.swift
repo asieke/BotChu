@@ -175,6 +175,8 @@ enum DevHooks {
         }
         .padding(10)
         .frame(width: 240, alignment: .leading)
+        // The sidebar's own dark shade; in light mode the window's background stands in for its material.
+        .modifier(SidebarShade())
         .background(Color(nsColor: .windowBackgroundColor))
         .environment(model)
         // Native progress indicators and buttons cannot be drawn by ImageRenderer. Host the
