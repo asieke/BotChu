@@ -30,6 +30,9 @@ import BotChuCore
 /// - `BOTCHU_SSH`: with `BOTCHU_DATA_DIR`, the program BotChu runs as `ssh` (a stand-in that runs the
 ///   command here lets a review exercise tasks on a host without one).
 /// - `BOTCHU_TASK_REPO`: with `BOTCHU_OPEN=task`, the repository (`owner/name`) New Task chooses.
+/// - `BOTCHU_PROJECT`: with `BOTCHU_OPEN=projects`, the repository (`owner/name`) its sidebar shows;
+///   `BOTCHU_PROJECT_TAB` (`overview`, `issues` or `pulls`) and `BOTCHU_PROJECT_ITEM` (a number) open
+///   a tab and an issue or pull request there.
 /// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
 /// - `BOTCHU_PET`: give the selected bot this pet folder at launch (`video.json`, `stills/`, `clips/`).
 /// - `BOTCHU_DRAW_PET`: give the selected bot this appearance and make its pet at launch (a real Codex
@@ -124,6 +127,10 @@ enum DevHooks {
         switch env["BOTCHU_OPEN"] {
         case "projects", "agents", "providers":
             model.destination = env["BOTCHU_OPEN"].flatMap(LibraryDestination.init(rawValue:))
+            if let repo = env["BOTCHU_PROJECT"] {
+                model.selectProject(repo, tab: env["BOTCHU_PROJECT_TAB"].flatMap(ProjectSelection.Tab.init(rawValue:)) ?? .overview,
+                                    item: env["BOTCHU_PROJECT_ITEM"].flatMap(Int.init))
+            }
         case "editor": model.newBot()
         case "task": if let id = model.selection { model.newTask(for: id) }
         case "memory": if let id = model.selection { model.editDocument(.memory, for: id) }

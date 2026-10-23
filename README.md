@@ -23,16 +23,34 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     from GitHub, and the name, type and status from `PROJECT.md` on the default branch. **Docs** is
     non-code; **Library**, **Local app**, and **Hosted app** are code. Unclassified repositories can
     get a minimal project record, without claiming the repository meets the workspace standard.
+    The list shows active projects (`status: active` in `PROJECT.md`) unless its status filter says
+    otherwise: every status, or only paused, maintenance, deprecated or unclassified ones (no
+    `PROJECT.md`); the choice is remembered. A repository whose `PROJECT.md` isn't read yet appears
+    once it is known to be active.
     **Pull Requests** and **Issues** list the open ones across the repositories (up to 30 most
     recently updated per repository, saying so when there are more), with checks, review state,
-    labels, author and any bot's task on them, filtered by repository or search. Double-click opens
-    one on GitHub; its menu reviews a pull request (**Review with**, **Review and Comment with**),
-    continues it or starts a task on an issue with a bot, opening New Task with it chosen, or opens
-    the task already on it. An issue or pull request count in the table shows that repository's.
-    These are read with one GraphQL query per page of repositories and one per ten busy
-    repositories, at most every ten minutes unless refreshed.
-    Open a project for deployment and resolved workspace details, GitHub, or **Start Task with…** to
-    choose an agent and open New Task with that project selected. **Workspace options** in New Task
+    labels, author and any bot's task on them, filtered by repository or search. Selecting one opens
+    it in the repository's sidebar, and double-click on GitHub; its menu reviews a pull request
+    (**Review with**, **Review and Comment with**), continues it or starts a task on an issue with a
+    bot, opening New Task with it chosen, or opens the task already on it. These are read with one
+    GraphQL query per page of repositories and one per ten busy repositories, at most every ten
+    minutes unless refreshed.
+  - **Project sidebar:** selecting a repository, in the table or the gallery, shows it on the right
+    with three tabs; closing the sidebar deselects it, and an issue or pull request count in the
+    table opens that tab. **Overview** has its open work, its type, status, merge policy and
+    deployment, where its tasks work, the open tasks on it, **Start Task with**, **Edit Metadata…**
+    and GitHub. **Issues** and **PRs** list the open ones read for it (saying so when there are
+    more), with their labels, checks and the bots on them; each opens in place, read with `gh issue
+    view` or `gh pr view`: its description, labels and conversation, and a pull request's branches,
+    checks, changed files and reviews. An issue's **Fix with** starts a task on it with an agent, and
+    **Fix All** one task in which the agent hands each listed issue that no task works on to a
+    parallel sub-agent of its own (`botchu-subagent spawn`, at most four at once), each in its own
+    worktree and branch with a pull request that closes its issue. A pull request's **Review**
+    reviews it with an agent, here or also on GitHub (**Continue** works on its branch), and
+    **Review All** starts one task that reviews each pull request no task is reviewing yet with
+    parallel sub-agents, each in a detached worktree of its own. Every start opens New Task with the
+    agent, the repository and the issue, pull request or fan-out brief chosen, so the account and
+    workspace can be checked (and the brief edited) first. **Workspace options** in New Task
     reveals computer/folder overrides; the project’s deployment and saved location choose them by
     default. An unconfigured deployment host needs connection in Settings or an explicit override.
   - **Project metadata:** **Edit Metadata…** edits the name, type, status, deployment, and merge
@@ -357,13 +375,15 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and the clips that show it (`Pet.swift`), making a pet: its poses and clips, the Codex prompt
     for the stills, the OpenRouter request and job, the cost estimate, the manifest and install
     (`PetVideo.swift`), tasks: the task, its title
-    and branch names, its pull request, receipts and dispatch requests (`Tasks.swift`), hosts and
+    and branch names, its pull request, receipts, dispatch requests and the briefs of tasks that fan
+    out to sub-agents (`Tasks.swift`), hosts and
     where a repository is worked on, from a `PROJECT.md`'s deploy targets (`Hosts.swift`), running
     a command on this Mac or a host, the checkouts in the repositories folder, cloning, task and
     review worktrees, and what `gh` says about your repositories, issues and pull requests
     (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
     or proposing it through GitHub with retryable, metadata-only PRs (`ProjectGitHub.swift`), the Projects
-    tables' rows and the open pull requests and issues across repositories (`ProjectOverview.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
+    tables' rows, their status filter and the open pull requests and issues across repositories (`ProjectOverview.swift`),
+    an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
     `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (transcripts saved off the main thread
@@ -376,7 +396,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, and what a report says about the app, `IssueReports.swift`),
-    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, and the composer), `Inspector/` (the
+    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects with its repository sidebar, Agents and Providers), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, and the composer), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
     the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -389,7 +409,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     turns on each account named the way the app does (see **Test**).
   - `Tests/BotChuCoreTests/` — parser tests against captured output of every CLI, command lines,
     context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
-    made in throwaway repositories; and hosts: their `ssh` command lines, deploy targets, clones,
+    made in throwaway repositories, the project status filter, issues and pull requests read in
+    full from `gh`'s output, and fan-out briefs; and hosts: their `ssh` command lines, deploy targets, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
     from a remote task; reports: their titles, app state, and filing through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
@@ -402,14 +423,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     saves, model-picker keyboard interaction and persisted choices,
     Markdown editor sizing and Save/Cancel, collapsing status sections, inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
-    main window's layout at its narrowest, galleries that preserve conversation state, custom
-    profile persistence, provider logos in both appearances and in account menus, the report
+    main window's layout at its narrowest, galleries that preserve conversation state, the project
+    sidebar's tabs, details and fan-out tasks, custom profile persistence, provider logos in both appearances and in account menus, the report
     sheet, filing with a stand-in, the activity chat at every density, light and dark and at its
     narrowest, and a chat that follows new content only for a reader at the bottom. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
-    (or `activityChatRendersGroupsCardsAndLiveWork`)
-    to render isolated gallery/table (or chat) screenshots with sample data. These
+    (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, or `activityChatRendersGroupsCardsAndLiveWork`)
+    to render isolated gallery/table (sidebar, or chat) screenshots with sample data. These
     share a serialized suite because AppKit
     window focus is global; all use isolated windows and no real bot data.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
@@ -488,7 +509,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor`, `BOTCHU_OPEN=task` or `BOTCHU_OPEN=settings` opens the bot editor, New
   Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository).
-  `BOTCHU_OPEN=projects`, `agents` or `providers` opens the corresponding workspace gallery.
+  `BOTCHU_OPEN=projects`, `agents` or `providers` opens the corresponding workspace gallery;
+  with `projects`, `BOTCHU_PROJECT=<owner/name>` shows that repository's sidebar, and
+  `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
+  tab and an issue or pull request there, read with your `gh` login.
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
   `BOTCHU_TAB=<n>` shows the first bot's nth conversation (and the message goes there), and
   `BOTCHU_TASK="hello-world|<task>"` starts a task in the throwaway repository (a real turn).

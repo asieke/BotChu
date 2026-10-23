@@ -25,6 +25,8 @@ struct NewTaskSheet: View {
     /// An open issue or pull request of `initialRepo` to choose once it is read, and what to do with it.
     var initialWork: BotTask.Work? = nil
     var initialPurpose = Purpose.work
+    /// What to tell the bot, written already: a task over many issues or pull requests.
+    var initialBrief = ""
     /// The repository a task started in last time, chosen again first.
     @AppStorage("newTaskRepo") private var lastRepo = ""
     @State private var showsLocation = false
@@ -184,6 +186,7 @@ struct NewTaskSheet: View {
         .frame(width: 560, height: 720)
         .task {
             accountID = model.bot(botID)?.accountID ?? Accounts.defaultID
+            if brief.isEmpty { brief = initialBrief }
             await model.loadRepositories()
             let wanted = initialRepo ?? (DevHooks.dataDir == nil ? lastRepo : DevHooks.env["BOTCHU_TASK_REPO"] ?? "")
             if repo == nil, let last = model.repositories?.first(where: { $0.nameWithOwner == wanted }) { choose(last.nameWithOwner) }

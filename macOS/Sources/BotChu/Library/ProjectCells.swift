@@ -10,6 +10,8 @@ enum GitHubColors {
     static let danger = Palette.dynamic(0xCF222E, 0xF85149)
     static let attention = Palette.dynamic(0x9A6700, 0xD29922)
     static let neutral = Palette.dynamic(0x59636E, 0x9198A1)
+    /// Merged pull requests and closed issues.
+    static let done = Palette.dynamic(0x8250DF, 0xA371F7)
 }
 
 extension Color {

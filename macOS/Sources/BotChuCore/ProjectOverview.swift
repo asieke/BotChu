@@ -265,3 +265,27 @@ public struct ProjectRow: Identifiable, Equatable, Sendable {
         return query.split(whereSeparator: \.isWhitespace).allSatisfy { text.localizedCaseInsensitiveContains($0) }
     }
 }
+
+/// Which projects the Projects list shows, by the status in their PROJECT.md: active ones by default.
+public enum ProjectStatusFilter: String, CaseIterable, Sendable {
+    case active, all, paused, maintenance, deprecated, unclassified
+
+    public var label: String {
+        switch self {
+        case .active: "Active"
+        case .all: "All statuses"
+        case .unclassified: "Unclassified"
+        case .paused, .maintenance, .deprecated: rawValue.capitalized
+        }
+    }
+
+    /// Whether the row shows. One whose PROJECT.md isn't read yet, or can't be, shows only under All
+    /// statuses: nobody knows its status until then. Unclassified ones have no PROJECT.md.
+    public func includes(_ row: ProjectRow) -> Bool {
+        switch self {
+        case .all: true
+        case .unclassified: row.record == .missing
+        case .active, .paused, .maintenance, .deprecated: row.metadata?.status.rawValue == rawValue
+        }
+    }
+}

@@ -16,6 +16,9 @@
 #                                          # runs the command here, in $data/far (a real turn)
 #   BOTCHU_TASK="hello-world|Add a line" macOS/ui-review.sh  # start a task (a real turn on Claude Dev)
 #   BOTCHU_OPEN=report macOS/ui-review.sh  # open Report a Bug or Feature
+#   BOTCHU_OPEN=projects BOTCHU_PROJECT=<owner/name> BOTCHU_PROJECT_TAB=issues BOTCHU_PROJECT_ITEM=<number> macOS/ui-review.sh
+#                                          # open Projects with that repository's sidebar, on a tab and an
+#                                          # issue or pull request there (read with your gh login)
 #   BOTCHU_REPORT="It crashed" macOS/ui-review.sh  # and file this report, with a stand-in gh that
 #                                          # keeps it in $data/reports (BOTCHU_REPORT_FAIL=1: it fails)
 # Prints the snapshot folder. Quit the app with `pkill -x BotChu` when done.
@@ -119,6 +122,9 @@ args+=(--env "BOTCHU_REPORT_GH=$data/fake-gh")
 [ -n "${BOTCHU_TASK:-}" ] && args+=(--env "BOTCHU_TASK=$BOTCHU_TASK")
 [ -n "${BOTCHU_TAB:-}" ] && args+=(--env "BOTCHU_TAB=$BOTCHU_TAB")
 [ -n "${BOTCHU_TASK_REPO:-}" ] && args+=(--env "BOTCHU_TASK_REPO=$BOTCHU_TASK_REPO")
+[ -n "${BOTCHU_PROJECT:-}" ] && args+=(--env "BOTCHU_PROJECT=$BOTCHU_PROJECT")
+[ -n "${BOTCHU_PROJECT_TAB:-}" ] && args+=(--env "BOTCHU_PROJECT_TAB=$BOTCHU_PROJECT_TAB")
+[ -n "${BOTCHU_PROJECT_ITEM:-}" ] && args+=(--env "BOTCHU_PROJECT_ITEM=$BOTCHU_PROJECT_ITEM")
 [ -n "${BOTCHU_HOST:-}" ] && args+=(--env "BOTCHU_HOST=$BOTCHU_HOST")
 if [ -n "${BOTCHU_FAKE_HOST:-}" ]; then
   # A host whose ssh skips its options and the host, then runs the command here, as the host would.
