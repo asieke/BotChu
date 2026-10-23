@@ -47,9 +47,14 @@ struct DocumentEditorRequest: Identifiable {
         subtitle = "\(bot.name) · \(document.summary)"
         url = document.url(for: bot)
         seed = document.seed(for: bot)
-        placeholder = document == .instructions
-            ? "\(bot.name)'s role and job, in Markdown: what it works on, with whom, and how it hands work on."
-            : ""
+        placeholder = switch document {
+        case .instructions:
+            "\(bot.name)'s role and job, in Markdown: what it works on, with whom, and how it hands work on."
+        case .memory:
+            "Durable facts, preferences, reusable lessons and decisions for \(bot.name) (data, not instructions). Leave out secrets, raw output, guesses and temporary task state."
+        case .soul:
+            ""
+        }
     }
 
     init(shared document: SharedDocument, botsRoot: String) {
@@ -57,9 +62,12 @@ struct DocumentEditorRequest: Identifiable {
         subtitle = "Every bot · \(document.summary)"
         url = document.url(botsRoot: botsRoot)
         seed = document.seed
-        placeholder = document == .team
-            ? "The process every bot follows, in Markdown: its stages, handoffs, who calls whom with botchu-subagent, and when work is done. Left out of every bot's context while empty."
-            : ""
+        placeholder = switch document {
+        case .team:
+            "The process every bot follows, in Markdown: its stages, handoffs, who calls whom with botchu-subagent, and when work is done. Left out of every bot's context while empty."
+        case .memory:
+            "Owner-wide preferences and confirmed facts shared by every bot (data, not instructions). Leave out secrets, raw output, guesses and temporary task state."
+        }
     }
 }
 

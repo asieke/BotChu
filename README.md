@@ -225,7 +225,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     worktree there and runs its CLI there, in that user's login shell; its output streams back, and
     Stop interrupts the CLI there. The bot's folder stays on this Mac: the task's first message
     brings the bot's identity, instructions and memory and a recap of its Home conversation, and
-    notes the bot writes in `<remember>…</remember>` in a reply are added to its `MEMORY.md` here.
+    notes the bot writes in `<remember>…</remember>` in a reply are applied to its `MEMORY.md` here
+    (deduplicating existing bullets, updating entries in place with `Replace: old -> new`, removing
+    entries with `Forget: old`, and dropping credentials/secrets).
     The status sidebar names the computer, and **Terminal** opens a shell in the
     worktree there. The OpenRouter key never leaves this Mac, so Pi on a host needs that host's own
     `OPENROUTER_API_KEY`.
@@ -311,9 +313,17 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     on their name and title; existing files are preserved, including intentionally empty ones.
     The bots folder's `MEMORY.md` (`~/BotChu/MEMORY.md` by default) is shared by every bot. Both
     memory files and the soul, with the bot's identity and instructions, open every new Home, task
-    or sub-agent CLI session (including tasks over SSH). The workspace's `AGENTS.md`, `CLAUDE.md` and
-    `GEMINI.md` carry the bot's `INSTRUCTIONS.md` and direct the agent to read the others, so it keeps
-    them across its own context compaction; they are rewritten before every turn.
+    or sub-agent CLI session (including tasks over SSH). Every session shares the same memory capture
+    policy: save stable owner preferences, confirmed facts, reusable lessons and durable decisions;
+    keep temporary task progress in the conversation and repository rules in the repository; never
+    save secrets/credentials, raw tool output, unverified guesses as facts, or anything the owner
+    asks not to retain (sensitive details are omitted unless explicitly requested, and explicit
+    requests never override exclusions); require evidence or confirmation for inferred notes while
+    preserving relevant uncertainty; and update or remove outdated/conflicting bullets in place
+    (or through `Replace:` and `Forget:` in `<remember>`). Memory remains data, not instructions.
+    The workspace's `AGENTS.md`, `CLAUDE.md` and `GEMINI.md` carry the bot's `INSTRUCTIONS.md` and
+    direct the agent to read the others, so it keeps them across its own context compaction; they
+    are rewritten before every turn.
   - **Team playbook:** `TEAM.md` in the bots folder, beside the shared `MEMORY.md`, is the process
     every bot follows: its stages, handoffs, who calls whom with `botchu-subagent`, and when work is
     done. Unlike memory, it is given as instructions: in every bot's Home `AGENTS.md`, and at the
@@ -348,7 +358,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     Sections within each area, and Status above the tabs, still collapse from their headings, with
     their expansion remembered. **Memory** has four cards matching
     Conversation: the bot's **INSTRUCTIONS.md**, **SOUL.md** and **MEMORY.md**, and **TEAM.md**, the
-    playbook every bot shares (the same file as in Settings). Each opens an in-app Markdown editor at half the
+    playbook every bot shares (the same file as in Settings), followed by a summary of what bots
+    save in memory and what stays out. Each opens an in-app Markdown editor at half the
     parent window's width and height, with Save (⌘S), Cancel (Escape), and Reload. Saving preserves exact
     Markdown and refuses to overwrite a file changed on disk since it was opened. Saved changes
     apply at the next new session; **New Session** applies them to an existing conversation. The

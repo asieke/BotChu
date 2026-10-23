@@ -302,6 +302,54 @@ private func tempDir(_ name: String) -> URL {
         try MemoryNotes.append(["two", "three"], toMemoryAt: file)
         #expect(try String(contentsOfFile: file, encoding: .utf8) == "# Scout\n\nWhat Scout has learned.\n\n- one\n- two\n- three\n")
     }
+
+    @Test func deduplicatesReplacesForgetsAndFiltersSecrets() throws {
+        let openRouterPrefix = "sk-" + "or-"
+        let githubPrefix = "ghp" + "_"
+        let pemHeader = "-----" + "BEGIN OPENSSH " + "PRIVATE KEY-----"
+        let messages = [
+            ChatMessage(role: .assistant, text: """
+                <remember>
+                - Alex prefers dark mode
+                *   alex prefers   dark mode
+                - OPENROUTER_API_KEY="\(openRouterPrefix)example"
+                - \(githubPrefix)example
+                - password: example-value
+                - \(pemHeader)
+                - OPENROUTER_API_KEY is read from the macOS Keychain
+                </remember>
+                """),
+        ]
+        #expect(MemoryNotes.remembered(in: messages) == [
+            "Alex prefers dark mode",
+            "OPENROUTER_API_KEY is read from the macOS Keychain",
+        ])
+
+        let folder = tempDir("botchu-memory-updates")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("MEMORY.md").path
+        try "# Scout\n\nWhat Scout has learned.\n\n- Alex prefers light mode\n- Omarchy runs Arch\n- Old temporary note\n"
+            .write(toFile: file, atomically: true, encoding: .utf8)
+
+        try MemoryNotes.append([
+            "omarchy   runs arch",
+            "Replace: Alex prefers light mode -> Alex prefers dark mode",
+            "Forget: Old temporary note",
+            "\(openRouterPrefix)example",
+            "Scout checks PR status before merging",
+        ], toMemoryAt: file)
+
+        #expect(try String(contentsOfFile: file, encoding: .utf8) == """
+            # Scout
+
+            What Scout has learned.
+
+            - Alex prefers dark mode
+            - Omarchy runs Arch
+            - Scout checks PR status before merging
+
+            """)
+    }
 }
 
 @Suite struct RepositoryListTests {
