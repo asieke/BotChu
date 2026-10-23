@@ -75,4 +75,5 @@ final class AppSettings {
     var expandedBotsRoot: String { (botsRoot as NSString).expandingTildeInPath }
     var expandedReposRoot: String { (reposRoot as NSString).expandingTildeInPath }
     var sharedMemoryPath: String { (expandedBotsRoot as NSString).appendingPathComponent(BotContext.memoryFile) }
+    var teamPath: String { BotContext.teamPath(besideSharedMemory: sharedMemoryPath) }
 }

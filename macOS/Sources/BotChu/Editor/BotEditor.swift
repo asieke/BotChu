@@ -12,11 +12,22 @@ struct BotEditor: View {
     @State private var confirmPet = false
     /// Asked on Create, when the new bot has an appearance.
     @State private var confirmCreatePet = false
+    /// An existing bot's INSTRUCTIONS.md, edited here and saved with the bot. A new bot's
+    /// instructions go in `bot.instructions` until it has a folder, which they then move into.
+    @State private var instructions: BotDocumentDraft?
+    @State private var instructionsError: String?
     private let isNew: Bool
 
     init(request: EditorRequest) {
         _bot = State(initialValue: request.bot)
         isNew = request.isNew
+        if !request.isNew {
+            do {
+                _instructions = State(initialValue: try BotDocumentDraft(bot: request.bot, document: .instructions))
+            } catch {
+                _instructionsError = State(initialValue: "Couldn't read \(BotDocument.instructions.rawValue): \(error.localizedDescription)")
+            }
+        }
     }
 
     var body: some View {
@@ -37,15 +48,21 @@ struct BotEditor: View {
                     TextField("Title", text: $bot.title, prompt: Text("What it's for, in one line"))
                 }
                 Section {
-                    TextEditor(text: $bot.instructions)
-                        .font(.body)
+                    TextEditor(text: instructionsText)
+                        .font(.system(size: 13, design: .monospaced))
                         .frame(minHeight: 130)
                         .scrollContentBackground(.hidden)
+                        .disabled(!isNew && instructions == nil)
+                        .accessibilityLabel("Edit \(BotDocument.instructions.rawValue)")
                 } header: {
                     Text("Instructions")
                 } footer: {
-                    Text("Private to the bot. Given at the start of every session, with its MEMORY.md and SOUL.md.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    if let instructionsError {
+                        Text(instructionsError).font(.caption).foregroundStyle(.red)
+                    } else {
+                        Text("The bot's role and job, in Markdown, kept in \(BotDocument.instructions.rawValue) in its folder. Given at the start of every session, with its SOUL.md, MEMORY.md and the shared TEAM.md.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Section {
                     HStack(alignment: .top, spacing: 12) {
@@ -153,6 +170,10 @@ struct BotEditor: View {
         }
     }
 
+    private var instructionsText: Binding<String> {
+        isNew ? $bot.instructions : Binding(get: { instructions?.text ?? "" }, set: { instructions?.text = $0 })
+    }
+
     private var workspaceProblem: String? {
         model.workspaceProblem(bot.workspace, for: bot.id)
     }
@@ -197,6 +218,17 @@ struct BotEditor: View {
             model.create(bot)
             if makingPet { model.makePet(bot.id) }
         } else {
+            // Saved in the folder it is in now, before the bot moves, so it moves with the bot.
+            if var draft = instructions, draft.hasChanges {
+                do {
+                    try draft.save()
+                    instructions = draft
+                    bot.instructions = ""
+                } catch {
+                    instructionsError = "Couldn't save \(BotDocument.instructions.rawValue): \(error.localizedDescription) To reload it here, Cancel and edit the bot again."
+                    return
+                }
+            }
             model.update(bot)
         }
         dismiss()

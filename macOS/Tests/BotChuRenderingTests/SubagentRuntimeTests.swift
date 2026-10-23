@@ -1,0 +1,429 @@
+import AppKit
+import SwiftUI
+import Testing
+import BotChuCore
+@testable import BotChu
+
+extension RenderingTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["BOTCHU_TEST_REAL_DELEGATION"] == "1"))
+    func realCodexTurnReceivesAClaudeSubagentHandoff() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        fixture.settings.commands = [:]
+        var worker = fixture.worker
+        worker.selectAccount(Accounts.account(id: "claude-dev"))
+        fixture.app.update(worker)
+        fixture.app.send("Use your shell to run exactly: botchu-subagent call --agent Worker --brief 'Reply with HANDOFF-REAL-OK, without tools or any files.' Then repeat the returned handoff. Do not edit files or do any other task.", to: fixture.target)
+        try await fixture.wait(seconds: 180) { !fixture.app.isRunning(fixture.target) }
+        let runs = fixture.app.delegation.records[fixture.target] ?? []
+        #expect(runs.count == 1)
+        #expect(runs.first?.accountID == "claude-dev")
+        #expect(runs.first?.phase == .completed)
+        #expect(runs.first?.handoffOutput?.contains("HANDOFF-REAL-OK") == true)
+        #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("HANDOFF-REAL-OK") == true)
+    }
+
+    @Test func replayingARejectedRequestCannotAdmitWorkAfterTheRosterChanges() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let caller = try await fixture.app.delegation.prepareCaller(target: fixture.target, directory: fixture.folder.path, machine: .thisMac, hostID: nil)
+        defer { fixture.app.delegation.endCaller(caller.id) }
+        let ipc = SubagentIPC(root: URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!))
+        let request = SubagentRequest(invocationID: caller.id, callerBotID: fixture.parent.id, callerTaskID: fixture.target.taskID,
+                                     depth: 0, targetAgent: "Future", brief: "LEAF")
+        let data = try SubagentIPC.encode(request)
+        try data.write(to: ipc.requestURL(request.id), options: .atomic)
+        try await fixture.wait { FileManager.default.fileExists(atPath: ipc.resultURL(request.id).path) }
+        var renamed = fixture.worker
+        renamed.name = "Future"
+        fixture.app.update(renamed)
+        // Recreate an unacknowledged file after the original failed outcome was returned.
+        try data.write(to: ipc.requestURL(request.id), options: .atomic)
+        try await fixture.wait { !FileManager.default.fileExists(atPath: ipc.requestURL(request.id).path) }
+        let result = try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: ipc.resultURL(request.id)))
+        #expect(result.phase == .failed)
+        #expect(fixture.app.delegation.all.isEmpty)
+    }
+
+    @Test func transcriptWriteFailureWaitsForTheWorkerToExitBeforeReturningFailure() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let caller = try await fixture.app.delegation.prepareCaller(target: fixture.target, directory: fixture.folder.path, machine: .thisMac, hostID: nil)
+        defer { fixture.app.delegation.endCaller(caller.id) }
+        let ipc = SubagentIPC(root: URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!))
+        let request = SubagentRequest(invocationID: caller.id, callerBotID: fixture.parent.id, callerTaskID: fixture.target.taskID,
+                                     depth: 0, targetAgent: "Worker", brief: "SAVE_FAILURE")
+        try SubagentIPC.encode(request).write(to: ipc.requestURL(request.id), options: .atomic)
+        try await fixture.wait { FileManager.default.fileExists(atPath: fixture.folder.appendingPathComponent("waiting-for-save").path) }
+        let transcript = fixture.home.subagentURL(id: request.id, taskID: fixture.target.taskID).appendingPathComponent("thread.jsonl")
+        try FileManager.default.removeItem(at: transcript)
+        try FileManager.default.createDirectory(at: transcript, withIntermediateDirectories: true)
+        try Data().write(to: fixture.folder.appendingPathComponent("fail-ready"))
+        try await fixture.wait { FileManager.default.fileExists(atPath: ipc.resultURL(request.id).path) }
+        #expect(FileManager.default.fileExists(atPath: fixture.folder.appendingPathComponent("child-exited").path))
+        let result = try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: ipc.resultURL(request.id)))
+        #expect(result.phase == .failed)
+        #expect(!fixture.app.isRunning(fixture.target))
+    }
+
+    @Test func sshDelegationUsesHostCommandsForSharedWorkAndLocalCommandsForBotHome() async throws {
+        let fixture = try SubagentFixture(remote: true)
+        defer { fixture.cleanUp() }
+        fixture.app.send("REMOTE_WORKSPACES", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        let records = fixture.app.delegation.records[fixture.target] ?? []
+        #expect(records.count == 2)
+        #expect(records.allSatisfy { $0.phase == .completed })
+        let shared = try #require(records.first { $0.workspaceMode == .sharedCallerWorkspace })
+        let ownHome = try #require(records.first { $0.workspaceMode == .subagentHomeWorkspace })
+        #expect(shared.hostID == fixture.host?.id)
+        #expect(shared.workingDirectory == fixture.folder.path)
+        let sharedLocation = try #require(shared.handoffOutput).split(separator: "|").map(String.init)
+        try #require(sharedLocation.count == 4)
+        #expect(URL(fileURLWithPath: sharedLocation[1]).resolvingSymlinksInPath().path == fixture.folder.resolvingSymlinksInPath().path)
+        #expect(sharedLocation[2] == "remote")
+        #expect(shared.handoffOutput?.contains(fixture.root.appendingPathComponent("remote-home").path) == true)
+        #expect(ownHome.hostID == nil)
+        #expect(ownHome.workingDirectory == fixture.worker.workspace)
+        let homeLocation = try #require(ownHome.handoffOutput).split(separator: "|").map(String.init)
+        try #require(homeLocation.count == 4)
+        #expect(URL(fileURLWithPath: homeLocation[1]).resolvingSymlinksInPath().path == URL(fileURLWithPath: fixture.worker.workspace).resolvingSymlinksInPath().path)
+        #expect(homeLocation[2] == "local")
+        #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("LOCATION|") == true)
+        #expect(fixture.app.bot(fixture.worker.id)?.sessionID == "worker-home-session")
+    }
+
+    @Test func sshHandoffRetriesAResultWriteThatLosesItsConnection() async throws {
+        let fixture = try SubagentFixture(remote: true)
+        defer { fixture.cleanUp() }
+        try Data().write(to: fixture.root.appendingPathComponent("fail-result-once"))
+        fixture.app.send("NEST", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("fail-result-once").path))
+        #expect(fixture.app.delegation.all.count == 1)
+        #expect(fixture.app.delegation.all.first?.phase == .completed)
+        #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("HANDOFF-LEAF") == true)
+    }
+
+    @Test func sshHelperPreparationFailureDoesNotStartOrStrandAConversation() async throws {
+        let fixture = try SubagentFixture(remote: true)
+        defer { fixture.cleanUp() }
+        try Data().write(to: fixture.root.appendingPathComponent("fail-transport"))
+        fixture.app.send("NEST", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        #expect(fixture.app.delegation.all.isEmpty)
+        #expect(fixture.app.thread(fixture.target).last?.role == .error)
+        #expect(fixture.app.thread(fixture.target).last?.text.contains("python3 unavailable") == true)
+    }
+
+    @Test func stoppingAnSSHParentStopsItsNestedWorkersAndSavesTheirTerminalState() async throws {
+        let fixture = try SubagentFixture(remote: true)
+        defer { fixture.cleanUp() }
+        fixture.app.send("STOP_TREE", to: fixture.target)
+        try await fixture.wait { fixture.app.delegation.all.filter { $0.phase == .running }.count == 2 }
+        fixture.app.stop(fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) && fixture.app.delegation.all.allSatisfy { !$0.phase.isActive } }
+        #expect(fixture.app.delegation.all.count == 2)
+        #expect(fixture.app.delegation.all.allSatisfy { $0.phase == .stopped })
+        #expect(fixture.home.loadSubagents(taskID: fixture.target.taskID).allSatisfy { $0.phase == .stopped })
+    }
+
+    @Test func sshSubagentSavesRememberedNotesToItsOwnBotOnTheMac() async throws {
+        let fixture = try SubagentFixture(remote: true)
+        defer { fixture.cleanUp() }
+        fixture.app.send("REMOTE_MEMORY", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        #expect(fixture.app.delegation.all.first?.phase == .completed)
+        #expect(Workspace.read(fixture.worker.workspace + "/MEMORY.md").contains("REMOTE-LESSON"))
+        #expect(!Workspace.read(fixture.parent.workspace + "/MEMORY.md").contains("REMOTE-LESSON"))
+    }
+
+    @Test func restartRedeliversCompletedAndInterruptedHandoffsToTheRemoteMailbox() async throws {
+        let fixture = try SubagentFixture(remote: true)
+        defer { fixture.cleanUp() }
+        let invocation = UUID(), host = try #require(fixture.host)
+        let transport = SubagentTransport(machine: Machine(destination: host.destination), namespace: fixture.app.delegation.namespace,
+                                         invocationID: invocation, localRoot: fixture.app.delegation.root)
+        let endpoint = try await transport.prepare(script: SubagentHookInstaller.script, roster: SubagentIPC.encode([] as [BotRosterEntry]))
+        var completed = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID, depth: 1, targetBot: fixture.worker,
+                                   title: "Saved handoff", brief: "Already completed", workingDirectory: fixture.folder.path,
+                                   hostID: host.id, phase: .completed)
+        completed.callerInvocationID = invocation
+        completed.callerHostID = host.id
+        completed.handoffOutput = "DURABLE-REMOTE-HANDOFF"
+        completed.finishedAt = .now
+        var interrupted = completed
+        interrupted.id = UUID()
+        interrupted.phase = .running
+        interrupted.handoffOutput = nil
+        interrupted.finishedAt = nil
+        try fixture.home.saveSubagent(completed)
+        try fixture.home.saveSubagent(interrupted)
+        let restored = AppModel(store: fixture.store, settings: fixture.settings)
+        defer { restored.stopAll() }
+        let results = URL(fileURLWithPath: endpoint.ipcDirectory).appendingPathComponent("results")
+        let completedFile = results.appendingPathComponent("\(completed.id.uuidString.lowercased()).result.json")
+        let interruptedFile = results.appendingPathComponent("\(interrupted.id.uuidString.lowercased()).result.json")
+        try await fixture.wait {
+            FileManager.default.fileExists(atPath: completedFile.path) && FileManager.default.fileExists(atPath: interruptedFile.path)
+        }
+        let final = try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: completedFile))
+        let stopped = try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: interruptedFile))
+        #expect(final.phase == .completed)
+        #expect(final.handoffOutput == "DURABLE-REMOTE-HANDOFF")
+        #expect(stopped.phase == .stopped)
+        #expect(restored.delegation.all.allSatisfy { !$0.phase.isActive })
+    }
+
+    @Test func subagentFanoutReturnsNestedHandoffsToTheCallingTask() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app
+        app.send("FANOUT", to: fixture.target)
+        try await fixture.wait { !app.isRunning(fixture.target) }
+        let runs = app.delegation.records[fixture.target] ?? []
+        #expect(runs.count == 3)
+        #expect(runs.allSatisfy { $0.phase == .completed })
+        #expect(runs.filter { $0.parentSubagentID != nil }.count == 1)
+        #expect(runs.map(\.depth).sorted() == [1, 1, 2])
+        #expect(runs.allSatisfy { $0.workingDirectory == fixture.folder.path && $0.accountID == "codex-work" })
+        #expect(app.delegation.records[.home(fixture.parent.id)]?.isEmpty != false)
+        #expect(app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("HANDOFF-LEAF") == true)
+        #expect(fixture.home.loadSubagents(taskID: fixture.target.taskID).count == 3)
+        for run in runs {
+            #expect(fixture.home.loadSubagentThread(id: run.id, taskID: fixture.target.taskID).contains { $0.role == .assistant })
+        }
+        // The target's Home session and its transcript are untouched by delegation.
+        #expect(app.bot(fixture.worker.id)?.sessionID == "worker-home-session")
+        #expect(app.thread(.home(fixture.worker.id)).isEmpty)
+    }
+
+    @Test func stoppingAParentStopsNestedRunsAndLeavesNoActiveChildren() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app
+        app.send("STOP_TREE", to: fixture.target)
+        try await fixture.wait { app.delegation.all.filter { $0.phase == .running }.count == 2 }
+        app.stop(fixture.target)
+        try await fixture.wait { !app.isRunning(fixture.target) }
+        #expect(app.delegation.all.count == 2)
+        #expect(app.delegation.all.allSatisfy { $0.phase == .stopped })
+        #expect(app.delegation.states.isEmpty)
+        #expect(fixture.home.loadSubagents(taskID: fixture.target.taskID).allSatisfy { $0.phase == .stopped })
+    }
+
+    @Test func subagentDepthAndUnknownNamesFailWithoutHangingTheCaller() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        fixture.app.send("DEPTH", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        #expect(fixture.app.delegation.all.count == 3)
+        #expect(fixture.app.delegation.all.map(\.depth).sorted() == [1, 2, 3])
+        #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.lowercased().contains("depth") == true)
+        fixture.app.send("UNKNOWN", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("missing-bot") == true)
+    }
+
+    @Test func restartMarksPersistedSubagentsStoppedAndInspectorRendersTheirTree() async throws {
+        _ = NSApplication.shared
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        var parent = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID,
+                                 depth: 1, targetBot: fixture.worker, title: "Audit changes", brief: "Inspect the task's changes",
+                                 workingDirectory: fixture.folder.path, phase: .running)
+        parent.startedAt = .now.addingTimeInterval(-30)
+        let child = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID, parentSubagentID: parent.id,
+                               depth: 2, targetBot: fixture.worker, title: "Run checks", brief: "Verify the audit",
+                               workingDirectory: fixture.folder.path, phase: .completed)
+        try fixture.home.saveSubagent(parent)
+        try fixture.home.saveSubagent(child)
+        let restored = AppModel(store: fixture.store, settings: fixture.settings)
+        defer { restored.stopAll() }
+        #expect(restored.delegation.run(parent.id)?.phase == .stopped)
+        #expect(restored.delegation.run(child.id)?.phase == .completed)
+        #expect(fixture.home.loadSubagents(taskID: fixture.target.taskID).allSatisfy { !$0.phase.isActive })
+        let defaults = UserDefaults(suiteName: fixture.domain)!
+        defaults.set("subagents", forKey: InspectorTab.storageKey)
+        restored.show(fixture.target)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 640),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: TaskInspector(target: fixture.target).environment(restored).defaultAppStorage(defaults))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(window.contentView?.fittingSize.width ?? 0 <= 380)
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("subagents"))
+        }
+        // Recreate with a live run to check automatic expansion and bounded streaming content.
+        restored.delegation.records[fixture.target] = [parent, child]
+        restored.delegation.states[parent.id] = RunState(hasOutput: true, activity: .testing)
+        restored.delegation.threads[parent.id] = [
+            ChatMessage(role: .tool, toolName: "Run tests", toolInput: "swift test", toolState: .running),
+            ChatMessage(role: .assistant, text: "Checking the changed files and test results."),
+        ]
+        window.contentView = NSHostingView(rootView: TaskInspector(target: fixture.target).environment(restored).defaultAppStorage(defaults))
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(window.contentView?.fittingSize.width ?? 0 <= 380)
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("subagents-expanded"))
+        }
+        parent.phase = .stopped
+        restored.delegation.records[fixture.target] = [parent, child]
+        restored.delegation.states[parent.id] = nil
+        restored.delegation.clear(parent.id)
+        #expect(restored.delegation.all.isEmpty)
+    }
+}
+
+@MainActor private final class SubagentFixture {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-subagent-runtime-\(UUID().uuidString)")
+    let domain = "local.BotChu.SubagentTests.\(UUID().uuidString)"
+    let store: Store
+    let settings: AppSettings
+    let parent: Bot
+    let worker: Bot
+    let home: BotHome
+    let app: AppModel
+    let target: ChatTarget
+    let folder: URL
+    let host: SSHHost?
+    let originalSSH: String
+
+    init(remote: Bool = false) throws {
+        originalSSH = Machine.ssh
+        store = Store(root: root.appendingPathComponent("index"))
+        settings = AppSettings(defaults: UserDefaults(suiteName: domain)!)
+        settings.botsRoot = root.appendingPathComponent("bots").path
+        settings.reposRoot = root.appendingPathComponent("repos").path
+        parent = Bot(name: "Parent", accountID: "codex-dev", workspace: root.appendingPathComponent("parent").path)
+        worker = Bot(name: "Worker", instructions: "Use the worker persona", accountID: "codex-work", workspace: root.appendingPathComponent("worker").path,
+                     sessionID: "worker-home-session", sessionAccountID: "codex-work")
+        home = BotHome(workspace: parent.workspace)
+        try home.save(parent)
+        try BotHome(workspace: worker.workspace).save(worker)
+        try "WORKER-SOUL".write(toFile: worker.workspace + "/SOUL.md", atomically: true, encoding: .utf8)
+        let script = root.appendingPathComponent("cli.py")
+        try Self.script.write(to: script, atomically: true, encoding: .utf8)
+        for account in [parent.accountID, worker.accountID] { settings.commands[account] = "/usr/bin/python3 \(Shell.quote(script.path)) --machine local" }
+        if remote {
+            let remoteHome = root.appendingPathComponent("remote-home")
+            try FileManager.default.createDirectory(at: remoteHome, withIntermediateDirectories: true)
+            let ssh = root.appendingPathComponent("ssh")
+            // Its HOME, helper, mailbox and captured stdin all belong to this isolated fixture.
+            try """
+                #!/bin/sh
+                while [ $# -gt 0 ]; do
+                  case $1 in -o|-p|-i|-l|-F) shift 2 ;; -*) shift ;; *) break ;; esac
+                done
+                shift
+                export HOME=\(Shell.quote(remoteHome.path))
+                incoming=$(/usr/bin/mktemp \(Shell.quote(root.appendingPathComponent("ssh-input.XXXXXX").path)))
+                /bin/cat > "$incoming"
+                if [ -f \(Shell.quote(root.appendingPathComponent("fail-result-once").path)) ] && /usr/bin/grep -q 'results' "$incoming"; then
+                  /bin/rm \(Shell.quote(root.appendingPathComponent("fail-result-once").path))
+                  echo 'Connection dropped during result delivery' >&2
+                  exit 255
+                fi
+                case "$*" in
+                  *'exec python3 -c'*)
+                    if [ -f \(Shell.quote(root.appendingPathComponent("fail-transport").path)) ]; then
+                      echo 'python3 unavailable on test host' >&2
+                      exit 127
+                    fi ;;
+                esac
+                exec /bin/sh -c "$*" < "$incoming"
+
+                """.write(to: ssh, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+            Machine.ssh = ssh.path
+            let commands = Dictionary(uniqueKeysWithValues: [parent.accountID, worker.accountID].map {
+                ($0, "/usr/bin/python3 \(Shell.quote(script.path)) --machine remote")
+            })
+            host = SSHHost(nickname: "Isolated test host", destination: "fixture-host", reposFolder: root.path, commands: commands)
+            settings.hosts = [host!]
+        } else { host = nil }
+        var task = BotTask(for: parent, repo: "fixture/repo", checkout: root.path, work: nil, brief: "Test delegation", host: host)
+        folder = root.appendingPathComponent("worktree")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        task.folder = folder.path
+        try home.save(task)
+        target = .task(task.id, of: parent.id)
+        try store.saveIndex([Store.Entry(id: parent.id, workspace: parent.workspace), Store.Entry(id: worker.id, workspace: worker.workspace)])
+        app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests") })
+    }
+
+    func wait(seconds: Int = 20, _ condition: () -> Bool) async throws {
+        for _ in 0..<(seconds * 40) {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        Issue.record("Timed out: \(app.thread(target).map(\.text)) / \(app.delegation.all.map { "\($0.title): \($0.phase) \($0.errorMessage ?? "")" })")
+        throw CocoaError(.executableLoad)
+    }
+    func cleanUp() {
+        app.stopAll()
+        Machine.ssh = originalSSH
+        UserDefaults(suiteName: domain)?.removePersistentDomain(forName: domain)
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    static let script = #"""
+    import json, os, re, signal, subprocess, sys, time
+    def emit(value): print(json.dumps(value), flush=True)
+    def helper(*args):
+        result = subprocess.run(["botchu-subagent", *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return result.stdout + result.stderr
+    depth = int(os.environ["BOTCHU_CALLER_DEPTH"])
+    prompt = sys.argv[-1]
+    emit({"type":"thread.started", "thread_id":"fixture-session"})
+    if depth:
+        assert "WORKER-SOUL" in prompt
+        brief = re.search(r"<handoff_brief>\s*(.*?)\s*</handoff_brief>", prompt, re.S).group(1)
+    else:
+        brief = prompt.splitlines()[-1]
+    if brief == "REMOTE_WORKSPACES":
+        shared = helper("call", "--agent", "Worker", "--workspace", "shared", "--brief", "LOCATION")
+        own = helper("call", "--agent", "Worker", "--workspace", "bot_home", "--brief", "LOCATION")
+        answer = shared + "\n" + own
+    elif brief == "REMOTE_MEMORY":
+        answer = helper("call", "--agent", "Worker", "--brief", "REMEMBER")
+    elif brief == "REMEMBER":
+        answer = "Handoff Report: complete. <remember>REMOTE-LESSON</remember>"
+    elif brief == "LOCATION":
+        machine = sys.argv[sys.argv.index("--machine") + 1]
+        answer = "LOCATION|" + os.getcwd() + "|" + machine + "|" + os.environ["HOME"]
+    elif brief == "FANOUT":
+        one = helper("spawn", "--agent", "Worker", "--brief", "NEST").strip()
+        two = helper("spawn", "--agent", "Worker", "--brief", "LEAF").strip()
+        answer = helper("wait", one, two)
+    elif brief == "NEST":
+        answer = helper("call", "--agent", "Worker", "--brief", "LEAF")
+    elif brief == "STOP_TREE":
+        answer = helper("call", "--agent", "Worker", "--brief", "STOP_CHILD")
+    elif brief == "STOP_CHILD":
+        answer = helper("call", "--agent", "Worker", "--brief", "BLOCK")
+    elif brief == "SAVE_FAILURE":
+        def stop_after_cleanup(signum, frame):
+            time.sleep(.4)
+            open("child-exited", "w").close()
+            sys.exit(130)
+        signal.signal(signal.SIGINT, stop_after_cleanup)
+        open("waiting-for-save", "w").close()
+        while not os.path.exists("fail-ready"): time.sleep(.01)
+        emit({"type":"item.completed", "item":{"type":"agent_message", "text":"Cannot persist this reply"}})
+        while True: time.sleep(.1)
+    elif brief == "BLOCK":
+        while True: time.sleep(.1)
+    elif brief == "DEPTH":
+        answer = helper("call", "--agent", "Worker", "--brief", "DEPTH")
+    elif brief == "UNKNOWN":
+        answer = helper("call", "--agent", "missing-bot", "--brief", "LEAF")
+    else:
+        answer = "HANDOFF-LEAF"
+    emit({"type":"item.completed", "item":{"type":"agent_message", "text":answer}})
+    emit({"type":"turn.completed"})
+    """#
+}

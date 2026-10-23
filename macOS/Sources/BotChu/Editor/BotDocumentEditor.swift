@@ -13,8 +13,8 @@ struct BotDocumentEditor: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(request.document.rawValue).font(.headline)
-                    Text("\(request.bot.name) · \(request.document.summary)")
+                    Text(request.name).font(.headline)
+                    Text(request.subtitle)
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -28,7 +28,17 @@ struct BotDocumentEditor: View {
                     .font(.system(size: 13, design: .monospaced))
                     .padding(10)
                     .focused($editing)
-                    .accessibilityLabel("Edit \(request.document.rawValue)")
+                    .overlay(alignment: .topLeading) {
+                        if draft?.text.isEmpty == true, !request.placeholder.isEmpty {
+                            Text(request.placeholder)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 15)
+                                .padding(.vertical, 10)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .accessibilityLabel("Edit \(request.name)")
             } else {
                 Spacer()
             }
@@ -61,10 +71,10 @@ struct BotDocumentEditor: View {
 
     private func load() {
         do {
-            draft = try BotDocumentDraft(bot: request.bot, document: request.document)
+            draft = try BotDocumentDraft(url: request.url, seed: request.seed)
             error = nil
         } catch {
-            self.error = "Couldn't read \(request.document.rawValue): \(error.localizedDescription)"
+            self.error = "Couldn't read \(request.name): \(error.localizedDescription)"
         }
     }
 

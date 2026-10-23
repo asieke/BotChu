@@ -30,7 +30,9 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var emoji: String
     /// The public one-liner shown under the name.
     public var title: String
-    /// Private instructions, given to the agent at the start of every session.
+    /// Private instructions, from before they moved to `INSTRUCTIONS.md` in the workspace. Still
+    /// decoded from older bot.json, and set by the New Bot sheet: `Workspace.migrateInstructions`
+    /// writes them into that file once and clears this.
     public var instructions: String
     public var accountID: String
     /// Custom profiles travel with the bot so its CLI family survives relaunch and workspace moves.
@@ -157,6 +159,9 @@ public enum AgentEvent: Equatable, Sendable {
     case toolFinished(id: String, name: String, output: String, isError: Bool)
     case failed(String)
     case finished
+    /// The CLI took the next message written to its stdin (Claude Code's replay of it). The
+    /// first is the turn's prompt; later ones are follow-ups, which then join the transcript.
+    case inputTaken
 }
 
 /// Applies a run's events to a thread. Kept free of UI so it can be tested.
@@ -170,6 +175,9 @@ public struct ThreadAssembler {
         switch event {
         case .session, .finished:
             openTextID = nil
+        case .inputTaken:
+            // A follow-up the caller adds next ends the reply being written.
+            apply(.textEnd, to: &messages)
         case .textDelta(let delta):
             if let id = openTextID, let i = messages.firstIndex(where: { $0.id == id }) {
                 messages[i].text += delta

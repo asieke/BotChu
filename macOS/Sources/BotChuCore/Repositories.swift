@@ -430,33 +430,66 @@ public enum GitHubLookup {
         public var description: String
         public var pushedAt: Date?
         public var isPrivate: Bool
+        public var isFork: Bool
+        /// The owner's avatar on GitHub, and whether the owner is an organization.
+        public var ownerAvatar: URL?
+        public var ownerIsOrganization: Bool
+        public var language: String?
+        /// Open issues and open pull requests, as GitHub counts them.
+        public var openIssues: Int
+        public var openPullRequests: Int
 
-        public init(nameWithOwner: String, description: String = "", pushedAt: Date? = nil, isPrivate: Bool = false) {
+        public init(nameWithOwner: String, description: String = "", pushedAt: Date? = nil, isPrivate: Bool = false,
+                    isFork: Bool = false, ownerAvatar: URL? = nil, ownerIsOrganization: Bool = false, language: String? = nil,
+                    openIssues: Int = 0, openPullRequests: Int = 0) {
             self.nameWithOwner = nameWithOwner; self.description = description; self.pushedAt = pushedAt; self.isPrivate = isPrivate
+            self.isFork = isFork; self.ownerAvatar = ownerAvatar; self.ownerIsOrganization = ownerIsOrganization; self.language = language
+            self.openIssues = openIssues; self.openPullRequests = openPullRequests
         }
         public var id: String { nameWithOwner }
         public var name: String { TaskNaming.repoName(nameWithOwner) }
+        public var owner: String { String(nameWithOwner.prefix { $0 != "/" }) }
     }
 
     /// The repositories tasks can work on: those of the account `gh` is signed in to, and of the
-    /// organizations it belongs to, without archived ones, most recently pushed first.
+    /// organizations it belongs to, without archived ones, most recently pushed first, with their
+    /// open issue and pull request counts.
     public static func repositories() async -> Result<[Repo], TaskWorktree.Failure> {
-        let args = ["gh", "api", "user/repos?per_page=100&affiliation=owner,organization_member", "--paginate",
-                    "--jq", #".[] | [.full_name, (.description // ""), (.archived | tostring), (.pushed_at // ""), (.private | tostring)] | @tsv"#]
+        let args = ["gh", "api", "graphql", "--paginate", "-f", "query=\(repositoriesQuery)", "--jq", repositoriesFields]
         let run = await Shell.run(args, in: NSHomeDirectory())
         guard run.ok else {
-            return .failure(TaskWorktree.Failure(step: "Couldn't list your GitHub repositories with gh", output: run.report("gh api user/repos")))
+            return .failure(TaskWorktree.Failure(step: "Couldn't list your GitHub repositories with gh", output: run.report("gh api graphql (repositories)")))
         }
         return .success(parseRepositories(run.output))
     }
 
+    static let repositoriesQuery = """
+        query($endCursor: String) { viewer { repositories(first: 100, after: $endCursor, \
+        ownerAffiliations: [OWNER, ORGANIZATION_MEMBER], affiliations: [OWNER, ORGANIZATION_MEMBER], isArchived: false, \
+        orderBy: {field: PUSHED_AT, direction: DESC}) { pageInfo { hasNextPage endCursor } nodes { \
+        nameWithOwner description isArchived isPrivate isFork pushedAt owner { __typename login avatarUrl(size: 64) } \
+        primaryLanguage { name } issues(states: OPEN) { totalCount } pullRequests(states: OPEN) { totalCount } } } } }
+        """
+    static let repositoriesFields = #".data.viewer.repositories.nodes[] | [.nameWithOwner, (.description // ""), (.isArchived | tostring), (.pushedAt // ""), (.isPrivate | tostring), (.owner.avatarUrl // ""), .owner.__typename, (.isFork | tostring), (.primaryLanguage.name // ""), (.issues.totalCount | tostring), (.pullRequests.totalCount | tostring)] | @tsv"#
+
+    /// One repository per line: name, description, archived, pushed, private, and then (optionally)
+    /// avatar, owner type, fork, language, open issues and open pull requests.
     static func parseRepositories(_ tsv: String) -> [Repo] {
         let dates = ISO8601DateFormatter()
         return tsv.split(whereSeparator: \.isNewline).compactMap { line -> Repo? in
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard fields.count == 5, fields[0].contains("/"), fields[2] != "true" else { return nil }
-            return Repo(nameWithOwner: fields[0], description: fields[1].replacingOccurrences(of: "\\t", with: " ").replacingOccurrences(of: "\\n", with: " "),
-                        pushedAt: dates.date(from: fields[3]), isPrivate: fields[4] == "true")
+            guard fields.count == 5 || fields.count == 11, fields[0].contains("/"), fields[2] != "true" else { return nil }
+            var repo = Repo(nameWithOwner: fields[0], description: fields[1].replacingOccurrences(of: "\\t", with: " ").replacingOccurrences(of: "\\n", with: " "),
+                            pushedAt: dates.date(from: fields[3]), isPrivate: fields[4] == "true")
+            if fields.count == 11 {
+                repo.ownerAvatar = URL(string: fields[5]).flatMap { $0.scheme == "https" ? $0 : nil }
+                repo.ownerIsOrganization = fields[6] == "Organization"
+                repo.isFork = fields[7] == "true"
+                repo.language = fields[8].isEmpty ? nil : fields[8]
+                repo.openIssues = Int(fields[9]) ?? 0
+                repo.openPullRequests = Int(fields[10]) ?? 0
+            }
+            return repo
         }
         .sorted { ($0.pushedAt ?? .distantPast) > ($1.pushedAt ?? .distantPast) }
     }

@@ -30,6 +30,19 @@ extension RenderingTests {
         }, projectGitHub: ProjectGitHub { _, _ in
             Issue.record("Library fixtures must not request GitHub")
             return await ProjectGitHub.command(["/usr/bin/false"], body: nil)
+        }, openWorkLookup: { repos in
+            #expect(repos == ["octocat/BotChu", "octocat/Orbit"])
+            let url = URL(string: "https://github.com/octocat/BotChu/pull/7")!
+            return .success(GitHubLookup.OpenWork(items: [
+                GitHubLookup.OpenItem(repo: "octocat/BotChu", number: 7, title: "Show open pull requests in Projects", url: url, isPullRequest: true,
+                                      isDraft: false, author: "octocat", authorAvatar: nil, createdAt: .now.addingTimeInterval(-7200),
+                                      updatedAt: .now.addingTimeInterval(-600), comments: 1, labels: [.init(name: "enhancement", color: "a2eeef")],
+                                      reviewDecision: "REVIEW_REQUIRED", checks: .success, branch: "feat/7-projects", fromFork: false, additions: 120, deletions: 8),
+                GitHubLookup.OpenItem(repo: "octocat/Orbit", number: 3, title: "Invite teammates by email", url: URL(string: "https://github.com/octocat/Orbit/issues/3")!,
+                                      isPullRequest: false, isDraft: false, author: "hubot", authorAvatar: nil, createdAt: .now.addingTimeInterval(-90000),
+                                      updatedAt: .now.addingTimeInterval(-86400), comments: 4, labels: [], reviewDecision: nil, checks: .none,
+                                      branch: nil, fromFork: false, additions: 0, deletions: 0),
+            ]))
         })
         let sample: [(String, String, ProjectMetadata.Kind, String)] = [
             ("BotChu", "Persistent agents, projects, and conversations on your Mac.", .local, "local:my-mac:~/apps/BotChu"),
@@ -37,7 +50,8 @@ extension RenderingTests {
             ("Orbit", "A welcoming home for your team's work.", .hosted, "vercel:orbit"),
             ("TinyKit", "Small Swift tools that make a difference.", .library, "registry:swift"),
         ]
-        app.repositories = sample.map { GitHubLookup.Repo(nameWithOwner: "octocat/\($0.0)", description: $0.1, isPrivate: $0.0 == "Fieldnotes") }
+        app.repositories = sample.map { GitHubLookup.Repo(nameWithOwner: "octocat/\($0.0)", description: $0.1, isPrivate: $0.0 == "Fieldnotes",
+                                                          openIssues: $0.0 == "Orbit" ? 1 : 0, openPullRequests: $0.0 == "BotChu" ? 1 : 0) }
         app.repositoriesReadAt = Date()
         for (name, _, kind, deploy) in sample {
             let metadata = ProjectMetadata(name: name, kind: kind, deploy: deploy)
@@ -62,7 +76,7 @@ extension RenderingTests {
             #expect(window.frame.width >= window.contentMinSize.width)
             try captureLibrary(window, name: destination.rawValue)
             if destination == .projects {
-                defaults.set("table", forKey: "projectsLayout")
+                defaults.set("table", forKey: "projectsLayoutV2")
                 try await Task.sleep(for: .milliseconds(200))
                 try captureLibrary(window, name: "projects-table")
                 window.setContentSize(NSSize(width: 820, height: 600))
@@ -70,10 +84,18 @@ extension RenderingTests {
                 #expect(window.frame.width >= window.contentMinSize.width)
                 try captureLibrary(window, name: "projects-compact")
                 window.setContentSize(NSSize(width: 1240, height: 800))
+                #expect(app.openItems?.count == 2)
+                for scope in ["pulls", "issues"] {
+                    defaults.set(scope, forKey: "projectsScope")
+                    try await Task.sleep(for: .milliseconds(200))
+                    window.layoutIfNeeded()
+                    try captureLibrary(window, name: "projects-\(scope)")
+                }
+                defaults.set("repositories", forKey: "projectsScope")
             }
         }
         NSApp.appearance = NSAppearance(named: .darkAqua)
-        defaults.set("gallery", forKey: "projectsLayout")
+        defaults.set("gallery", forKey: "projectsLayoutV2")
         app.destination = .projects
         try await Task.sleep(for: .milliseconds(200))
         try captureLibrary(window, name: "projects-dark")
@@ -91,6 +113,13 @@ extension RenderingTests {
         #expect(BotHome(workspace: bot.workspace).loadTasks().first?.account == account)
         app.newTask(for: bot.id, repo: "octocat/Fieldnotes")
         #expect(app.taskSheet?.repo == "octocat/Fieldnotes")
+        let pull = try #require(app.openItems?.first { $0.isPullRequest })
+        app.newTask(for: bot.id, repo: pull.repo, work: pull.work, purpose: .comment)
+        #expect(app.taskSheet?.work?.number == 7)
+        #expect(app.taskSheet?.purpose == .comment)
+        let issue = try #require(app.openItems?.first { !$0.isPullRequest })
+        app.newTask(for: bot.id, repo: issue.repo, work: issue.work, purpose: .review)
+        #expect(app.taskSheet?.purpose == .work)
         app.taskSheet = nil
         let record = try #require(app.projectRecords["octocat/BotChu"])
         let metadata = try record.metadata(repoName: "BotChu")

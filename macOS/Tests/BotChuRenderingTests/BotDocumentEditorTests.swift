@@ -134,7 +134,11 @@ extension RenderingTests {
         #!/usr/bin/env python3
         import json, sys
         from pathlib import Path
-        Path(__file__).with_name('prompt.txt').write_text(sys.argv[-1])
+        # Claude Code takes its prompt on stdin (stream-json) so it can take follow-ups mid-turn.
+        prompt = sys.argv[-1]
+        if '--input-format' in sys.argv:
+            prompt = json.loads(sys.stdin.readline())['message']['content'][0]['text']
+        Path(__file__).with_name('prompt.txt').write_text(prompt)
         print(json.dumps({'type': 'system', 'subtype': 'init', 'session_id': 'fixture-session'}))
         print(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': 'OK'}]}}))
         """.write(to: script, atomically: true, encoding: .utf8)

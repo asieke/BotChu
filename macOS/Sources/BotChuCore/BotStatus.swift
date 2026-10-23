@@ -7,6 +7,8 @@ public struct RunState: Equatable, Sendable {
     public var startedAt: Date
     public var hasOutput: Bool
     public var preparing: Bool
+    /// Whether the running CLI takes queued follow-ups now, at its next tool call.
+    public var takesInput = false
     public private(set) var activity: BotActivity
     public private(set) var activitySince: Date
     /// Thinking, waiting until the tool's activity has shown for `minimumShow`.
@@ -119,6 +121,16 @@ public struct BotStatus: Equatable, Sendable {
             lastActivity: messages.last(where: { !$0.role.isNote })?.date,
             lastError: run == nil ? lastError : nil,
             activity: run?.activity ?? reaction ?? (phase == .failed ? .failed : .idle))
+    }
+
+    /// A compact elapsed timer, clamped at zero if the clock moves backwards.
+    public static func formatElapsed(from start: Date, to now: Date = Date()) -> String {
+        let total = max(0, Int(now.timeIntervalSince(start)))
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
+            : String(format: "%d:%02d", minutes, seconds)
     }
 
     /// The bot as its sidebar row shows it: its Home's status, but while Home is idle and

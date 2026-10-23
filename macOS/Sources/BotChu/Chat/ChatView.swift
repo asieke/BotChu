@@ -41,11 +41,15 @@ struct ChatView: View {
                         .frame(maxWidth: .infinity)
                     }
                     .followsNewestMessage()
-                    .onChange(of: messages.count) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    // The chat follows its newest message. Watch the last message, not the count: a
+                    // reply streams in by growing its text in place, which is a content change and not
+                    // a new message, and the follow has to keep up with every delta.
+                    .onChange(of: messages.last) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
                 VStack(spacing: 8) {
                     if let queue = model.messageQueues[target], !queue.messages.isEmpty {
                         QueuedMessages(queue: queue, running: running, preparing: model.runStates[target]?.preparing == true,
+                            midTurn: model.takesFollowUpsMidTurn(target),
                             resume: { model.resumeQueuedMessages(to: target) },
                             edit: { model.editQueuedMessage($0, in: target); composerFocused = true },
                             remove: { model.removeQueuedMessage($0, from: target) })
@@ -59,7 +63,7 @@ struct ChatView: View {
                          onPasteImages: { model.pasteImages($0, to: target) },
                          attachmentError: model.attachmentErrors[target],
                          placeholder: task.map { "Message \(bot.name) about \($0.title)" } ?? "Message \(bot.name)",
-                         running: running, onSend: send, onStop: { model.stop(target) }) {
+                         running: running, midTurn: model.takesFollowUpsMidTurn(target), onSend: send, onStop: { model.stop(target) }) {
                         ModelMenu(settings: current, disabled: running,
                                   onModel: { model.setModel($0, for: target) },
                                   onEffort: { model.setReasoningEffort($0, for: target) })

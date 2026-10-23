@@ -50,9 +50,14 @@ public enum ImageDelivery {
                 content.append(["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": data.base64EncodedString()]])
             }
             let message: [String: Any] = ["type": "user", "message": ["role": "user", "content": content]]
-            result.standardInput = try JSONSerialization.data(withJSONObject: message) + Data([10])
-            result.arguments.removeLast()
-            result.arguments += ["--input-format", "stream-json"]
+            let data = try JSONSerialization.data(withJSONObject: message)
+            if result.input != nil {
+                result.input = [String(decoding: data, as: UTF8.self)]
+            } else {
+                result.standardInput = data + Data([10])
+                result.arguments.removeLast()
+                result.arguments += ["--input-format", "stream-json"]
+            }
         case .antigravity:
             // agy's streaming input accepts text blocks only. Its file reader opens image files.
             result.arguments[1] = prompt + "\n\nAttached images (open these files to inspect them):\n" + images.map(\.path).joined(separator: "\n")
