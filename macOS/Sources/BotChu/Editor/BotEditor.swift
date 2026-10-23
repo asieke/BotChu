@@ -102,7 +102,7 @@ struct BotEditor: View {
                 Section {
                     Picker("Account", selection: Binding(get: { bot.accountID }, set: { bot.selectAccount(model.settings.account($0)) })) {
                         ForEach(model.settings.accounts) { account in
-                            Label(account.name, systemImage: account.symbol).tag(account.id)
+                            ProviderMenuLabel(account).tag(account.id)
                         }
                     }
                     TextField("Model", text: Binding(get: { bot.model }, set: { bot.selectModel($0) }), prompt: Text(modelPrompt))

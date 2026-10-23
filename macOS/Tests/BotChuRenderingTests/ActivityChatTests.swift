@@ -68,7 +68,8 @@ extension RenderingTests {
             messages.append(ChatMessage(role: .user, text: "Question \(turn)"))
             messages.append(ChatMessage(role: .assistant, text: "Answer \(turn)\n\nA paragraph long enough to take a few lines in the chat, so the conversation is much taller than its window."))
         }
-        app.threads[fixture.task] = messages
+        let conversation = app.conversation(fixture.task)
+        conversation.replace(messages)
         app.runStates[fixture.task] = RunState(hasOutput: true)
         app.show(fixture.task)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -84,10 +85,9 @@ extension RenderingTests {
         }
         #expect(below() < 40)
         // Following: a reply streaming in keeps the newest text in view.
-        messages.append(ChatMessage(role: .assistant, text: "Streaming"))
+        conversation.append(ChatMessage(role: .assistant, text: "Streaming"))
         for i in 0..<12 {
-            messages[messages.count - 1].text += "\n\nMore of the reply \(i), growing in place."
-            app.threads[fixture.task] = messages
+            conversation.stream { $0[$0.count - 1].text += "\n\nMore of the reply \(i), growing in place." }
             try await Task.sleep(for: .milliseconds(40))
         }
         try await Task.sleep(for: .milliseconds(200))
@@ -98,21 +98,25 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(200))
         let held = scroll.contentView.bounds.minY
         for i in 0..<12 {
-            messages[messages.count - 1].text += "\n\nStill more \(i)."
-            app.threads[fixture.task] = messages
+            conversation.stream { $0[$0.count - 1].text += "\n\nStill more \(i)." }
             try await Task.sleep(for: .milliseconds(40))
         }
-        messages.append(ChatMessage(role: .tool, toolID: "t", toolName: "Bash", toolInput: "swift build", toolState: .running))
-        app.threads[fixture.task] = messages
+        conversation.append(ChatMessage(role: .tool, toolID: "t", toolName: "Bash", toolInput: "swift build", toolState: .running))
         try await Task.sleep(for: .milliseconds(300))
         #expect(abs(scroll.contentView.bounds.minY - held) < 2)
         #expect(below() > 100)
     }
 
-    static func chatScrollView(in view: NSView) -> NSScrollView? {
-        if let scroll = view as? NSScrollView, (scroll.documentView?.frame.height ?? 0) > 1_000 { return scroll }
-        for subview in view.subviews { if let found = chatScrollView(in: subview) { return found } }
-        return nil
+    /// The chat's scroll view: the widest one holding more than `minimum` points of content.
+    static func chatScrollView(in view: NSView, minimum: CGFloat = 1_000) -> NSScrollView? {
+        var best: NSScrollView?
+        func visit(_ view: NSView) {
+            if let scroll = view as? NSScrollView, (scroll.documentView?.frame.height ?? 0) > minimum,
+               scroll.frame.width > (best?.frame.width ?? 400) { best = scroll }
+            view.subviews.forEach(visit)
+        }
+        visit(view)
+        return best
     }
 }
 

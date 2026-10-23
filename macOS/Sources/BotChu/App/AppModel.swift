@@ -73,10 +73,11 @@ final class AppModel {
     var delegation: SubagentRuntime!
     /// Each bot's tasks, open and closed, oldest first.
     var tasks: [UUID: [BotTask]] = [:]
-    /// Every conversation: each bot's Home, and each task.
-    var threads: [ChatTarget: [ChatMessage]] = [:]
+    /// Every conversation (each bot's Home, and each task), observed one by one: see
+    /// `ConversationState`. Made when first asked for (`conversation(_:)`).
+    @ObservationIgnored private(set) var conversations: [ChatTarget: ConversationState] = [:]
     /// Turns in progress, by conversation.
-    var runStates: [ChatTarget: RunState] = [:]
+    var runStates: ConversationField<RunState> { ConversationField(model: self, field: \.run) }
     /// Nil shows the remembered conversation; galleries never discard that conversation.
     var destination: LibraryDestination?
     var visibleBotID: UUID? { destination == nil ? selection : nil }
@@ -96,8 +97,8 @@ final class AppModel {
     var draftImages: [ChatTarget: [ImageAttachment]] = [:]
     var attachmentErrors: [ChatTarget: String] = [:]
     /// Unsent follow-ups and short pet reactions belong to one conversation, not the whole bot.
-    var messageQueues: [ChatTarget: MessageQueue] = [:]
-    var reactions: [ChatTarget: BotActivity] = [:]
+    var messageQueues: ConversationField<MessageQueue> { ConversationField(model: self, field: \.queue) }
+    var reactions: ConversationField<BotActivity> { ConversationField(model: self, field: \.reaction) }
     @ObservationIgnored private var reactionTickets: [ChatTarget: UUID] = [:]
     /// Pets, by bot; a bot without one shows its emoji (see `Pets.swift`).
     var pets: [UUID: PetVideoPackage] = [:]
@@ -107,6 +108,9 @@ final class AppModel {
     var editor: EditorRequest?
     var taskSheet: TaskSheetRequest?
     var documentEditor: DocumentEditorRequest?
+    /// Report a Bug or Feature, and what files its issues: gh, or a stand-in (`DevHooks`, tests).
+    var issueReport: IssueReportRequest?
+    @ObservationIgnored var issueFiler = DevHooks.issueFiler
     let settings: AppSettings
     let usage: UsageCache
     let modelCatalog = ModelCatalog()
@@ -165,19 +169,20 @@ final class AppModel {
         bots = loaded.bots
         missing = loaded.missing
         for bot in bots {
-            threads[.home(bot.id)] = self.store.loadThread(for: bot)
+            conversation(.home(bot.id)).load(self.store.loadThread(for: bot))
             let home = BotHome(workspace: bot.workspace)
             messageQueues[.home(bot.id)] = MessageQueue(saved: home.loadQueuedMessages(), delivered: thread(.home(bot.id)),
                                                         paused: home.loadQueuePaused())
             tasks[bot.id] = home.loadTasks()
             for task in tasks[bot.id] ?? [] where !task.isArchived {
                 let target = ChatTarget.task(task.id, of: bot.id)
-                threads[target] = home.loadThread(task: task.id)
+                conversation(target).load(home.loadThread(task: task.id))
                 messageQueues[target] = MessageQueue(saved: home.loadQueuedMessages(task: task.id), delivered: thread(target),
                                                      paused: home.loadQueuePaused(task: task.id))
             }
             reloadPet(bot.id)
         }
+        warmMarkdown()
         delegation = SubagentRuntime(model: self, root: (store != nil || DevHooks.dataDir != nil)
             ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot)
         selection = bots.first?.id
@@ -199,10 +204,25 @@ final class AppModel {
     func task(_ target: ChatTarget) -> BotTask? { target.taskID.flatMap { task($0, of: target.botID) } }
     func openTasks(of botID: UUID) -> [BotTask] { tasks[botID, default: []].filter { !$0.isArchived } }
     func closedTasks(of botID: UUID) -> [BotTask] { tasks[botID, default: []].filter(\.isArchived) }
-    func thread(_ target: ChatTarget) -> [ChatMessage] { threads[target] ?? [] }
+
+    /// The conversation's live state, made when first asked for.
+    func conversation(_ target: ChatTarget) -> ConversationState {
+        if let existing = conversations[target] { return existing }
+        let made = ConversationState()
+        conversations[target] = made
+        return made
+    }
+
+    func thread(_ target: ChatTarget) -> [ChatMessage] { conversation(target).messages }
     func isRunning(_ target: ChatTarget) -> Bool { runStates[target] != nil || (delegation?.activeCount(target) ?? 0) > 0 }
-    /// Whether any of the bot's conversations has a turn under way.
-    func isBusy(_ botID: UUID) -> Bool { runStates.keys.contains { $0.botID == botID } || delegation.usesBot(botID) }
+    /// Whether any of the bot's conversations has a turn under way. Reading its Home's and its
+    /// tasks' turns by name observes them, also a task's that is made later.
+    func isBusy(_ botID: UUID) -> Bool {
+        let known = [ChatTarget.home(botID)] + tasks[botID, default: []].map { .task($0.id, of: botID) }
+        return known.contains { runStates[$0] != nil }
+            || conversations.contains { $0.key.botID == botID && $0.value.run != nil }
+            || delegation.usesBot(botID)
+    }
 
     /// What a conversation runs on: its task's settings, or its bot's.
     func runSettings(of target: ChatTarget) -> (any RunSettings)? {
@@ -231,16 +251,21 @@ final class AppModel {
         show(tabs[(index + offset % tabs.count + tabs.count) % tabs.count])
     }
 
-    /// One conversation's status.
+    /// One conversation's status, from its thread's summary: it costs the same however long the
+    /// thread, and a view showing it isn't redrawn while a reply's text streams in.
     func status(of target: ChatTarget) -> BotStatus? {
-        if let task = task(target) { return BotStatus.make(task: task, messages: thread(target), run: runStates[target], reaction: reactions[target]) }
+        let conversation = conversation(target)
+        if let task = task(target) {
+            return BotStatus.make(settings: task, summary: conversation.summary, run: conversation.run, reaction: conversation.reaction)
+        }
         guard target.taskID == nil, let bot = bot(target.botID) else { return nil }
-        return BotStatus.make(bot: bot, messages: thread(target), run: runStates[target], reaction: reactions[target])
+        return BotStatus.make(settings: bot, summary: conversation.summary, run: conversation.run, reaction: conversation.reaction)
     }
 
     /// The bot as a whole, for its list row only. Profile cards always use status(of: ChatTarget).
     func status(of bot: Bot) -> BotStatus {
-        let home = BotStatus.make(bot: bot, messages: thread(.home(bot.id)), run: runStates[.home(bot.id)], reaction: reactions[.home(bot.id)])
+        let conversation = conversation(.home(bot.id))
+        let home = BotStatus.make(settings: bot, summary: conversation.summary, run: conversation.run, reaction: conversation.reaction)
         let working = openTasks(of: bot.id).compactMap { task in runStates[.task(task.id, of: bot.id)].map { (title: task.title, run: $0) } }
         return home.working(on: working)
     }
@@ -294,7 +319,7 @@ final class AppModel {
         bot.workspace = (bot.workspace as NSString).expandingTildeInPath
         if bot.emoji.isEmpty { bot.emoji = "🤖" }
         bots.append(bot)
-        threads[.home(bot.id)] = []
+        conversation(.home(bot.id)).load([])
         tasks[bot.id] = []
         save(bot)
         destination = nil
@@ -356,8 +381,8 @@ final class AppModel {
         if let bot = bot(id) { BotHome(workspace: bot.workspace).trash() }
         bots.removeAll { $0.id == id }
         tasks[id] = nil
-        threads = threads.filter { $0.key.botID != id }
-        runStates = runStates.filter { $0.key.botID != id }
+        // Its threads, turns, queues and reactions.
+        conversations = conversations.filter { $0.key.botID != id }
         waiting = waiting.filter { $0.key.botID != id }
         unread = unread.filter { $0.botID != id }
         drafts = drafts.filter { $0.key.botID != id }
@@ -366,8 +391,6 @@ final class AppModel {
         openTask[id] = nil
         pets[id] = nil
         petJobs[id] = nil
-        messageQueues = messageQueues.filter { $0.key.botID != id }
-        reactions = reactions.filter { $0.key.botID != id }
         reactionTickets = reactionTickets.filter { $0.key.botID != id }
         saveIndex()
         if selection == id { selection = bots.first?.id }
@@ -411,7 +434,7 @@ final class AppModel {
         guard bot(botID) != nil else { return }
         let target = ChatTarget.task(task.id, of: botID)
         tasks[botID, default: []].append(task)
-        threads[target] = []
+        conversation(target).load([])
         saveTask(task, of: botID)
         postReceipt(TaskReceipt.started(task), task: task.id, for: botID)
         if show { self.show(target) }
@@ -441,8 +464,8 @@ final class AppModel {
         guard let i = taskIndex(target), let bot = bot(target.botID) else { return }
         tasks[target.botID]?[i].archivedAt = nil
         saveTask(tasks[target.botID]![i], of: target.botID)
-        if threads[target] == nil, let id = target.taskID {
-            threads[target] = BotHome(workspace: bot.workspace).loadThread(task: id)
+        if !conversation(target).isLoaded, let id = target.taskID {
+            conversation(target).load(BotHome(workspace: bot.workspace).loadThread(task: id))
             let home = BotHome(workspace: bot.workspace)
             messageQueues[target] = MessageQueue(saved: home.loadQueuedMessages(task: id), delivered: thread(target),
                                                  paused: home.loadQueuePaused(task: id))
@@ -556,9 +579,8 @@ final class AppModel {
     private func postReceipt(_ text: String, task taskID: UUID?, for botID: UUID) {
         let home = ChatTarget.home(botID)
         let receipt = ChatMessage(role: .receipt, text: text, taskID: taskID)
-        let messages = thread(home)
-        if let taskID, let last = messages.last, last.role == .receipt, last.taskID == taskID {
-            threads[home]?[messages.count - 1] = receipt
+        if let taskID, let last = thread(home).last, last.role == .receipt, last.taskID == taskID {
+            conversation(home).edit { $0[$0.count - 1] = receipt }
         } else {
             append(receipt, to: home)
         }
@@ -594,12 +616,13 @@ final class AppModel {
     /// A task as its bot's Home hears of it; `replyLimit` keeps an overview of many tasks short.
     private func report(on task: BotTask, of botID: UUID, replyLimit: Int = BotContext.maxReportReply) -> String {
         let target = ChatTarget.task(task.id, of: botID)
+        let conversation = conversation(target)
         // A closed task's thread isn't read at launch.
-        if threads[target] == nil, let bot = bot(botID) {
-            threads[target] = BotHome(workspace: bot.workspace).loadThread(task: task.id)
+        if !conversation.isLoaded, let bot = bot(botID) {
+            conversation.load(BotHome(workspace: bot.workspace).loadThread(task: task.id))
         }
-        return BotContext.taskReport(task, status: BotStatus.make(task: task, messages: thread(target), run: runStates[target]),
-                                     pullRequest: task.pullRequest, lastReply: thread(target).last(where: { $0.role == .assistant })?.text,
+        return BotContext.taskReport(task, status: BotStatus.make(settings: task, summary: conversation.summary, run: conversation.run),
+                                     pullRequest: task.pullRequest, lastReply: conversation.messages.last(where: { $0.role == .assistant })?.text,
                                      replyLimit: replyLimit)
     }
 
@@ -892,7 +915,7 @@ final class AppModel {
             if current.resumableSessionID == nil, history.contains(where: { $0.role == .assistant }) {
                 // Name the account on the note New Session left, or add one (an account switch).
                 if let last = history.last, last.role == .note, last.text.hasPrefix("New session") {
-                    threads[target]?.removeLast()
+                    conversation(target).edit { $0.removeLast() }
                 }
                 append(ChatMessage(role: .note, text: "New session on \(current.account.name)"), to: target)
             }
@@ -902,7 +925,7 @@ final class AppModel {
         }
         guard saveThread(target) else {
             // Still queued, not delivered. Keep one copy in the outbox and explain the failure.
-            threads[target] = history + [ChatMessage(role: .error, text: "Couldn't save this message. It is still queued.")]
+            conversation(target).replace(history + [ChatMessage(role: .error, text: "Couldn't save this message. It is still queued.")])
             return false
         }
 
@@ -1062,27 +1085,34 @@ final class AppModel {
                 let what = task.map { "\($0.title) turn" } ?? "turn"
                 let startedAt = Date()
                 let turnStart = thread(target).count
-                var parser = StreamParsers.make(for: account.kind)
                 var assembler = ThreadAssembler()
                 var outcome = TurnOutcome()
                 let accountID = account.id
 
-                run.onLines = { [weak self, weak run] lines in
+                // The CLI's lines are parsed off the main thread; their events arrive here in
+                // batches, a few times a second at most, and go into this conversation alone.
+                run.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak run] events in
                     guard let self, let run, self.runs[target] === run, self.runSettings(of: target) != nil else { return }
-                    if self.runStates[target]?.hasOutput == false { self.runStates[target]?.hasOutput = true }
-                    var messages = self.thread(target)
+                    let conversation = self.conversation(target)
+                    var state = conversation.run
+                    if state?.hasOutput == false { state?.hasOutput = true }
+                    // The CLI's first lines held no events: it has started, and that's all.
+                    guard !events.isEmpty else {
+                        if state != conversation.run { conversation.run = state }
+                        return
+                    }
+                    var sessions: [String] = []
+                    var settles: [TimeInterval] = []
                     var delivered = false
-                    for line in lines {
-                        for event in parser.parse(line: line) {
+                    conversation.stream { messages in
+                        for event in events {
                             // After Stop, a CLI's last word is about the interruption (Antigravity
                             // repeats its whole reply as a failure); the "Stopped" note says it.
                             if run.stopped, case .failed = event { continue }
                             outcome.record(event)
                             switch event {
                             case .session(let reported):
-                                let session = CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: reported)
-                                self.recordSession(session, accountID: accountID, for: target)
-                                self.delegationSessions[target, default: []].insert(session)
+                                sessions.append(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: reported))
                             case .inputTaken:
                                 guard self.inputs[target] != nil else { break }
                                 if self.inputs[target]?.ledger.taken() == true {
@@ -1094,29 +1124,35 @@ final class AppModel {
                                     }
                                 } else {
                                     // The prompt's echo: this CLI takes follow-ups from now on.
-                                    self.runStates[target]?.takesInput = true
+                                    state?.takesInput = true
                                 }
                             case .finished, .failed:
                                 // Its input closes once the CLI has taken everything written to it.
                                 if self.inputs[target]?.ledger.turnEnded() == true {
                                     run.closeInput()
-                                    self.runStates[target]?.takesInput = false
+                                    state?.takesInput = false
                                 }
                             default: break
                             }
-                            if let activity = BotActivity.next(after: event),
-                               activity != self.runStates[target]?.activity || self.runStates[target]?.pending != nil,
-                               let wait = self.runStates[target]?.move(to: activity) {
-                                DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self, weak run] in
-                                    guard let run, self?.runs[target] === run else { return }
-                                    self?.runStates[target]?.settle()
-                                }
+                            if let activity = BotActivity.next(after: event), activity != state?.activity || state?.pending != nil,
+                               let wait = state?.move(to: activity) {
+                                settles.append(wait)
                             }
                             if case .inputTaken = event { continue }
                             assembler.apply(event, to: &messages)
                         }
                     }
-                    self.threads[target] = messages
+                    if state != conversation.run { conversation.run = state }
+                    for wait in settles {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self, weak run] in
+                            guard let run, self?.runs[target] === run else { return }
+                            self?.runStates[target]?.settle()
+                        }
+                    }
+                    for session in sessions {
+                        self.recordSession(session, accountID: accountID, for: target)
+                        self.delegationSessions[target, default: []].insert(session)
+                    }
                     if delivered {
                         // Transcript first: recovery drops a queued copy of a delivered message.
                         self.saveThread(target)
@@ -1134,24 +1170,25 @@ final class AppModel {
                     if target.taskID == nil { self.watchDispatches(for: id, while: false) }
                     // The bot (or the task) was deleted while it ran.
                     guard self.runSettings(of: target) != nil else { return }
-                    var messages = self.thread(target)
-                    assembler.apply(.textEnd, to: &messages)
-                    ThreadAssembler.closeRunningTools(&messages)
                     let stopped = run.stopped
-                    if stopped {
-                        messages.append(ChatMessage(role: .note, text: "Stopped"))
-                    } else if !outcome.ended, machine.isRemote, status == 255 {
-                        // ssh's own failure: the host didn't answer, or refused the connection.
-                        let detail = Self.lastLines(stderr)
-                        messages.append(ChatMessage(role: .error, text: "Couldn't reach \(place) over SSH" + (detail.isEmpty ? "." : ":\n\(detail)")))
-                    } else if !outcome.ended {
-                        // The stream never said the turn finished or failed: report what the CLI printed.
-                        let detail = Self.lastLines(stderr)
-                        messages.append(ChatMessage(role: .error, text: detail.isEmpty
-                            ? "\(account.name) exited with status \(status) without replying."
-                            : "\(account.name) exited with status \(status):\n\(detail)"))
+                    self.conversation(target).stream { messages in
+                        assembler.apply(.textEnd, to: &messages)
+                        ThreadAssembler.closeRunningTools(&messages)
+                        if stopped {
+                            messages.append(ChatMessage(role: .note, text: "Stopped"))
+                        } else if !outcome.ended, machine.isRemote, status == 255 {
+                            // ssh's own failure: the host didn't answer, or refused the connection.
+                            let detail = Self.lastLines(stderr)
+                            messages.append(ChatMessage(role: .error, text: "Couldn't reach \(place) over SSH" + (detail.isEmpty ? "." : ":\n\(detail)")))
+                        } else if !outcome.ended {
+                            // The stream never said the turn finished or failed: report what the CLI printed.
+                            let detail = Self.lastLines(stderr)
+                            messages.append(ChatMessage(role: .error, text: detail.isEmpty
+                                ? "\(account.name) exited with status \(status) without replying."
+                                : "\(account.name) exited with status \(status):\n\(detail)"))
+                        }
                     }
-                    self.threads[target] = messages
+                    let messages = self.thread(target)
                     let saved = self.saveThread(target)
                     let failure = outcome.failure(stopped: stopped, exitError: messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil })
                     if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
@@ -1253,10 +1290,30 @@ final class AppModel {
     /// BotChu is quitting. Queues stay as they are, to go out on their own after the next launch.
     func stopAll() {
         terminating = true
+        // What each CLI printed last goes into its thread, and the thread is saved: BotChu may
+        // quit before the turn's end would save it, and nothing streamed may be lost.
+        for (target, run) in Array(runs) {
+            run.flushOutput()
+            saveUnfinishedTurn(target)
+        }
         delegation.stopAll()
         for target in Array(runStates.keys) { stop(target) }
         for run in petRuns.values { run.stop() }
         for task in petTasks.values { task.cancel() }
+    }
+
+    /// Saves a turn still running as it stands, with its running tool calls marked interrupted;
+    /// the thread in memory is left as it is, for the turn's end.
+    private func saveUnfinishedTurn(_ target: ChatTarget) {
+        guard let bot = bot(target.botID), runSettings(of: target) != nil else { return }
+        var messages = thread(target)
+        ThreadAssembler.closeRunningTools(&messages)
+        let home = BotHome(workspace: bot.workspace)
+        if let taskID = target.taskID {
+            try? home.saveThread(messages, task: taskID)
+        } else {
+            try? home.saveThread(messages)
+        }
     }
 
     private func recordSession(_ sessionID: String, accountID: String, for target: ChatTarget) {
@@ -1271,8 +1328,21 @@ final class AppModel {
     // MARK: Storage
 
     private func append(_ message: ChatMessage, to target: ChatTarget) {
-        threads[target, default: []].append(message)
+        conversation(target).append(message)
     }
+
+    /// Parses the recent replies of every conversation in the background, so a conversation
+    /// shown for the first time finds them parsed and doesn't parse them on the main thread.
+    private func warmMarkdown() {
+        let replies = conversations.values.flatMap { conversation in
+            conversation.messages.reversed().lazy.filter { $0.role == .assistant }.prefix(Self.warmedReplies).map(\.text)
+        }
+        guard !replies.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async { MarkdownCache.shared.warm(replies) }
+    }
+
+    /// How many of each conversation's latest replies are parsed ahead.
+    static let warmedReplies = 60
 
     private func taskIndex(_ target: ChatTarget) -> Int? {
         target.taskID.flatMap { id in tasks[target.botID]?.firstIndex { $0.id == id } }

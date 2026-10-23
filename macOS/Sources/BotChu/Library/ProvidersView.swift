@@ -43,7 +43,7 @@ private struct ProviderCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
-                LibraryIcon(symbol: account.symbol, color: .purple)
+                ProviderLogo(kind: account.kind, size: 44)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(account.name).font(.headline)
                     Text(account.kind.displayName).font(.caption).foregroundStyle(.secondary)
@@ -110,7 +110,7 @@ struct AddProviderSheet: View {
             Text("Add CLI Profile").font(.headline).padding(20)
             Form {
                 TextField("Profile name", text: $name, prompt: Text("Claude Research"))
-                Picker("CLI family", selection: $kind) { ForEach(AgentKind.allCases, id: \.self) { Text($0.displayName).tag($0) } }
+                Picker("CLI family", selection: $kind) { ForEach(AgentKind.allCases, id: \.self) { ProviderMenuLabel(title: $0.displayName, kind: $0).tag($0) } }
                 TextField("Command", text: $command, prompt: Text("~/.local/bin/claude-research"))
                     .font(.system(.body, design: .monospaced))
                     .onChange(of: command) { found = nil }

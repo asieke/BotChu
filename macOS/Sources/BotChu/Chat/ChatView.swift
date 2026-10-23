@@ -129,7 +129,7 @@ struct ChatView: View {
                             .layoutPriority(1)
                             .id(target)
                         Spacer(minLength: 0)
-                        Text(current.account.name)
+                        ProviderLabel(current.account, size: 12)
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                             .lineLimit(1).truncationMode(.tail)
                             .help(task == nil ? "Current account. Change it in Edit Bot." : "This task's account. Change it in the status sidebar.")

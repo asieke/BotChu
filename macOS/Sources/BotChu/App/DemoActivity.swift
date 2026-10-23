@@ -118,7 +118,7 @@ enum DemoActivity {
         // The live group started nine seconds ago.
         let liveStart = now.addingTimeInterval(-9)
         for index in messages.indices.suffix(4) { messages[index].date = liveStart.addingTimeInterval(Double(index - messages.count + 4) * 2) }
-        model.threads[target] = messages
+        model.conversation(target).replace(messages)
         model.runStates[target] = RunState(startedAt: now.addingTimeInterval(-620), hasOutput: true, activity: .researching)
     }
 }

@@ -21,10 +21,12 @@ struct SidebarView: View {
             }
             Section("Conversations") {
                 ForEach(model.bots) { bot in
-                    let expanded = expansion.botIDs.contains(bot.id)
+                    let tasks = model.openTasks(of: bot.id)
+                    // Only a bot with open tasks has a group to expand; without any, it is a single row.
+                    let expanded = !tasks.isEmpty && expansion.botIDs.contains(bot.id)
                     BotRow(bot: bot, status: model.status(of: bot), selected: model.visibleBotID == bot.id,
                            unread: model.unreadCount(of: bot.id), runningTasks: model.runningTaskCount(for: bot.id),
-                           openTasks: model.openTasks(of: bot.id).count, isExpanded: expanded,
+                           openTasks: tasks.count, isExpanded: expanded,
                            onToggleExpand: { expansion.toggle(bot.id) })
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -43,7 +45,7 @@ struct SidebarView: View {
                             Button("Delete…", role: .destructive) { pendingDelete = bot }
                         }
                     if expanded {
-                        ForEach(model.openTasks(of: bot.id)) { task in
+                        ForEach(tasks) { task in
                             SidebarTaskRow(botID: bot.id, task: task)
                                 .modifier(SidebarTreeBranch())
                                 .tag(SidebarDestination.botTask(botID: bot.id, taskID: task.id))
@@ -74,12 +76,38 @@ struct SidebarView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
         }
+        .modifier(SidebarShade())
         .confirmationDialog("Delete \(pendingDelete?.name ?? "bot")?", isPresented: Binding(
             get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { bot in
             Button("Delete", role: .destructive) { model.delete(bot.id) }
         } message: { bot in
             Text("Its conversation and tasks are deleted. Its workspace folder, \(bot.workspace), and its tasks' worktrees are kept.")
         }
+    }
+}
+
+/// In dark mode the sidebar's material blends into the chat beside it, so the sidebar takes the
+/// status sidebar's darker shade instead, with a hairline along its trailing edge. Light mode keeps
+/// the standard sidebar. Both follow appearance changes as they happen.
+struct SidebarShade: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        let dark = colorScheme == .dark
+        content
+            // The split view's sidebar already leaves the list's own background out, so hiding it in
+            // both appearances changes nothing there; only the material shows, or the shade over it.
+            .scrollContentBackground(.hidden)
+            .background(dark ? Palette.sidebar : .clear)
+            .overlay(alignment: .trailing) {
+                if dark {
+                    Rectangle().fill(Palette.hairline)
+                        .frame(width: 1)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
     }
 }
 
@@ -113,6 +141,8 @@ struct BotRow: View {
     var isExpanded = false
     var onToggleExpand: () -> Void = {}
 
+    private static let disclosureWidth: CGFloat = 18
+
     var body: some View {
         HStack(spacing: 10) {
             // Only the selected bot and busy ones move, so a long list stays calm.
@@ -141,17 +171,23 @@ struct BotRow: View {
                     .background(Capsule().fill(Color.accentColor))
                     .help(unread == 1 ? "1 conversation has news" : "\(unread) conversations have news")
             }
-            Button(action: onToggleExpand) {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18, height: 26)
-                    .contentShape(Rectangle())
+            if openTasks > 0 {
+                Button(action: onToggleExpand) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: Self.disclosureWidth, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .help(isExpanded ? "Collapse tasks" : "Expand tasks")
+                .accessibilityLabel("\(isExpanded ? "Collapse" : "Expand") tasks for \(bot.name)")
+                .accessibilityIdentifier("sidebar-disclosure-\(bot.id)")
+            } else {
+                // No tasks, no arrow; its place stays, so spinners and badges line up down the list.
+                Color.clear.frame(width: Self.disclosureWidth, height: 26)
+                    .accessibilityHidden(true)
             }
-            .buttonStyle(.borderless)
-            .help(isExpanded ? "Collapse tasks" : "Expand tasks")
-            .accessibilityLabel("\(isExpanded ? "Collapse" : "Expand") tasks for \(bot.name)")
-            .accessibilityIdentifier("sidebar-disclosure-\(bot.id)")
         }
         .padding(.vertical, 3)
     }

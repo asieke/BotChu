@@ -72,15 +72,14 @@ extension RenderingTests {
         app.show(bench.long)
         app.runStates[bench.long] = RunState(hasOutput: true)
         try await idle(200)
-        var streamed = app.thread(bench.long)
-        streamed.append(ChatBenchFixture.message(["role": "assistant", "text": "Streaming"]))
-        app.threads[bench.long] = streamed
+        // Written as a turn writes it: through the conversation's own state.
+        let long = app.conversation(bench.long)
+        long.append(ChatBenchFixture.message(["role": "assistant", "text": "Streaming"]))
         try await idle()
         var deltas: [Double] = []
         for i in 0..<40 {
             deltas.append(time {
-                streamed[streamed.count - 1].text += " token\(i) with **some** words"
-                app.threads[bench.long] = streamed
+                long.stream { $0[$0.count - 1].text += " token\(i) with **some** words" }
             })
             try await idle(20)
         }
@@ -91,21 +90,15 @@ extension RenderingTests {
         app.show(bench.explore)
         app.runStates[bench.explore] = RunState(hasOutput: true, activity: .researching)
         try await idle(200)
-        var explore = app.thread(bench.explore)
+        let explore = app.conversation(bench.explore)
         var calls: [Double] = []
         for i in 0..<30 {
             var call = ChatBenchFixture.toolCall(index: 10_000 + i, kind: i % 3, state: "running")
-            calls.append(time {
-                explore.append(call)
-                app.threads[bench.explore] = explore
-            })
+            calls.append(time { explore.stream { $0.append(call) } })
             try await idle(15)
             call.toolState = .done
             call.toolOutput = String(repeating: "let value = \(i)\n", count: 120)
-            calls.append(time {
-                explore[explore.count - 1] = call
-                app.threads[bench.explore] = explore
-            })
+            calls.append(time { explore.stream { $0[$0.count - 1] = call } })
             try await idle(15)
         }
         report.add("Live exploration call (400+ calls)", calls)

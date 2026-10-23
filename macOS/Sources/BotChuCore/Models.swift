@@ -189,7 +189,7 @@ public struct ThreadAssembler {
             // A follow-up the caller adds next ends the reply being written.
             apply(.textEnd, to: &messages)
         case .textDelta(let delta):
-            if let id = openTextID, let i = messages.firstIndex(where: { $0.id == id }) {
+            if let id = openTextID, let i = Self.index(of: id, in: messages) {
                 messages[i].text += delta
             } else {
                 // Leading newlines would start the bubble with blank space.
@@ -205,7 +205,7 @@ public struct ThreadAssembler {
             guard !trimmed.isEmpty else { return }
             messages.append(ChatMessage(role: .assistant, text: trimmed))
         case .textEnd:
-            if let id = openTextID, let i = messages.firstIndex(where: { $0.id == id }) {
+            if let id = openTextID, let i = Self.index(of: id, in: messages) {
                 messages[i].text = messages[i].text.trimmingCharacters(in: .whitespacesAndNewlines)
             }
             openTextID = nil
@@ -238,6 +238,13 @@ public struct ThreadAssembler {
             apply(.textEnd, to: &messages)
             messages.append(ChatMessage(role: .error, text: reason))
         }
+    }
+
+    /// The reply being written is at the end of the thread, or near it (a note can follow it), so
+    /// look from the end: a long thread isn't scanned for every delta.
+    private static func index(of id: UUID, in messages: [ChatMessage]) -> Int? {
+        if let last = messages.indices.last, messages[last].id == id { return last }
+        return messages.lastIndex { $0.id == id }
     }
 
     /// A missing terminal event is not evidence that the tool failed.

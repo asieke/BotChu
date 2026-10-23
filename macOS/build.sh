@@ -28,6 +28,10 @@ swiftc "$dir/icon.swift" -o "$tmp/icon"
 "$tmp/icon" "$tmp/AppIcon.iconset"
 iconutil -c icns "$tmp/AppIcon.iconset" -o "$out/Contents/Resources/AppIcon.icns"
 
+# The commit it is built from (-dirty with uncommitted changes), which reports filed from it name.
+commit=$(git -C "$dir" rev-parse --short=7 HEAD 2>/dev/null || true)
+if [ -n "$commit" ] && ! git -C "$dir" diff --quiet HEAD -- 2>/dev/null; then commit="$commit-dirty"; fi
+
 cat > "$out/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
@@ -39,6 +43,7 @@ cat > "$out/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>CFBundleVersion</key><string>$(git -C "$dir" rev-list --count HEAD 2>/dev/null || echo 1)</string>
+  <key>BotChuCommit</key><string>$commit</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHighResolutionCapable</key><true/>

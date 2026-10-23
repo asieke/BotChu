@@ -15,6 +15,9 @@
 #                                          # a task on a host, "Far Mac", whose ssh is a stand-in that
 #                                          # runs the command here, in $data/far (a real turn)
 #   BOTCHU_TASK="hello-world|Add a line" macOS/ui-review.sh  # start a task (a real turn on Claude Dev)
+#   BOTCHU_OPEN=report macOS/ui-review.sh  # open Report a Bug or Feature
+#   BOTCHU_REPORT="It crashed" macOS/ui-review.sh  # and file this report, with a stand-in gh that
+#                                          # keeps it in $data/reports (BOTCHU_REPORT_FAIL=1: it fails)
 # Prints the snapshot folder. Quit the app with `pkill -x BotChu` when done.
 set -euo pipefail
 dir=$(cd "$(dirname "$0")" && pwd)
@@ -93,6 +96,25 @@ path.write_text(json.dumps(bots))
 PY
 "$dir/build.sh" "$data" >/dev/null
 args=(--env "BOTCHU_DATA_DIR=$data" --env "BOTCHU_SNAPSHOT=$data/snapshots")
+# Reports go to a stand-in gh, never to GitHub: it keeps each one in $data/reports and prints a
+# made-up issue's address, or, with BOTCHU_REPORT_FAIL=1, fails as gh does when it isn't signed in.
+mkdir -p "$data/reports"
+cat > "$data/fake-gh" <<'SH'
+#!/bin/sh
+dir="$(dirname "$0")/reports"
+n=$(ls "$dir" | grep -c '\.md$')
+printf '%s\n' "$@" > "$dir/$n.args"
+cat > "$dir/$n.md"
+if [ -e "$(dirname "$0")/fake-gh-fails" ]; then
+  echo 'To get started with GitHub CLI, please run:  gh auth login' >&2
+  exit 4
+fi
+echo "https://github.com/asieke/BotChu/issues/$((9000 + n))"
+SH
+chmod +x "$data/fake-gh"
+[ -n "${BOTCHU_REPORT_FAIL:-}" ] && touch "$data/fake-gh-fails"
+args+=(--env "BOTCHU_REPORT_GH=$data/fake-gh")
+[ -n "${BOTCHU_REPORT:-}" ] && args+=(--env "BOTCHU_REPORT=$BOTCHU_REPORT")
 [ -n "${BOTCHU_OPEN:-}" ] && args+=(--env "BOTCHU_OPEN=$BOTCHU_OPEN")
 [ -n "${BOTCHU_TASK:-}" ] && args+=(--env "BOTCHU_TASK=$BOTCHU_TASK")
 [ -n "${BOTCHU_TAB:-}" ] && args+=(--env "BOTCHU_TAB=$BOTCHU_TAB")

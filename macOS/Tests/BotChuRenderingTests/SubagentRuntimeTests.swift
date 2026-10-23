@@ -225,6 +225,79 @@ extension RenderingTests {
         #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("missing-bot") == true)
     }
 
+    /// #46: a streaming sub-agent's transcript is checkpointed off the main thread, a few times a
+    /// second at most, and its output doesn't invalidate what views of other conversations read.
+    @Test func aStreamingSubagentIsCheckpointedAndLeavesOtherConversationsAlone() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app
+        let writes = ArchiveWrites()
+        app.delegation = SubagentRuntime(model: app, root: app.delegation.root,
+                                         archive: SubagentArchive(interval: 0.2) { try writes.record($0) })
+        app.send("STREAM_PARENT", to: fixture.target)
+        try await fixture.wait { app.delegation.all.first.map { (app.delegation.threads[$0.id]?.count ?? 0) >= 2 } ?? false }
+        let run = try #require(app.delegation.all.first)
+        let home = ChatTarget.home(fixture.parent.id)
+        let otherChanged = Flag(), ownChanged = Flag()
+        withObservationTracking {
+            _ = app.isRunning(home)
+            _ = app.delegation.records[home]
+            _ = app.status(of: home)
+            _ = app.thread(home)
+            _ = app.isBusy(fixture.worker.id)
+        } onChange: { otherChanged.set() }
+        withObservationTracking { _ = app.delegation.threads[run.id] } onChange: { ownChanged.set() }
+        let before = writes.count
+        let started = Date()
+        try Data().write(to: fixture.folder.appendingPathComponent("stream-go"))
+        try await fixture.wait { (app.delegation.threads[run.id]?.count ?? 0) >= 102 }
+        let elapsed = Date().timeIntervalSince(started)
+        #expect(ownChanged.value)
+        #expect(!otherChanged.value)
+        // 100 tool calls, but at most one write per interval, not one per batch of output.
+        #expect(writes.count - before <= Int(elapsed / 0.2) + 2)
+        try Data().write(to: fixture.folder.appendingPathComponent("stream-done"))
+        try await fixture.wait { !app.isRunning(fixture.target) }
+        #expect(app.delegation.run(run.id)?.phase == .completed)
+        #expect(fixture.home.loadSubagentThread(id: run.id, taskID: fixture.target.taskID).filter { $0.role == .tool }.count == 101)
+        #expect(fixture.home.loadSubagents(taskID: fixture.target.taskID).first?.phase == .completed)
+    }
+
+    /// #46: quitting writes what a streaming sub-agent said since its last checkpoint.
+    @Test func quittingKeepsWhatAStreamingSubagentSaid() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app
+        app.delegation = SubagentRuntime(model: app, root: app.delegation.root, archive: SubagentArchive(interval: 600))
+        app.send("STREAM_PARENT", to: fixture.target)
+        try await fixture.wait { app.delegation.all.first.map { (app.delegation.threads[$0.id]?.count ?? 0) >= 2 } ?? false }
+        let run = try #require(app.delegation.all.first)
+        try Data().write(to: fixture.folder.appendingPathComponent("stream-go"))
+        try await fixture.wait { (app.delegation.threads[run.id]?.count ?? 0) >= 102 }
+        // Nothing streamed is written yet: not once per batch.
+        #expect(fixture.home.loadSubagentThread(id: run.id, taskID: fixture.target.taskID).count == 1)
+        app.stopAll()
+        #expect(fixture.home.loadSubagentThread(id: run.id, taskID: fixture.target.taskID).filter { $0.role == .tool }.count == 101)
+    }
+
+    @Test func subagentTreesGroupChildrenOnce() throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let parent = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID, depth: 1, targetBot: fixture.worker,
+                                 title: "Parent", brief: "Parent", workingDirectory: fixture.folder.path, phase: .completed)
+        let children = (0..<3).map { index in
+            SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID, parentSubagentID: parent.id, depth: 2,
+                        targetBot: fixture.worker, title: "Child \(index)", brief: "Child", workingDirectory: fixture.folder.path, phase: .completed)
+        }
+        fixture.app.delegation.records[fixture.target] = [parent] + children
+        #expect(fixture.app.delegation.children(of: nil, in: fixture.target).map(\.id) == [parent.id])
+        #expect(fixture.app.delegation.children(of: parent.id).map(\.title) == ["Child 0", "Child 1", "Child 2"])
+        #expect(fixture.app.delegation.run(children[1].id)?.title == "Child 1")
+        fixture.app.delegation.records[fixture.target] = [parent]
+        #expect(fixture.app.delegation.children(of: parent.id).isEmpty)
+        #expect(fixture.app.delegation.run(children[1].id) == nil)
+    }
+
     @Test func restartMarksPersistedSubagentsStoppedAndInspectorRendersTheirTree() async throws {
         _ = NSApplication.shared
         let fixture = try SubagentFixture()
@@ -275,6 +348,23 @@ extension RenderingTests {
         restored.delegation.states[parent.id] = nil
         restored.delegation.clear(parent.id)
         #expect(restored.delegation.all.isEmpty)
+    }
+}
+
+/// Counts the sub-agent archive's writes, then writes them.
+private final class ArchiveWrites: @unchecked Sendable {
+    private let lock = NSLock()
+    private var written = 0
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return written
+    }
+    func record(_ snapshot: SubagentArchive.Snapshot) throws {
+        lock.lock()
+        written += 1
+        lock.unlock()
+        try SubagentArchive.writeToDisk(snapshot)
     }
 }
 
@@ -417,6 +507,19 @@ extension RenderingTests {
         while True: time.sleep(.1)
     elif brief == "BLOCK":
         while True: time.sleep(.1)
+    elif brief == "STREAM_PARENT":
+        answer = helper("call", "--agent", "Worker", "--brief", "STREAM_CHILD")
+    elif brief == "STREAM_CHILD":
+        def shell(i):
+            emit({"type":"item.completed", "item":{"id":"item_%d" % i, "type":"command_execution", "command":"echo %d" % i,
+                  "aggregated_output":"x" * 256, "exit_code":0, "status":"completed"}})
+        shell(0)
+        while not os.path.exists("stream-go"): time.sleep(.01)
+        for i in range(1, 101):
+            shell(i)
+            time.sleep(.005)
+        while not os.path.exists("stream-done"): time.sleep(.01)
+        answer = "HANDOFF-STREAM"
     elif brief == "DEPTH":
         answer = helper("call", "--agent", "Worker", "--brief", "DEPTH")
     elif brief == "UNKNOWN":

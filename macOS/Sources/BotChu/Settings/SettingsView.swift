@@ -70,7 +70,7 @@ struct SettingsView: View {
                                 .help(available[account.id] == true ? "Found" : available[account.id] == false ? "Not found by the login shell" : "Checking…")
                         }
                     } label: {
-                        Label(account.name, systemImage: account.symbol)
+                        ProviderLabel(account)
                     }
                 }
             } header: {
@@ -83,7 +83,7 @@ struct SettingsView: View {
             Section {
                 Picker("Draw stills with", selection: $settings.petAccountID) {
                     ForEach(model.settings.accounts.filter { $0.kind == .codex }) { account in
-                        Text(account.name).tag(account.id)
+                        ProviderMenuLabel(account).tag(account.id)
                     }
                 }
                 Picker("Animate on", selection: $settings.petModelID) {
