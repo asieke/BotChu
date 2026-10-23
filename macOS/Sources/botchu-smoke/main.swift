@@ -47,36 +47,34 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
     }
     return await withCheckedContinuation { continuation in
         var turn = Turn()
-        var parser = StreamParsers.make(for: kind)
         var assembler = ThreadAssembler()
         var ledger = InputLedger()
         var pending = followUp
         let run = AgentRun(command: bot.account.defaultCommand, invocation: invocation, directory: URL(fileURLWithPath: bot.workspace))
-        run.onLines = { lines in
-            for line in lines {
-                for event in parser.parse(line: line) {
-                    switch event {
-                    case .session(let reported):
-                        turn.session = CommandBuilder.resumeID(kind: kind, invocation: invocation, reported: reported)
-                    case .inputTaken:
-                        if ledger.taken(), let followUp {
-                            turn.followUpsTaken += 1
-                            assembler.apply(event, to: &turn.messages)
-                            turn.messages.append(ChatMessage(role: .user, text: followUp))
-                        }
-                    case .toolStarted:
-                        // As the app does: written once the CLI has echoed the prompt.
-                        if let text = pending, ledger.acceptsFollowUps, let line = CommandBuilder.inputLine(kind: kind, text: text), run.send(line) {
-                            ledger.wrote()
-                            pending = nil
-                        }
-                    case .finished, .failed:
-                        if invocation.input != nil, ledger.turnEnded() { run.closeInput() }
-                    default: break
+        // As the app does: parsed off the main thread, delivered in batches.
+        run.deliverEvents(parsedBy: StreamParsers.make(for: kind)) { events in
+            for event in events {
+                switch event {
+                case .session(let reported):
+                    turn.session = CommandBuilder.resumeID(kind: kind, invocation: invocation, reported: reported)
+                case .inputTaken:
+                    if ledger.taken(), let followUp {
+                        turn.followUpsTaken += 1
+                        assembler.apply(event, to: &turn.messages)
+                        turn.messages.append(ChatMessage(role: .user, text: followUp))
                     }
-                    if case .inputTaken = event { continue }
-                    assembler.apply(event, to: &turn.messages)
+                case .toolStarted:
+                    // As the app does: written once the CLI has echoed the prompt.
+                    if let text = pending, ledger.acceptsFollowUps, let line = CommandBuilder.inputLine(kind: kind, text: text), run.send(line) {
+                        ledger.wrote()
+                        pending = nil
+                    }
+                case .finished, .failed:
+                    if invocation.input != nil, ledger.turnEnded() { run.closeInput() }
+                default: break
                 }
+                if case .inputTaken = event { continue }
+                assembler.apply(event, to: &turn.messages)
             }
         }
         run.onExit = { status, stderr in

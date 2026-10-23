@@ -251,6 +251,8 @@ extension RenderingTests {
         app.editQueuedMessage(id, in: target)
         #expect(app.messageQueues[target]?.messages.count == 1)
         #expect(fixture.home.loadQueuedMessages(task: target.taskID).map(\.id) == [id])
+        // The tool call ends once the CLI has the follow-up, so it takes it at that call.
+        try await fixture.wait { FileManager.default.fileExists(atPath: fixture.folder(target).appendingPathComponent("received").path) }
         try fixture.release(target)
         try await fixture.wait { !app.isRunning(target) }
         let thread = app.thread(target).filter { !$0.role.isNote }
@@ -348,6 +350,55 @@ extension RenderingTests {
         #expect(app.thread(target).allSatisfy { $0.role.isNote })
     }
 
+    /// #46: a reply streaming into a task doesn't invalidate anything a view of another
+    /// conversation reads, nor the task's own status (its sidebar row) while only its text grows.
+    @Test func streamingIntoATaskLeavesOtherConversationsAndItsStatusAlone() async throws {
+        let fixture = try ConversationFixture(accountID: "claude-dev", script: ConversationFixture.streamScript)
+        defer { fixture.cleanUp() }
+        let app = fixture.app, shown = ChatTarget.home(fixture.bot.id), streaming = fixture.taskTarget
+        app.show(shown)
+        #expect(app.send("STREAM", to: streaming))
+        try await fixture.wait { app.thread(streaming).last?.text.hasPrefix("first") == true }
+        let shownChanged = Flag(), otherTaskChanged = Flag(), statusChanged = Flag(), threadChanged = Flag()
+        withObservationTracking {
+            _ = app.thread(shown)
+            _ = app.runStates[shown]?.preparing
+            _ = app.isRunning(shown)
+            _ = app.messageQueues[shown]
+            _ = app.reactions[shown]
+            _ = app.status(of: shown)
+        } onChange: { shownChanged.set() }
+        withObservationTracking {
+            _ = app.thread(fixture.otherTaskTarget)
+            _ = app.status(of: fixture.otherTaskTarget)
+        } onChange: { otherTaskChanged.set() }
+        withObservationTracking { _ = app.status(of: streaming) } onChange: { statusChanged.set() }
+        withObservationTracking { _ = app.thread(streaming) } onChange: { threadChanged.set() }
+        try fixture.release(streaming)
+        try await fixture.wait { app.thread(streaming).last?.text.contains("token199") == true }
+        #expect(threadChanged.value)
+        #expect(!shownChanged.value)
+        #expect(!otherTaskChanged.value)
+        #expect(!statusChanged.value)
+        try Data().write(to: fixture.folder(streaming).appendingPathComponent("finish"))
+        try await fixture.wait { !app.isRunning(streaming) }
+        #expect(app.thread(streaming).filter { $0.role == .assistant }.map(\.text).first?.hasSuffix("token199") == true)
+    }
+
+    /// #46: quitting mid-turn saves what the turn streamed so far; the turn's end would have.
+    @Test func quittingMidTurnKeepsWhatTheTurnStreamed() async throws {
+        let fixture = try ConversationFixture(accountID: "claude-dev", script: ConversationFixture.streamScript)
+        defer { fixture.cleanUp() }
+        let app = fixture.app, target = fixture.taskTarget
+        #expect(app.send("STREAM", to: target))
+        try fixture.release(target)
+        try await fixture.wait { app.thread(target).last?.text.contains("token199") == true }
+        app.stopAll()
+        let saved = fixture.home.loadThread(task: try #require(target.taskID))
+        #expect(saved.first?.text == "STREAM")
+        #expect(saved.last?.text.contains("token199") == true)
+    }
+
     @Test func profileActivityAndReactionsAreScopedToTheirConversation() throws {
         let fixture = try ConversationFixture()
         defer { fixture.cleanUp() }
@@ -368,6 +419,22 @@ extension RenderingTests {
         #expect(app.status(of: target)?.phase == .idle)
         #expect(app.status(of: fixture.otherTaskTarget)?.phase == .idle)
         app.runStates.removeAll()
+    }
+}
+
+/// Whether an observation fired.
+final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fired = false
+    var value: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return fired
+    }
+    func set() {
+        lock.lock()
+        fired = true
+        lock.unlock()
     }
 }
 
@@ -470,6 +537,36 @@ extension RenderingTests {
         sys.exit(3)
     """#
 
+    /// Claude Code streaming a reply: its first word, then, once released, 200 more in bursts; it
+    /// ends once told to finish.
+    static let streamScript = #"""
+    import json, sys, time
+    from pathlib import Path
+    def emit(value):
+        print(json.dumps(value), flush=True)
+    def event(value):
+        emit({"type":"stream_event", "event":value, "parent_tool_use_id":None})
+    with open("calls.jsonl", "a") as file:
+        file.write(json.dumps(sys.argv[1:]) + "\n")
+    emit({"type":"system", "subtype":"init", "session_id":"claude-stream"})
+    first = json.loads(sys.stdin.readline())
+    first.update({"session_id": "claude-stream", "parent_tool_use_id": None, "isReplay": True})
+    emit(first)
+    event({"type":"message_start", "message":{"id":"m1"}})
+    event({"type":"content_block_start", "index":0, "content_block":{"type":"text"}})
+    event({"type":"content_block_delta", "index":0, "delta":{"type":"text_delta", "text":"first "}})
+    while not Path("release").exists():
+        time.sleep(0.02)
+    for i in range(200):
+        event({"type":"content_block_delta", "index":0, "delta":{"type":"text_delta", "text":"token%d " % i}})
+        if i % 10 == 9:
+            time.sleep(0.01)
+    while not Path("finish").exists():
+        time.sleep(0.02)
+    event({"type":"content_block_stop", "index":0})
+    emit({"type":"result", "subtype":"success", "is_error":False, "result":"ok"})
+    """#
+
     /// Claude Code with `--input-format stream-json --replay-user-messages`: messages on stdin,
     /// each echoed when taken; one written during a tool call is taken after its result; the CLI
     /// ends when stdin closes.
@@ -518,6 +615,7 @@ extension RenderingTests {
             line = read_line(0.02)
             if line:
                 pending.append(line)
+                Path("received").touch()
         emit({"type":"user", "message":{"role":"user", "content":[{"tool_use_id":"toolu_1", "type":"tool_result",
               "content":"done", "is_error":False}]}, "parent_tool_use_id":None})
         for line in pending:

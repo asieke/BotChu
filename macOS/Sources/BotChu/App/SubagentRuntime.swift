@@ -4,15 +4,25 @@ import BotChuCore
 
 /// Owns the short-lived delegation sessions. The selected conversation never owns a process:
 /// requests are bound to the invocation that created them, even while the owner navigates away.
+///
+/// Each conversation's runs (`records[target]`) and each run's transcript and turn
+/// (`threads[id]`, `states[id]`) are observed on their own, so a sub-agent streaming redraws only
+/// the views that show it. Transcripts are saved off the main thread while they stream
+/// (`SubagentArchive`); a run's start and end are saved at once.
 @MainActor @Observable
 final class SubagentRuntime {
-    var records: [ChatTarget: [SubagentRun]] = [:]
-    var threads: [UUID: [ChatMessage]] = [:]
-    var states: [UUID: RunState] = [:]
     var error: String?
+    /// Bots with a run under way, as the bot of its root conversation or as the bot it calls.
+    /// Reassigned only when that changes, as runs start and end.
+    private(set) var busyBots: Set<UUID> = []
     @ObservationIgnored weak var model: AppModel?
     @ObservationIgnored let root: URL
     @ObservationIgnored let namespace: UUID
+    @ObservationIgnored let archive: SubagentArchive
+    @ObservationIgnored fileprivate var roots: [ChatTarget: SubagentRoot] = [:]
+    @ObservationIgnored fileprivate var lives: [UUID: SubagentLive] = [:]
+    /// Each run's root conversation, so finding a run doesn't search every conversation's.
+    @ObservationIgnored private var locations: [UUID: ChatTarget] = [:]
     @ObservationIgnored private var contexts: [UUID: Caller] = [:]
     @ObservationIgnored private var runners: [UUID: AgentRun] = [:]
     @ObservationIgnored private var preparations: [UUID: Task<Void, Never>] = [:]
@@ -22,6 +32,12 @@ final class SubagentRuntime {
     @ObservationIgnored private var rejections: [UUID: [UUID: SubagentResult]] = [:]
     @ObservationIgnored private var pendingFinishes: [UUID: (SubagentPhase, String?)] = [:]
     @ObservationIgnored private var requestCounts: [ChatTarget: Int] = [:]
+
+    /// How often a caller's mailbox is looked at, on this Mac and on a host.
+    nonisolated static let localPoll: Duration = .milliseconds(250)
+    nonisolated static let remotePoll: Duration = .milliseconds(750)
+    /// How often its heartbeat is refreshed: well within `SubagentLimits.heartbeatTimeout`.
+    nonisolated static let heartbeatInterval: TimeInterval = 2
 
     struct Caller {
         var id: UUID
@@ -34,9 +50,10 @@ final class SubagentRuntime {
         var environment: [String: String] = [:]
     }
 
-    init(model: AppModel, root: URL) {
+    init(model: AppModel, root: URL, archive: SubagentArchive = SubagentArchive()) {
         self.model = model
         self.root = root
+        self.archive = archive
         let namespaceURL = root.appendingPathComponent("namespace")
         namespace = (try? String(contentsOf: namespaceURL, encoding: .utf8)).flatMap(UUID.init(uuidString:)) ?? UUID()
         do {
@@ -48,15 +65,84 @@ final class SubagentRuntime {
         restore()
     }
 
+    /// Each conversation's runs, oldest first: `records[target]`, read and written like the
+    /// dictionary it replaces. Reading one conversation's observes that conversation's alone.
+    var records: SubagentRecords { SubagentRecords(runtime: self) }
+    /// Each run's transcript, by run.
+    var threads: SubagentThreads { SubagentThreads(runtime: self) }
+    /// Each run's turn while it runs, by run.
+    var states: SubagentStates { SubagentStates(runtime: self) }
+
     var roster: [BotRosterEntry] { (model?.bots ?? []).map { BotRosterEntry(bot: $0) } }
-    var all: [SubagentRun] { records.values.flatMap { $0 } }
-    func run(_ id: UUID) -> SubagentRun? { all.first { $0.id == id } }
+    /// Every conversation's runs. For the runtime's own work and tests: a view reads one
+    /// conversation's (`records[target]`), which observes only that conversation.
+    var all: [SubagentRun] { roots.values.flatMap(\.runs) }
+    func run(_ id: UUID) -> SubagentRun? {
+        locations[id].flatMap { target in root(target).runs.first { $0.id == id } }
+    }
     func activeCount(_ target: ChatTarget, includeTasks: Bool = false) -> Int {
-        all.filter { $0.rootBotID == target.botID && (includeTasks || $0.rootTaskID == target.taskID) && $0.phase.isActive }.count
+        let targets = includeTasks
+            ? [ChatTarget.home(target.botID)] + (model?.tasks[target.botID] ?? []).map { .task($0.id, of: target.botID) }
+            : [target]
+        return targets.reduce(0) { count, target in count + root(target).runs.filter { $0.phase.isActive }.count }
     }
-    func usesBot(_ id: UUID) -> Bool {
-        all.contains { $0.phase.isActive && ($0.rootBotID == id || $0.targetBotID == id) }
+    func usesBot(_ id: UUID) -> Bool { busyBots.contains(id) }
+
+    /// The runs a run delegated to, grouped once per change of its conversation's runs.
+    func children(of id: UUID) -> [SubagentRun] {
+        locations[id].map { root($0).children(of: id) } ?? []
     }
+
+    /// In one conversation, the runs a run delegated to, or (for nil) the conversation's own.
+    func children(of parent: UUID?, in target: ChatTarget) -> [SubagentRun] {
+        root(target).children(of: parent)
+    }
+
+    fileprivate func root(_ target: ChatTarget) -> SubagentRoot {
+        if let existing = roots[target] { return existing }
+        let made = SubagentRoot()
+        roots[target] = made
+        return made
+    }
+
+    fileprivate func live(_ id: UUID) -> SubagentLive {
+        if let existing = lives[id] { return existing }
+        let made = SubagentLive()
+        lives[id] = made
+        return made
+    }
+
+    fileprivate func dropLive(_ id: UUID) {
+        lives[id] = nil
+    }
+
+    /// Replaces a conversation's runs, and the index of where each run is.
+    fileprivate func setRuns(_ runs: [SubagentRun], for target: ChatTarget) {
+        let root = root(target)
+        for run in root.runs where locations[run.id] == target { locations[run.id] = nil }
+        root.runs = runs
+        for run in runs { locations[run.id] = target }
+        refreshBusyBots()
+    }
+
+    private func add(_ record: SubagentRun, to target: ChatTarget) {
+        root(target).runs.append(record)
+        locations[record.id] = target
+        refreshBusyBots()
+    }
+
+    private func refreshBusyBots() {
+        var busy: Set<UUID> = []
+        for root in roots.values {
+            for run in root.runs where run.phase.isActive {
+                busy.insert(run.rootBotID)
+                busy.insert(run.targetBotID)
+            }
+        }
+        if busy != busyBots { busyBots = busy }
+    }
+
+    private var activeRunCount: Int { roots.values.reduce(0) { $0 + $1.runs.filter { $0.phase.isActive }.count } }
 
     func refreshRoster() throws {
         let ipc = SubagentIPC(root: root)
@@ -102,29 +188,54 @@ final class SubagentRuntime {
         }
     }
 
+    /// Watches a caller's mailbox off the main actor: its files, or the SSH commands that reach
+    /// them on a host, are read and written there, and only the requests it holds come here. The
+    /// heartbeat is refreshed every `heartbeatInterval` (with the poll, on a host), and a run's
+    /// status file is written only when its phase or activity changes.
     private func startWatcher(_ caller: Caller) {
-        watchers[caller.id] = Task { [weak self] in
+        let id = caller.id
+        let transport = caller.transport
+        let pause = transport.machine.isRemote ? Self.remotePoll : Self.localPoll
+        let heartbeatInterval = Self.heartbeatInterval
+        watchers[id] = Task.detached(priority: .utility) { [weak self] in
+            var lastHeartbeat: Date?
+            var written: [UUID: SubagentStatus] = [:]
             while !Task.isCancelled {
                 do {
-                    try await caller.transport.heartbeat()
-                    let envelopes = try await caller.transport.poll()
-                    guard let self, self.contexts[caller.id] != nil, !Task.isCancelled else { break }
-                    for envelope in envelopes {
-                        await self.receive(envelope.data, filename: envelope.filename, from: caller)
-                    }
-                    for record in self.all where record.callerInvocationID == caller.id && record.phase.isActive {
-                        let status = SubagentStatus(id: record.id, phase: record.phase,
-                                                   activity: self.states[record.id]?.activity.doing ?? "Preparing…")
-                        try await caller.transport.writeStatus(id: record.id, data: SubagentIPC.encode(status))
+                    let beat = lastHeartbeat.map { Date().timeIntervalSince($0) >= heartbeatInterval } ?? true
+                    let envelopes = try await transport.poll(heartbeat: beat)
+                    if beat { lastHeartbeat = Date() }
+                    guard let self, !Task.isCancelled, let statuses = await self.take(envelopes, from: id) else { break }
+                    for status in statuses {
+                        if let last = written[status.id], last.phase == status.phase, last.activity == status.activity { continue }
+                        try await transport.writeStatus(id: status.id, data: SubagentIPC.encode(status))
+                        written[status.id] = status
                     }
                 } catch {
-                    guard let self, !Task.isCancelled, self.contexts[caller.id] != nil else { break }
-                    self.error = "Sub-agent connection: \(error.localizedDescription)"
+                    guard let self, !Task.isCancelled, await self.isWatching(id) else { break }
+                    await self.report("Sub-agent connection: \(error.localizedDescription)")
                 }
-                do { try await Task.sleep(for: .milliseconds(caller.transport.machine.isRemote ? 750 : 250)) }
-                catch { break }
+                do { try await Task.sleep(for: pause) } catch { break }
             }
         }
+    }
+
+    /// Takes a caller's requests, then returns its runs' statuses; nil once the caller has ended.
+    private func take(_ envelopes: [SubagentEnvelope], from id: UUID) async -> [SubagentStatus]? {
+        guard let caller = contexts[id] else { return nil }
+        for envelope in envelopes {
+            await receive(envelope.data, filename: envelope.filename, from: caller)
+        }
+        guard contexts[id] != nil else { return nil }
+        return root(caller.target).runs.filter { $0.callerInvocationID == id && $0.phase.isActive }.map { record in
+            SubagentStatus(id: record.id, phase: record.phase, activity: lives[record.id]?.state?.activity.doing ?? "Preparing…")
+        }
+    }
+
+    private func isWatching(_ id: UUID) -> Bool { contexts[id] != nil }
+
+    private func report(_ message: String) {
+        if error != message { error = message }
     }
 
     private func receive(_ data: Data, filename: String, from caller: Caller) async {
@@ -158,7 +269,7 @@ final class SubagentRuntime {
                 return
             }
             guard caller.depth < SubagentLimits.maxDepth else { throw DelegationFailure("Maximum sub-agent depth reached.") }
-            guard all.filter({ $0.phase.isActive }).count < 12 else { throw DelegationFailure("Twelve sub-agents are already running. Wait for one to finish before trying again.") }
+            guard activeRunCount < 12 else { throw DelegationFailure("Twelve sub-agents are already running. Wait for one to finish before trying again.") }
             guard requestCounts[caller.target, default: 0] < 64 else { throw DelegationFailure("This turn has reached its limit of 64 delegations.") }
             guard !request.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, request.brief.utf8.count <= 128_000 else {
                 throw DelegationFailure("Provide a nonempty brief smaller than 128 KB.")
@@ -175,9 +286,9 @@ final class SubagentRuntime {
             record.callerInvocationID = caller.id
             record.callerHostID = caller.hostID
             try persist(record, messages: [ChatMessage(role: .user, text: request.brief)])
-            records[caller.target, default: []].append(record)
-            threads[record.id] = [ChatMessage(role: .user, text: request.brief)]
-            states[record.id] = RunState(preparing: true)
+            add(record, to: caller.target)
+            live(record.id).messages = [ChatMessage(role: .user, text: request.brief)]
+            live(record.id).state = RunState(preparing: true)
             deliveries[record.id] = caller.transport
             requestCounts[caller.target, default: 0] += 1
             guard contexts[caller.id] != nil else { stop(record.id); return }
@@ -227,38 +338,47 @@ final class SubagentRuntime {
             let runner = machine.isRemote
                 ? AgentRun(command: command, invocation: invocation, on: machine, folder: record.workingDirectory)
                 : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: record.workingDirectory))
-            var parser = StreamParsers.make(for: account.kind)
             var assembler = ThreadAssembler()
             var finished = false
             var failure: String?
             var persistenceFailure: String?
-            runner.onLines = { [weak self, weak runner] lines in
+            // Parsed off the main thread, in batches; the transcript is checkpointed off it too.
+            runner.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak runner] events in
                 guard let self, let runner, self.runners[id] === runner, self.run(id)?.phase.isActive == true else { return }
-                var messages = self.threads[id] ?? []
-                self.states[id]?.hasOutput = true
-                for line in lines {
-                    for event in parser.parse(line: line) {
+                let live = self.live(id)
+                var state = live.state
+                state?.hasOutput = true
+                guard !events.isEmpty else {
+                    if state != live.state { live.state = state }
+                    return
+                }
+                var sessions: [String] = []
+                live.update { messages in
+                    for event in events {
                         switch event {
                         case .session(let session):
-                            self.modify(id) { $0.sessionID = CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: session) }
+                            sessions.append(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: session))
                         case .finished: finished = true
                         case .failed(let reason): failure = reason
                         default: break
                         }
-                        if let activity = BotActivity.next(after: event) { _ = self.states[id]?.move(to: activity) }
-                        self.states[id]?.settle()
+                        if let activity = BotActivity.next(after: event) { _ = state?.move(to: activity) }
+                        state?.settle()
                         assembler.apply(event, to: &messages)
                     }
                 }
-                self.threads[id] = messages
-                if let record = self.run(id) {
-                    do { try self.persist(record, messages: messages) }
-                    catch {
-                        if persistenceFailure == nil {
-                            persistenceFailure = "Couldn't save the sub-agent transcript: \(error.localizedDescription)"
-                            self.stop(id)
-                        }
-                    }
+                if state != live.state { live.state = state }
+                for session in sessions { self.modify(id) { $0.sessionID = session } }
+                guard let record = self.run(id) else { return }
+                let failed: @MainActor (Error) -> Void = { [weak self] error in
+                    guard let self, persistenceFailure == nil, self.run(id)?.phase.isActive == true else { return }
+                    persistenceFailure = "Couldn't save the sub-agent transcript: \(error.localizedDescription)"
+                    self.stop(id)
+                }
+                do {
+                    self.archive.checkpoint(try self.snapshot(record, messages: live.messages), failed: failed)
+                } catch {
+                    failed(error)
                 }
             }
             runner.onExit = { [weak self, weak runner] status, stderr in
@@ -266,21 +386,22 @@ final class SubagentRuntime {
                 self.runners[id] = nil
                 self.endCaller(context.id)
                 guard self.run(id)?.phase.isActive == true else { return }
-                var messages = self.threads[id] ?? []
-                assembler.apply(.textEnd, to: &messages)
-                ThreadAssembler.closeRunningTools(&messages)
-                self.threads[id] = messages
-                let reply = messages.last(where: { $0.role == .assistant })?.text ?? ""
+                let live = self.live(id)
+                live.update { messages in
+                    assembler.apply(.textEnd, to: &messages)
+                    ThreadAssembler.closeRunningTools(&messages)
+                }
+                let reply = live.messages.last(where: { $0.role == .assistant })?.text ?? ""
                 let reason = persistenceFailure ?? failure ?? ((status != 0 || !finished || reply.isEmpty)
                     ? "\(account.name) ended without a successful handoff (exit \(status)). \(AppModel.lastLines(stderr))" : nil)
                 self.finish(id, phase: persistenceFailure != nil ? .failed : runner.stopped ? .stopped : reason == nil ? .completed : .failed, error: reason)
             }
             record.phase = .running
             record.startedAt = Date()
-            try persist(record, messages: threads[id] ?? [])
+            try persist(record, messages: live(id).messages)
             replace(record)
             runners[id] = runner
-            states[id] = RunState()
+            live(id).state = RunState()
             try runner.start()
             preparations[id] = nil
         } catch {
@@ -291,7 +412,7 @@ final class SubagentRuntime {
     }
 
     func stop(_ id: UUID) {
-        for child in all where child.parentSubagentID == id && child.phase.isActive { stop(child.id) }
+        for child in children(of: id) where child.phase.isActive { stop(child.id) }
         preparations.removeValue(forKey: id)?.cancel()
         // Revoke admissions immediately, even when the process takes time to honor Stop.
         for context in Array(contexts.values) where context.parent == id { endCaller(context.id) }
@@ -305,7 +426,7 @@ final class SubagentRuntime {
     }
 
     func stopRoot(_ target: ChatTarget) {
-        for record in all where record.rootBotID == target.botID && record.rootTaskID == target.taskID && record.phase.isActive { stop(record.id) }
+        for record in root(target).runs where record.phase.isActive { stop(record.id) }
         for context in Array(contexts.values) where context.target == target { endCaller(context.id) }
     }
 
@@ -318,39 +439,45 @@ final class SubagentRuntime {
         guard let caller = contexts.removeValue(forKey: id) else { return }
         watchers.removeValue(forKey: id)?.cancel()
         rejections[id] = nil
-        for record in all where record.callerInvocationID == id && record.phase.isActive { stop(record.id) }
+        for record in root(caller.target).runs where record.callerInvocationID == id && record.phase.isActive { stop(record.id) }
         Task { try? await caller.transport.close() }
     }
 
+    /// BotChu is quitting: what each run printed last goes into its transcript, and every
+    /// checkpoint still waiting is written, so nothing streamed is lost.
     func stopAll() {
+        for runner in Array(runners.values) { runner.flushOutput() }
         for record in all where record.phase.isActive { stop(record.id) }
         for id in Array(contexts.keys) { endCaller(id) }
+        archive.flush()
     }
 
     private func finish(_ id: UUID, phase: SubagentPhase, error: String?) {
         guard var record = run(id), record.phase.isActive else { return }
-        let children = all.filter { $0.parentSubagentID == id && $0.phase.isActive }
-        if !children.isEmpty {
+        let working = children(of: id).filter { $0.phase.isActive }
+        if !working.isEmpty {
             pendingFinishes[id] = (phase, error)
-            for child in children { stop(child.id) }
+            for child in working { stop(child.id) }
             return
         }
         pendingFinishes[id] = nil
         record.phase = phase
         record.finishedAt = Date()
         record.errorMessage = error
-        record.handoffOutput = threads[id]?.last(where: { $0.role == .assistant }).map { MemoryNotes.handoffText($0.text) }
-        var messages = threads[id] ?? []
+        let live = live(id)
+        record.handoffOutput = live.messages.last(where: { $0.role == .assistant }).map { MemoryNotes.handoffText($0.text) }
+        var messages = live.messages
         ThreadAssembler.closeRunningTools(&messages)
         if let error { messages.append(ChatMessage(role: phase == .stopped ? .note : .error, text: error)) }
-        threads[id] = messages
-        states[id] = nil
+        live.messages = messages
+        live.state = nil
         preparations[id] = nil
         do {
             if phase == .completed, let targetBot = model?.bot(record.targetBotID) {
                 let notes = MemoryNotes.remembered(in: messages)
                 try MemoryNotes.append(notes, toMemoryAt: targetBot.workspace + "/MEMORY.md")
             }
+            // The handoff goes back only once its record is durable.
             try persist(record, messages: messages)
         }
         catch {
@@ -360,7 +487,7 @@ final class SubagentRuntime {
         }
         replace(record)
         queueDelivery(record)
-        for (parent, outcome) in pendingFinishes where !all.contains(where: { $0.parentSubagentID == parent && $0.phase.isActive }) {
+        for (parent, outcome) in pendingFinishes where !children(of: parent).contains(where: { $0.phase.isActive }) {
             finish(parent, phase: outcome.0, error: outcome.1)
         }
         model?.sendNextQueued(to: ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID))
@@ -396,19 +523,27 @@ final class SubagentRuntime {
     }
 
     private func replace(_ record: SubagentRun) {
-        let target = ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID)
-        if let index = records[target]?.firstIndex(where: { $0.id == record.id }) { records[target]?[index] = record }
+        let root = root(ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID))
+        guard let index = root.runs.firstIndex(where: { $0.id == record.id }) else { return }
+        let wasActive = root.runs[index].phase.isActive
+        root.runs[index] = record
+        if wasActive != record.phase.isActive { refreshBusyBots() }
     }
     private func modify(_ id: UUID, _ edit: (inout SubagentRun) -> Void) {
         guard var record = run(id) else { return }
         edit(&record)
         replace(record)
     }
-    private func persist(_ record: SubagentRun, messages: [ChatMessage]) throws {
+
+    /// The run as it stands, with the folder of the bot that owns its records.
+    private func snapshot(_ record: SubagentRun, messages: [ChatMessage]) throws -> SubagentArchive.Snapshot {
         guard let owner = model?.bot(record.rootBotID) else { throw DelegationFailure("The owning bot no longer exists.") }
-        let home = BotHome(workspace: owner.workspace)
-        try home.saveSubagentThread(messages, id: record.id, taskID: record.rootTaskID)
-        try home.saveSubagent(record)
+        return SubagentArchive.Snapshot(record: record, messages: messages, home: BotHome(workspace: owner.workspace))
+    }
+
+    /// Saves the run now, after any checkpoint of it under way: its start and its end.
+    private func persist(_ record: SubagentRun, messages: [ChatMessage]) throws {
+        try archive.save(snapshot(record, messages: messages))
     }
 
     private func restore() {
@@ -417,9 +552,11 @@ final class SubagentRuntime {
             let home = BotHome(workspace: bot.workspace)
             for taskID in [nil] + (model.tasks[bot.id] ?? []).map({ Optional($0.id) }) {
                 let target = ChatTarget(botID: bot.id, taskID: taskID)
-                records[target] = home.loadSubagents(taskID: taskID)
-                for record in records[target] ?? [] {
-                    threads[record.id] = home.loadSubagentThread(id: record.id, taskID: taskID)
+                let runs = home.loadSubagents(taskID: taskID)
+                guard !runs.isEmpty else { continue }
+                setRuns(runs, for: target)
+                for record in runs {
+                    live(record.id).messages = home.loadSubagentThread(id: record.id, taskID: taskID)
                     if let invocationID = record.callerInvocationID {
                         let destination = model.settings.host(record.callerHostID)?.destination
                         if record.callerHostID == nil || destination != nil {
@@ -437,18 +574,94 @@ final class SubagentRuntime {
 
     func clear(_ id: UUID) {
         guard let record = run(id), !record.phase.isActive else { return }
-        let children = all.filter { $0.parentSubagentID == id }
-        guard !children.contains(where: { $0.phase.isActive }) else { return }
-        for child in children { clear(child.id) }
+        let descendants = children(of: id)
+        guard !descendants.contains(where: { $0.phase.isActive }) else { return }
+        for child in descendants { clear(child.id) }
         guard let owner = model?.bot(record.rootBotID) else { return }
         let home = BotHome(workspace: owner.workspace)
         do {
             try home.removeSubagent(id: id, taskID: record.rootTaskID)
-            let target = ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID)
-            records[target]?.removeAll { $0.id == id }
-            threads[id] = nil
+            root(ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID)).runs.removeAll { $0.id == id }
+            locations[id] = nil
+            lives[id] = nil
         } catch { self.error = "Couldn't clear the sub-agent: \(error.localizedDescription)" }
     }
+}
+
+/// The runs delegated from one conversation (their root), observed apart from every other
+/// conversation's, with their tree grouped once per change rather than on every draw.
+@MainActor @Observable
+final class SubagentRoot {
+    @ObservationIgnored private var storage: [SubagentRun] = []
+    @ObservationIgnored private var byParent: [UUID?: [SubagentRun]]?
+
+    /// Oldest first; descendants beside the conversation's own.
+    var runs: [SubagentRun] {
+        get {
+            access(keyPath: \.runs)
+            return storage
+        }
+        set {
+            withMutation(keyPath: \.runs) {
+                storage = newValue
+                byParent = nil
+            }
+        }
+    }
+
+    /// The runs a run delegated to; nil for the conversation's own.
+    func children(of parent: UUID?) -> [SubagentRun] {
+        access(keyPath: \.runs)
+        if byParent == nil { byParent = Dictionary(grouping: storage, by: \.parentSubagentID) }
+        return byParent?[parent] ?? []
+    }
+}
+
+/// A run's transcript and turn as they stream in, observed apart from every other run's.
+@MainActor @Observable
+final class SubagentLive {
+    var messages: [ChatMessage] = []
+    var state: RunState?
+
+    /// Changes the transcript in place, without copying it.
+    func update(_ change: (inout [ChatMessage]) -> Void) {
+        change(&messages)
+    }
+}
+
+/// `records[target]`: a conversation's runs, read and written like a dictionary.
+@MainActor struct SubagentRecords {
+    let runtime: SubagentRuntime
+
+    subscript(target: ChatTarget) -> [SubagentRun]? {
+        get { runtime.root(target).runs }
+        nonmutating set { runtime.setRuns(newValue ?? [], for: target) }
+    }
+}
+
+/// `threads[id]`: a run's transcript.
+@MainActor struct SubagentThreads {
+    let runtime: SubagentRuntime
+
+    subscript(id: UUID) -> [ChatMessage]? {
+        get { runtime.live(id).messages }
+        nonmutating set {
+            if let newValue { runtime.live(id).messages = newValue } else { runtime.dropLive(id) }
+        }
+    }
+}
+
+/// `states[id]`: a run's turn, while it runs.
+@MainActor struct SubagentStates {
+    let runtime: SubagentRuntime
+
+    subscript(id: UUID) -> RunState? {
+        get { runtime.live(id).state }
+        nonmutating set { runtime.live(id).state = newValue }
+    }
+
+    /// Whether no run is under way.
+    var isEmpty: Bool { runtime.lives.values.allSatisfy { $0.state == nil } }
 }
 
 private struct DelegationFailure: LocalizedError {

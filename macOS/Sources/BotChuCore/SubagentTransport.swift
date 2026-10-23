@@ -65,13 +65,15 @@ public struct SubagentTransport: Sendable {
     }
 
     /// Files stay until acknowledge, which the coordinator calls only after recording the run.
-    /// Each read is bounded; incomplete .tmp writes never appear here.
-    public func poll() async throws -> [SubagentEnvelope] {
+    /// Each read is bounded; incomplete .tmp writes never appear here. With `heartbeat`, the
+    /// heartbeat is refreshed first, in the same round trip to a host.
+    public func poll(heartbeat: Bool = false) async throws -> [SubagentEnvelope] {
         if machine.isRemote {
             struct Entry: Decodable { var filename: String; var data: Data; var problem: String? }
-            return try JSONDecoder().decode([Entry].self, from: await remote("poll"))
+            return try JSONDecoder().decode([Entry].self, from: await remote("poll", heartbeat ? ["heartbeat"] : []))
                 .map { SubagentEnvelope(filename: $0.filename, data: $0.data, problem: $0.problem) }
         }
+        if heartbeat { try await self.heartbeat() }
         try Task.checkCancellation()
         let folder = URL(fileURLWithPath: directory).appendingPathComponent("requests")
         let files = try FileManager.default.contentsOfDirectory(at: folder,
@@ -192,6 +194,9 @@ if operation == 'prepare':
     atomic(root / 'heartbeat.json', json.dumps({'updatedAt': stamp, 'closed': False}).encode())
     print(json.dumps({'directory': str(root.resolve())}))
 elif operation == 'poll':
+    if parameters and parameters[0] == 'heartbeat':
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        atomic(root / 'heartbeat.json', json.dumps({'updatedAt': stamp, 'closed': False}).encode())
     entries = []
     for name in sorted(os.listdir(root / 'requests')):
         if not valid(name): continue
@@ -276,6 +281,9 @@ final class TransportCommand: @unchecked Sendable {
             }
             lock.unlock()
             if let stdin, let input {
+                // A command cancelled (or timed out) before reading its input must not take BotChu
+                // with it: the write then fails with EPIPE instead of raising SIGPIPE.
+                _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
                 group.enter()
                 DispatchQueue.global().async {
                     try? stdin.fileHandleForWriting.write(contentsOf: input)

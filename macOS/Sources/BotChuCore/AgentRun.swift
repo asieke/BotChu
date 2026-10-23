@@ -4,7 +4,11 @@ import Foundation
 /// (`zsh -l`, so PATH and Homebrew are the user's), in the bot's workspace, with stdin closed, or
 /// open for a CLI that takes input mid-turn (`Invocation.input`, This Mac only). On a host it runs
 /// there over SSH, through that user's login shell, and only its output comes back.
-/// Complete stdout lines and the exit are delivered on the main queue.
+/// Complete stdout lines (or, with `deliverEvents`, the events parsed from them off the main
+/// thread) and the exit are delivered on the main queue. Output that arrives within
+/// `deliveryInterval` of the last delivery waits and goes with the next one, so a fast stream
+/// costs the main thread a few updates a second rather than one per read; everything is delivered,
+/// in order, before the exit.
 public final class AgentRun: @unchecked Sendable {
     private let process = Process()
     private let stdout = Pipe()
@@ -18,6 +22,21 @@ public final class AgentRun: @unchecked Sendable {
     private var buffer = Data()
     private var errorTail = Data()
     public private(set) var stopped = false
+    /// The shortest time between two deliveries to the main queue.
+    public var deliveryInterval: TimeInterval = 0.04
+    /// Parses stdout off the main thread, when set (`deliverEvents`); guarded by `parseLock`.
+    private var parser: (any StreamParser)?
+    private let parseLock = NSLock()
+    private var onEvents: (([AgentEvent]) -> Void)?
+    /// Output not delivered yet, and whether a delivery is on its way; guarded by `lock`.
+    private var pendingLines: [String] = []
+    private var pendingEvents: [AgentEvent] = []
+    private var deliveryScheduled = false
+    private var lastDelivery: UInt64 = 0
+    /// The CLI's first output is delivered even when it holds no events (`onEvents([])`): it has
+    /// started, whatever it printed.
+    private var printed = false
+    private var announcePrinted = false
     /// Whether `send` can still write to the CLI: its stdin is open and the run hasn't stopped.
     public var acceptsInput: Bool {
         lock.lock()
@@ -107,6 +126,17 @@ public final class AgentRun: @unchecked Sendable {
         return script
     }
 
+    /// Delivers stdout to `handler` as the events `parser` makes of it, instead of as lines to
+    /// `onLines`. The lines are parsed as they arrive, off the main thread. Batches hold events,
+    /// except the first, which can be empty when the CLI's first lines aren't events. Call before
+    /// `start`.
+    public func deliverEvents(parsedBy parser: any StreamParser, to handler: @escaping ([AgentEvent]) -> Void) {
+        parseLock.lock()
+        self.parser = parser
+        parseLock.unlock()
+        onEvents = handler
+    }
+
     public func start() throws {
         let group = DispatchGroup()
         group.enter()
@@ -118,8 +148,7 @@ public final class AgentRun: @unchecked Sendable {
                 group.leave()
                 return
             }
-            let lines = self.takeLines(appending: data)
-            if !lines.isEmpty { DispatchQueue.main.async { self.onLines(lines) } }
+            if self.enqueue(self.takeLines(appending: data)) { self.scheduleDelivery() }
         }
         group.enter()
         stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -144,12 +173,75 @@ public final class AgentRun: @unchecked Sendable {
         for line in initialInput { send(line) }
         group.notify(queue: .main) { [self] in
             closeInput()
-            let rest = takeLines(appending: Data("\n".utf8))
-            if !rest.isEmpty { onLines(rest) }
+            // The last line may lack its newline; then everything still waiting goes before the exit.
+            _ = enqueue(takeLines(appending: Data("\n".utf8)))
+            flushOutput()
             lock.lock()
             let tail = String(decoding: errorTail, as: UTF8.self)
             lock.unlock()
             onExit(process.terminationStatus, tail)
+        }
+    }
+
+    /// Delivers the output received and not delivered yet, now. On the main queue; BotChu calls
+    /// it when quitting, so what a CLI said last is in its thread before the thread is saved.
+    public func flushOutput() {
+        lock.lock()
+        let lines = pendingLines
+        let events = pendingEvents
+        let announce = announcePrinted
+        pendingLines = []
+        pendingEvents = []
+        announcePrinted = false
+        deliveryScheduled = false
+        lastDelivery = DispatchTime.now().uptimeNanoseconds
+        lock.unlock()
+        if !lines.isEmpty { onLines(lines) }
+        if !events.isEmpty || announce { onEvents?(events) }
+    }
+
+    /// Adds lines to what waits for delivery: parsed into events, when parsing here. True when
+    /// there is something to deliver.
+    private func enqueue(_ lines: [String]) -> Bool {
+        guard !lines.isEmpty else { return false }
+        parseLock.lock()
+        var events: [AgentEvent]?
+        if parser != nil {
+            events = []
+            for line in lines { events! += parser!.parse(line: line) }
+        }
+        parseLock.unlock()
+        lock.lock()
+        defer { lock.unlock() }
+        if let events {
+            pendingEvents += events
+            if !printed {
+                printed = true
+                announcePrinted = true
+            }
+            return !pendingEvents.isEmpty || announcePrinted
+        }
+        pendingLines += lines
+        return true
+    }
+
+    /// Delivers what waits on the main queue: right away when the last delivery was at least
+    /// `deliveryInterval` ago, else once it is. One delivery is on its way at a time.
+    private func scheduleDelivery() {
+        lock.lock()
+        guard !deliveryScheduled else {
+            lock.unlock()
+            return
+        }
+        deliveryScheduled = true
+        let interval = UInt64(max(0, deliveryInterval) * 1_000_000_000)
+        let elapsed = DispatchTime.now().uptimeNanoseconds &- lastDelivery
+        let wait = elapsed >= interval ? 0 : interval - elapsed
+        lock.unlock()
+        if wait == 0 {
+            DispatchQueue.main.async { self.flushOutput() }
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .nanoseconds(Int(wait))) { self.flushOutput() }
         }
     }
 

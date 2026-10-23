@@ -100,18 +100,22 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and any OpenRouter model). Each account's command can be changed in Settings.
     Wherever an account or a CLI family is shown, so is the family's logo, as in GitChu: Claude's
     spark, OpenAI's knot for Codex, Google's G for Antigravity, Facebook's f for Muse, and π for Pi.
-  - **Chat:** one continuous thread per bot (its **Home**), and one per task. Replies stream in, rendered as Markdown; each tool the
+  - **Chat:** one continuous thread per bot (its **Home**), and one per task. Replies stream in, rendered as Markdown (each reply
+    is parsed once, and recent ones ahead of time, so showing a conversation again doesn't parse it again); each tool the
     agent runs shows as a collapsible card with its input and output. Headings, nested lists, quotes,
     tables and fenced code use native block layouts; code has a Copy button. Replies have soft rounded
     bubbles. Inline and display math use bundled KaTeX; Mermaid code fences display diagrams with
     source/copy and fit/actual-size controls. Both render offline in system WebKit, including inside
-    tables and lists. Unsupported or incomplete expressions and diagrams stay readable as source.
+    tables and lists; a reply's web view is made as it nears the visible part of the chat, with only
+    the renderer it uses. Unsupported or incomplete expressions and diagrams stay readable as source.
     Antigravity subagent
     launch cards finish when the CLI acknowledges the launch; the bot reports the workers' results
     in its replies. A missing completion record shows a neutral question mark, not a tool failure.
     A turn can be stopped. The
     thread and the CLI's session id are saved, so the next message (also after a relaunch) resumes
-    the same CLI session.
+    the same CLI session; quitting mid-turn saves what the turn printed so far. A CLI's output is
+    parsed off the main thread and reaches the window a few times a second, and each conversation
+    is observed on its own, so turns running elsewhere don't slow the one shown.
   - **Tasks:** besides its Home, a bot can work on tasks, several at once: each in one of your
     GitHub repositories, with its own conversation and CLI session, in its own git worktree, so
     tasks never share files. BotChu does all of this itself, with no other app. **New Task** (⌘T)
@@ -319,8 +323,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
     (`UsageCache.swift`), per-conversation pending-message delivery (`MessageQueue.swift`), what
-    the status sidebar shows about a bot and
-    its `MEMORY.md` (`BotStatus.swift`), pets: the activity a tool call means
+    the status sidebar shows about a bot, from a summary of its thread kept as the thread grows, and
+    its `MEMORY.md` (`BotStatus.swift`), replies' parsed Markdown, cached by their text
+    (`MarkdownCache.swift`), pets: the activity a tool call means
     and the clips that show it (`Pet.swift`), making a pet: its poses and clips, the Codex prompt
     for the stills, the OpenRouter request and job, the cost estimate, the manifest and install
     (`PetVideo.swift`), tasks: the task, its title
@@ -331,13 +336,16 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
     or proposing it through GitHub with retryable, metadata-only PRs (`ProjectGitHub.swift`), the Projects
     tables' rows and the open pull requests and issues across repositories (`ProjectOverview.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
-    a CLI through the login shell, `zsh -l`, or on a host over `ssh` (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
-    `Subagents.swift`, `Store.swift`, `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
+    a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
+    main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
+    `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (transcripts saved off the main thread
+    while they stream), `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
     handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
     Reports filed from the app (their title, description, app state and `gh issue create`) are in
     `IssueReport.swift`.
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
-    in standard system materials: `App/` (the app, window, model, settings, Keychain, dev hooks, making
+    in standard system materials: `App/` (the app, window, model, each conversation's state, observed
+    on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, and what a report says about the app, `IssueReports.swift`),
     `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (messages and the composer), `Inspector/` (the
@@ -355,9 +363,13 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
     made in throwaway repositories; and hosts: their `ssh` command lines, deploy targets, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
-    from a remote task; and reports: their titles, app state, and filing through a stand-in `gh`.
+    from a remote task; reports: their titles, app state, and filing through a stand-in `gh`; and
+    output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
+    and sub-agent checkpoints.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
-    fallback and offline restrictions, model-picker keyboard interaction and persisted choices,
+    fallback and offline restrictions, web views made only near the visible chat, conversations and
+    sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
+    saves, model-picker keyboard interaction and persisted choices,
     Markdown editor sizing and Save/Cancel, collapsing status sections, inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
     main window's layout at its narrowest, galleries that preserve conversation state, custom
