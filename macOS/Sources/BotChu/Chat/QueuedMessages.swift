@@ -6,14 +6,17 @@ struct QueuedMessages: View {
     let queue: MessageQueue
     let running: Bool
     let preparing: Bool
+    /// The CLI takes follow-ups during a turn, at its next tool call (Claude Code on This Mac).
+    let midTurn: Bool
     let resume: () -> Void
     let edit: (UUID) -> Void
     let remove: (UUID) -> Void
 
     private var explanation: String {
         if queue.isPaused { return "Paused · send when you’re ready" }
+        if midTurn { return running ? "Will reach the bot at its next tool call" : "Sending…" }
         if preparing { return "Will send after the first turn" }
-        return "Will send after this turn"
+        return running ? "Will send when this turn ends" : "Sending…"
     }
 
     var body: some View {
@@ -22,7 +25,7 @@ struct QueuedMessages: View {
                 Label("\(queue.messages.count) queued", systemImage: "text.bubble")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer(minLength: 0)
-                if !running {
+                if queue.isPaused || !running {
                     Button("Send next", action: resume)
                         .buttonStyle(.plain)
                         .font(.system(size: 12, weight: .semibold))
@@ -40,12 +43,18 @@ struct QueuedMessages: View {
                                 .lineLimit(2)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .help(message.text)
-                            Button { edit(message.id) } label: { Image(systemName: "pencil") }
-                                .help("Move this message back to the composer")
-                                .accessibilityLabel("Edit queued message")
-                            Button { remove(message.id) } label: { Image(systemName: "xmark") }
-                                .help("Remove this queued message")
-                                .accessibilityLabel("Remove queued message")
+                            if queue.isInFlight(message.id) {
+                                // Already written to the CLI, which takes it at its next tool call.
+                                Text("Sent").font(.system(size: 11)).foregroundStyle(.secondary)
+                                    .help("Sent to the bot, which reads it at its next tool call")
+                            } else {
+                                Button { edit(message.id) } label: { Image(systemName: "pencil") }
+                                    .help("Move this message back to the composer")
+                                    .accessibilityLabel("Edit queued message")
+                                Button { remove(message.id) } label: { Image(systemName: "xmark") }
+                                    .help("Remove this queued message")
+                                    .accessibilityLabel("Remove queued message")
+                            }
                         }
                         .buttonStyle(.plain)
                         .padding(9)

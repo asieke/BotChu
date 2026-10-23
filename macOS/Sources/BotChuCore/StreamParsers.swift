@@ -109,6 +109,8 @@ public struct ClaudeParser: StreamParser {
             }
             return events
         case "user":
+            // With --replay-user-messages, each message Claude Code takes from stdin comes back.
+            if obj["isReplay"] as? Bool == true { return [.inputTaken] }
             guard let content = (obj["message"] as? JSON)?["content"] as? [JSON] else { return [] }
             return content.compactMap { block in
                 guard block["type"] as? String == "tool_result", let id = block["tool_use_id"] as? String else { return nil }

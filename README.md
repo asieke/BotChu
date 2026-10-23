@@ -158,12 +158,17 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     [delegation protocol](docs/subagents.md) for lifecycle and persistence details.
   - **Message box:** a multiline writing area with account, model/effort and send/stop controls in
     its bottom row. Return sends; Option-Return inserts a new line. Send stays available during a
-    run: follow-ups appear in a queue above the composer and send in order after each successful
-    turn, in the same CLI session. Follow-ups never interrupt work in progress. This works with
-    every account, including tasks over SSH. Pending messages can be edited or removed. Stop and
-    errors pause the queue; relaunching restores it
-    paused. **Send next** resumes it. Each Home and task has its own queue, saved beside its thread
-    in `queued.jsonl`. A worktree being prepared finishes setup before follow-ups can run.
+    run: follow-ups appear in a queue above the composer and reach the bot on their own, in order,
+    in the same CLI session. Where the CLI takes input mid-turn (Claude Code on This Mac, through
+    `--input-format stream-json`), a follow-up reaches it at its next tool call, like steering in
+    Claude Code itself; it shows as **Sent** until the CLI takes it, then joins the conversation
+    where it was read. Every other account (Codex, Antigravity, Muse, Pi, and any task over SSH)
+    gets it as the next turn, as soon as the running one ends. Pending messages can be edited or
+    removed until they are sent. Only Stop and a failed turn pause the queue (**Paused · send when
+    you're ready**), and a paused queue stays paused across relaunches; messages left queued when
+    BotChu quit go out on their own after it starts again. **Send next** resumes a paused queue.
+    Each Home and task has its own queue, saved beside its thread in `queued.jsonl` (with
+    `queued.paused` while paused). A worktree being prepared finishes setup before follow-ups can run.
   - **Model controls:** separate model and reasoning-effort buttons below the writing area and compact
     text selectors in the status sidebar's **Runs on** card open the same pickers. Both stay in sync
     for the shown Home or task conversation; choices are saved for its next turn, including resumed sessions.

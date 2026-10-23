@@ -81,12 +81,26 @@ public struct BotHome: Sendable {
         Self.readThread((id.map(taskURL) ?? url).appendingPathComponent("queued.jsonl"))
     }
 
-    public func saveQueuedMessages(_ messages: [ChatMessage], task id: UUID? = nil) throws {
+    /// Whether the owner's Stop or a failed turn paused the queue, which then waits for the owner
+    /// after a relaunch too. Otherwise recovered messages are sent on their own.
+    public func loadQueuePaused(task id: UUID? = nil) -> Bool {
+        FileManager.default.fileExists(atPath: (id.map(taskURL) ?? url).appendingPathComponent(Self.queuePausedFile).path)
+    }
+
+    public func saveQueuedMessages(_ messages: [ChatMessage], paused: Bool = false, task id: UUID? = nil) throws {
         try prepare()
         let folder = id.map(taskURL) ?? url
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Self.writeThread(messages, to: folder.appendingPathComponent("queued.jsonl"))
+        let marker = folder.appendingPathComponent(Self.queuePausedFile)
+        if paused && !messages.isEmpty {
+            try Data().write(to: marker, options: .atomic)
+        } else if FileManager.default.fileExists(atPath: marker.path) {
+            try FileManager.default.removeItem(at: marker)
+        }
     }
+
+    static let queuePausedFile = "queued.paused"
 
     public func subagentsURL(taskID: UUID? = nil) -> URL {
         (taskID.map(taskURL) ?? url).appendingPathComponent("subagents", isDirectory: true)
