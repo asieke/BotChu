@@ -321,6 +321,8 @@ public struct ShellFacts: Equatable, Sendable {
     public var delegation: DelegationCall?
     /// The commands that do something (not `cd`, `export` and the like), in order.
     public var meaningful: [ShellCommand.Simple] = []
+    /// The words each `for name in …` loop goes through, by its variable.
+    private var loops: [String: [String]] = [:]
 
     public init(_ command: ShellCommand) {
         for simple in command.commands { add(simple) }
@@ -340,6 +342,9 @@ public struct ShellFacts: Equatable, Sendable {
 
     private mutating func add(_ simple: ShellCommand.Simple) {
         if !simple.writes.isEmpty || simple.background { changes = true }
+        if simple.words.count >= 3, simple.words[0] == "for", simple.words[2] == "in" {
+            loops[simple.words[1]] = Array(simple.words.dropFirst(3))
+        }
         let effect = ShellFacts.classify(simple)
         if case .neutral = effect { return }
         // A filter after a pipe (`| head -20`, `| rg foo`) is part of the command before it.
@@ -367,8 +372,14 @@ public struct ShellFacts: Equatable, Sendable {
             if paths.isEmpty {
                 inspections.append(ShellFacts.head(of: simple))
             } else {
-                // `cat "$file"`: a file only known when it runs.
-                reads += paths.filter { !$0.contains("$") }.map { Read(path: ShellPaths.join(simple.directory, $0), range: range) }
+                // `for f in a b; do cat "$f"`: the loop's files. Any other `$file` is only known
+                // when it runs.
+                let files = paths.flatMap { path -> [String] in
+                    let name = path.hasPrefix("${") ? String(path.dropFirst(2).dropLast()) : String(path.dropFirst())
+                    if path.hasPrefix("$"), let words = loops[name] { return words }
+                    return path.contains("$") ? [] : [path]
+                }
+                reads += files.map { Read(path: ShellPaths.join(simple.directory, $0), range: range) }
             }
         case .list(let paths):
             lists += (paths.isEmpty ? [simple.directory ?? "."] : paths.map { ShellPaths.join(simple.directory, $0) })

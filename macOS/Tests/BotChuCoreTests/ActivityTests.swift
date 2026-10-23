@@ -155,6 +155,17 @@ private func describe(_ message: ChatMessage, root: String? = "/work/BotChu") ->
         #expect(agy.reads.first?.path == "/work/BotChu/docs/README.md")
     }
 
+    /// As Codex ran it in the smoke turn: files read in a loop are the loop's words.
+    @Test func loopsReadTheirWords() {
+        let loop = describe(call("Shell", #"for file in SOUL.md MEMORY.md INSTRUCTIONS.md ../MEMORY.md; do if [ -f "$file" ]; then echo "--- $file"; cat "$file"; fi; done"#))
+        #expect(loop.intent == .inspect || loop.intent == .read)
+        #expect(loop.intent.isExploration)
+        #expect(loop.title == "for file in SOUL.md MEMORY.md INSTRUCTIONS.md ../MEMORY.md")
+        #expect(loop.reads.map(\.path) == ["SOUL.md", "MEMORY.md", "INSTRUCTIONS.md", "../MEMORY.md"])
+        let unknown = describe(call("Bash", #"f=$(ls | head -1); cat "$f""#))
+        #expect(unknown.reads.isEmpty && unknown.intent.isExploration)
+    }
+
     @Test func searchesThatFindNothingAreNotFailures() {
         let grep = describe(call("Bash", "rg -n nothing-here Sources", output: "Exit code 1\n", state: .failed))
         #expect(grep.failure == nil)

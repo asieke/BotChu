@@ -217,7 +217,11 @@ public struct ToolActivity: Equatable, Sendable {
         var activity = ToolActivity(intent: .command, title: first.map { ShellFacts.head(of: $0) } ?? firstLine(line))
         activity.isShell = true
         activity.command = line
-        if let first {
+        if let keyword = command.commands.first?.words.first, ["for", "while", "until", "if", "select", "case"].contains(keyword) {
+            // A loop or condition is named by its header: `for file in SOUL.md MEMORY.md`.
+            let header = firstLine(unwrapped(line)).components(separatedBy: "; do").first?.components(separatedBy: "; then").first ?? ""
+            activity.title = header.count > 70 ? String(header.prefix(69)) + "…" : header
+        } else if let first {
             activity.subtitle = ShellFacts.arguments(of: first).map { humanize(word: $0, directory: first.directory, root: root) }
                 .joined(separator: " ")
         }
