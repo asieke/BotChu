@@ -114,6 +114,10 @@ final class AppModel {
     @ObservationIgnored private var missing: [Store.Entry] = []
     @ObservationIgnored private var delegationSessions: [ChatTarget: Set<String>] = [:]
     @ObservationIgnored private var runs: [ChatTarget: AgentRun] = [:]
+    /// What each running CLI that takes input mid-turn has been given and has taken back.
+    @ObservationIgnored private var inputs: [ChatTarget: (kind: AgentKind, ledger: InputLedger)] = [:]
+    /// BotChu is quitting: the turns it stops weren't stopped by the owner, so queues stay unpaused.
+    @ObservationIgnored private var terminating = false
     /// While a bot's Home turn runs, BotChu looks for the tasks it asks for (`.botchu/dispatch/`).
     @ObservationIgnored private var dispatchTimers: [UUID: Timer] = [:]
     /// Bots whose dispatch requests are being started.
@@ -161,12 +165,14 @@ final class AppModel {
         for bot in bots {
             threads[.home(bot.id)] = self.store.loadThread(for: bot)
             let home = BotHome(workspace: bot.workspace)
-            messageQueues[.home(bot.id)] = MessageQueue(saved: home.loadQueuedMessages(), delivered: thread(.home(bot.id)))
+            messageQueues[.home(bot.id)] = MessageQueue(saved: home.loadQueuedMessages(), delivered: thread(.home(bot.id)),
+                                                        paused: home.loadQueuePaused())
             tasks[bot.id] = home.loadTasks()
             for task in tasks[bot.id] ?? [] where !task.isArchived {
                 let target = ChatTarget.task(task.id, of: bot.id)
                 threads[target] = home.loadThread(task: task.id)
-                messageQueues[target] = MessageQueue(saved: home.loadQueuedMessages(task: task.id), delivered: thread(target))
+                messageQueues[target] = MessageQueue(saved: home.loadQueuedMessages(task: task.id), delivered: thread(target),
+                                                     paused: home.loadQueuePaused(task: task.id))
             }
             reloadPet(bot.id)
         }
@@ -178,6 +184,12 @@ final class AppModel {
         }
         // Requests left while BotChu wasn't running.
         for bot in bots { takeDispatches(for: bot.id) }
+        // Follow-ups left queued when BotChu quit go out on their own, unless Stop or a failure
+        // paused them; once the window is up, so a turn's first output has somewhere to go.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            for target in Array(self.messageQueues.keys) { self.sendNextQueued(to: target) }
+        }
     }
 
     func bot(_ id: UUID) -> Bot? { bots.first { $0.id == id } }
@@ -427,9 +439,12 @@ final class AppModel {
         saveTask(tasks[target.botID]![i], of: target.botID)
         if threads[target] == nil, let id = target.taskID {
             threads[target] = BotHome(workspace: bot.workspace).loadThread(task: id)
-            messageQueues[target] = MessageQueue(saved: BotHome(workspace: bot.workspace).loadQueuedMessages(task: id), delivered: thread(target))
+            let home = BotHome(workspace: bot.workspace)
+            messageQueues[target] = MessageQueue(saved: home.loadQueuedMessages(task: id), delivered: thread(target),
+                                                 paused: home.loadQueuePaused(task: id))
         }
         show(target)
+        sendNextQueued(to: target)
     }
 
     func revealWorktree(_ target: ChatTarget) {
@@ -773,10 +788,11 @@ final class AppModel {
         return true
     }
 
-    /// Resume a paused queue. Follow-ups never interrupt a turn already in progress.
+    /// Resume a paused queue: its next message goes out now, or, during a turn, as a follow-up.
     func resumeQueuedMessages(to target: ChatTarget) {
-        guard !isRunning(target), messageQueues[target]?.messages.isEmpty == false else { return }
+        guard messageQueues[target]?.messages.isEmpty == false else { return }
         messageQueues[target]?.resume()
+        if let queue = messageQueues[target] { _ = saveQueue(queue, for: target) }
         sendNextQueued(to: target)
     }
 
@@ -787,20 +803,57 @@ final class AppModel {
     }
 
     func editQueuedMessage(_ id: UUID, in target: ChatTarget) {
-        guard let message = messageQueues[target]?.messages.first(where: { $0.id == id }) else { return }
+        guard let message = messageQueues[target]?.messages.first(where: { $0.id == id }),
+              messageQueues[target]?.isInFlight(id) == false else { return }
         removeQueuedMessage(id, from: target)
         guard messageQueues[target]?.messages.contains(where: { $0.id == id }) == false else { return }
         let draft = drafts[target] ?? ""
         drafts[target] = message.text + (draft.isEmpty ? "" : "\n\n" + draft)
     }
 
+    /// Whether follow-ups reach this conversation's CLI during a turn, at its next tool call, rather
+    /// than once the turn ends: Claude Code, on This Mac.
+    func takesFollowUpsMidTurn(_ target: ChatTarget) -> Bool {
+        guard let current = runSettings(of: target) else { return false }
+        return CommandBuilder.takesInputMidTurn(current.account.kind) && task(target)?.isRemote != true
+    }
+
+    /// Sends the next queued message: as a new turn when none is running, or written to a running
+    /// CLI that takes input mid-turn. Otherwise it waits for the turn to end.
     func sendNextQueued(to target: ChatTarget) {
-        guard !isRunning(target), let message = messageQueues[target]?.next else { return }
+        // Not while quitting, nor while restoring sub-agents at launch (`init` sends afterwards).
+        guard !terminating, delegation != nil else { return }
+        if isRunning(target) {
+            sendFollowUps(to: target)
+            return
+        }
+        guard let message = messageQueues[target]?.next else { return }
         guard beginTurn(message.text, for: target, message: message) else {
-            messageQueues[target]?.pause()
+            pauseQueue(target)
             return
         }
         messageQueues[target]?.remove(message.id)
+        if let queue = messageQueues[target] { _ = saveQueue(queue, for: target) }
+    }
+
+    /// Writes queued messages to the running CLI, which takes them at its next tool call. They stay
+    /// queued, unable to be edited, until the CLI echoes them (`AgentEvent.inputTaken`); any it
+    /// never takes go out as the next turn.
+    private func sendFollowUps(to target: ChatTarget) {
+        guard let run = runs[target], run.acceptsInput, var input = inputs[target], input.ledger.acceptsFollowUps else { return }
+        while let message = messageQueues[target]?.next, let line = CommandBuilder.inputLine(kind: input.kind, text: message.text) {
+            guard run.send(line) else { break }
+            messageQueues[target]?.markInFlight(message.id)
+            input.ledger.wrote()
+        }
+        inputs[target] = input
+    }
+
+    /// Withdraws automatic delivery, remembered across relaunches: after Stop or a real failure,
+    /// the queue waits for the owner. Quitting BotChu doesn't count.
+    private func pauseQueue(_ target: ChatTarget) {
+        guard !terminating, messageQueues[target]?.messages.isEmpty == false else { return }
+        messageQueues[target]?.pause()
         if let queue = messageQueues[target] { _ = saveQueue(queue, for: target) }
     }
 
@@ -840,18 +893,18 @@ final class AppModel {
                 waiting[target] = nil
                 runStates[target] = nil
                 if let failure {
-                    messageQueues[target]?.pause()
+                    pauseQueue(target)
                     if let task = self.task(target) {
                         postReceipt(TaskReceipt.failed(task, error: failure.step), task: task.id, for: target.botID)
                     }
                 } else {
                     startTurn(text, for: target, history: history, updates: nil)
-                    if !isRunning(target) { messageQueues[target]?.pause() }
+                    if !isRunning(target) { pauseQueue(target) }
                 }
             }
         } else {
             startTurn(text, for: target, history: history, updates: updates)
-            if !isRunning(target) { messageQueues[target]?.pause() }
+            if !isRunning(target) { pauseQueue(target) }
         }
         return true
     }
@@ -910,13 +963,16 @@ final class AppModel {
                 let contextSections = [preamble, delegationInstructions].compactMap { $0 }
                 let prompt = BotContext.prompt(for: text, preamble: contextSections.isEmpty ? nil : contextSections.joined(separator: "\n\n"), updates: updates)
                 let model = GenerationOptions.effectiveModel(current.model, kind: account.kind, openRouterDefault: settings.openRouterModel)
+                // A CLI that takes input mid-turn keeps its stdin open for follow-ups (This Mac only).
+                let liveInput = CommandBuilder.takesInputMidTurn(account.kind) && !machine.isRemote
                 var invocation = CommandBuilder.invocation(
                     kind: account.kind,
                     prompt: prompt,
                     model: model,
                     sessionID: resume,
                     reasoningEffort: current.reasoningEffort,
-                    openRouterKey: account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil)
+                    openRouterKey: account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil,
+                    liveInput: liveInput)
 
                 invocation.environment.merge(context.environment) { _, new in new }
 
@@ -924,7 +980,7 @@ final class AppModel {
                 if account.kind == .pi, !machine.isRemote, Keychain.get(Keychain.openRouterAccount)?.isEmpty ?? true {
                     delegation.endCaller(context.id)
                     runStates[target] = nil
-                    messageQueues[target]?.pause()
+                    pauseQueue(target)
                     append(ChatMessage(role: .error, text: "Add your OpenRouter API key in BotChu ▸ Settings first."), to: target)
                     saveThread(target)
                     return
@@ -942,26 +998,44 @@ final class AppModel {
                 let turnStart = thread(target).count
                 var parser = StreamParsers.make(for: account.kind)
                 var assembler = ThreadAssembler()
-                var ended = false
-                var reportedFailure: String?
+                var outcome = TurnOutcome()
                 let accountID = account.id
 
                 run.onLines = { [weak self, weak run] lines in
                     guard let self, let run, self.runs[target] === run, self.runSettings(of: target) != nil else { return }
                     if self.runStates[target]?.hasOutput == false { self.runStates[target]?.hasOutput = true }
                     var messages = self.thread(target)
+                    var delivered = false
                     for line in lines {
                         for event in parser.parse(line: line) {
+                            // After Stop, a CLI's last word is about the interruption (Antigravity
+                            // repeats its whole reply as a failure); the "Stopped" note says it.
+                            if run.stopped, case .failed = event { continue }
+                            outcome.record(event)
                             switch event {
                             case .session(let reported):
                                 let session = CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: reported)
                                 self.recordSession(session, accountID: accountID, for: target)
                                 self.delegationSessions[target, default: []].insert(session)
-                            case .failed(let reason):
-                                reportedFailure = reason
-                                ended = true
-                            case .finished:
-                                ended = true
+                            case .inputTaken:
+                                guard self.inputs[target] != nil else { break }
+                                if self.inputs[target]?.ledger.taken() == true {
+                                    // A follow-up reached the CLI: it joins the transcript here.
+                                    if let message = self.messageQueues[target]?.acknowledge() {
+                                        assembler.apply(event, to: &messages)
+                                        messages.append(message)
+                                        delivered = true
+                                    }
+                                } else {
+                                    // The prompt's echo: this CLI takes follow-ups from now on.
+                                    self.runStates[target]?.takesInput = true
+                                }
+                            case .finished, .failed:
+                                // Its input closes once the CLI has taken everything written to it.
+                                if self.inputs[target]?.ledger.turnEnded() == true {
+                                    run.closeInput()
+                                    self.runStates[target]?.takesInput = false
+                                }
                             default: break
                             }
                             if let activity = BotActivity.next(after: event),
@@ -972,14 +1046,23 @@ final class AppModel {
                                     self?.runStates[target]?.settle()
                                 }
                             }
+                            if case .inputTaken = event { continue }
                             assembler.apply(event, to: &messages)
                         }
                     }
                     self.threads[target] = messages
+                    if delivered {
+                        // Transcript first: recovery drops a queued copy of a delivered message.
+                        self.saveThread(target)
+                        if let queue = self.messageQueues[target] { _ = self.saveQueue(queue, for: target) }
+                    }
+                    // Messages queued before the CLI could take them.
+                    self.sendFollowUps(to: target)
                 }
                 run.onExit = { [weak self, weak run] status, stderr in
                     guard let self, let run, self.runs[target] === run else { return }
                     self.runs[target] = nil
+                    self.inputs[target] = nil
                     self.delegation.endCaller(context.id)
                     self.runStates[target] = nil
                     if target.taskID == nil { self.watchDispatches(for: id, while: false) }
@@ -991,11 +1074,11 @@ final class AppModel {
                     let stopped = run.stopped
                     if stopped {
                         messages.append(ChatMessage(role: .note, text: "Stopped"))
-                    } else if !ended, machine.isRemote, status == 255 {
+                    } else if !outcome.ended, machine.isRemote, status == 255 {
                         // ssh's own failure: the host didn't answer, or refused the connection.
                         let detail = Self.lastLines(stderr)
                         messages.append(ChatMessage(role: .error, text: "Couldn't reach \(place) over SSH" + (detail.isEmpty ? "." : ":\n\(detail)")))
-                    } else if !ended {
+                    } else if !outcome.ended {
                         // The stream never said the turn finished or failed: report what the CLI printed.
                         let detail = Self.lastLines(stderr)
                         messages.append(ChatMessage(role: .error, text: detail.isEmpty
@@ -1004,7 +1087,7 @@ final class AppModel {
                     }
                     self.threads[target] = messages
                     let saved = self.saveThread(target)
-                    let failure = reportedFailure ?? messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil }
+                    let failure = outcome.failure(stopped: stopped, exitError: messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil })
                     if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
                     if self.visibleBotID != id || self.tab(of: id) != target { self.unread.insert(target) }
                     let turn = messages.suffix(from: min(turnStart, messages.count))
@@ -1013,7 +1096,11 @@ final class AppModel {
                         at: Date(), startedAt: startedAt, status: status, stopped: stopped,
                         toolCalls: turn.filter { $0.role == .tool }.count,
                         error: turn.last(where: { $0.role == .error })?.text, stderr: stderr, what: what))
-                    self.messageQueues[target]?.finishTurn(stopped: stopped, failed: !saved || (!stopped && (failure != nil || status != 0)))
+                    // Only Stop and real failures pause the queue (not quitting BotChu); messages the
+                    // CLI never took go out as the next turn.
+                    self.messageQueues[target]?.finishTurn(stopped: stopped && !self.terminating,
+                                                           failed: !self.terminating && (!saved || failure != nil))
+                    if let queue = self.messageQueues[target] { _ = self.saveQueue(queue, for: target) }
                     self.sendNextQueued(to: target)
                 }
 
@@ -1024,6 +1111,7 @@ final class AppModel {
                     try run.start()
                     if let resume { delegationSessions[target, default: []].insert(resume) }
                     runs[target] = run
+                    if liveInput { inputs[target] = (account.kind, InputLedger()) }
                     reactions[target] = nil
                     reactionTickets[target] = nil
                     runStates[target] = RunState()
@@ -1040,7 +1128,7 @@ final class AppModel {
                 } catch {
                     delegation.endCaller(context.id)
                     runStates[target] = nil
-                    messageQueues[target]?.pause()
+                    pauseQueue(target)
                     append(ChatMessage(role: .error, text: "Couldn't start \(account.name): \(error.localizedDescription)"), to: target)
                     saveThread(target)
                 }
@@ -1048,7 +1136,7 @@ final class AppModel {
                 guard waiting[target] == ticket else { return }
                 waiting[target] = nil
                 runStates[target] = nil
-                messageQueues[target]?.pause()
+                pauseQueue(target)
                 append(ChatMessage(role: .error, text: "Couldn't prepare delegation: \(error.localizedDescription)"), to: target)
                 saveThread(target)
             }
@@ -1083,7 +1171,8 @@ final class AppModel {
 
     func stop(_ target: ChatTarget) {
         delegation.stopRoot(target)
-        messageQueues[target]?.pause()
+        pauseQueue(target)
+        inputs[target]?.ledger.close()
         if let run = runs[target] {
             run.stop()
         } else if runStates[target]?.preparing == true {
@@ -1095,9 +1184,10 @@ final class AppModel {
         }
     }
 
+    /// BotChu is quitting. Queues stay as they are, to go out on their own after the next launch.
     func stopAll() {
+        terminating = true
         delegation.stopAll()
-        for target in Array(messageQueues.keys) { messageQueues[target]?.pause() }
         for target in Array(runStates.keys) { stop(target) }
         for run in petRuns.values { run.stop() }
         for task in petTasks.values { task.cancel() }
@@ -1195,7 +1285,7 @@ final class AppModel {
     private func saveQueue(_ queue: MessageQueue, for target: ChatTarget) -> Bool {
         guard let bot = bot(target.botID) else { return false }
         do {
-            try BotHome(workspace: bot.workspace).saveQueuedMessages(queue.messages, task: target.taskID)
+            try BotHome(workspace: bot.workspace).saveQueuedMessages(queue.messages, paused: queue.isPaused, task: target.taskID)
             return true
         } catch {
             messageQueues[target]?.pause()

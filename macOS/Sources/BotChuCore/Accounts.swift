@@ -63,17 +63,36 @@ public struct Invocation: Equatable, Sendable {
     public var arguments: [String]
     public var environment: [String: String]
     public var sessionID: String?
+    /// For a CLI that takes input mid-turn, the lines written to its stdin when it starts (the
+    /// prompt); its stdin then stays open for follow-ups until BotChu closes it. Nil runs the CLI
+    /// with stdin closed and the prompt among its arguments.
+    public var input: [String]?
 
-    public init(arguments: [String], environment: [String: String] = [:], sessionID: String? = nil) {
+    public init(arguments: [String], environment: [String: String] = [:], sessionID: String? = nil, input: [String]? = nil) {
         self.arguments = arguments
         self.environment = environment
         self.sessionID = sessionID
+        self.input = input
     }
 }
 
 public enum CommandBuilder {
+    /// Whether the CLI takes a follow-up while a turn runs, at its next tool call: Claude Code,
+    /// with `--input-format stream-json`. The others hear follow-ups as the next turn, once the
+    /// running one ends (see README.md, Queued messages).
+    public static func takesInputMidTurn(_ kind: AgentKind) -> Bool { kind == .claude }
+
+    /// One user message for the stdin of a CLI that takes input mid-turn, or nil for the others.
+    public static func inputLine(kind: AgentKind, text: String) -> String? {
+        guard takesInputMidTurn(kind) else { return nil }
+        let message: [String: Any] = ["type": "user", "message": ["role": "user", "content": [["type": "text", "text": text]]]]
+        guard let data = try? JSONSerialization.data(withJSONObject: message, options: [.withoutEscapingSlashes]) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     /// The arguments for one turn. `sessionID` is the session to resume, or nil to start one;
     /// `newID` makes the ids of sessions BotChu names itself (Claude, Muse, Pi) testable.
+    /// `liveInput` gives a CLI that takes input mid-turn its prompt on stdin, which stays open.
     public static func invocation(
         kind: AgentKind,
         prompt: String,
@@ -81,8 +100,10 @@ public enum CommandBuilder {
         sessionID: String?,
         reasoningEffort: ReasoningEffort? = nil,
         openRouterKey: String? = nil,
+        liveInput: Bool = false,
         newID: () -> String = { UUID().uuidString.lowercased() }
     ) -> Invocation {
+        let input = liveInput ? inputLine(kind: kind, text: prompt).map { [$0] } : nil
         // A prompt that starts with "-" would be read as an option.
         let prompt = prompt.hasPrefix("-") ? " " + prompt : prompt
         let model = model.flatMap { value -> String? in
@@ -100,6 +121,8 @@ public enum CommandBuilder {
         case .claude:
             args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                     "--dangerously-skip-permissions"]
+            // Each message Claude Code takes from stdin is echoed back, so BotChu knows when it did.
+            if input != nil { args += ["--input-format", "stream-json", "--replay-user-messages"] }
             if let sessionID {
                 args += ["--resume", sessionID]
             } else {
@@ -109,7 +132,7 @@ public enum CommandBuilder {
             }
             if let model { args += ["--model", model] }
             if let effort { args += ["--effort", effort] }
-            args.append(prompt)
+            if input == nil { args.append(prompt) }
         case .codex:
             args = ["exec"]
             if let sessionID { args += ["resume", sessionID] }
@@ -138,7 +161,7 @@ public enum CommandBuilder {
             args.append(prompt)
             if let openRouterKey, !openRouterKey.isEmpty { env["OPENROUTER_API_KEY"] = openRouterKey }
         }
-        return Invocation(arguments: args, environment: env, sessionID: session)
+        return Invocation(arguments: args, environment: env, sessionID: session, input: input)
     }
 
     /// The id that resumes a run's session, once its stream reports one: Muse and Pi resume by the

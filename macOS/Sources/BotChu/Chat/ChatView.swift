@@ -49,6 +49,7 @@ struct ChatView: View {
                 VStack(spacing: 8) {
                     if let queue = model.messageQueues[target], !queue.messages.isEmpty {
                         QueuedMessages(queue: queue, running: running, preparing: model.runStates[target]?.preparing == true,
+                            midTurn: model.takesFollowUpsMidTurn(target),
                             resume: { model.resumeQueuedMessages(to: target) },
                             edit: { model.editQueuedMessage($0, in: target); composerFocused = true },
                             remove: { model.removeQueuedMessage($0, from: target) })
@@ -56,7 +57,7 @@ struct ChatView: View {
                     Composer(draft: Binding(get: { model.drafts[target] ?? "" }, set: { model.drafts[target] = $0 }),
                          focused: $composerFocused,
                          placeholder: task.map { "Message \(bot.name) about \($0.title)" } ?? "Message \(bot.name)",
-                         running: running, onSend: send, onStop: { model.stop(target) }) {
+                         running: running, midTurn: model.takesFollowUpsMidTurn(target), onSend: send, onStop: { model.stop(target) }) {
                         ModelMenu(settings: current, disabled: running,
                                   onModel: { model.setModel($0, for: target) },
                                   onEffort: { model.setReasoningEffort($0, for: target) })

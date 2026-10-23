@@ -14,6 +14,27 @@ import Testing
         #expect(next.arguments.suffix(5) == ["--resume", "s1", "--model", "opus", "again"])
     }
 
+    /// Claude Code takes follow-ups mid-turn: its prompt goes on stdin, which stays open, and it
+    /// echoes each message it takes. The other CLIs keep the prompt among their arguments.
+    @Test func claudeTakesItsPromptOnStdinForFollowUps() throws {
+        let live = CommandBuilder.invocation(kind: .claude, prompt: "-hi \"there\"", model: nil, sessionID: "s1", liveInput: true, newID: id)
+        #expect(live.arguments == ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+                                   "--dangerously-skip-permissions", "--input-format", "stream-json", "--replay-user-messages",
+                                   "--resume", "s1"])
+        let line = try #require(live.input?.first)
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        let message = try #require(object["message"] as? [String: Any])
+        let content = try #require(message["content"] as? [[String: Any]])
+        #expect(object["type"] as? String == "user")
+        #expect(content.first?["text"] as? String == "-hi \"there\"")
+        #expect(!line.contains("\n"))
+        for kind in AgentKind.allCases where kind != .claude {
+            #expect(!CommandBuilder.takesInputMidTurn(kind))
+            #expect(CommandBuilder.invocation(kind: kind, prompt: "hi", model: nil, sessionID: nil, liveInput: true).input == nil)
+        }
+        #expect(CommandBuilder.invocation(kind: .claude, prompt: "hi", model: nil, sessionID: nil).input == nil)
+    }
+
     @Test func codexResumesItsThread() {
         let first = CommandBuilder.invocation(kind: .codex, prompt: "hi", model: " ", sessionID: nil)
         #expect(first.arguments == ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "hi"])

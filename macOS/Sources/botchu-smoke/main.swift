@@ -1,5 +1,7 @@
 // Runs two real turns on each account named (all accounts when none is), the way the app does:
 // a new session that opens with the bot's context, then a resumed one that must remember a code word.
+// A CLI that takes input mid-turn (Claude Code) gets a third turn, with a follow-up written to it
+// during its tool call, which it must take and answer in that same turn.
 // Prints each thread and exits non-zero when an account fails. Needs the CLIs signed in.
 //
 //   swift run --package-path macOS botchu-smoke claude-personal codex-dev
@@ -20,28 +22,51 @@ struct Turn {
     var session: String?
     var status: Int32 = 0
     var stderr = ""
+    /// Follow-ups the CLI took during the turn.
+    var followUpsTaken = 0
 }
 
-func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage]) async -> Turn {
+/// `followUp` is written to a CLI that takes input mid-turn at its first tool call.
+func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: String? = nil) async -> Turn {
     let resume = bot.resumableSessionID
     let preamble = resume == nil
         ? BotContext.sessionPreamble(bot: bot, memory: Workspace.read(bot.workspace + "/MEMORY.md"), sharedMemory: "", history: history,
                                      soul: Workspace.read(bot.workspace + "/SOUL.md"))
         : nil
+    let kind = bot.account.kind
     let invocation = CommandBuilder.invocation(
-        kind: bot.account.kind, prompt: BotContext.prompt(for: prompt, preamble: preamble), model: bot.model, sessionID: resume, reasoningEffort: bot.reasoningEffort,
-        openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"])
+        kind: kind, prompt: BotContext.prompt(for: prompt, preamble: preamble), model: bot.model, sessionID: resume, reasoningEffort: bot.reasoningEffort,
+        openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], liveInput: CommandBuilder.takesInputMidTurn(kind))
     return await withCheckedContinuation { continuation in
         var turn = Turn()
-        var parser = StreamParsers.make(for: bot.account.kind)
+        var parser = StreamParsers.make(for: kind)
         var assembler = ThreadAssembler()
+        var ledger = InputLedger()
+        var pending = followUp
         let run = AgentRun(command: bot.account.defaultCommand, invocation: invocation, directory: URL(fileURLWithPath: bot.workspace))
         run.onLines = { lines in
             for line in lines {
                 for event in parser.parse(line: line) {
-                    if case .session(let reported) = event {
-                        turn.session = CommandBuilder.resumeID(kind: bot.account.kind, invocation: invocation, reported: reported)
+                    switch event {
+                    case .session(let reported):
+                        turn.session = CommandBuilder.resumeID(kind: kind, invocation: invocation, reported: reported)
+                    case .inputTaken:
+                        if ledger.taken(), let followUp {
+                            turn.followUpsTaken += 1
+                            assembler.apply(event, to: &turn.messages)
+                            turn.messages.append(ChatMessage(role: .user, text: followUp))
+                        }
+                    case .toolStarted:
+                        // As the app does: written once the CLI has echoed the prompt.
+                        if let text = pending, ledger.acceptsFollowUps, let line = CommandBuilder.inputLine(kind: kind, text: text), run.send(line) {
+                            ledger.wrote()
+                            pending = nil
+                        }
+                    case .finished, .failed:
+                        if invocation.input != nil, ledger.turnEnded() { run.closeInput() }
+                    default: break
                     }
+                    if case .inputTaken = event { continue }
                     assembler.apply(event, to: &turn.messages)
                 }
             }
@@ -120,7 +145,16 @@ Task {
         let reply = second.messages.filter { $0.role == .assistant }.map(\.text).joined()
         let ok = reply.contains(word) && !second.messages.contains(where: { $0.role == .error })
         print("    \(ok ? "OK" : "FAIL: resumed turn did not recall \(word) (exit \(second.status)) \(second.stderr.suffix(300))") in \(Int(Date().timeIntervalSince(started)))s")
-        if !ok { failures.append(account.id) }
+        if !ok { failures.append(account.id); continue }
+        guard CommandBuilder.takesInputMidTurn(account.kind) else { continue }
+        let third = await runTurn(bot, prompt: "Use your shell tool to run `sleep 8`, then reply with just: slept",
+                                  history: first.messages + second.messages,
+                                  followUp: "Also, after the command, add the code word to your reply.")
+        show(third.messages)
+        let steered = third.messages.filter { $0.role == .assistant }.map(\.text).joined()
+        let steerOK = third.followUpsTaken == 1 && steered.contains(word) && !third.messages.contains(where: { $0.role == .error })
+        print("    \(steerOK ? "OK: took the follow-up mid-turn" : "FAIL: follow-up taken \(third.followUpsTaken) times, reply \(steered.prefix(120)) (exit \(third.status)) \(third.stderr.suffix(300))")")
+        if !steerOK { failures.append(account.id) }
     }
     try? FileManager.default.removeItem(at: root)
     print(failures.isEmpty ? "smoke: all passed" : "smoke: failed: \(failures.joined(separator: ", "))")

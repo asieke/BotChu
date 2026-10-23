@@ -7,6 +7,8 @@ struct Composer<Controls: View>: View {
     /// "Message Scout", or for a task, "Message Scout about GitChu #48".
     let placeholder: String
     let running: Bool
+    /// Follow-ups reach the bot at its next tool call rather than when the turn ends.
+    var midTurn = false
     let onSend: () -> Void
     let onStop: () -> Void
     @ViewBuilder let controls: Controls
@@ -29,7 +31,7 @@ struct Composer<Controls: View>: View {
                     button("stop.fill", label: "Stop", help: "Stop (⌘.)", action: onStop)
                 }
                 button("arrow.up", label: running ? "Queue message" : "Send", enabled: !isEmpty,
-                       help: running ? "Queue after this turn (Return; Option-Return for a new line)"
+                       help: running ? (midTurn ? "Send at the bot’s next tool call" : "Queue for when this turn ends") + " (Return; Option-Return for a new line)"
                            : "Send (Return; Option-Return for a new line)", action: onSend)
             }
         }

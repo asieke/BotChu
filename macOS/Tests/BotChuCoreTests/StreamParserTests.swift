@@ -65,6 +65,18 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         let events = run(.claude, [#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"No conversation found with session ID: x"}"#])
         #expect(events == [.failed("No conversation found with session ID: x")])
     }
+
+    /// With `--input-format stream-json --replay-user-messages` (Claude Code 2.1.308), each message
+    /// taken from stdin comes back: the prompt at the start, a follow-up after the tool result it
+    /// followed. Tool results, also `user` lines, are not replays.
+    @Test func replayedInputIsTaken() {
+        let events = run(.claude, [
+            #"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Reply with just OK."}]},"session_id":"e485fd44-fe1b-4f33-9fb5-3806e003584a","parent_tool_use_id":null,"uuid":"10eddb68-ca21-4a05-85a1-ae5b1941fb2a","timestamp":"2026-10-23T02:00:04.262Z","isReplay":true}"#,
+            #"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_014mbfyb6J2TnMub9WuxJd7h","type":"tool_result","content":"one","is_error":false}]},"parent_tool_use_id":null,"session_id":"837c1775-1771-4e52-9523-a9354e905bef","uuid":"04be0b02-bd34-4738-afe8-2ac04509935d","timestamp":"2026-10-23T01:52:31.200Z","tool_use_result":{"stdout":"one","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false}}"#,
+            #"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Change of plan: after the current command, skip the rest and just reply with the word BANANA."}]},"session_id":"837c1775-1771-4e52-9523-a9354e905bef","parent_tool_use_id":null,"uuid":"5e64391e-4ca5-4c35-84b5-e67a8047ded8","timestamp":"2026-10-23T01:52:27.068Z","isReplay":true}"#,
+        ])
+        #expect(events == [.inputTaken, .toolFinished(id: "toolu_014mbfyb6J2TnMub9WuxJd7h", name: "Tool", output: "one", isError: false), .inputTaken])
+    }
 }
 
 @Suite struct CodexParserTests {

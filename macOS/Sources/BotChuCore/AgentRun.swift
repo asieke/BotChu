@@ -1,17 +1,28 @@
 import Foundation
 
 /// One headless CLI process for one turn. It runs the account's command through the login shell
-/// (`zsh -l`, so PATH and Homebrew are the user's), in the bot's workspace, with stdin closed. On a
-/// host it runs there over SSH, through that user's login shell, and only its output comes back.
+/// (`zsh -l`, so PATH and Homebrew are the user's), in the bot's workspace, with stdin closed, or
+/// open for a CLI that takes input mid-turn (`Invocation.input`, This Mac only). On a host it runs
+/// there over SSH, through that user's login shell, and only its output comes back.
 /// Complete stdout lines and the exit are delivered on the main queue.
 public final class AgentRun: @unchecked Sendable {
     private let process = Process()
     private let stdout = Pipe()
     private let stderr = Pipe()
+    /// The CLI's stdin, while it takes input; written on `inputQueue`, in order.
+    private var stdin: Pipe?
+    private let initialInput: [String]
+    private let inputQueue = DispatchQueue(label: "BotChu.AgentRun.input")
     private let lock = NSLock()
     private var buffer = Data()
     private var errorTail = Data()
     public private(set) var stopped = false
+    /// Whether `send` can still write to the CLI: its stdin is open and the run hasn't stopped.
+    public var acceptsInput: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stdin != nil && !stopped
+    }
     /// The host it runs on, and the CLI's process there, once it has said which.
     private let remote: Machine?
     private var remotePID: String?
@@ -24,6 +35,7 @@ public final class AgentRun: @unchecked Sendable {
 
     public init(command: String, invocation: Invocation, directory: URL) {
         remote = nil
+        initialInput = invocation.input ?? []
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-l", "-c", Self.delegationShellPrefix(invocation.environment) + CommandBuilder.shellScript(command: command), "botchu"] + invocation.arguments
         process.currentDirectoryURL = directory
@@ -32,15 +44,14 @@ public final class AgentRun: @unchecked Sendable {
         env["TERM"] = "dumb"
         for (key, value) in invocation.environment { env[key] = value }
         process.environment = env
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = stdout
-        process.standardError = stderr
+        attachInput(invocation)
     }
 
     /// A run in `folder` on a host. Only the explicit delegation context crosses SSH; credentials
     /// such as the OpenRouter key stay on this Mac, so a CLI there uses that machine's own.
     public init(command: String, invocation: Invocation, on machine: Machine, folder: String) {
         remote = machine
+        initialInput = invocation.input ?? []
         process.executableURL = URL(fileURLWithPath: Machine.ssh)
         let script = "export NO_COLOR=1 TERM=dumb; " + Self.delegationShellPrefix(invocation.environment)
             + "printf '%s %s\\n' \(Self.pidMarker) \"$$\"; "
@@ -49,7 +60,21 @@ public final class AgentRun: @unchecked Sendable {
                                                   Machine.remoteCommand(script: script, arguments: invocation.arguments, in: folder)]
         process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         process.environment = Self.childEnvironment(ProcessInfo.processInfo.environment)
-        process.standardInput = FileHandle.nullDevice
+        attachInput(invocation)
+    }
+
+    /// stdin is closed, or a pipe for a CLI that takes input (ssh forwards it to a host).
+    private func attachInput(_ invocation: Invocation) {
+        if invocation.input != nil {
+            let pipe = Pipe()
+            // A CLI that has exited must not take BotChu with it: writing then fails with EPIPE
+            // instead of raising SIGPIPE.
+            _ = fcntl(pipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+            stdin = pipe
+            process.standardInput = pipe
+        } else {
+            process.standardInput = FileHandle.nullDevice
+        }
         process.standardOutput = stdout
         process.standardError = stderr
     }
@@ -110,7 +135,9 @@ public final class AgentRun: @unchecked Sendable {
         group.enter()
         process.terminationHandler = { _ in group.leave() }
         try process.run()
+        for line in initialInput { send(line) }
         group.notify(queue: .main) { [self] in
+            closeInput()
             let rest = takeLines(appending: Data("\n".utf8))
             if !rest.isEmpty { onLines(rest) }
             lock.lock()
@@ -120,10 +147,37 @@ public final class AgentRun: @unchecked Sendable {
         }
     }
 
+    /// Writes one line to the CLI's stdin, after the lines written before it. False when the CLI
+    /// doesn't take input (any more): its stdin was never open, or was closed, or it was stopped.
+    @discardableResult
+    public func send(_ line: String) -> Bool {
+        lock.lock()
+        let handle = stopped ? nil : stdin?.fileHandleForWriting
+        lock.unlock()
+        guard let handle else { return false }
+        // Off the main thread: a long prompt can fill the pipe before the CLI reads it.
+        inputQueue.async { try? handle.write(contentsOf: Data((line + "\n").utf8)) }
+        return true
+    }
+
+    /// Closes the CLI's stdin once what was written has gone, so it ends when it has nothing left
+    /// to do. Nothing can be sent after this.
+    public func closeInput() {
+        lock.lock()
+        let pipe = stdin
+        stdin = nil
+        lock.unlock()
+        guard let pipe else { return }
+        inputQueue.async { try? pipe.fileHandleForWriting.close() }
+    }
+
     /// Interrupts the CLI as Ctrl-C would, then terminates it if it is still running. On a host,
     /// the CLI there is interrupted too: closing the connection alone would leave it running.
     public func stop() {
+        lock.lock()
         stopped = true
+        lock.unlock()
+        closeInput()
         guard process.isRunning else { return }
         lock.lock()
         let pid = remotePID

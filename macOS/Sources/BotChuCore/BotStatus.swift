@@ -7,6 +7,8 @@ public struct RunState: Equatable, Sendable {
     public var startedAt: Date
     public var hasOutput: Bool
     public var preparing: Bool
+    /// Whether the running CLI takes queued follow-ups now, at its next tool call.
+    public var takesInput = false
     public private(set) var activity: BotActivity
     public private(set) var activitySince: Date
     /// Thinking, waiting until the tool's activity has shown for `minimumShow`.
