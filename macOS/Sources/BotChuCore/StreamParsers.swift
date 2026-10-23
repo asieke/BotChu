@@ -211,6 +211,9 @@ public struct CodexParser: StreamParser {
 
 /// `agy -p --output-format stream-json` (Antigravity CLI).
 public struct AntigravityParser: StreamParser {
+    private var completedResponse = false
+    private var reportedError = false
+
     public init() {}
 
     public mutating func parse(line: String) -> [AgentEvent] {
@@ -226,7 +229,10 @@ public struct AntigravityParser: StreamParser {
             case "agent_response":
                 var events: [AgentEvent] = []
                 if let delta = step["text_delta"] as? String { events.append(.textDelta(delta)) }
-                if state == "DONE" { events.append(.textEnd) }
+                if state == "DONE" {
+                    completedResponse = true
+                    events.append(.textEnd)
+                }
                 return events
             case "tool", "subagent":
                 let id = "step-\(index)"
@@ -258,10 +264,13 @@ public struct AntigravityParser: StreamParser {
         case "result":
             let result = obj["result"] as? JSON
             let status = result?["status"] as? String ?? ""
-            if status == "SUCCESS" { return [.finished] }
-            let response = (result?["response"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            return [.failed(response ?? "Antigravity stopped: \(status.isEmpty ? "unknown status" : status).")]
+            // Status summarizes the whole trajectory, including earlier failed turns.
+            // response is the assistant's reply, never an error diagnostic.
+            if reportedError { return [] } // The error event already reported this failure.
+            if status == "SUCCESS" || completedResponse { return [.finished] }
+            return [.failed("Antigravity stopped: \(status.isEmpty ? "unknown status" : status).")]
         case "error":
+            reportedError = true
             let message = (obj["error"] as? JSON)?["message"] as? String ?? obj["error"] as? String ?? obj["message"] as? String
             return [.failed(message ?? "Antigravity reported an error.")]
         default: break

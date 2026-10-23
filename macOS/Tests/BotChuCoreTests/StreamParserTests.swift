@@ -160,6 +160,46 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         #expect(messages[1].text == "Done")
     }
 
+    @Test(arguments: ["ERROR", "CANCELED", ""])
+    func incompleteReplyStillFails(status: String) {
+        let events = run(.antigravity, [
+            #"{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"Partial reply"}}"#,
+            "{\"event\":\"result\",\"result\":{\"status\":\"\(status)\",\"response\":\"Partial reply\"}}",
+        ])
+        #expect(events == [.textDelta("Partial reply"),
+                           .failed("Antigravity stopped: \(status.isEmpty ? "unknown status" : status).")])
+    }
+
+    @Test(arguments: [true, false])
+    func currentErrorIsNotHiddenByCompletedReply(errorFirst: Bool) {
+        let reply = #"{"event":"step_update","step_update":{"state":"DONE","step_type":"agent_response","text_delta":"Done"}}"#
+        let error = #"{"event":"error","error":{"message":"Quota exhausted"}}"#
+        for status in ["ERROR", "SUCCESS"] {
+            let events = run(.antigravity, (errorFirst ? [error, reply] : [reply, error]) + [
+                "{\"event\":\"result\",\"result\":{\"status\":\"\(status)\",\"response\":\"Done\"}}",
+            ])
+            let replyEvents: [AgentEvent] = [.textDelta("Done"), .textEnd]
+            let failure: [AgentEvent] = [.failed("Quota exhausted")]
+            #expect(events == (errorFirst ? failure + replyEvents : replyEvents + failure))
+        }
+    }
+
+    // Captured from agy on 2026-10-23, with IDs/usage trimmed. The terminal status
+    // is changed to ERROR to model the earlier failed trajectory described in #62.
+    let recoveredTurn = [
+        #"{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"ORCHID"}}"#,
+        #"{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\n","duration_seconds":3.497328}}"#,
+        #"{"event":"result","result":{"status":"ERROR","response":"ORCHID\n","num_turns":1}}"#,
+    ]
+
+    @Test func completedResponseOverridesHistoricalFailure() {
+        let events = run(.antigravity, recoveredTurn)
+        #expect(events == [.textDelta("ORCHID"), .textDelta("\n"), .textEnd, .finished])
+        let messages = BotChuCoreTests.thread(events)
+        #expect(messages.map(\.role) == [.assistant])
+        #expect(messages.first?.text == "ORCHID")
+    }
+
     @Test func failedResult() {
         let events = run(.antigravity, [#"{"event":"result","result":{"status":"ERROR","response":""}}"#])
         #expect(events == [.failed("Antigravity stopped: ERROR.")])
