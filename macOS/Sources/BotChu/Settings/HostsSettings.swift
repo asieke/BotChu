@@ -120,7 +120,7 @@ struct HostEditor: View {
                                 .labelsHidden()
                                 .font(.system(.body, design: .monospaced))
                         } label: {
-                            Label(account.name, systemImage: account.symbol)
+                            ProviderLabel(account)
                         }
                     }
                 } header: {
