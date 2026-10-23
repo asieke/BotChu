@@ -10,10 +10,22 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
 ## Scope
 - Does:
   - **Workspace:** the left sidebar has **Projects**, **Agents**, and **Providers**, followed by
-    the bots’ conversations. Opening a gallery keeps the selected conversation and unsent draft;
+    the bots’ conversations, in sections (below). Opening a gallery keeps the selected conversation and unsent draft;
     turns that finish while a gallery is shown still get an unread badge. In dark mode the sidebar
     takes the status sidebar's darker shade, with a hairline along its edge, so it stands apart from
     the chat; light mode keeps the standard sidebar.
+  - **Sections:** bots can be grouped into sections you name, each a heading of its own in the
+    sidebar. A bot's **Move to Section** menu lists Conversations (no section) and the sections,
+    with its own checked, and **New Section…**, which names a section and moves the bot into it;
+    a moved bot goes last in its section. Bots in no section, new bots among them, come first,
+    under Conversations, so a sidebar without sections looks as before. A section heading's menu
+    renames it (another section's name merges the two), moves it up or down, or removes it, which
+    returns its bots to Conversations and deletes nothing. Names are trimmed and matched whatever
+    their case, and no section can be called Conversations. Headings collapse, and stay collapsed
+    across launches, but what is selected from elsewhere (Agents, a new bot or task, ⌃Tab) shows
+    in its section.
+    Sections are kept in `index.json` with the sidebar's order, so a bot whose folder is missing
+    comes back in its section.
   - **Projects:** one project per non-archived GitHub repository returned by `gh` for your account
     and organizations, in a sortable table modeled on GitChu's (or a gallery of cards). Columns show
     where it deploys (local machines by their BotChu name, Vercel, registry), the owner, open issues
@@ -378,7 +390,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     review worktrees, and what `gh` says about your repositories, issues and pull requests
     (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
     or proposing it through GitHub with retryable, metadata-only PRs (`ProjectGitHub.swift`), the Projects
-    tables' rows and the open pull requests and issues across repositories (`ProjectOverview.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
+    tables' rows and the open pull requests and issues across repositories (`ProjectOverview.swift`), the sections the sidebar
+    groups bots into (`BotSections.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
     `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (transcripts saved off the main thread
@@ -391,7 +404,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, and what a report says about the app, `IssueReports.swift`),
-    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects, Agents and Providers), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
+    `Sidebar/` (workspace destinations, and bot conversations in their sections), `Library/` (Projects, Agents and Providers), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
     the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -403,7 +416,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - `Sources/botchu-smoke/` — a command-line check, not shipped in the app, that runs two real
     turns on each account named the way the app does (see **Test**).
   - `Tests/BotChuCoreTests/` — parser tests against captured output of every CLI, command lines,
-    context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
+    context and store, the sidebar's sections, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
     made in throwaway repositories; and hosts: their `ssh` command lines, deploy targets, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
     from a remote task; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
@@ -417,7 +430,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     saves, model-picker keyboard interaction and persisted choices,
     Markdown editor sizing and Save/Cancel, collapsing status sections, inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
-    main window's layout at its narrowest, galleries that preserve conversation state, custom
+    main window's layout at its narrowest, the sidebar's sections (their menus, the alert that
+    names them, collapsing and revealing), galleries that preserve conversation state, custom
     profile persistence, provider logos in both appearances and in account menus, the report
     sheet, filing with a stand-in, images pasted with Edit ▸ Paste into the composer, the report
     and New Task (through a stand-in for the general pasteboard, so no test touches the clipboard)
@@ -440,7 +454,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     from a checkout are neither counted nor quit. `test.sh` runs the unit tests. `ui-review.sh` opens a build on
     throwaway data for checking its screens (see **Test**).
 - Data: each bot's `.botchu/` folder in its workspace (above), and `index.json` in
-  `~/Library/Application Support/BotChu/`, which only lists the bots' workspaces in sidebar order.
+  `~/Library/Application Support/BotChu/`, which only lists the bots' workspaces in sidebar order,
+  with the section each is in.
   Versions before bot folders kept everything in `bots.json` and `threads/` there; the first launch
   moves them into the bots' folders and keeps the old files in `backup-before-bot-folders/`.
   Project metadata stays in each repository’s `PROJECT.md` on GitHub; its fetched catalog is cached
@@ -508,6 +523,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository).
   `BOTCHU_OPEN=projects`, `agents` or `providers` opens the corresponding workspace gallery.
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
+  `BOTCHU_SECTION=<name>` moves the first bot into a sidebar section of that name.
   `BOTCHU_TAB=<n>` shows the first bot's nth conversation (and the message goes there), and
   `BOTCHU_TASK="hello-world|<task>"` starts a task in the throwaway repository (a real turn).
   Hosts: `BOTCHU_HOST="<nickname>|<ssh host>|<repositories folder>|<machine>|<account>=<command>,…"`

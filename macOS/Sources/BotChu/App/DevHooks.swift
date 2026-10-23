@@ -31,6 +31,8 @@ import BotChuCore
 ///   command here lets a review exercise tasks on a host without one).
 /// - `BOTCHU_TASK_REPO`: with `BOTCHU_OPEN=task`, the repository (`owner/name`) New Task chooses.
 /// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
+/// - `BOTCHU_SECTION`: with `BOTCHU_DATA_DIR`, move the selected bot into the sidebar section of this
+///   name at launch, as Move to Section does.
 /// - `BOTCHU_PET`: give the selected bot this pet folder at launch (`video.json`, `stills/`, `clips/`).
 /// - `BOTCHU_DRAW_PET`: give the selected bot this appearance and make its pet at launch (a real Codex
 ///   run, then real clips on OpenRouter, which cost OpenRouter credit).
@@ -131,6 +133,9 @@ enum DevHooks {
         case "settings": openSettings()
         default: break
         }
+        if dataDir != nil, let name = env["BOTCHU_SECTION"], let id = model.selection {
+            model.moveBot(id, toSection: name)
+        }
         if let spec = env["BOTCHU_CREATE"] {
             let parts = spec.split(separator: "|", maxSplits: 2).map(String.init)
             var bot = Bot(name: parts[0], workspace: model.defaultWorkspace(for: parts[0]))
@@ -191,18 +196,24 @@ enum DevHooks {
                     .frame(maxWidth: .infinity, alignment: .leading).padding(10)
                     .background(model.destination == destination ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 8))
             }
-            Text("Conversations").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.vertical, 6)
-            ForEach(model.bots) { bot in
-                let tasks = model.openTasks(of: bot.id)
-                BotRow(bot: bot, status: model.status(of: bot), selected: model.visibleBotID == bot.id,
-                       unread: model.unreadCount(of: bot.id), runningTasks: model.runningTaskCount(for: bot.id),
-                       openTasks: tasks.count, isExpanded: !tasks.isEmpty)
-                if !tasks.isEmpty {
-                    ForEach(tasks) { task in
-                        SidebarTaskRow(botID: bot.id, task: task)
-                            .modifier(SidebarTreeBranch())
+            // Each section's heading, and its bots unless it is collapsed (as the sidebar keeps it).
+            let collapsed = CollapsedSections(rawValue: UserDefaults.standard.string(forKey: CollapsedSections.storageKey) ?? "")
+            ForEach(model.botSections.groups) { group in
+                Text(group.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.vertical, 6)
+                if !collapsed.titles.contains(group.title) {
+                    ForEach(group.botIDs.compactMap(model.bot)) { bot in
+                        let tasks = model.openTasks(of: bot.id)
+                        BotRow(bot: bot, status: model.status(of: bot), selected: model.visibleBotID == bot.id,
+                               unread: model.unreadCount(of: bot.id), runningTasks: model.runningTaskCount(for: bot.id),
+                               openTasks: tasks.count, isExpanded: !tasks.isEmpty)
+                        if !tasks.isEmpty {
+                            ForEach(tasks) { task in
+                                SidebarTaskRow(botID: bot.id, task: task)
+                                    .modifier(SidebarTreeBranch())
+                            }
+                            SidebarNewTaskRow(botID: bot.id).modifier(SidebarTreeBranch(isLast: true))
+                        }
                     }
-                    SidebarNewTaskRow(botID: bot.id).modifier(SidebarTreeBranch(isLast: true))
                 }
             }
         }

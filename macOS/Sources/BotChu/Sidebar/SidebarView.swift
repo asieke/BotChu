@@ -5,6 +5,9 @@ struct SidebarView: View {
     @Environment(AppModel.self) private var model
     @State private var pendingDelete: Bot?
     @State private var expansion = SidebarExpansion()
+    @State private var sectionPrompt: SectionPrompt?
+    @State private var sectionName = ""
+    @AppStorage(CollapsedSections.storageKey) private var collapsed = CollapsedSections()
 
     var body: some View {
         List(selection: Binding<SidebarDestination?>(
@@ -19,46 +22,60 @@ struct SidebarView: View {
                     Label(destination.title, systemImage: destination.symbol).tag(SidebarDestination.library(destination))
                 }
             }
-            Section("Conversations") {
-                ForEach(model.bots) { bot in
-                    let tasks = model.openTasks(of: bot.id)
-                    // Only a bot with open tasks has a group to expand; without any, it is a single row.
-                    let expanded = !tasks.isEmpty && expansion.botIDs.contains(bot.id)
-                    BotRow(bot: bot, status: model.status(of: bot), selected: model.visibleBotID == bot.id,
-                           unread: model.unreadCount(of: bot.id), runningTasks: model.runningTaskCount(for: bot.id),
-                           openTasks: tasks.count, isExpanded: expanded,
-                           onToggleExpand: { expansion.toggle(bot.id) })
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            expansion.reveal(.botHome(bot.id))
-                            model.show(.home(bot.id))
+            // The bots in no section, under Conversations, then each section the owner made.
+            ForEach(model.botSections.groups) { group in
+                Section(isExpanded: isExpanded(group)) {
+                    ForEach(group.botIDs.compactMap(model.bot)) { bot in
+                        let tasks = model.openTasks(of: bot.id)
+                        // Only a bot with open tasks has a group to expand; without any, it is a single row.
+                        let expanded = !tasks.isEmpty && expansion.botIDs.contains(bot.id)
+                        BotRow(bot: bot, status: model.status(of: bot), selected: model.visibleBotID == bot.id,
+                               unread: model.unreadCount(of: bot.id), runningTasks: model.runningTaskCount(for: bot.id),
+                               openTasks: tasks.count, isExpanded: expanded,
+                               onToggleExpand: { expansion.toggle(bot.id) })
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                expansion.reveal(.botHome(bot.id))
+                                model.show(.home(bot.id))
+                            }
+                            .tag(SidebarDestination.botHome(bot.id))
+                            .accessibilityIdentifier("sidebar-home-\(bot.id)")
+                            .contextMenu {
+                                Button("Edit…") { model.edit(bot.id) }
+                                Button("New Task…") { model.newTask(for: bot.id) }
+                                Button("New Session") { model.newSession(.home(bot.id)) }
+                                    .disabled(model.isRunning(.home(bot.id)))
+                                Button("Show Workspace in Finder") { model.revealWorkspace(bot.id) }
+                                Divider()
+                                MoveToSectionMenu(botID: bot.id) { ask(.new(botID: bot.id)) }
+                                Divider()
+                                Button("Delete…", role: .destructive) { pendingDelete = bot }
+                            }
+                        if expanded {
+                            ForEach(tasks) { task in
+                                SidebarTaskRow(botID: bot.id, task: task)
+                                    .modifier(SidebarTreeBranch())
+                                    .tag(SidebarDestination.botTask(botID: bot.id, taskID: task.id))
+                            }
+                            SidebarNewTaskRow(botID: bot.id)
+                                .modifier(SidebarTreeBranch(isLast: true))
+                                .selectionDisabled()
                         }
-                        .tag(SidebarDestination.botHome(bot.id))
-                        .accessibilityIdentifier("sidebar-home-\(bot.id)")
-                        .contextMenu {
-                            Button("Edit…") { model.edit(bot.id) }
-                            Button("New Task…") { model.newTask(for: bot.id) }
-                            Button("New Session") { model.newSession(.home(bot.id)) }
-                                .disabled(model.isRunning(.home(bot.id)))
-                            Button("Show Workspace in Finder") { model.revealWorkspace(bot.id) }
-                            Divider()
-                            Button("Delete…", role: .destructive) { pendingDelete = bot }
-                        }
-                    if expanded {
-                        ForEach(tasks) { task in
-                            SidebarTaskRow(botID: bot.id, task: task)
-                                .modifier(SidebarTreeBranch())
-                                .tag(SidebarDestination.botTask(botID: bot.id, taskID: task.id))
-                        }
-                        SidebarNewTaskRow(botID: bot.id)
-                            .modifier(SidebarTreeBranch(isLast: true))
-                            .selectionDisabled()
                     }
+                } header: {
+                    SidebarSectionHeader(group: group, rename: { ask(.rename($0)) }, remove: { name in
+                        model.removeSection(name)
+                        collapsed.titles.remove(name)
+                    })
                 }
             }
         }
         .listStyle(.sidebar)
         .onChange(of: model.sidebarStructure, initial: true) { _, structure in expansion.update(structure) }
+        // What is selected from elsewhere (Agents, a new bot or task, ⌃Tab) shows, in its section.
+        .onChange(of: model.sidebarSelection) { _, selection in
+            if let id = selection?.botID { reveal(model.sections[id] ?? BotSections.unsectioned) }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack {
                 Button { model.newBot() } label: {
@@ -82,6 +99,46 @@ struct SidebarView: View {
             Button("Delete", role: .destructive) { model.delete(bot.id) }
         } message: { bot in
             Text("Its conversation and tasks are deleted. Its workspace folder, \(bot.workspace), and its tasks' worktrees are kept.")
+        }
+        .alert(sectionPrompt?.title ?? "", isPresented: Binding(
+            get: { sectionPrompt != nil }, set: { if !$0 { sectionPrompt = nil } }), presenting: sectionPrompt) { prompt in
+            TextField("Section name", text: $sectionName)
+            Button(prompt.confirm) { commit(prompt) }
+            Button("Cancel", role: .cancel) {}
+        } message: { prompt in
+            if let message = prompt.message { Text(message) }
+        }
+    }
+
+    private func isExpanded(_ group: BotSections.Group) -> Binding<Bool> {
+        Binding(get: { !collapsed.titles.contains(group.title) }, set: { expanded in
+            if expanded { collapsed.titles.remove(group.title) } else { collapsed.titles.insert(group.title) }
+        })
+    }
+
+    private func reveal(_ title: String) {
+        if collapsed.titles.contains(title) { collapsed.titles.remove(title) }
+    }
+
+    private func ask(_ prompt: SectionPrompt) {
+        if case .rename(let name) = prompt { sectionName = name } else { sectionName = "" }
+        sectionPrompt = prompt
+    }
+
+    /// Makes or renames the section the prompt asked for; an empty name changes nothing.
+    private func commit(_ prompt: SectionPrompt) {
+        guard !sectionName.allSatisfy(\.isWhitespace) else { return }
+        switch prompt {
+        case .new(let botID):
+            model.moveBot(botID, toSection: sectionName)
+            reveal(model.sections[botID] ?? BotSections.unsectioned)
+        case .rename(let old):
+            let before = Set(model.botSections.names)
+            model.renameSection(old, to: sectionName)
+            // A renamed section stays as it was, open or collapsed; merged into another, it is as that one is.
+            if collapsed.titles.remove(old) != nil, let new = Set(model.botSections.names).subtracting(before).first {
+                collapsed.titles.insert(new)
+            }
         }
     }
 }

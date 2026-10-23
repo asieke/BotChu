@@ -182,6 +182,142 @@ extension RenderingTests {
         #expect(try quietButtons().isEmpty)
     }
 
+    @Test func sectionsGroupBotsAndAreKeptInTheIndex() throws {
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot, quiet = fixture.quiet
+        #expect(model.botSections.groups == [.init(name: nil, botIDs: [bot.id, quiet.id])])
+        // A bot whose folder is missing comes back in its section, also after the section changes.
+        let gone = Store.Entry(id: UUID(), workspace: fixture.root.appendingPathComponent("gone").path, section: "Research")
+        model.missing = [gone]
+        model.moveBot(quiet.id, toSection: " research ")
+        #expect(model.botSections.groups == [.init(name: nil, botIDs: [bot.id]), .init(name: "research", botIDs: [quiet.id])])
+        model.moveBot(bot.id, toSection: "Research")
+        #expect(model.bots.map(\.id) == [quiet.id, bot.id])
+        #expect(model.botSections.groups == [.init(name: "research", botIDs: [quiet.id, bot.id])])
+        model.renameSection("research", to: "Scouting")
+        #expect(fixture.store.loadIndex().map(\.section) == ["Scouting", "Scouting", "Scouting"])
+        model.moveBot(bot.id, toSection: "Building")
+        model.moveSection("Building", by: -1)
+        #expect(model.botSections.names == ["Building", "Scouting"])
+        #expect(fixture.store.loadIndex().map(\.id) == [bot.id, quiet.id, gone.id])
+        // A relaunch reads the same sections, in the same order.
+        let relaunched = AppModel(store: fixture.store, settings: AppSettings(defaults: fixture.defaults),
+                                  usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
+        #expect(relaunched.botSections == model.botSections)
+        #expect(relaunched.missing == [Store.Entry(id: gone.id, workspace: gone.workspace, section: "Scouting")])
+        model.removeSection("Scouting")
+        #expect(model.botSections.groups == [.init(name: nil, botIDs: [quiet.id]), .init(name: "Building", botIDs: [bot.id])])
+        #expect(fixture.store.loadIndex().map(\.section) == [nil, "Building", nil])
+    }
+
+    // Model and defaults changes only: no native clicks, so it can share the test process.
+    @Test func sectionsShowAsHeadingsThatCollapseAndRevealTheShownBot() async throws {
+        _ = NSApplication.shared
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, quiet = fixture.quiet
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 640),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let host = NSHostingView(rootView: SidebarView().environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        let table = try #require(sidebarTable(in: host))
+        let flat = table.numberOfRows
+        // Its own heading, below Conversations.
+        model.moveBot(quiet.id, toSection: "Research")
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(table.numberOfRows == flat + 1)
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            let folder = URL(fileURLWithPath: path).appendingPathComponent("sidebar-sections")
+            DevHooks.snapshot(into: folder)
+            DevHooks.snapshotSidebar(model: model, into: folder)
+        }
+        // The menus a right click shows: the heading's (its only section can't move), and the bot's
+        // Move to Section, with its own section checked.
+        let heading = try sidebarMenu(row: table.numberOfRows - 2, of: table, in: host)
+        #expect(heading.items.map(\.title) == ["Rename Section…", "Move Section Up", "Move Section Down", "", "Remove Section"])
+        #expect(heading.items.filter(\.isEnabled).map(\.title) == ["Rename Section…", "Remove Section"])
+        let botMenu = try sidebarMenu(row: table.numberOfRows - 1, of: table, in: host)
+        let move = try #require(botMenu.items.first { $0.title == "Move to Section" }?.submenu)
+        #expect(move.items.map(\.title) == ["Conversations", "Research", "", "New Section…"])
+        #expect(move.items.filter { $0.state == .on }.map(\.title) == ["Research"])
+        // Collapsed, as its heading's disclosure leaves it, the section hides its bot, and stays so.
+        fixture.defaults.set("Research", forKey: CollapsedSections.storageKey)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(table.numberOfRows == flat)
+        // Opening the bot from elsewhere (Agents) shows it in its section again.
+        model.show(.home(quiet.id))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(table.numberOfRows == flat + 1)
+        #expect(fixture.defaults.string(forKey: CollapsedSections.storageKey) == "")
+        // So does selecting another of a bot's conversations, as ⌃Tab does, in collapsed Conversations.
+        fixture.defaults.set(BotSections.unsectioned, forKey: CollapsedSections.storageKey)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(table.numberOfRows == flat - 4)
+        model.showTab(offset: 1, of: fixture.bot.id)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(table.numberOfRows == flat + 1)
+        // Removed from its heading's menu, its bot is back under Conversations.
+        let shown = try sidebarMenu(row: table.numberOfRows - 2, of: table, in: host)
+        shown.performActionForItem(at: shown.indexOfItem(withTitle: "Remove Section"))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(table.numberOfRows == flat)
+        #expect(model.botSections.groups.map(\.title) == ["Conversations"])
+        // And moved from its own menu into a section again.
+        let again = try #require(try sidebarMenu(row: table.numberOfRows - 1, of: table, in: host)
+            .items.first { $0.title == "Move to Section" }?.submenu)
+        #expect(again.items.map(\.title) == ["Conversations", "", "New Section…"])
+        #expect(again.items.first?.state == .on)
+    }
+
+    /// New Section… and Rename Section… ask for the name in an alert; Return names it, Escape doesn't.
+    @Test func sectionsAreNamedInAnAlertFromTheirMenus() async throws {
+        _ = NSApplication.shared
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, quiet = fixture.quiet
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 640),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let host = NSHostingView(rootView: SidebarView().environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        let table = try #require(sidebarTable(in: host))
+        /// Chooses the item in the row's menu (or its submenu), then types the name into the alert it
+        /// opens, in place of the name it starts from.
+        func name(row: Int, item: String, in submenu: String? = nil, from start: String = "", as text: String,
+                  key: (String, UInt16) = ("\r", 36)) async throws {
+            var menu = try sidebarMenu(row: row, of: table, in: host)
+            if let submenu { menu = try #require(menu.items.first { $0.title == submenu }?.submenu) }
+            menu.performActionForItem(at: menu.indexOfItem(withTitle: item))
+            try await Task.sleep(for: .milliseconds(400))
+            let sheet = try #require(window.attachedSheet)
+            let field = try #require(sheet.firstResponder as? NSTextView)
+            #expect(field.string == start)
+            field.selectAll(nil)
+            field.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            try await Task.sleep(for: .milliseconds(100))
+            sidebarKey(key.0, code: key.1, to: sheet)
+            try await Task.sleep(for: .milliseconds(400))
+            #expect(window.attachedSheet == nil)
+        }
+        try await name(row: table.numberOfRows - 1, item: "New Section…", in: "Move to Section", as: "  Research ")
+        #expect(model.sections == [quiet.id: "Research"])
+        #expect(table.numberOfRows == 12)
+        // Rename Section… starts from its name; Escape keeps it.
+        try await name(row: 10, item: "Rename Section…", from: "Research", as: "Ignored", key: ("\u{1B}", 53))
+        #expect(model.botSections.names == ["Research"])
+        try await name(row: 10, item: "Rename Section…", from: "Research", as: "Scouting")
+        #expect(model.botSections.names == ["Scouting"])
+        #expect(fixture.store.loadIndex().map(\.section) == [nil, "Scouting"])
+    }
+
     @Test func darkSidebarTakesTheStatusShadeWithAnEdgeAndFollowsAppearance() async throws {
         _ = NSApplication.shared
         let fixture = try SidebarFixture()
@@ -234,6 +370,29 @@ extension RenderingTests {
          a.blueComponent - b.blueComponent, a.alphaComponent - b.alphaComponent].allSatisfy { abs($0) < 0.02 }
     }
 
+    /// The context menu a right click on the row shows, as AppKit asks the views under the pointer for it.
+    private func sidebarMenu(row: Int, of table: NSTableView, in host: NSView) throws -> NSMenu {
+        let rowView = try #require(table.rowView(atRow: row, makeIfNecessary: false))
+        let point = rowView.convert(NSPoint(x: 60, y: rowView.bounds.midY), to: nil)
+        let event = try #require(NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                                                    windowNumber: host.window?.windowNumber ?? 0, context: nil,
+                                                    eventNumber: 0, clickCount: 1, pressure: 1))
+        var view = host.hitTest(host.convert(point, from: nil))
+        var menu: NSMenu?
+        while let current = view, menu == nil {
+            menu = current.menu(for: event)
+            view = current.superview
+        }
+        return try #require(menu)
+    }
+
+    private func sidebarKey(_ text: String, code: UInt16, to window: NSWindow) {
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                     windowNumber: window.windowNumber, context: nil, characters: text,
+                                     charactersIgnoringModifiers: text, isARepeat: false, keyCode: code)!
+        if !window.performKeyEquivalent(with: event) { window.sendEvent(event) }
+    }
+
     private func sidebarButtons(in view: NSView) -> [NSButton] {
         ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(sidebarButtons)
     }
@@ -252,6 +411,7 @@ extension RenderingTests {
     /// A second bot, listed after the first, without any tasks.
     let quiet: Bot
     let tasks: [BotTask]
+    let store: Store
     let model: AppModel
 
     init() throws {
@@ -269,7 +429,7 @@ extension RenderingTests {
         try home.save(bot)
         for task in tasks { try home.save(task) }
         try BotHome(workspace: quiet.workspace).save(quiet)
-        let store = Store(root: root.appendingPathComponent("index"))
+        store = Store(root: root.appendingPathComponent("index"))
         try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace),
                              Store.Entry(id: quiet.id, workspace: quiet.workspace)])
         model = AppModel(store: store, settings: AppSettings(defaults: defaults),
