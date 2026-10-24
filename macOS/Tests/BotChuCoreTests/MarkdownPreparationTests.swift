@@ -107,7 +107,12 @@ func prose(_ bytes: Int) -> String {
         try await eventually { gate.sources.count == 2 }
         try await Task.sleep(for: .milliseconds(50))
         #expect(Set(gate.sources) == ["Reply 0", "Reply 1"])
-        gate.release(7)
+        // One parse at a time, so the order parses start in is the worker's, not the dispatch queue's.
+        for started in 3...7 {
+            gate.release()
+            try await eventually { gate.sources.count == started }
+        }
+        gate.release(2)
         try await eventually { deliveries.all.count == 7 }
         #expect(worker.statistics.peak == 2)
         #expect(gate.sources.last == "Reply 0, longer")
