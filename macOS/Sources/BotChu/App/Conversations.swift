@@ -23,20 +23,85 @@ final class ConversationState {
     var run: RunState?
     var reaction: BotActivity?
     var queue: MessageQueue?
-    /// Whether the thread was read: a closed task's isn't, at launch.
-    @ObservationIgnored private(set) var isLoaded = false
+    /// Whether the thread is in memory (#109). Until it is, the chat shows a spinner, not an empty
+    /// conversation, and `summary` comes from its digest.
+    private(set) var isLoaded = false
+    /// Where its history is (`HistoryState`), and what waits for it: changes asked for while it
+    /// isn't in memory or is being read or recovered, run in order once it is (`AppModel.later`).
+    @ObservationIgnored var history = HistoryState()
+    @ObservationIgnored var waiting: [Waiting] = []
+    /// What waits is running (`AppModel.drain`): what it asks for in turn goes before the rest.
+    @ObservationIgnored var draining = false
+    @ObservationIgnored var insertion = 0
+    /// What a task report reads of a thread that isn't in memory: its digest, from its index.
+    @ObservationIgnored private(set) var digest: ThreadDigest?
     /// Which state of the thread this is, so a save of a state already written is skipped
     /// (`StorageQueue.replace`): this conversation's own id and a count of its changes.
     @ObservationIgnored private let id = UUID()
-    @ObservationIgnored private var revision = 0
+    @ObservationIgnored private(set) var revision = 0
+    /// The latest state known to be on disk: read from it, or saved.
+    @ObservationIgnored private(set) var savedRevision = 0
     var version: AnyHashable { AnyHashable([id.uuidString, String(revision)]) }
+    /// Whether what is in memory is what was last read or saved.
+    var isSaved: Bool { savedRevision == revision }
 
-    func load(_ messages: [ChatMessage]) {
-        isLoaded = true
-        replace(messages)
+    struct Waiting {
+        /// Its queue recovered; no read or recovery under way; its history in memory too.
+        enum Need { case recovery, idle, history }
+        var need: Need
+        var run: () -> Void
+        /// Runs instead when the conversation goes (its bot or task deleted).
+        var cancel: (() -> Void)?
     }
 
+    /// The thread as read from disk (or new, with nothing on disk yet).
+    func load(_ messages: [ChatMessage], summary: ThreadSummary? = nil) {
+        isLoaded = true
+        revision += 1
+        self.messages = messages
+        epoch += 1
+        summarize(summary ?? ThreadSummary(messages))
+        savedRevision = revision
+        digest = nil
+    }
+
+    /// A conversation made now, with nothing on disk yet.
+    func start() {
+        history = .created
+        load([])
+    }
+
+
+    /// Drops the thread from memory, keeping its digest for the sidebar and task reports.
+    func unload() {
+        digest = ThreadDigest(summary: summary, count: messages.count, lastReply: messages.last(where: { $0.role == .assistant })?.text)
+        revision += 1
+        savedRevision = revision
+        isLoaded = false
+        messages = []
+        epoch += 1
+    }
+
+    /// What its index says of a thread that isn't in memory.
+    func know(_ digest: ThreadDigest) {
+        guard !isLoaded else { return }
+        self.digest = digest
+        summarize(digest.summary)
+    }
+
+    /// A save of `revision` was written.
+    func saved(_ revision: Int) {
+        savedRevision = max(savedRevision, revision)
+    }
+
+    /// The whole thread given anew. Given to a conversation not in memory, it is the thread now:
+    /// no read under way is taken, and it is saved as any change is.
     func replace(_ messages: [ChatMessage]) {
+        if !isLoaded {
+            history.adopt()
+            isLoaded = true
+            digest = nil
+        }
         revision += 1
         self.messages = messages
         epoch += 1

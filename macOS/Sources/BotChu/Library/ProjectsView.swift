@@ -338,7 +338,7 @@ struct ProjectsTable: View {
 
     /// A local deploy target's machine as BotChu knows it: This Mac, a host's nickname, or its name.
     private func machineLabel(_ machine: String) -> String {
-        if machine.caseInsensitiveCompare(model.settings.thisMacName) == .orderedSame { return "This Mac" }
+        if let thisMac = model.settings.thisMacName, machine.caseInsensitiveCompare(thisMac) == .orderedSame { return "This Mac" }
         return model.settings.hosts.first { $0.machine.caseInsensitiveCompare(machine) == .orderedSame }?.nickname ?? machine
     }
 

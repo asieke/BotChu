@@ -427,9 +427,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     keep their accounts. Switching CLI families resets model and effort choices. For known
     Antigravity models, effort also selects the matching model-ID suffix.
   - **The bot's folder is the bot:** BotChu keeps each bot's settings (`bot.json`), its whole
-    conversation (`thread.jsonl`, one message per line), its tasks (`tasks/<id>/`: `task.json` with
+    conversation (`thread.jsonl`, one message per line, with its index beside it,
+    `thread.index.json`: see **Loading**), its tasks (`tasks/<id>/`: `task.json` with
     the repository, computer, branch, worktree, session and pull request, and the task's
-    `thread.jsonl`), the
+    `thread.jsonl` and index), the
     task requests it writes (`dispatch/`), its scheduled jobs (`jobs/<id>/`: `job.json` with the
     job, where its schedule is up to and its runs, and each run's transcript in `runs/<run>.jsonl`),
     a log of every turn and job run (`logs/<date>.log`:
@@ -465,6 +466,35 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     Deleting a bot drops what waits to be written in its folder and waits for what is being written;
     moving one waits for its writes, so neither leaves the old folder behind. A job's run is still
     reserved in its `job.json` before it starts, at once, and never twice.
+  - **Loading:** a launch reads the bots' and tasks' settings and puts the window up; conversations
+    are read when they are needed, off the main thread, in order with their writes. Each Home's and
+    open task's queue is recovered first: its transcript is read then only when messages wait in it
+    (or the CLI took one the transcript lacks), and what waits goes out once its own conversation is
+    recovered, never before, even when it is never opened. The conversation shown is read first;
+    another is read when it is shown, with a spinner where its messages go (never an empty
+    conversation), while typing and switching go on. Sidebar rows and Home's reports on its tasks
+    come from each conversation's index (`thread.index.json`): its counts, last activity and error,
+    and the start of its last reply, with the size, dates and inode of the transcript it was made from
+    and a hash of its end and of all of it. A transcript changed since, by BotChu or anything else,
+    even to the same size with its dates kept, is never described by an old index: it is read again,
+    and its index made again; a missing one (a folder from before) is made in the background, one
+    conversation at a time. What changes a conversation not read yet (a task's or job's receipt, a
+    note, a Telegram message, which is checked against its whole history) or its queue before its
+    recovery (a send, Stop, an edit of the queue) waits until it is, in the order asked, so nothing is
+    lost, sent twice or saved over the full transcript, and a read that ends after its bot was deleted
+    or moved, or after a newer read, is dropped (a moved one is read again where it is). Stop
+    withdraws a turn waiting for its conversation to be read. A closed task's history and queue are
+    read when it opens again, and only then does what waits in it go out. Finished sub-agents'
+    transcripts are read when something shows them (a handoff goes back from its run's record); one a
+    relaunch interrupted is read, then closed, once. Inactive conversations' histories beyond 48 MB,
+    and finished sub-agents' transcripts beyond 16 MB, leave memory, the least recently shown first,
+    never the one shown, one with a turn or a sub-agent under way, or one not saved; drafts, queues,
+    sessions and summaries stay, and the history is read again when it is shown. The replies parsed
+    ahead are the shown conversation's latest 60, up to 256 KB of them. This Mac's name (`scutil`) is
+    looked up off the main thread, and a task request naming this Mac waits for it. With eight bots,
+    forty open tasks and a hundred finished sub-agents (101 MB) on an M4 Max, the window is up in
+    about 220 ms (it was 800) and the shown conversation in about 330, having read one transcript
+    (it read all 148).
   - **Memory and personality:** each bot's workspace has a `MEMORY.md` for facts and notes it keeps
     itself, and an editable `SOUL.md` for its personality and voice. New bots get a starter soul based
     on their name and title; existing files are preserved, including intentionally empty ones.
@@ -742,6 +772,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     target's in its own lane and in order, newer states of a file taking the place of waiting ones
     (`StorageQueue.swift`), and a conversation's transcript and queue saved through it, with the
     messages a written transcript holds taken out of the queue as it is then (`ConversationStorage.swift`),
+    what a conversation not in memory is known by, its index and how it is checked against its
+    transcript, reading one and recovering its queue after a launch, where its history is and which
+    read is taken, and which inactive histories leave memory (`ConversationHistory.swift`), what was
+    read, decoded, written and copied, per file (`HistoryCounters.swift`),
     and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
@@ -767,7 +801,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     about them.
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
     in standard system materials: `App/` (the app, window, model, each conversation's state, observed
-    on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
+    on its own, with whether its history is in memory and what waits for it (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, the
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
@@ -847,7 +881,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     failed save and its retry, failures told apart, the account limits counting every model call,
     reading replies, recall by a fresh session, the tool-free command lines, runs on CLIs without
     them, a review that reports a tool call, and the review's own session through a stand-in CLI,
-    killed at its timeout.
+    killed at its timeout; and loading histories: a digest and its report, an index saved with its
+    transcript and read without it, one made stale by a change of the same size with the dates kept,
+    or by its end, version or contents, made again from an older folder without repairing or copying
+    a damaged transcript, recovery that reads a transcript only when messages wait or were taken,
+    which read is taken, the history budget and counters kept per folder.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
     across every column, streaming updates (a long reply being written never parsed on the main
     thread, its chunks laid out only at the width it is shown at, also when the window asks for its
@@ -887,7 +925,15 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     starts only once its message is saved, sending and Stop that never wait for a write, a message
     that can't be queued coming back to the composer, typing and switching while four conversations
     save, quitting through the real notification waiting for writes and saying which it couldn't,
-    deleting and moving a bot with writes under way, and a handoff that goes back only once saved. Set
+    deleting and moving a bot with writes under way, and a handoff that goes back only once saved;
+    and, with reads held back: a launch that decodes only the shown conversation and an interrupted
+    sub-agent, also with ten times the closed tasks' history, a conversation shown with a spinner
+    while typing and switching go on, a receipt and a note to a conversation not read yet that wait
+    for it and keep its history, sends, Stop and queue edits before recovery that keep their order
+    and start nothing stopped, an unopened task's queued message that goes out after its own
+    recovery, reads dropped after a deletion and made again after a move, histories leaving memory
+    with their draft, queue and session kept, Home's report on its tasks from their digests, and
+    Telegram recognizing a repeated message in a Home not read yet. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
@@ -1056,6 +1102,13 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.
+- Launching: `BOTCHU_LAUNCH_BENCHMARK=<file> swift test --configuration release --package-path macOS
+  --filter launchBenchmark` builds eight bots, forty open tasks, sixteen closed ones and a hundred
+  finished sub-agents (101 MB), opens each Home and open task once and reads the process's memory,
+  then launches 30 times (`BOTCHU_LAUNCH_SAMPLES`), timing the model, the first window, the first
+  keystroke, the shown conversation's messages and opening a conversation not shown yet, and five
+  more without indexes, as a first launch after the upgrade, with what each read, decoded, wrote and
+  copied; and writes the table to the file. It asserts nothing about time and isn't part of `check`.
 - Markdown: `BOTCHU_MARKDOWN_BENCHMARK=<file> swift test --configuration release --package-path macOS
   --filter markdownBenchmark` times converting the next revision of prose, code, shell code with
   `$HOME`, equation-heavy, and table-and-diagram replies of 2 to 128 KB, gives a 128 KB reply 100

@@ -24,6 +24,8 @@ extension RenderingTests {
         let bench = try ChatBenchFixture()
         defer { bench.cleanUp() }
         let app = bench.app
+        // Conversations are read when needed (#109): these switches are between ones in memory.
+        for target in [bench.home] + bench.conversations.map(\.1) { _ = await app.loadedThread(target) }
         let defaults = UserDefaults(suiteName: bench.domain)!
         defaults.set(true, forKey: "showsStatus")
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 820),

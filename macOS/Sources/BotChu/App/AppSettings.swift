@@ -19,8 +19,13 @@ final class AppSettings {
     var hosts: [SSHHost] { didSet { save(hosts, forKey: "hosts") } }
     /// Where the owner chose to work on each repository (`owner/name`), when not where it lives by default.
     var repoLocations: [String: RepoLocation] { didSet { save(repoLocations, forKey: "repoLocations") } }
-    /// This Mac's short name, as PROJECT.md's `deploy` calls it.
-    let thisMacName = Locations.thisMacName()
+    /// This Mac's short name, as PROJECT.md's `deploy` calls it: looked up off the main thread (it
+    /// runs `scutil`), nil until it is. What places a task waits for it (`resolvedMacName`), never
+    /// taking another name meanwhile.
+    private(set) var thisMacName: String?
+    private let macName = Task.detached(priority: .utility) { Locations.thisMacName() }
+
+    func resolvedMacName() async -> String { await macName.value }
     var openRouterModel: String { didSet { defaults.set(openRouterModel, forKey: "openRouterModel") } }
     /// Command overrides by account id; a missing or empty entry means the account's default.
     var commands: [String: String] { didSet { defaults.set(commands, forKey: "commands") } }
@@ -61,6 +66,10 @@ final class AppSettings {
         evaluateRuns = defaults.object(forKey: "evaluateRuns") as? Bool ?? true
         telegramEnabled = defaults.bool(forKey: "telegramEnabled")
         telegramChats = Self.load([TelegramChat].self, from: defaults, forKey: "telegramChats") ?? []
+        Task { [weak self, macName] in
+            let name = await macName.value
+            self?.thisMacName = name
+        }
     }
 
     func account(_ id: String) -> Account { accounts.first { $0.id == id } ?? Accounts.account(id: id) }
