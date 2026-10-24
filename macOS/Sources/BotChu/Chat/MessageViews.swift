@@ -9,6 +9,15 @@ struct MessageRow: View, Equatable {
     /// The first reply or tool call after the owner's message carries the bot's avatar.
     let startsBotTurn: Bool
 
+    /// The owner's text, with the agents and projects chosen in it from `@` and `#` in semibold.
+    static func withMentions(_ message: ChatMessage) -> AttributedString {
+        var text = AttributedString(message.text)
+        for reference in MessageReference.standing(message.mentions, in: message.text) {
+            if let range = Range(reference.range, in: text) { text[range].font = .body.weight(.semibold) }
+        }
+        return text
+    }
+
     var body: some View {
         switch message.role {
         case .user:
@@ -26,7 +35,7 @@ struct MessageRow: View, Equatable {
                             } else { Label(image.name + " (image unavailable)", systemImage: "photo") }
                         }
                     }
-                    if !message.text.isEmpty { Text(message.text).textSelection(.enabled) }
+                    if !message.text.isEmpty { Text(Self.withMentions(message)).textSelection(.enabled) }
                 }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)

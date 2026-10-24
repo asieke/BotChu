@@ -304,6 +304,29 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     full disk, a folder without write access), the chat says which file and why, the pending
     messages pause, and the next launch puts that follow-up back into the conversation rather than
     sending it again. A worktree being prepared finishes setup before follow-ups can run.
+  - **Mentions:** in a Home or task message box, `@` lists your other agents and `#` your projects,
+    in a short list just above the line being typed, over the chat, so the box neither moves nor
+    grows. Agents match by name or title, in the sidebar's order, with their avatar and title (and
+    the start of their ID beside a namesake); projects match by name or `owner/name`, from the whole
+    saved Projects catalog whatever Projects' search and filter show, with the task's own repository
+    and active projects first. Exact and prefix matches come first. Up and Down choose, Return or Tab
+    inserts the chosen one, a click inserts it, and Escape closes the list and leaves the text; Return
+    that inserts never sends, and with no list Return sends as before. Only typing opens the list:
+    email addresses, URLs and their fragments, Markdown headings, issue numbers such as `#123` and
+    pasted text don't, nor does an input method's composition. A chosen agent reads `@QA Duck` and a
+    project `#asieke/BotChu`, in the accent color on a faint tint, linked to the agent's ID or the
+    repository: renaming the agent keeps the link, and editing inside the label turns it back into
+    plain text (undo brings the link back). Copying gives readable text, and pasting it into a message
+    box keeps its links. A message keeps its links in the queue, its saved thread and across
+    relaunches, and when it is sent (in a new session, a resumed one, or as a follow-up mid-turn) its
+    bot is told what each points at, once each: an agent's name, title and ID, so it can delegate to
+    it with `botchu-subagent` when the message asks, and never its memory, instructions or
+    conversations; a repository's URL, project name and where its tasks work. A mention starts,
+    switches, clones and sends nothing. A link to a deleted agent, or to a project the current GitHub
+    account's catalog doesn't list, is never moved to another: the box shows it dotted, says why,
+    and offers **Unlink** and **Refresh Projects**. Without a saved catalog, `#` offers **Load
+    Projects**; a saved one stays searchable and says when it was synced. Suggestions come from what
+    is saved, never from GitHub while you type. The report and New Task sheets have no completion.
   - **Images:** use the **+** button, paste an image (⌘V, such as a copied screenshot) or image
     files, or drop them into the message box. Copied text still pastes as text when its app adds a
     picture of it after the text (as spreadsheets do), and other files paste as text too.
@@ -580,15 +603,18 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `IssueReport.swift`. The Telegram gateway is in `Telegram.swift` (the Bot API client: long
     polling, sending, and errors that never hold the token) and `TelegramGateway.swift` (which chats
     may reach which bot, message IDs that recognize a repeated update, replies cut to Telegram's
-    limit, the saved offset and replies owed, and retries).
+    limit, the saved offset and replies owed, and retries). `@` and `#` mentions are in
+    `Mentions.swift`: the link a message keeps, where a query starts and ends, matching and ranking,
+    what a choice inserts, whether a link still resolves, and what a sent message tells its bot
+    about them.
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
     in standard system materials: `App/` (the app, window, model, each conversation's state, observed
     on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, the
-    skills the app lists and edits, `SkillLibrary.swift`, and the Telegram gateway in the app,
-    `TelegramBridge.swift`),
-    `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers and Skills), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
+    skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
+    `TelegramBridge.swift`, and what mentions complete from and tell a bot, `Mentions.swift`),
+    `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers and Skills), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
     the hosts and Telegram), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -622,12 +648,15 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
     grows and how far its text scrolls; each account's allowance, with Muse's check through a
     stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
-    answered empty, and none at all; and skills: their frontmatter, finding and making them, which a
-    bot uses, and the catalog, or (on a host) the files in full, that sessions get; and the Telegram
+    answered empty, and none at all; skills: their frontmatter, finding and making them, which a
+    bot uses, and the catalog, or (on a host) the files in full, that sessions get; the Telegram
     gateway against a stand-in Bot API: round trips, refused and revoked chats, each chat's own bot,
     busy conversations, repeated updates, cancelled batches, relaunches, forwarded input,
     pending-work limits, shared rate-limit waits, reconnecting, failed sends and checkpoints, and
-    long replies.
+    long replies; and mentions: where a query starts (not in email addresses, URLs, headings or
+    `#123`), agents with spaces and namesakes, ranking, what a choice inserts, trimming and taking a
+    message back into the draft, links that no longer resolve, and the context a message carries,
+    kept through the queue and the saved thread.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
     across every column, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
@@ -651,8 +680,12 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     tab that folds finished runs and scrolls to one the chat opens, and switching without a flash:
     the toolbar kept, the message box focused in the same update, the chat at its very end, pets
     that never blink out while a clip loads, rich replies shown only once rendered and shown
-    again at once from those kept, within their budget, and typing dots that move, and a Telegram
-    message answered in its bot's Home, with stand-ins for the CLI and Telegram. Set
+    again at once from those kept, within their budget, and typing dots that move, a Telegram
+    message answered in its bot's Home, with stand-ins for the CLI and Telegram, and `@` and `#`
+    completion: Return and Tab that insert and never send, Escape, an edited label unlinked and undo
+    linking it again (and redo unlinking it), a draft taken back from the queue shown linked, pasted
+    text that opens nothing, links kept through copy and paste, a message's
+    links and their context through sending, and the report and New Task boxes without it. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
@@ -783,6 +816,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   attaches) in `reports/` in
   its data folder and prints a made-up issue's link (with `BOTCHU_REPORT_FAIL=1`, it fails as a
   signed-out gh does), so no review creates a real issue.
+  `BOTCHU_TYPE="<text>"` types into the shown conversation's message box a moment after launch, a
+  character at a time, so `@` and `#` completion opens (`{down}`, `{up}`, `{tab}`, `{return}` and
+  `{escape}` press those keys).
   `BOTCHU_DEMO=activity` makes the shown conversation a long agent run, in memory (exploration with
   failures, a build, an edit, three sub-agents and a live group), and `BOTCHU_DENSITY=compact` (or
   `detailed`, `raw`) chooses the chat density for the run.
