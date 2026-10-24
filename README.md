@@ -106,7 +106,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - **Providers:** one compact table of CLI profiles, a row each, under 100 points high whatever
     its state: the logo, name and CLI family; the command, and whether the login shell finds it;
     a line per allowance window, with its use and reset (the reset when the column has room, and
-    at most four lines, the rest in the tooltip); when it was read, marked stale or failed (with
+    at most four lines, the rest in the tooltip), whose bars, percentages and resets line up from
+    row to row; when it was read, marked stale or failed (with
     the error in a tooltip and a popover); and Refresh. It shares the conversation inspector's
     allowance cache and refresh limits, and searches by name or family. **Add CLI**
     adds a named profile of Claude Code, Codex, Antigravity, Muse or Pi, with an installed command or
@@ -673,8 +674,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     items, with exploration folded into groups and kept up to date at the tail
     (`ActivityTranscript.swift`), the identity, instructions,
     team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
-    files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries
-    (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
+    files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries,
+    and the lines Providers shows, lined up across its rows (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
     (`UsageCache.swift`), per-conversation pending-message delivery, keeping a follow-up the CLI
     took until a saved transcript holds it (`MessageQueue.swift`, saved in that order by
     `Store.swift`), how tall the message box is for its draft and how far its text may scroll
@@ -766,7 +767,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
     grows and how far its text scrolls; each account's allowance, with Muse's check through a
     stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
-    answered empty, and none at all; skills: their frontmatter, finding and making them, which a
+    answered empty, and none at all; the widths that line up Providers' allowance lines in every
+    row; skills: their frontmatter, finding and making them, which a
     bot uses, and the catalog, or (on a host) the files in full, that sessions get; the Telegram
     gateway against a stand-in Bot API: round trips, refused and revoked chats, each chat's own bot,
     busy conversations, repeated updates, cancelled batches, relaunches, forwarded input,
