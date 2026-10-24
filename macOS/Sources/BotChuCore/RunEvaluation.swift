@@ -408,8 +408,9 @@ public struct EvaluationPlan: Equatable, Sendable {
     public static let maxLessonCharacters = 300
     public static let maxLessons = 20
 
-    /// Lines that would rewrite who the bot is, give it more authority, or loosen a safeguard.
-    static let safeguardPattern = #"(?i)^\s*you are\b|\b(without (running |doing |waiting for |getting )?(the )?(asking|approval|permission|review|reviews|tests?|checks?|confirmation|owner)|skip(ping)? (the )?(tests?|checks?|review|reviews|approval|sync|ci|gate)|bypass|disable|force[- ]push|never ask|no need to (ask|wait|test|check|review)|don't (ask|wait for|need) (the )?(owner|approval|review)|ignore (the )?(rules?|instructions|agents\.md|team\.md|owner|safeguards?)|(you|bots?) (may|can) now|allowed to|authori[sz]ed to|permission to)\b|--force\b|--no-verify\b"#
+    /// Lines that would rewrite who the bot is, give it more authority, loosen a safeguard, or send
+    /// secrets somewhere.
+    static let safeguardPattern = #"(?i)^\s*you are\b|\b(without (running |doing |waiting for |getting )?(the )?(asking|approval|permission|review|reviews|tests?|checks?|confirmation|owner)|skip(ping)? (the )?(tests?|checks?|review|reviews|approval|sync|ci|gate)|bypass|disable|force[- ]push|never ask|no need to (ask|wait|test|check|review)|don't (ask|wait for|need) (the )?(owner|approval|review)|ignore (the )?(rules?|instructions|agents\.md|team\.md|owner|safeguards?)|(you|bots?) (may|can) now|allowed to|authori[sz]ed to|permission to)\b|--force\b|--no-verify\b|\b(send|upload|post|share|e-?mail|forward|paste|commit|push)\b[^\n]{0,80}(secrets?|api[- ]?keys?|tokens?|passwords?|credentials?|\.env\b|private keys?|keychain)"#
 
     /// `instructions` is the bot's `INSTRUCTIONS.md` as it is now.
     public init(_ changes: [EvaluationChange], snapshot: EvaluationSnapshot, instructions: String) {
