@@ -155,7 +155,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - **Chat:** one continuous thread per bot (its **Home**), and one per task. Replies stream in, rendered as Markdown (each reply
     is parsed once, and recent ones ahead of time, so showing a conversation again doesn't parse it again); the
     agent's tool work shows as activity (below). Headings, nested lists, quotes,
-    tables and fenced code use native block layouts; code has a Copy button. Replies have soft rounded
+    tables and fenced code use native block layouts; code has a Copy button. A table's cells stay on
+    one line, each row ruled straight across whatever its cells hold (empty, or inline code), and a
+    table wider than the chat scrolls sideways. Replies have soft rounded
     bubbles. Inline and display math use bundled KaTeX; Mermaid code fences display diagrams with
     source/copy and fit/actual-size controls. Both render offline in system WebKit, including inside
     tables and lists; a reply's web view is made as it nears the visible part of the chat, with only
@@ -559,7 +561,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     before the next save, also in a queue going through a relaunch; a section change or a new
     bot while `index.json` can't be saved, then the retry and a reload; and how tall the
     message box grows and how far its text scrolls.
-  - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
+  - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
+    across every column, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
     saves, a follow-up taken while the transcript can't be saved (back in it after a relaunch), model-picker keyboard interaction and persisted choices,
