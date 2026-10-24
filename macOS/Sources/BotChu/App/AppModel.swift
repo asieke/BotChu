@@ -166,6 +166,15 @@ final class AppModel {
     let modelCatalog = ModelCatalog()
 
     private let store: Store
+    /// Where conversations, settings, logs, memory, sub-agents' and jobs' files are written, off the
+    /// main thread, each target in order (`StorageQueue`, #107).
+    let storage: StorageQueue
+    /// How long moving or deleting a bot, a launch, and quitting wait for what is still being saved
+    /// there. What quitting couldn't save by then is listed in `unsavedAtQuit` and the system log,
+    /// never taken as saved.
+    nonisolated static let saveTimeout: TimeInterval = 5
+    @ObservationIgnored var quitTimeout = AppModel.saveTimeout
+    @ObservationIgnored private(set) var unsavedAtQuit: [String] = []
     /// Index entries whose folders don't hold their bot right now; kept so the bot returns with it.
     @ObservationIgnored var missing: [Store.Entry] = []
     /// Why `index.json` couldn't be saved; nil while it is saved. Until a save works (Try Again in
@@ -220,7 +229,10 @@ final class AppModel {
          openWorkLookup: @escaping @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure> = { await GitHubLookup.openWork(repos: $0) },
          workDetailLookup: @escaping @Sendable (String, Int, Bool) async -> Result<GitHubLookup.WorkDetail, TaskWorktree.Failure> = {
              await GitHubLookup.detail(number: $1, pullRequest: $2, repo: $0)
-         }, evaluationRunner: RunEvaluator.Runner? = nil) {
+         }, evaluationRunner: RunEvaluator.Runner? = nil, storage: StorageQueue = .shared) {
+        self.storage = storage
+        // Files still being written by this process (a model made before, in tests) are read once written.
+        storage.wait(timeout: Self.saveTimeout)
         self.projectGitHub = projectGitHub
         self.openWorkLookup = openWorkLookup
         self.workDetailLookup = workDetailLookup
@@ -240,12 +252,12 @@ final class AppModel {
         for bot in bots {
             conversation(.home(bot.id)).load(self.store.loadThread(for: bot))
             let home = BotHome(workspace: bot.workspace)
-            loadQueue(.home(bot.id))
+            loadQueue(.home(bot.id), atLaunch: true)
             tasks[bot.id] = home.loadTasks()
             for task in tasks[bot.id] ?? [] where !task.isArchived {
                 let target = ChatTarget.task(task.id, of: bot.id)
                 conversation(target).load(home.loadThread(task: task.id))
-                loadQueue(target)
+                loadQueue(target, atLaunch: true)
             }
             reloadPet(bot.id)
         }
@@ -253,7 +265,7 @@ final class AppModel {
         // Reviews spend the accounts' allowance: only the real app runs them by itself.
         evaluator = makeEvaluator(runner: store == nil && DevHooks.dataDir == nil ? evaluationRunner ?? liveEvaluationRunner() : evaluationRunner)
         delegation = SubagentRuntime(model: self, root: (store != nil || DevHooks.dataDir != nil)
-            ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot)
+            ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot, archive: SubagentArchive(storage: storage))
         telegram = TelegramBridge(model: self, stateURL: self.store.root.appendingPathComponent("telegram.json"))
         jobs = JobRuntime(model: self, runs: DevHooks.runsJobs)
         selection = bots.first?.id
@@ -421,9 +433,15 @@ final class AppModel {
             return
         }
         if bot.workspace != bots[i].workspace {
-            // The bot's history, logs and tasks move with it.
+            // The bot's history, logs, tasks and memory move with it, once what is being saved
+            // there is written, so nothing makes the old folder again.
+            let old = BotHome(workspace: bots[i].workspace)
+            guard storage.wait(under: bots[i].workspace, timeout: Self.saveTimeout).isEmpty else {
+                append(ChatMessage(role: .error, text: "Couldn't move this bot's history to \(bot.workspace): its files are still being saved. Try again."), to: .home(bot.id))
+                return
+            }
             do {
-                try BotHome(workspace: bots[i].workspace).move(toWorkspace: bot.workspace)
+                try old.move(toWorkspace: bot.workspace)
             } catch {
                 append(ChatMessage(role: .error, text: "Couldn't move this bot's history to \(bot.workspace): \(error.localizedDescription)"), to: .home(bot.id))
                 return
@@ -464,7 +482,13 @@ final class AppModel {
         petRuns[id]?.stop()
         petTasks.removeValue(forKey: id)?.cancel()
         dispatchTimers.removeValue(forKey: id)?.invalidate()
-        if let bot = bot(id) { BotHome(workspace: bot.workspace).trash() }
+        if let bot = bot(id) {
+            // What waits to be saved in its folder (its memory too) is dropped, and what is being
+            // written finishes first, so nothing makes the folder again once it is in the Trash.
+            storage.retire(bot.workspace, timeout: Self.saveTimeout)
+            BotHome(workspace: bot.workspace).trash()
+            storage.reopen(bot.workspace)
+        }
         bots.removeAll { $0.id == id }
         sections[id] = nil
         tasks[id] = nil
@@ -551,11 +575,11 @@ final class AppModel {
     }
 
     func reopenTask(_ target: ChatTarget) {
-        guard let i = taskIndex(target), let bot = bot(target.botID) else { return }
+        guard let i = taskIndex(target), bot(target.botID) != nil else { return }
         tasks[target.botID]?[i].archivedAt = nil
         saveTask(tasks[target.botID]![i], of: target.botID)
-        if !conversation(target).isLoaded, let id = target.taskID {
-            conversation(target).load(BotHome(workspace: bot.workspace).loadThread(task: id))
+        if !conversation(target).isLoaded, let files = files(target) {
+            conversation(target).load(files.load())
             loadQueue(target)
         }
         show(target)
@@ -725,8 +749,8 @@ final class AppModel {
         let target = ChatTarget.task(task.id, of: botID)
         let conversation = conversation(target)
         // A closed task's thread isn't read at launch.
-        if !conversation.isLoaded, let bot = bot(botID) {
-            conversation.load(BotHome(workspace: bot.workspace).loadThread(task: task.id))
+        if !conversation.isLoaded, let files = files(target) {
+            conversation.load(files.load())
         }
         return BotContext.taskReport(task, status: BotStatus.make(settings: task, summary: conversation.summary, run: conversation.run),
                                      pullRequest: task.pullRequest, lastReply: conversation.messages.last(where: { $0.role == .assistant })?.text,
@@ -908,9 +932,14 @@ final class AppModel {
 
     /// `id` is the message's own: a message from Telegram has one made from it, so the same
     /// message sent again is recognized.
+    ///
+    /// The message shows in the queue at once and its save goes on off the main thread; it is sent
+    /// only once a saved queue holds it. `accepted` hears whether it was: when the queue can't be
+    /// saved, the message leaves the queue again (for the composer to put back into its draft), the
+    /// queue pauses and the conversation says why.
     @discardableResult
     func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [], id: UUID = UUID(),
-              references: [MessageReference] = []) -> Bool {
+              references: [MessageReference] = [], accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
         let (text, references) = MessageReference.trimming(text, references: references)
         guard images.count <= ImageAttachment.maximumCount else {
             attachmentErrors[target] = "Attach up to 8 images per message. Remove an image before sending."
@@ -921,26 +950,69 @@ final class AppModel {
             return beginTurn(text, for: target, message: nil)
         }
         var queue = messageQueues[target] ?? MessageQueue()
-        queue.enqueue(ChatMessage(id: id, role: .user, text: text, images: images, references: references))
-        // Save before clearing the composer; a failed write must leave the owner's draft intact.
-        guard saveQueue(queue, for: target) else { return false }
+        queue.enqueue(ChatMessage(id: id, role: .user, text: text, images: images, references: references), unsaved: true)
         messageQueues[target] = queue
-        sendNextQueued(to: target)
+        // An idle conversation is busy from now on, so nothing else starts in it before this message
+        // does, and Stop withdraws it.
+        let ticket = isRunning(target) ? nil : UUID()
+        if let ticket {
+            waiting[target] = ticket
+            runStates[target] = RunState(preparing: true)
+        }
+        saveQueue(for: target) { [weak self] saved in
+            guard let self else { return accepted?(false) ?? () }
+            if let ticket, self.waiting[target] == ticket {
+                self.waiting[target] = nil
+                self.runStates[target] = nil
+            }
+            if saved {
+                self.messageQueues[target]?.accepted(id)
+                self.sendNextQueued(to: target)
+            } else {
+                self.messageQueues[target]?.remove(id)
+            }
+            accepted?(saved)
+        }
         return true
+    }
+
+    /// `send`, returning once the message's save is done: whether a saved queue holds it.
+    func sendAccepted(_ text: String, to target: ChatTarget, id: UUID = UUID()) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let started = send(text, to: target, id: id) { continuation.resume(returning: $0) }
+            if !started { continuation.resume(returning: false) }
+        }
+    }
+
+    /// Puts a message that couldn't be queued back into the composer, before what was typed since.
+    func returnToDraft(_ text: String, references: [MessageReference], images: [ImageAttachment], in target: ChatTarget) {
+        let draft = MessageReference.joining((text, references), (drafts[target] ?? "", draftReferences[target] ?? []))
+        drafts[target] = draft.text
+        draftReferences[target] = draft.references.isEmpty ? nil : draft.references
+        draftImages[target] = images + (draftImages[target] ?? [])
     }
 
     /// Resume a paused queue: its next message goes out now, or, during a turn, as a follow-up.
     func resumeQueuedMessages(to target: ChatTarget) {
         guard messageQueues[target]?.messages.isEmpty == false else { return }
         messageQueues[target]?.resume()
-        if let queue = messageQueues[target] { _ = saveQueue(queue, for: target) }
+        saveQueue(for: target)
         sendNextQueued(to: target)
     }
 
+    /// Takes a pending message out of the queue now; if the queue can't be saved without it, it
+    /// goes back where it was, so what is queued is what is saved.
     func removeQueuedMessage(_ id: UUID, from target: ChatTarget) {
-        guard var queue = messageQueues[target] else { return }
+        guard var queue = messageQueues[target], let index = queue.messages.firstIndex(where: { $0.id == id }) else { return }
+        let message = queue.messages[index]
         queue.remove(id)
-        if saveQueue(queue, for: target) { messageQueues[target] = queue }
+        guard queue != messageQueues[target] else { return }
+        messageQueues[target] = queue
+        saveQueue(for: target) { [weak self] saved in
+            guard !saved, let self, var queue = self.messageQueues[target] else { return }
+            queue.restore(message, at: index)
+            self.messageQueues[target] = queue
+        }
     }
 
     func editQueuedMessage(_ id: UUID, in target: ChatTarget) {
@@ -948,10 +1020,7 @@ final class AppModel {
               messageQueues[target]?.isInFlight(id) == false else { return }
         removeQueuedMessage(id, from: target)
         guard messageQueues[target]?.messages.contains(where: { $0.id == id }) == false else { return }
-        let draft = MessageReference.joining((message.text, message.mentions), (drafts[target] ?? "", draftReferences[target] ?? []))
-        drafts[target] = draft.text
-        draftReferences[target] = draft.references.isEmpty ? nil : draft.references
-        draftImages[target] = message.images + (draftImages[target] ?? [])
+        returnToDraft(message.text, references: message.mentions, images: message.images, in: target)
     }
 
     /// Whether follow-ups reach this conversation's CLI during a turn, at its next tool call, rather
@@ -971,12 +1040,11 @@ final class AppModel {
             return
         }
         guard let message = messageQueues[target]?.next else { return }
+        // It leaves the queue once the saved transcript holds it (`beginTurn`).
         guard beginTurn(message.text, for: target, message: message) else {
             pauseQueue(target)
             return
         }
-        messageQueues[target]?.remove(message.id)
-        if let queue = messageQueues[target] { _ = saveQueue(queue, for: target) }
     }
 
     /// Writes queued messages to the running CLI, which takes them at its next tool call. They stay
@@ -1015,7 +1083,7 @@ final class AppModel {
     private func pauseQueue(_ target: ChatTarget) {
         guard !terminating, messageQueues[target]?.messages.isEmpty == false else { return }
         messageQueues[target]?.pause()
-        if let queue = messageQueues[target] { _ = saveQueue(queue, for: target) }
+        saveQueue(for: target)
     }
 
     private func beginTurn(_ text: String, for target: ChatTarget, message: ChatMessage?) -> Bool {
@@ -1029,24 +1097,58 @@ final class AppModel {
         // What the message's mentions point at goes with it, in a new session or a resumed one.
         let text = message.map { deliveredText(of: $0, for: target) } ?? text
 
+        var added: [ChatMessage] = []
+        var replacedNote: ChatMessage?
         if let message {
             if current.resumableSessionID == nil, history.contains(where: { $0.role == .assistant }) {
                 // Name the account on the note New Session left, or add one (an account switch).
                 if let last = history.last, last.role == .note, last.text.hasPrefix("New session") {
+                    replacedNote = last
                     conversation(target).edit { $0.removeLast() }
                 }
-                append(ChatMessage(role: .note, text: "New session on \(current.account.name)"), to: target)
+                added.append(ChatMessage(role: .note, text: "New session on \(current.account.name)"))
             }
-            append(message, to: target)
+            added.append(message)
+            // It shows in the conversation now, and stays in the saved queue until the saved transcript holds it.
+            messageQueues[target]?.deliver(message.id)
         } else {
-            append(ChatMessage(role: .note, text: "\(bot.name) was created on \(current.account.name)"), to: target)
+            added.append(ChatMessage(role: .note, text: "\(bot.name) was created on \(current.account.name)"))
         }
-        guard saveThread(target) else {
-            // Still queued, not delivered. Keep one copy in the outbox and explain the failure.
-            conversation(target).replace(history + [ChatMessage(role: .error, text: "Couldn't save this message. It is still queued.")])
-            return false
+        for line in added { append(line, to: target) }
+        // The CLI runs only once the transcript holding the message is saved, off the main thread.
+        // Meanwhile the conversation is busy, so nothing else starts in it, and Stop withdraws the turn.
+        let ticket = UUID()
+        waiting[target] = ticket
+        runStates[target] = RunState(preparing: true)
+        saveThread(target) { [weak self] saved in
+            guard let self else { return }
+            guard self.waiting[target] == ticket else {
+                // Stopped meanwhile: the turn doesn't start, and an unsaved message waits again.
+                if !saved, let message { self.messageQueues[target]?.undeliver(message.id) }
+                return
+            }
+            self.waiting[target] = nil
+            self.runStates[target] = nil
+            guard saved else {
+                // Still queued, not delivered. Keep one copy in the outbox and explain the failure.
+                if let message { self.messageQueues[target]?.undeliver(message.id) }
+                let ids = Set(added.map(\.id))
+                self.conversation(target).edit { messages in
+                    messages.removeAll { ids.contains($0.id) }
+                    if let replacedNote { messages.append(replacedNote) }
+                    messages.append(ChatMessage(role: .error, text: "Couldn't save this message. It is still queued."))
+                }
+                self.pauseQueue(target)
+                return
+            }
+            self.startSavedTurn(text, for: target, history: history, updates: updates, images: message?.images ?? [])
         }
+        return true
+    }
 
+    /// Starts a turn whose message the saved transcript holds: in the task's worktree once it is
+    /// ready, or at once.
+    private func startSavedTurn(_ text: String, for target: ChatTarget, history: [ChatMessage], updates: String?, images: [ImageAttachment]) {
         if let task = task(target), !hasWorktree(task) {
             // On a host, the worktree is checked there (and made again if it went) before each turn.
             let ticket = UUID()
@@ -1064,15 +1166,14 @@ final class AppModel {
                         postReceipt(TaskReceipt.failed(task, error: failure.step), task: task.id, for: target.botID)
                     }
                 } else {
-                    startTurn(text, for: target, history: history, updates: nil, images: message?.images ?? [])
+                    startTurn(text, for: target, history: history, updates: nil, images: images)
                     if !isRunning(target) { pauseQueue(target) }
                 }
             }
         } else {
-            startTurn(text, for: target, history: history, updates: updates, images: message?.images ?? [])
+            startTurn(text, for: target, history: history, updates: updates, images: images)
             if !isRunning(target) { pauseQueue(target) }
         }
-        return true
     }
 
     /// Runs the CLI for one turn of the conversation, in the bot's workspace or the task's worktree.
@@ -1288,10 +1389,12 @@ final class AppModel {
                     self.runs[target] = nil
                     self.inputs[target] = nil
                     self.delegation.endCaller(context.id)
-                    self.runStates[target] = nil
                     if target.taskID == nil { self.watchDispatches(for: id, while: false) }
                     // The bot (or the task) was deleted while it ran.
-                    guard self.runSettings(of: target) != nil else { return }
+                    guard self.runSettings(of: target) != nil else {
+                        if self.bot(target.botID) != nil { self.runStates[target] = nil }
+                        return
+                    }
                     let stopped = run.stopped
                     self.conversation(target).stream { messages in
                         assembler.apply(.textEnd, to: &messages)
@@ -1311,34 +1414,40 @@ final class AppModel {
                         }
                     }
                     let messages = self.thread(target)
-                    let saved = self.saveThread(target)
                     let failure = outcome.failure(stopped: stopped, exitError: messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil })
-                    if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
-                    if self.visibleBotID != id || self.tab(of: id) != target { self.unread.insert(target) }
-                    let turn = messages.suffix(from: min(turnStart, messages.count))
-                    self.saveMemory(from: Array(turn), for: target)
-                    if target.taskID != nil {
-                        self.finishTaskTurn(target, stopped: stopped, failure: failure)
-                        self.evaluateTaskTurn(target, thread: messages, turnStart: turnStart, stopped: stopped, failure: failure)
-                    }
-                    try? home.appendLog(TurnLog.ended(
+                    let turn = Array(messages.suffix(from: min(turnStart, messages.count)))
+                    self.log(TurnLog.ended(
                         at: Date(), startedAt: startedAt, status: status, stopped: stopped,
                         toolCalls: turn.filter { $0.role == .tool }.count,
-                        error: turn.last(where: { $0.role == .error })?.text, stderr: stderr, what: what))
-                    // Only Stop and real failures pause the queue (not quitting BotChu); messages the
-                    // CLI never took go out as the next turn.
-                    self.messageQueues[target]?.finishTurn(stopped: stopped && !self.terminating,
-                                                           failed: !self.terminating && (!saved || failure != nil))
-                    if let queue = self.messageQueues[target] { _ = self.saveQueue(queue, for: target) }
-                    self.sendNextQueued(to: target)
-                    // The account may be idle now, for a review waiting for it.
-                    self.evaluator.pump()
+                        error: turn.last(where: { $0.role == .error })?.text, stderr: stderr, what: what), in: home)
+                    // The turn's end is saved off the main thread, then what it asked to remember;
+                    // until both are done the conversation stays busy, so nothing else starts in it.
+                    self.saveThread(target) { [weak self] saved in
+                        self?.saveMemory(from: turn, for: target) { [weak self] in
+                            guard let self, self.runSettings(of: target) != nil else { return }
+                            self.runStates[target] = nil
+                            if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
+                            if self.visibleBotID != id || self.tab(of: id) != target { self.unread.insert(target) }
+                            if target.taskID != nil {
+                                self.finishTaskTurn(target, stopped: stopped, failure: failure)
+                                self.evaluateTaskTurn(target, thread: messages, turnStart: turnStart, stopped: stopped, failure: failure)
+                            }
+                            // Only Stop and real failures pause the queue (not quitting BotChu); messages the
+                            // CLI never took go out as the next turn.
+                            self.messageQueues[target]?.finishTurn(stopped: stopped && !self.terminating,
+                                                                   failed: !self.terminating && (!saved || failure != nil))
+                            self.saveQueue(for: target)
+                            self.sendNextQueued(to: target)
+                            // The account may be idle now, for a review waiting for it.
+                            self.evaluator.pump()
+                        }
+                    }
                 }
 
                 do {
-                    try? home.appendLog(TurnLog.started(at: startedAt, account: account, command: command,
-                                                        arguments: invocation.arguments, prompt: prompt, resuming: resume, what: what,
-                                                        directory: task == nil ? nil : machine.isRemote ? "\(place): \(directory)" : directory))
+                    log(TurnLog.started(at: startedAt, account: account, command: command,
+                                        arguments: invocation.arguments, prompt: prompt, resuming: resume, what: what,
+                                        directory: task == nil ? nil : machine.isRemote ? "\(place): \(directory)" : directory), in: home)
                     try run.start()
                     if let resume { delegationSessions[target, default: []].insert(resume) }
                     runs[target] = run
@@ -1392,31 +1501,45 @@ final class AppModel {
     // MARK: Memory
 
     /// After a turn of Home or a task, on this Mac or a host (or on Retry): saves what its replies
-    /// asked to remember, and any notes still waiting, and says how it went in the conversation.
-    private func saveMemory(from turn: [ChatMessage], for target: ChatTarget, retrying: Bool = false) {
-        guard let bot = bot(target.botID) else { return }
-        let lines = saveMemory(from: turn, of: bot, reportTo: target, retrying: retrying)
-        guard !lines.isEmpty else { return }
-        for line in lines { append(line, to: target) }
-        saveThread(target)
+    /// asked to remember, and any notes still waiting, off the main thread, says how it went in the
+    /// conversation, and then calls `done`.
+    private func saveMemory(from turn: [ChatMessage], for target: ChatTarget, retrying: Bool = false,
+                            done: (@MainActor @Sendable () -> Void)? = nil) {
+        guard let bot = bot(target.botID) else { done?(); return }
+        saveMemory(from: turn, of: bot, reportTo: target, retrying: retrying) { [weak self] lines in
+            if let self, !lines.isEmpty, self.bot(target.botID) != nil {
+                for line in lines { self.append(line, to: target) }
+                self.saveThread(target)
+            }
+            done?()
+        }
     }
 
     /// Saves what the replies asked to remember (`<remember>` for the bot's own memory, `<remember
-    /// scope="shared">` for the shared one) after any notes still waiting for those files, keeps
-    /// what became of them for the next turn of `target`, and returns the lines that say so. Waiting
-    /// notes that fail again on their own are left to the banner, unless the owner chose Retry.
-    func saveMemory(from replies: [ChatMessage], of bot: Bot, reportTo target: ChatTarget, retrying: Bool = false) -> [ChatMessage] {
+    /// scope="shared">` for the shared one) after any notes still waiting for those files, off the
+    /// main thread (`MemoryWriter` saves one file at a time), keeps what became of them for the next
+    /// turn of `target`, and gives `done` the lines that say so. Waiting notes that fail again on
+    /// their own are left to the banner, unless the owner chose Retry.
+    func saveMemory(from replies: [ChatMessage], of bot: Bot, reportTo target: ChatTarget, retrying: Bool = false,
+                    done: @escaping @MainActor @Sendable ([ChatMessage]) -> Void) {
         let requests = MemoryNotes.requests(in: replies)
-        var lines: [ChatMessage] = []
-        for save in MemoryWriter.shared.save(requests, to: memoryFiles(of: bot)) {
-            if save.failure != nil, !retrying, requests[save.file.scope]?.isEmpty ?? true { continue }
-            if let summary = save.summary(botName: bot.name) {
-                lines.append(ChatMessage(role: summary.failed ? .error : .note, text: summary.text))
+        let files = memoryFiles(of: bot)
+        storage.submit(Self.memoryLane(of: bot), label: "memory", work: { () -> (saves: [MemorySave], waiting: Int) in
+            let saves = MemoryWriter.shared.save(requests, to: files)
+            return (saves, files.reduce(0) { $0 + MemoryWriter.shared.waitingCount($1) })
+        }) { [weak self] result in
+            guard let self, case .success(let saved) = result else { return done([]) }
+            var lines: [ChatMessage] = []
+            for save in saved.saves {
+                if save.failure != nil, !retrying, requests[save.file.scope]?.isEmpty ?? true { continue }
+                if let summary = save.summary(botName: bot.name) {
+                    lines.append(ChatMessage(role: summary.failed ? .error : .note, text: summary.text))
+                }
+                if let report = save.report { self.memoryReports[target, default: []].append(report) }
             }
-            if let report = save.report { memoryReports[target, default: []].append(report) }
+            if self.bot(bot.id) != nil, self.unsavedMemory[bot.id, default: 0] != saved.waiting { self.unsavedMemory[bot.id] = saved.waiting }
+            done(lines)
         }
-        refreshUnsavedMemory(of: bot.id)
-        return lines
     }
 
     /// Tries the notes waiting for the bot's memory again, saying how it went in `target` (Retry).
@@ -1424,11 +1547,20 @@ final class AppModel {
         saveMemory(from: [], for: target, retrying: true)
     }
 
+    /// Counts the notes waiting for the bot's memory files, read off the main thread.
     func refreshUnsavedMemory(of botID: UUID) {
         guard let bot = bot(botID) else { return }
-        let count = memoryFiles(of: bot).reduce(0) { $0 + MemoryWriter.shared.waitingCount($1) }
-        if unsavedMemory[botID, default: 0] != count { unsavedMemory[botID] = count }
+        let files = memoryFiles(of: bot)
+        storage.submit(Self.memoryLane(of: bot), label: "memory", work: {
+            files.reduce(0) { $0 + MemoryWriter.shared.waitingCount($1) }
+        }) { [weak self] result in
+            guard let self, self.bot(botID) != nil, case .success(let count) = result else { return }
+            if self.unsavedMemory[botID, default: 0] != count { self.unsavedMemory[botID] = count }
+        }
     }
+
+    /// The lane a bot's memory saves go in: its `MEMORY.md`, beside the workspace's `.botchu/`.
+    private static func memoryLane(of bot: Bot) -> String { MemoryFile.bot(workspace: bot.workspace).path }
 
     private func memoryFiles(of bot: Bot) -> [MemoryFile] {
         [.bot(workspace: bot.workspace), .shared(settings.sharedMemoryPath, botWorkspace: bot.workspace)]
@@ -1450,6 +1582,9 @@ final class AppModel {
     }
 
     /// BotChu is quitting. Queues stay as they are, to go out on their own after the next launch.
+    /// Everything asked to be saved is written before it quits, waiting up to `quitTimeout` for the
+    /// writes still under way; what isn't written by then is listed in `unsavedAtQuit` and the
+    /// system log, and its files stay as they were (with any messages the CLI took in their queue).
     func stopAll() {
         terminating = true
         // What each CLI printed last goes into its thread, and the thread is saved: BotChu may
@@ -1466,20 +1601,21 @@ final class AppModel {
         for task in petTasks.values { task.cancel() }
         // Sidebar changes that couldn't be saved get one more try.
         if indexFailure != nil { saveIndex() }
+        unsavedAtQuit = storage.wait(timeout: quitTimeout)
+        if !unsavedAtQuit.isEmpty {
+            NSLog("BotChu quit before it could save %@; those files are as they were last saved.", unsavedAtQuit.joined(separator: ", "))
+        }
     }
 
-    /// Saves a turn still running as it stands, with its running tool calls marked interrupted;
-    /// the thread in memory is left as it is, for the turn's end.
+    /// Saves a turn still running as it stands, with its running tool calls marked interrupted,
+    /// after the conversation's other writes; the thread in memory is left as it is, for the
+    /// turn's end.
     private func saveUnfinishedTurn(_ target: ChatTarget) {
         guard let bot = bot(target.botID), runSettings(of: target) != nil else { return }
-        var messages = thread(target)
-        ThreadAssembler.closeRunningTools(&messages)
-        let home = BotHome(workspace: bot.workspace)
-        if let taskID = target.taskID {
-            try? home.saveThread(messages, task: taskID)
-        } else {
-            try? home.saveThread(messages)
-        }
+        var closed = thread(target)
+        ThreadAssembler.closeRunningTools(&closed)
+        let home = BotHome(workspace: bot.workspace), taskID = target.taskID, messages = closed
+        storage.submit(home.conversationLane(task: taskID), label: "unfinished", work: { try home.writeTranscript(messages, task: taskID) })
     }
 
     /// The model the CLI said it ran, for the model choice the turn ran with. Changes no choice.
@@ -1527,7 +1663,8 @@ final class AppModel {
         target.taskID.flatMap { id in tasks[target.botID]?.firstIndex { $0.id == id } }
     }
 
-    /// Changes what a conversation runs on, its task's or its bot's, and saves it.
+    /// Changes what a conversation runs on, its task's or its bot's, and saves it off the main
+    /// thread (the index of bot folders doesn't change with it).
     private func change(_ target: ChatTarget, _ edit: (inout any RunSettings) -> Void) {
         if let i = taskIndex(target), var task: any RunSettings = tasks[target.botID]?[i] {
             edit(&task)
@@ -1539,7 +1676,7 @@ final class AppModel {
             edit(&bot)
             guard let bot = bot as? Bot else { return }
             bots[i] = bot
-            save(bot)
+            saveSettings(bot)
         }
     }
 
@@ -1561,21 +1698,32 @@ final class AppModel {
 
     /// Writes the bot's `.botchu/bot.json`, and the index of bot folders.
     func save(_ bot: Bot) {
-        do {
-            try BotHome(workspace: bot.workspace).save(bot)
-        } catch {
-            append(ChatMessage(role: .error, text: "Couldn't save this bot in \(bot.workspace): \(error.localizedDescription)"), to: .home(bot.id))
-        }
+        saveSettings(bot)
         saveIndex()
     }
 
+    /// Writes the bot's `.botchu/bot.json` off the main thread, after its earlier saves.
+    private func saveSettings(_ bot: Bot) {
+        let home = BotHome(workspace: bot.workspace), id = bot.id, workspace = bot.workspace
+        storage.replace(home.botLane, slot: "bot", value: bot, write: { try home.save($0); return 0 }) { [weak self] result in
+            guard case .failure(let error) = result, (error as? StorageQueue.Failure) == nil, let self, self.bot(id) != nil else { return }
+            self.append(ChatMessage(role: .error, text: "Couldn't save this bot in \(workspace): \(error.localizedDescription)"), to: .home(id))
+        }
+    }
+
+    /// Writes the task's `task.json` off the main thread, after its earlier saves.
     private func saveTask(_ task: BotTask, of botID: UUID) {
         guard let bot = bot(botID) else { return }
-        do {
-            try BotHome(workspace: bot.workspace).save(task)
-        } catch {
-            append(ChatMessage(role: .error, text: "Couldn't save this task in \(bot.workspace): \(error.localizedDescription)"), to: .task(task.id, of: botID))
+        let home = BotHome(workspace: bot.workspace), workspace = bot.workspace, target = ChatTarget.task(task.id, of: botID)
+        storage.replace(home.taskLane(task.id), slot: "task", value: task, write: { try home.save($0); return 0 }) { [weak self] result in
+            guard case .failure(let error) = result, (error as? StorageQueue.Failure) == nil, let self, self.task(target) != nil else { return }
+            self.append(ChatMessage(role: .error, text: "Couldn't save this task in \(workspace): \(error.localizedDescription)"), to: target)
         }
+    }
+
+    /// Appends to the bot's turn log off the main thread, in order.
+    func log(_ text: String, in home: BotHome, at date: Date = Date()) {
+        storage.submit(home.logsLane, label: "log", work: { try home.appendLog(text, at: date) })
     }
 
     /// Writes `index.json`: the bots in sidebar order, with their sections, then the entries whose
@@ -1585,38 +1733,53 @@ final class AppModel {
         if failure != indexFailure { indexFailure = failure }
     }
 
-    /// Saves the conversation, and its queue while it holds messages the CLI took
-    /// (`BotHome.checkpoint`); true when the transcript was saved.
-    @discardableResult
-    func saveThread(_ target: ChatTarget) -> Bool {
-        guard let bot = bot(target.botID) else { return false }
-        if let taskID = target.taskID, task(taskID, of: bot.id) == nil { return false }
-        var queue = messageQueues[target] ?? MessageQueue()
-        let result = BotHome(workspace: bot.workspace).checkpoint(thread(target), queue: &queue, task: target.taskID)
-        if messageQueues[target] != nil, queue != messageQueues[target] { messageQueues[target] = queue }
-        show(result.failures, in: target)
-        return result.saved
+    /// The conversation's files, written off the main thread in order (`ConversationStorage`); nil
+    /// once its bot or task is gone.
+    private func files(_ target: ChatTarget) -> ConversationStorage? {
+        guard let bot = bot(target.botID) else { return nil }
+        if let taskID = target.taskID, task(taskID, of: bot.id) == nil { return nil }
+        return ConversationStorage(storage: storage, home: BotHome(workspace: bot.workspace), task: target.taskID)
     }
 
-    private func saveQueue(_ queue: MessageQueue, for target: ChatTarget) -> Bool {
-        guard let bot = bot(target.botID) else { return false }
-        do {
-            try BotHome(workspace: bot.workspace).saveQueue(queue, task: target.taskID)
-            return true
-        } catch {
-            messageQueues[target]?.pause()
-            show([SaveFailure(.pendingMessages, file: BotHome(workspace: bot.workspace).queueURL(task: target.taskID), error: error)], in: target)
-            return false
+    private func queueAccess(_ target: ChatTarget) -> ConversationStorage.Queue {
+        ConversationStorage.Queue(get: { [weak self] in self?.bot(target.botID) == nil ? nil : self?.messageQueues[target] },
+                                  set: { [weak self] in self?.messageQueues[target] = $0 },
+                                  files: { [weak self] in self?.files(target) })
+    }
+
+    /// Saves the conversation as it is now, off the main thread, after its earlier saves; then the
+    /// messages the CLI took, or the turn starts with, that the saved transcript holds leave its
+    /// queue (`ConversationStorage.saveTranscript`). `done` says whether a transcript holding
+    /// everything in it now was saved.
+    func saveThread(_ target: ChatTarget, done: (@MainActor @Sendable (Bool) -> Void)? = nil) {
+        guard let files = files(target) else { done?(false); return }
+        let conversation = conversation(target)
+        files.saveTranscript(conversation.messages, version: conversation.version, queue: queueAccess(target),
+                             failed: { [weak self] failures in self?.show(failures, in: target) }, done: done)
+    }
+
+    /// Saves the conversation's queue as it is now, off the main thread; when it can't be saved,
+    /// the queue pauses and the conversation says why. `done` says whether it was saved.
+    private func saveQueue(for target: ChatTarget, done: (@MainActor @Sendable (Bool) -> Void)? = nil) {
+        guard let files = files(target), let queue = messageQueues[target] else { done?(false); return }
+        files.saveQueue(queue) { [weak self] failure in
+            guard let failure else { done?(true); return }
+            if let self, self.bot(target.botID) != nil {
+                self.messageQueues[target]?.pause()
+                self.show([failure], in: target)
+            }
+            done?(false)
         }
     }
 
     /// Reads a conversation's queue, after its thread, putting back into its transcript any messages
     /// the CLI took before the transcript could be saved, and noting any it couldn't read, and where
-    /// their original file is kept.
-    private func loadQueue(_ target: ChatTarget) {
-        guard let bot = bot(target.botID) else { return }
+    /// their original file is kept. At launch nothing is being written (`init` waited for this
+    /// process's writes); later, it reads (and repairs) in order with the conversation's writes.
+    private func loadQueue(_ target: ChatTarget, atLaunch: Bool = false) {
+        guard let files = files(target) else { return }
         var transcript = thread(target)
-        let recovered = BotHome(workspace: bot.workspace).recoverQueue(transcript: &transcript, task: target.taskID)
+        let recovered = atLaunch ? files.home.recoverQueue(transcript: &transcript, task: target.taskID) : files.recover(&transcript)
         if transcript.count != thread(target).count { conversation(target).replace(transcript) }
         messageQueues[target] = recovered.queue
         show(recovered.failures, in: target)
@@ -1624,6 +1787,7 @@ final class AppModel {
 
     /// Says in the conversation why its files couldn't be saved; once while the same failure repeats.
     private func show(_ failures: [SaveFailure], in target: ChatTarget) {
+        guard bot(target.botID) != nil else { return }
         for failure in failures where thread(target).last(where: { $0.role == .error })?.text != failure.message {
             append(ChatMessage(role: .error, text: failure.message), to: target)
         }

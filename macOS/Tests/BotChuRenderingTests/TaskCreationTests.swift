@@ -63,6 +63,7 @@ extension RenderingTests {
         #expect(prepared[2].branch.hasPrefix("feat/17-"))
         #expect(await Shell.run(["git", "branch", "--show-current"], in: checkout).output.trimmingCharacters(in: .whitespacesAndNewlines) == "main")
         #expect(model.thread(.home(bot.id)).allSatisfy { !$0.text.contains("feat/") && !$0.text.contains("PR #") })
+        await model.storage.settle()
         #expect(home.loadTasks().allSatisfy { !$0.branch.isEmpty && $0.folder != nil })
     }
 

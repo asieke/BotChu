@@ -303,7 +303,7 @@ import Testing
         let archive = SubagentArchive(interval: 0.2) { try writes.record($0) }
         let run = record
         archive.checkpoint(snapshot(run, ["streaming"])) { _ in }
-        try archive.save(snapshot(run, ["streaming", "handoff"]))
+        try await archive.save(snapshot(run, ["streaming", "handoff"]))
         #expect(writes.all == [["streaming", "handoff"]])
         try await Task.sleep(for: .milliseconds(400))
         #expect(writes.all == [["streaming", "handoff"]])
@@ -330,16 +330,59 @@ import Testing
             archive.checkpoint(snapshot(record, ["lost"])) { _ in done.resume(returning: Thread.isMainThread) }
         }
         #expect(reported)
-        #expect(throws: (any Error).self) { try archive.save(snapshot(record, ["final"])) }
+        await #expect(throws: (any Error).self) { try await archive.save(snapshot(record, ["final"])) }
     }
 
-    @Test func snapshotsAreWrittenToTheOwningBotsFolder() throws {
+    /// #107: each run has its own lane, so a run's end is never written behind another run's slow
+    /// checkpoint, and waiting for it never blocks the caller.
+    @Test func aRunsSaveNeverWaitsBehindAnotherRunsWrite() async throws {
+        let slow = DispatchSemaphore(value: 0), writing = DispatchSemaphore(value: 0)
+        let writes = Writes()
+        let blocked = record
+        let archive = SubagentArchive(interval: 0) { snapshot in
+            if snapshot.record.id == blocked.id {
+                writing.signal()
+                slow.wait()
+            }
+            try writes.record(snapshot)
+        }
+        archive.checkpoint(snapshot(blocked, ["slow"])) { _ in }
+        writing.wait()
+        // The other run's write is held until after this save: were they in one lane, this would never return.
+        try await archive.save(snapshot(record, ["handoff"]))
+        #expect(writes.all == [["handoff"]])
+        slow.signal()
+        await archive.storage.settle()
+        #expect(writes.all == [["handoff"], ["slow"]])
+    }
+
+    /// #107: clearing a finished run drops its checkpoint still waiting and removes its folder after
+    /// any write of it, so nothing makes the folder again.
+    @MainActor @Test func clearingARunNeverLeavesItsFolderBehind() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-archive-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let home = BotHome(workspace: folder.path)
+        let run = record
+        let archive = SubagentArchive(interval: 60)
+        try await archive.save(SubagentArchive.Snapshot(record: run, messages: [ChatMessage(role: .user, text: "Do it")], home: home))
+        archive.checkpoint(SubagentArchive.Snapshot(record: run, messages: [ChatMessage(role: .assistant, text: "late")], home: home)) { _ in }
+        let removed: Error?? = await withCheckedContinuation { done in
+            archive.remove(run.id, taskID: nil, home: home) { done.resume(returning: $0) }
+        }
+        #expect(removed.flatMap { $0 } == nil)
+        #expect(archive.flush(timeout: 2).isEmpty)
+        await archive.storage.settle()
+        #expect(!FileManager.default.fileExists(atPath: home.subagentURL(id: run.id).path))
+        #expect(home.loadSubagents().isEmpty)
+    }
+
+    @Test func snapshotsAreWrittenToTheOwningBotsFolder() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-archive-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
         let home = BotHome(workspace: folder.path)
         var run = record
         run.rootTaskID = UUID()
-        try SubagentArchive().save(SubagentArchive.Snapshot(record: run, messages: [ChatMessage(role: .user, text: "Do it")], home: home))
+        try await SubagentArchive().save(SubagentArchive.Snapshot(record: run, messages: [ChatMessage(role: .user, text: "Do it")], home: home))
         #expect(home.loadSubagents(taskID: run.rootTaskID).map(\.id) == [run.id])
         #expect(home.loadSubagentThread(id: run.id, taskID: run.rootTaskID).map(\.text) == ["Do it"])
     }

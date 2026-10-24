@@ -29,6 +29,13 @@ public struct BotHome: Sendable {
     /// A conversation's pending messages: Home's, or a task's.
     public func queueURL(task id: UUID? = nil) -> URL { (id.map(taskURL) ?? url).appendingPathComponent("queued.jsonl") }
 
+    /// The lanes (`StorageQueue`) the bot's files are written in, each in order: a conversation's
+    /// transcript and queue files together, so they keep their order; its settings; a task's; its
+    /// logs. Every lane is under `url`, so retiring `url.path` covers the whole bot.
+    public func conversationLane(task id: UUID? = nil) -> String { (id.map(taskThreadURL) ?? threadURL).path }
+    public var botLane: String { botURL.path }
+    public func taskLane(_ id: UUID) -> String { taskURL(id).appendingPathComponent("task.json").path }
+    public var logsLane: String { logsURL.path }
 
     public var exists: Bool { FileManager.default.fileExists(atPath: botURL.path) }
 
@@ -49,8 +56,17 @@ public struct BotHome: Sendable {
     /// Rewrites the whole thread, atomically (a temporary file, then a rename), so a crash never
     /// leaves it half written.
     public func saveThread(_ messages: [ChatMessage]) throws {
+        try writeTranscript(messages)
+    }
+
+    /// Rewrites a conversation's transcript, Home's or a task's, as `saveThread` does, and returns
+    /// its size in bytes.
+    @discardableResult
+    public func writeTranscript(_ messages: [ChatMessage], task id: UUID? = nil) throws -> Int {
         try prepare()
-        try Self.writeThread(messages, to: threadURL)
+        guard let id else { return try Self.writeThread(messages, to: threadURL) }
+        try FileManager.default.createDirectory(at: taskURL(id), withIntermediateDirectories: true)
+        return try Self.writeThread(messages, to: taskThreadURL(id))
     }
 
     /// The bot's tasks, open and closed, oldest first. A task whose `task.json` can't be read is left out.
@@ -73,9 +89,7 @@ public struct BotHome: Sendable {
     }
 
     public func saveThread(_ messages: [ChatMessage], task id: UUID) throws {
-        try prepare()
-        try FileManager.default.createDirectory(at: taskURL(id), withIntermediateDirectories: true)
-        try Self.writeThread(messages, to: taskThreadURL(id))
+        try writeTranscript(messages, task: id)
     }
 
     /// Unsent follow-ups live beside their conversation, including while a task is closed.
@@ -101,17 +115,19 @@ public struct BotHome: Sendable {
         FileManager.default.fileExists(atPath: (id.map(taskURL) ?? url).appendingPathComponent(Self.queuePausedFile).path)
     }
 
-    public func saveQueuedMessages(_ messages: [ChatMessage], paused: Bool = false, task id: UUID? = nil) throws {
+    @discardableResult
+    public func saveQueuedMessages(_ messages: [ChatMessage], paused: Bool = false, task id: UUID? = nil) throws -> Int {
         try prepare()
         let folder = id.map(taskURL) ?? url
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try Self.writeThread(messages, to: folder.appendingPathComponent("queued.jsonl"))
+        let bytes = try Self.writeThread(messages, to: folder.appendingPathComponent("queued.jsonl"))
         let marker = folder.appendingPathComponent(Self.queuePausedFile)
         if paused && !messages.isEmpty {
             try Data().write(to: marker, options: .atomic)
         } else if FileManager.default.fileExists(atPath: marker.path) {
             try FileManager.default.removeItem(at: marker)
         }
+        return bytes
     }
 
     static let queuePausedFile = "queued.paused"
@@ -124,18 +140,21 @@ public struct BotHome: Sendable {
     }
 
     /// Saves a conversation's queue: the messages the CLI took (`taken.jsonl`) first, so a message
-    /// leaving the pending ones is never in neither file, then the pending messages.
-    public func saveQueue(_ queue: MessageQueue, task id: UUID? = nil) throws {
+    /// leaving the pending ones is never in neither file, then the pending messages. Returns the
+    /// bytes written.
+    @discardableResult
+    public func saveQueue(_ queue: MessageQueue, task id: UUID? = nil) throws -> Int {
         try prepare()
         let folder = id.map(taskURL) ?? url
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let taken = folder.appendingPathComponent(Self.takenFile)
+        var bytes = 0
         if !queue.taken.isEmpty {
-            try Self.writeThread(queue.taken, to: taken)
+            bytes += try Self.writeThread(queue.taken, to: taken)
         } else if FileManager.default.fileExists(atPath: taken.path) {
             try FileManager.default.removeItem(at: taken)
         }
-        try saveQueuedMessages(queue.messages, paused: queue.isPaused, task: id)
+        return bytes + (try saveQueuedMessages(queue.messages, paused: queue.isPaused, task: id))
     }
 
     /// Saves a conversation's transcript, and its queue while it holds messages the CLI took. A
@@ -211,11 +230,12 @@ public struct BotHome: Sendable {
     }
 
     /// Streaming uses complete snapshots so the open assistant message can be replaced atomically.
-    public func saveSubagentThread(_ messages: [ChatMessage], id: UUID, taskID: UUID? = nil) throws {
+    @discardableResult
+    public func saveSubagentThread(_ messages: [ChatMessage], id: UUID, taskID: UUID? = nil) throws -> Int {
         try prepare()
         let folder = subagentURL(id: id, taskID: taskID)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try Self.writeThread(messages, to: folder.appendingPathComponent("thread.jsonl"))
+        return try Self.writeThread(messages, to: folder.appendingPathComponent("thread.jsonl"))
     }
 
     public func appendSubagentMessages(_ messages: [ChatMessage], id: UUID, taskID: UUID? = nil) throws {
@@ -286,9 +306,17 @@ public struct BotHome: Sendable {
         return read
     }
 
-    static func writeThread(_ messages: [ChatMessage], to url: URL) throws {
-        let lines = try messages.map { String(decoding: try Store.lineEncoder.encode($0), as: UTF8.self) }
-        try Data((lines.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")).utf8).write(to: url, options: .atomic)
+    /// Writes one message per line, atomically, into one buffer (no line is copied twice), and
+    /// returns the bytes written.
+    @discardableResult
+    static func writeThread(_ messages: [ChatMessage], to url: URL) throws -> Int {
+        var data = Data()
+        for message in messages {
+            data.append(try Store.lineEncoder.encode(message))
+            data.append(0x0A)
+        }
+        try data.write(to: url, options: .atomic)
+        return data.count
     }
 
     /// Appends to the day's log, `logs/yyyy-MM-dd.log` in local time.

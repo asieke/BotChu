@@ -116,8 +116,9 @@ final class TelegramBridge {
         return .allowed
     }
 
-    /// Into the bot's Home (never a task), through its queue, under the message's own ID.
-    fileprivate func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64, generation: Int) -> TelegramDelivery {
+    /// Into the bot's Home (never a task), through its queue, under the message's own ID, once a
+    /// saved queue holds it (so Telegram's offset moves on only past a message that is kept).
+    fileprivate func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64, generation: Int) async -> TelegramDelivery {
         // No suspension between the final authorization check and AppModel.send. Settings may
         // have changed before observation has had a chance to cancel/restart this gateway.
         guard case .allowed = authorization(for: chat, botID: botID, generation: generation) else { return .discarded }
@@ -125,8 +126,10 @@ final class TelegramBridge {
         let target = ChatTarget.home(botID)
         let queued = { model.messageQueues[target]?.messages.contains { $0.id == id } == true }
         if queued() || model.thread(target).contains(where: { $0.id == id }) { return .duplicate }
-        guard model.send(text, to: target, id: id) else { return .failed("it couldn't be saved in \(bot.name)'s queue.") }
-        return .queued(busy: queued() && model.isRunning(target))
+        guard await model.sendAccepted(text, to: target, id: id) else { return .failed("it couldn't be saved in \(bot.name)'s queue.") }
+        // Still waiting in the queue, behind a turn: not one starting with it.
+        let waiting = model.messageQueues[target]?.pending.contains { $0.id == id } == true
+        return .queued(busy: waiting && model.isRunning(target))
     }
 
     fileprivate func progress(of id: UUID, for botID: UUID) -> TelegramProgress {
@@ -171,8 +174,8 @@ final class TelegramBridge {
         bridge?.authorization(for: chat, botID: botID, generation: generation) ?? .stopped
     }
 
-    func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64) -> TelegramDelivery {
-        bridge?.deliver(text, id: id, to: botID, from: chat, generation: generation) ?? .discarded
+    func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64) async -> TelegramDelivery {
+        await bridge?.deliver(text, id: id, to: botID, from: chat, generation: generation) ?? .discarded
     }
 
     func progress(of id: UUID, for botID: UUID) -> TelegramProgress {

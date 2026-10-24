@@ -156,6 +156,7 @@ extension RenderingTests {
         #expect(app.send("third", to: target))
         #expect(app.thread(target).filter { $0.role == .user }.map(\.text) == ["WAIT"])
         #expect(app.messageQueues[target]?.messages.map(\.text) == ["second", "third"])
+        await app.storage.settle()
         #expect(fixture.home.loadQueuedMessages(task: target.taskID).count == 2)
         app.show(.home(fixture.bot.id))
         #expect(app.status(of: .home(fixture.bot.id))?.phase == .idle)
@@ -194,6 +195,7 @@ extension RenderingTests {
         let id = try #require(recovered.messageQueues[target]?.messages.first?.id)
         recovered.editQueuedMessage(id, in: target)
         #expect(recovered.drafts[target] == "keep this\n\na draft already here")
+        await recovered.storage.settle()
         #expect(fixture.home.loadQueuedMessages(task: target.taskID).isEmpty)
     }
 
@@ -249,10 +251,12 @@ extension RenderingTests {
         try await fixture.wait { app.runStates[target]?.takesInput == true }
         app.send("steer me", to: target, images: withImages ? [image] : [])
         let id = try #require(app.messageQueues[target]?.messages.first?.id)
-        #expect(app.messageQueues[target]?.isInFlight(id) == true)
+        // Written to the CLI once a saved queue holds it.
+        try await fixture.wait { app.messageQueues[target]?.isInFlight(id) == true }
         // Already written to the CLI: it can't be taken back into the composer.
         app.editQueuedMessage(id, in: target)
         #expect(app.messageQueues[target]?.messages.count == 1)
+        await app.storage.settle()
         #expect(fixture.home.loadQueuedMessages(task: target.taskID).map(\.id) == [id])
         // The tool call ends once the CLI has the follow-up, so it takes it at that call.
         try await fixture.wait { FileManager.default.fileExists(atPath: fixture.folder(target).appendingPathComponent("received").path) }
@@ -306,6 +310,7 @@ extension RenderingTests {
         #expect(errors.first?.text.hasPrefix("Couldn't save this conversation (") == true)
         #expect(app.messageQueues[target]?.messages.isEmpty == true)
         #expect(app.messageQueues[target]?.taken.map(\.text) == ["steer me"])
+        await app.storage.settle()
         #expect(fixture.home.loadThread(task: taskID).filter { $0.role == .user }.map(\.text) == ["WAIT"])
         #expect(fixture.home.loadQueuedMessages(task: taskID).isEmpty)
         #expect(fixture.home.loadQueue(delivered: fixture.home.loadThread(task: taskID), task: taskID).taken.map(\.text) == ["steer me"])
@@ -364,7 +369,9 @@ extension RenderingTests {
         #expect(try fixture.calls(task).count == 2)
     }
 
-    @Test func failedQueueWriteDoesNotAcceptOrLoseTheDraft() throws {
+    /// #107: the queue is saved off the main thread; a send whose save fails isn't accepted, its
+    /// message leaves the queue, the conversation says why, and no CLI runs.
+    @Test func failedQueueWriteDoesNotAcceptOrLoseTheDraft() async throws {
         let fixture = try ConversationFixture()
         defer { fixture.cleanUp() }
         let app = fixture.app, target = fixture.taskTarget
@@ -372,11 +379,17 @@ extension RenderingTests {
         try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
         app.runStates[target] = RunState()
         app.drafts[target] = "Keep my draft"
-        #expect(!app.send("Keep my draft", to: target))
+        let accepted = await app.sendAccepted("Keep my draft", to: target)
+        #expect(!accepted)
         #expect(app.messageQueues[target]?.messages.isEmpty == true)
         #expect(app.drafts[target] == "Keep my draft")
         #expect(app.thread(target).last?.role == .error)
         app.runStates.removeAll()
+        // Idle, the send is refused the same way, and nothing starts.
+        #expect(!(await app.sendAccepted("Still not saved", to: target)))
+        #expect(app.messageQueues[target]?.messages.isEmpty == true)
+        #expect(!app.isRunning(target))
+        #expect(!FileManager.default.fileExists(atPath: fixture.folder(target).appendingPathComponent("calls.jsonl").path))
     }
 
     @Test func queuedMessagesDuringPreparationCanBeStoppedWithoutStarting() throws {

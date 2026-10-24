@@ -252,21 +252,35 @@ public struct EvaluationRequest: Sendable {
         snapshot.toolCalls > 0 || ending == .failed
     }
 
+    /// The same, from the messages, without building a snapshot.
+    static func worthReviewing(_ messages: some Collection<ChatMessage>, ending: RunEnding) -> Bool {
+        ending == .failed || messages.contains { $0.role == .tool }
+    }
+
+    /// What a review of a task's turn is about (`taskTurn`), known before anything is built.
+    public static func taskTurnSubject(_ task: BotTask, of bot: Bot, thread: [ChatMessage], turnStart: Int) -> EvaluationSubject? {
+        let start = min(max(0, turnStart), thread.count)
+        guard start < thread.count else { return nil }
+        return .taskTurn(botID: bot.id, taskID: task.id, turnID: thread[start].id)
+    }
+
     /// A review of a task's turn, from the message that started it to its end; `turnStart` is where
     /// the turn's output began in `thread`. Nil when the turn isn't worth one.
+    /// `snapshot` false (the account's CLI can't run a review) builds none, for a run recorded as
+    /// not reviewed.
     public static func taskTurn(_ task: BotTask, of bot: Bot, thread: [ChatMessage], turnStart: Int,
-                                ending: RunEnding, error: String?, machine: String) -> EvaluationRequest? {
+                                ending: RunEnding, error: String?, machine: String, snapshot builds: Bool = true) -> EvaluationRequest? {
         let start = min(max(0, turnStart), thread.count)
         guard start < thread.count else { return nil }
         let prompt = thread[..<start].lastIndex { $0.role == .user } ?? start
         var heading = "a turn of the task “\(task.title)” in \(task.repo)"
         if let work = task.work { heading += task.review == nil ? ", on \(work.reference)" : ", reviewing \(work.reference)" }
         heading += ", on \(machine)"
+        guard worthReviewing(thread[prompt...], ending: ending) else { return nil }
         let snapshot = EvaluationSnapshot(heading: heading, ending: ending, error: error, brief: task.brief,
-                                          messages: Array(thread[prompt...]),
+                                          messages: builds ? Array(thread[prompt...]) : [],
                                           firstMessage: task.origin == .home && prompt == thread.firstIndex { $0.role == .user }
                                               ? "Brief (from the bot's Home)" : "Owner")
-        guard worthReviewing(snapshot, ending: ending) else { return nil }
         return EvaluationRequest(subject: .taskTurn(botID: bot.id, taskID: task.id, turnID: thread[start].id),
                                  botID: bot.id, botName: bot.name, workspace: bot.workspace, accountID: task.accountID,
                                  accountProfile: task.accountProfile, model: task.model, reasoningEffort: task.reasoningEffort,
@@ -275,7 +289,8 @@ public struct EvaluationRequest: Sendable {
 
     /// A review of a finished sub-agent attempt, about the bot it ran as (`bot`, as it is now), on
     /// the account it ran on. Nil while it runs, or when it isn't worth one.
-    public static func subagent(_ run: SubagentRun, bot: Bot, messages: [ChatMessage], caller: String) -> EvaluationRequest? {
+    public static func subagent(_ run: SubagentRun, bot: Bot, messages: [ChatMessage], caller: String,
+                                snapshot builds: Bool = true) -> EvaluationRequest? {
         let ending: RunEnding
         switch run.phase {
         case .completed: ending = .finished
@@ -284,10 +299,10 @@ public struct EvaluationRequest: Sendable {
         case .queued, .preparing, .running: return nil
         }
         let place = run.workspaceMode == .sharedCallerWorkspace ? "in the caller's workspace" : "in its own folder"
+        guard worthReviewing(messages, ending: ending) else { return nil }
         let snapshot = EvaluationSnapshot(heading: "a sub-agent run “\(run.title)” of \(run.targetBotName), delegated by \(caller) at depth \(run.depth), \(place)",
-                                          ending: ending, error: run.errorMessage, brief: run.brief, messages: messages,
+                                          ending: ending, error: run.errorMessage, brief: run.brief, messages: builds ? messages : [],
                                           firstMessage: "Brief (from \(caller))")
-        guard worthReviewing(snapshot, ending: ending) else { return nil }
         return EvaluationRequest(subject: .subagent(run), botID: bot.id, botName: bot.name, workspace: bot.workspace,
                                  accountID: run.accountID, accountProfile: run.accountProfile, model: run.model,
                                  reasoningEffort: run.reasoningEffort, title: "sub-agent “\(run.title)”", ending: ending, snapshot: snapshot)
@@ -1145,14 +1160,21 @@ public final class RunEvaluator {
     let teamPath: () -> String
 
     public private(set) var records: [String: EvaluationRecord] = [:]
+    /// Where records are saved, off the main actor, each in its own lane, in order.
+    public let storage: StorageQueue
     private var running: [String: Task<Void, Never>] = [:]
     private var wakeTask: Task<Void, Never>?
     /// BotChu is quitting (`stopAll`).
     private var stopping = false
+    /// Runs handed over by `enqueue(_:workspace:account:prepare:)`, so a run's end reported again,
+    /// before or after its request is ready, isn't prepared twice; and the preparations under way.
+    private var claimed: Set<String> = []
+    private var preparations: [String: Task<Void, Never>] = [:]
 
-    public init(writer: MemoryWriter = .shared, workspace: @escaping (UUID) -> String?,
+    public init(writer: MemoryWriter = .shared, storage: StorageQueue = StorageQueue(qos: .utility), workspace: @escaping (UUID) -> String?,
                 sharedMemoryPath: @escaping () -> String, teamPath: @escaping () -> String) {
         self.writer = writer
+        self.storage = storage
         self.workspace = workspace
         self.sharedMemoryPath = sharedMemoryPath
         self.teamPath = teamPath
@@ -1180,26 +1202,73 @@ public final class RunEvaluator {
         pump()
     }
 
-    /// Hands a finished run over for review and returns at once; false when reviews are off, or
-    /// the run was handed over before (also before a relaunch).
+    /// Hands a finished run over for review, with its request built already, and returns at once;
+    /// false when reviews are off, or the run was handed over before (also before a relaunch). The
+    /// app hands runs over with `enqueue(_:workspace:account:prepare:)`, which builds the request
+    /// off the main actor.
     @discardableResult
     public func enqueue(_ request: EvaluationRequest) -> Bool {
         guard runner != nil, isEnabled() else { return false }
         let key = request.subject.key
         guard records[key] == nil, !FileManager.default.fileExists(atPath: BotHome(workspace: request.workspace).evaluationURL(key).path)
         else { return false }
-        var record = EvaluationRecord(request, at: now())
+        let record = EvaluationRecord(request, at: now()).redacted()
+        admit(Prepared(record: record, memory: CommandBuilder.runsToolFree(record.account.kind) ? Self.memoryNotes(workspace: request.workspace) : nil))
+        return true
+    }
+
+    /// Hands a finished run over for review without building what it sees on the main actor. The
+    /// run is claimed here first: false, and nothing built, when reviews are off, there is no runner,
+    /// BotChu is quitting, or the run was handed over before. `prepare` then builds its request off
+    /// the main actor, with `toolFree` false when the account's CLI can't run a review (no snapshot
+    /// is built, and the run is recorded as not reviewed), along with the bot's memory as it is; the
+    /// request is handed over only if reviews are still on and the run still unreviewed.
+    @discardableResult
+    public func enqueue(_ subject: EvaluationSubject, workspace: String, account: Account,
+                        prepare: @escaping @Sendable (_ toolFree: Bool) -> EvaluationRequest?) -> Bool {
+        let key = subject.key
+        guard runner != nil, isEnabled(), !stopping, records[key] == nil, claimed.insert(key).inserted else { return false }
+        let toolFree = CommandBuilder.runsToolFree(account.kind)
+        let file = BotHome(workspace: workspace).evaluationURL(key)
+        let date = now()
+        preparations[key] = Task.detached(priority: .utility) { [weak self] in
+            let prepared: Prepared? = prepare(toolFree).flatMap { request in
+                guard !FileManager.default.fileExists(atPath: file.path) else { return nil }
+                return Prepared(record: EvaluationRecord(request, at: date).redacted(),
+                                memory: toolFree ? Self.memoryNotes(workspace: workspace) : nil)
+            }
+            await self?.prepared(key, prepared)
+        }
+        return true
+    }
+
+    /// A run's request, built and redacted, and the bot's memory notes when it ended.
+    private struct Prepared: Sendable {
+        var record: EvaluationRecord
+        var memory: [String]?
+    }
+
+    private func prepared(_ key: String, _ prepared: Prepared?) {
+        preparations[key] = nil
+        guard let prepared, runner != nil, isEnabled(), !stopping, records[key] == nil else { return }
+        admit(prepared)
+    }
+
+    private func admit(_ prepared: Prepared) {
+        var record = prepared.record
         guard CommandBuilder.runsToolFree(record.account.kind) else {
             record.snapshot = nil
-            update(Self.skipped(record, Self.unavailable(record.account.kind), at: record.createdAt))
-            return true
+            update(Self.skipped(record, Self.unavailable(record.account.kind), at: record.createdAt), redacted: true)
+            return
         }
         if limits.delay > 0 { record.notBefore = record.createdAt.addingTimeInterval(limits.delay) }
-        record.memoryAtRun = MemoryNotes.bullets(in: Workspace.read(MemoryFile.bot(workspace: request.workspace).path))
-            .filter { !MemoryNotes.isSecret($0) }
-        update(record)
+        record.memoryAtRun = prepared.memory
+        update(record, redacted: true)
         pump()
-        return true
+    }
+
+    private nonisolated static func memoryNotes(workspace: String) -> [String] {
+        MemoryNotes.bullets(in: Workspace.read(MemoryFile.bot(workspace: workspace).path)).filter { !MemoryNotes.isSecret($0) }
     }
 
     /// Why a run on a CLI isn't reviewed when the CLI can't run a session without tools.
@@ -1218,7 +1287,7 @@ public final class RunEvaluator {
             skip(record.id, "Not reviewed within \(Int(limits.expiry / 3_600)) hours of the run: its account was busy or at its daily limit")
         }
         guard runner != nil, isEnabled() else { return }
-        for record in records.values where record.phase == .applying && running[record.id] == nil { apply(record.id) }
+        for record in records.values where record.phase == .applying && running[record.id] == nil { applyOnceSaved(record.id) }
         while running.count < limits.concurrent, let next = nextReview(at: date) { start(next) }
         if records.values.contains(where: { $0.phase == .pending }) {
             let wake = limits.wake
@@ -1303,9 +1372,10 @@ public final class RunEvaluator {
         for task in running.values { task.cancel() }
     }
 
-    /// Waits until no review runs (for tests).
+    /// Waits until no review runs or is being prepared, and every record is saved (for tests).
     public func settle() async {
-        while let task = running.values.first { await task.value }
+        while let task = running.values.first ?? preparations.values.first { await task.value }
+        await storage.settle()
     }
 
     private func nextReview(at date: Date) -> String? {
@@ -1343,7 +1413,10 @@ public final class RunEvaluator {
                                     memory: Workspace.read(MemoryFile.bot(workspace: workspace).path),
                                     sharedMemory: Workspace.read(sharedMemoryPath()), team: Workspace.read(teamPath())))
         let timeout = limits.timeout
+        let lane = BotHome(workspace: workspace).evaluationURL(id).path, storage = storage
         running[id] = Task { [weak self] in
+            // The model is asked only once the record says the review is running.
+            await storage.barrier(lane)
             let attempt = await Self.run(job, with: runner, timeout: timeout)
             self?.finish(id, attempt)
         }
@@ -1438,7 +1511,7 @@ public final class RunEvaluator {
                 + (parsed.extra > 0 ? ["\(parsed.extra) change\(parsed.extra == 1 ? "" : "s") beyond the \(EvaluationResponse.maxChanges) a review may suggest"] : [])
             record.phase = .applying
             update(record)
-            apply(id)
+            applyOnceSaved(id)
         } else {
             let error = attempt.error ?? EvaluationRunError("The review ended without a result")
             let kind: EvaluationFailure.Kind = error.usedTool ? .toolUse : error.timedOut ? .evaluation : EvaluationFailure.kind(of: error.message)
@@ -1460,6 +1533,21 @@ public final class RunEvaluator {
             record.finishedAt = now()
         }
         update(record)
+    }
+
+    /// Applies the plan once the record saying it is being applied is saved, so a relaunch applies
+    /// it again (which changes nothing) rather than asking the model again.
+    private func applyOnceSaved(_ id: String) {
+        guard running[id] == nil, let record = records[id], let workspace = workspace(record.botID) else { return apply(id) }
+        let lane = BotHome(workspace: workspace).evaluationURL(id).path, storage = storage
+        running[id] = Task { [weak self] in
+            await storage.barrier(lane)
+            guard let self else { return }
+            self.running[id] = nil
+            guard !self.stopping else { return }
+            self.apply(id)
+            self.pump()
+        }
     }
 
     /// Applies a reviewed plan to the bot's `MEMORY.md` through the writer, which re-reads the file
@@ -1537,30 +1625,51 @@ public final class RunEvaluator {
         return record
     }
 
-    /// Keeps the record and saves it, without anything that looks like a secret (`redacted`), noting
-    /// when it couldn't be saved, keeps the newest finished ones; then reports the change.
-    private func update(_ record: EvaluationRecord) {
-        var record = record.redacted()
-        if let workspace = workspace(record.botID) {
-            do {
-                try BotHome(workspace: workspace).save(record)
-                record.saveError = nil
-            } catch {
-                record.saveError = "Couldn't save this review in .botchu/evaluations: \(error.localizedDescription)"
-            }
-        }
+    /// Keeps the record, without anything that looks like a secret (`redacted`), and saves it off
+    /// the main actor, noting when that couldn't be done; keeps the newest finished ones; then
+    /// reports the change.
+    private func update(_ record: EvaluationRecord, redacted: Bool = false) {
+        let record = redacted ? record : record.redacted()
         records[record.id] = record
+        save(record)
         if !record.phase.isWaiting { prune(record.botID) }
         onChange(record)
+    }
+
+    /// Saves the record in its own lane, after its earlier saves (a newer state takes the place of
+    /// one not written yet); a failure shows in the record until a save works.
+    private func save(_ record: EvaluationRecord) {
+        guard let workspace = workspace(record.botID) else { return }
+        let home = BotHome(workspace: workspace), id = record.id
+        storage.replace(home.evaluationURL(id).path, slot: "record", value: record, write: { record in
+            var record = record
+            record.saveError = nil
+            try home.save(record)
+            return 0
+        }) { [weak self] result in
+            guard let self, var current = self.records[id] else { return }
+            var error: String?
+            if case .failure(let failure) = result {
+                guard (failure as? StorageQueue.Failure) == nil else { return }
+                error = EvaluationSnapshot.redacted("Couldn't save this review in .botchu/evaluations: \(failure.localizedDescription)")
+            }
+            guard current.saveError != error else { return }
+            current.saveError = error
+            self.records[id] = current
+            self.onChange(current)
+        }
     }
 
     /// Keeps the newest `limits.kept` finished reviews of a bot.
     private func prune(_ botID: UUID) {
         guard let workspace = workspace(botID) else { return }
         let finished = records(aboutBot: botID).filter { !$0.phase.isWaiting }
+        let home = BotHome(workspace: workspace)
         for record in finished.dropFirst(limits.kept) {
             records[record.id] = nil
-            BotHome(workspace: workspace).removeEvaluation(record.id)
+            let lane = home.evaluationURL(record.id).path, id = record.id
+            storage.cancel(lane, slot: "record")
+            storage.submit(lane, label: "remove", work: { home.removeEvaluation(id) })
         }
     }
 }

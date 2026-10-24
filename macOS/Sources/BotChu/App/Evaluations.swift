@@ -7,7 +7,7 @@ import BotChuCore
 /// and the queue never wait for it.
 extension AppModel {
     func makeEvaluator(runner: RunEvaluator.Runner?) -> RunEvaluator {
-        let evaluator = RunEvaluator(workspace: { [weak self] id in self?.bot(id)?.workspace },
+        let evaluator = RunEvaluator(storage: storage, workspace: { [weak self] id in self?.bot(id)?.workspace },
                                      sharedMemoryPath: { [weak self] in self?.settings.sharedMemoryPath ?? "" },
                                      teamPath: { [weak self] in self?.settings.teamPath ?? "" })
         evaluator.runner = runner
@@ -34,21 +34,26 @@ extension AppModel {
     }
 
     /// Hands a task's finished turn over for review, unless BotChu is quitting (which interrupts it).
+    /// What the review sees is built off the main actor, and only when reviews are on and the run
+    /// wasn't handed over before (`RunEvaluator.enqueue(_:workspace:account:prepare:)`).
     func evaluateTaskTurn(_ target: ChatTarget, thread: [ChatMessage], turnStart: Int, stopped: Bool, failure: String?) {
-        guard !terminating, let bot = bot(target.botID), let task = task(target) else { return }
+        guard !terminating, let bot = bot(target.botID), let task = task(target),
+              let subject = EvaluationRequest.taskTurnSubject(task, of: bot, thread: thread, turnStart: turnStart) else { return }
         let machine = task.isRemote ? "\(machineName(task.hostID, fallback: task.hostName)) over SSH" : "This Mac"
-        guard let request = EvaluationRequest.taskTurn(task, of: bot, thread: thread, turnStart: turnStart,
-                                                       ending: stopped ? .stopped : failure == nil ? .finished : .failed,
-                                                       error: failure, machine: machine) else { return }
-        evaluator.enqueue(request)
+        let ending: RunEnding = stopped ? .stopped : failure == nil ? .finished : .failed
+        evaluator.enqueue(subject, workspace: bot.workspace, account: task.account) { toolFree in
+            EvaluationRequest.taskTurn(task, of: bot, thread: thread, turnStart: turnStart, ending: ending, error: failure,
+                                       machine: machine, snapshot: toolFree)
+        }
     }
 
     /// Hands a finished sub-agent attempt over for review, about the bot it ran as.
     func evaluateSubagentRun(_ run: SubagentRun, messages: [ChatMessage]) {
-        guard !terminating, let bot = bot(run.targetBotID) else { return }
+        guard !terminating, let bot = bot(run.targetBotID), !run.phase.isActive else { return }
         let caller = run.parentSubagentID.flatMap { delegation?.run($0)?.targetBotName } ?? self.bot(run.rootBotID)?.name ?? "a bot"
-        guard let request = EvaluationRequest.subagent(run, bot: bot, messages: messages, caller: caller) else { return }
-        evaluator.enqueue(request)
+        evaluator.enqueue(.subagent(run), workspace: bot.workspace, account: run.account) { toolFree in
+            EvaluationRequest.subagent(run, bot: bot, messages: messages, caller: caller, snapshot: toolFree)
+        }
     }
 
     /// The reviews the status sidebar lists, newest first: Home's are those about the bot's
