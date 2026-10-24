@@ -59,7 +59,7 @@ public struct ProjectMetadata: Equatable, Sendable {
     }
 }
 
-public struct ProjectRecord: Equatable, Sendable {
+public struct ProjectRecord: Equatable, Codable, Sendable {
     public var text: String
     /// GitHub's blob SHA, nil when PROJECT.md does not exist yet.
     public var sha: String?

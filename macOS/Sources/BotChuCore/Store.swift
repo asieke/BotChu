@@ -305,14 +305,14 @@ public struct BotHome: Sendable {
         try handle.write(contentsOf: Data(text.utf8))
     }
 
-    /// Moves the bot and its editable Markdown together, rejecting collisions before moving anything.
+    /// Moves the bot, its editable Markdown and its own skills together, rejecting collisions before moving anything.
     public func move(toWorkspace workspace: String) throws {
         let destination = BotHome(workspace: workspace)
         let files = FileManager.default
         let sourceFolder = url.deletingLastPathComponent()
         let targetFolder = destination.url.deletingLastPathComponent()
         guard sourceFolder.standardizedFileURL != targetFolder.standardizedFileURL else { return }
-        let sources = ([url] + BotDocument.allCases.map { sourceFolder.appendingPathComponent($0.rawValue) })
+        let sources = ([url] + (BotDocument.allCases.map(\.rawValue) + [Skills.folderName]).map { sourceFolder.appendingPathComponent($0) })
             .filter { files.fileExists(atPath: $0.path) }
         for source in sources {
             let target = targetFolder.appendingPathComponent(source.lastPathComponent)
@@ -364,6 +364,9 @@ public struct SaveFailure: Error, Equatable, Sendable {
         case conversation(paused: Bool)
         /// A conversation's pending messages.
         case pendingMessages
+        /// `index.json`: the bots in the sidebar, in order, with their sections. What changed since
+        /// it last saved stays in the sidebar, unsaved, until a save works (`Store.commitIndex`).
+        case botIndex
     }
 
     public var item: Item
@@ -390,6 +393,9 @@ public struct SaveFailure: Error, Equatable, Sendable {
                 + " " + fix
         case .pendingMessages:
             return "Couldn't save pending messages \(place): \(reason). \(fix)"
+        case .botIndex:
+            return "Couldn't save the sidebar's bots and sections \(place): \(reason). Changes since then show here but "
+                + "aren't saved until Try Again or a later change saves them. \(fix)"
         }
     }
 }
@@ -458,6 +464,26 @@ public struct Store: Sendable {
     public func saveIndex(_ entries: [Entry]) throws {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Self.encoder.encode(entries).write(to: indexURL, options: .atomic)
+    }
+
+    /// What the index holds for `bots`, in sidebar order, each in its section, then the entries
+    /// whose folders are missing: each bot once, in its first place.
+    public static func entries(for bots: [Bot], sections: [UUID: String], missing: [Entry]) -> [Entry] {
+        var listed = Set<UUID>()
+        return (bots.map { Entry(id: $0.id, workspace: $0.workspace, section: sections[$0.id]) } + missing)
+            .filter { listed.insert($0.id).inserted }
+    }
+
+    /// Saves the whole index, or says why it couldn't. Nothing is kept from a failed save, so the
+    /// next save that works (a retry, or the next change) saves every change since the last one
+    /// that did, once, with the missing entries it was given.
+    public func commitIndex(_ entries: [Entry]) -> SaveFailure? {
+        do {
+            try saveIndex(entries)
+            return nil
+        } catch {
+            return SaveFailure(.botIndex, file: indexURL, error: error)
+        }
     }
 
     /// The bots in the index whose folders hold them, in order, with the sections they are in, and

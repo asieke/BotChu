@@ -302,6 +302,7 @@ private struct FakeGH {
         #expect(lines(.projects)[2...] == ["Screen: Projects", "Window: 820 × 600 points, light appearance", "Bots: 1, 1 turn running"])
         #expect(lines(.agents)[2] == "Screen: Agents")
         #expect(lines(.providers)[2] == "Screen: Providers")
+        #expect(lines(.skills)[2] == "Screen: Skills")
         #expect(lines(.conversation(statusArea: nil))[2] == "Screen: conversation, status sidebar hidden")
         #expect(lines(.noBot)[2] == "Screen: no bot selected")
     }

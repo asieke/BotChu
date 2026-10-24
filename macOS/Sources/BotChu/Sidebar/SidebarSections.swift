@@ -1,8 +1,10 @@
 import SwiftUI
 import BotChuCore
 
-/// The sections the sidebar groups bots into (`BotSections`): moving a bot into one, and renaming,
-/// reordering and removing them. Each change saves the bots' order and sections in `index.json`.
+/// The sections the sidebar and Agents group bots into (`BotSections`): moving a bot into one, and
+/// renaming, reordering and removing them. Each change saves the bots' order and sections in
+/// `index.json`; when that fails, the change stays, unsaved, and the sidebar says so until a save
+/// works (`indexFailure`).
 extension AppModel {
     /// The bots as the sidebar groups them.
     var botSections: BotSections { BotSections(order: bots.map(\.id), membership: sections) }
@@ -95,23 +97,79 @@ enum SectionPrompt: Identifiable, Equatable {
     }
 }
 
-/// A bot's Move to Section menu: Conversations and each section, with the bot's own checked, then
+/// A section being named in an alert: a new one for a bot to move into, or a section's new name.
+/// The sidebar and Agents each keep one, and ask with `ask`.
+struct SectionNaming {
+    var prompt: SectionPrompt?
+    var name = ""
+
+    /// Asks for a name, starting from the section's own for a rename.
+    mutating func ask(_ prompt: SectionPrompt) {
+        if case .rename(let old) = prompt { name = old } else { name = "" }
+        self.prompt = prompt
+    }
+}
+
+extension View {
+    /// Asks for the name `naming` wants in an alert, and makes or renames the section.
+    func sectionNamingAlert(_ naming: Binding<SectionNaming>) -> some View {
+        modifier(SectionNamingAlert(naming: naming))
+    }
+}
+
+/// The alert that names a section, wherever it is asked for. A section the sidebar shows collapsed
+/// stays collapsed under its new name, and a bot moved into a new section shows in it there.
+struct SectionNamingAlert: ViewModifier {
+    @Environment(AppModel.self) private var model
+    @Binding var naming: SectionNaming
+    @AppStorage(CollapsedSections.storageKey) private var collapsed = CollapsedSections()
+
+    func body(content: Content) -> some View {
+        content.alert(naming.prompt?.title ?? "", isPresented: Binding(
+            get: { naming.prompt != nil }, set: { if !$0 { naming.prompt = nil } }), presenting: naming.prompt) { prompt in
+            TextField("Section name", text: $naming.name)
+            Button(prompt.confirm) { commit(prompt) }
+            Button("Cancel", role: .cancel) {}
+        } message: { prompt in
+            if let message = prompt.message { Text(message) }
+        }
+    }
+
+    /// Makes or renames the section the prompt asked for; an empty name changes nothing.
+    private func commit(_ prompt: SectionPrompt) {
+        let name = naming.name
+        guard !name.allSatisfy(\.isWhitespace) else { return }
+        switch prompt {
+        case .new(let botID):
+            model.moveBot(botID, toSection: name)
+            let title = model.sections[botID] ?? BotSections.unsectioned
+            if collapsed.titles.contains(title) { collapsed.titles.remove(title) }
+        case .rename(let old):
+            let before = Set(model.botSections.names)
+            model.renameSection(old, to: name)
+            // A renamed section stays as it was, open or collapsed; merged into another, it is as that one is.
+            if collapsed.titles.remove(old) != nil, let new = Set(model.botSections.names).subtracting(before).first {
+                collapsed.titles.insert(new)
+            }
+        }
+    }
+}
+
+/// A bot's Move to Section choices: Conversations and each section, with the bot's own checked, then
 /// New Section….
-struct MoveToSectionMenu: View {
+struct MoveToSectionItems: View {
     @Environment(AppModel.self) private var model
     let botID: UUID
     let newSection: () -> Void
 
     var body: some View {
-        Menu("Move to Section") {
-            // Toggles, not an inline picker, which would add separators of its own around them.
-            Toggle(BotSections.unsectioned, isOn: isIn(nil))
-            ForEach(model.botSections.names, id: \.self) { name in
-                Toggle(name, isOn: isIn(name))
-            }
-            Divider()
-            Button("New Section…", action: newSection)
+        // Toggles, not an inline picker, which would add separators of its own around them.
+        Toggle(BotSections.unsectioned, isOn: isIn(nil))
+        ForEach(model.botSections.names, id: \.self) { name in
+            Toggle(name, isOn: isIn(name))
         }
+        Divider()
+        Button("New Section…", action: newSection)
     }
 
     /// Checked for the bot's own section; choosing another moves it there.
@@ -120,28 +178,50 @@ struct MoveToSectionMenu: View {
     }
 }
 
+/// A bot's Move to Section menu, in the sidebar's and Agents' menus for a bot.
+struct MoveToSectionMenu: View {
+    let botID: UUID
+    let newSection: () -> Void
+
+    var body: some View {
+        Menu("Move to Section") { MoveToSectionItems(botID: botID, newSection: newSection) }
+    }
+}
+
+/// A named section's menu, wherever its heading is: rename, move up or down, remove. Removing it
+/// returns its bots to Conversations and deletes nothing.
+struct SectionMenuItems: View {
+    @Environment(AppModel.self) private var model
+    @AppStorage(CollapsedSections.storageKey) private var collapsed = CollapsedSections()
+    let name: String
+    let rename: (String) -> Void
+
+    var body: some View {
+        let names = model.botSections.names
+        let index = names.firstIndex(of: name) ?? 0
+        Button("Rename Section…") { rename(name) }
+        Button("Move Section Up") { model.moveSection(name, by: -1) }
+            .disabled(index == 0)
+        Button("Move Section Down") { model.moveSection(name, by: 1) }
+            .disabled(index >= names.count - 1)
+        Divider()
+        Button("Remove Section") {
+            model.removeSection(name)
+            collapsed.titles.remove(name)
+        }
+    }
+}
+
 /// A section's heading in the sidebar. A named section's menu renames, reorders and removes it;
 /// Conversations has none.
 struct SidebarSectionHeader: View {
-    @Environment(AppModel.self) private var model
     let group: BotSections.Group
     let rename: (String) -> Void
-    let remove: (String) -> Void
 
     var body: some View {
         if let name = group.name {
-            let names = model.botSections.names
-            let index = names.firstIndex(of: name) ?? 0
             Text(name)
-                .contextMenu {
-                    Button("Rename Section…") { rename(name) }
-                    Button("Move Section Up") { model.moveSection(name, by: -1) }
-                        .disabled(index == 0)
-                    Button("Move Section Down") { model.moveSection(name, by: 1) }
-                        .disabled(index >= names.count - 1)
-                    Divider()
-                    Button("Remove Section") { remove(name) }
-                }
+                .contextMenu { SectionMenuItems(name: name, rename: rename) }
                 .accessibilityIdentifier("sidebar-section-\(name)")
         } else {
             Text(group.title)

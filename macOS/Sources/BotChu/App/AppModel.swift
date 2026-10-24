@@ -41,6 +41,8 @@ struct DocumentEditorRequest: Identifiable {
     let seed: String
     /// Shown over an empty draft, saying what the file is for.
     let placeholder: String
+    /// When the bots read the file, beside Save.
+    var footnote = "Read at the start of each new session. Use New Session to apply changes to an existing conversation."
 
     init(bot: Bot, document: BotDocument) {
         name = document.rawValue
@@ -82,9 +84,11 @@ struct ChatTarget: Hashable {
 }
 
 enum LibraryDestination: String, CaseIterable {
-    case projects, agents, providers
+    case projects, agents, providers, skills
     var title: String { rawValue.capitalized }
-    var symbol: String { switch self { case .projects: "square.grid.2x2"; case .agents: "person.2"; case .providers: "terminal" } }
+    var symbol: String {
+        switch self { case .projects: "square.grid.2x2"; case .agents: "person.2"; case .providers: "terminal"; case .skills: "wand.and.stars" }
+    }
 }
 
 @MainActor @Observable
@@ -94,6 +98,8 @@ final class AppModel {
     /// bots in no section first. See `SidebarSections.swift`.
     var sections: [UUID: String] = [:]
     var delegation: SubagentRuntime!
+    /// Messages from Telegram, into bots' Homes, and their replies back (Settings ▸ Telegram).
+    var telegram: TelegramBridge!
     /// Each bot's tasks, open and closed, oldest first.
     var tasks: [UUID: [BotTask]] = [:]
     /// Every conversation (each bot's Home, and each task), observed one by one: see
@@ -148,11 +154,17 @@ final class AppModel {
     @ObservationIgnored var issueFiler = DevHooks.issueFiler
     let settings: AppSettings
     let usage: UsageCache
+    /// Usage views inject this lookup in tests so they never read the owner's Keychain.
+    let openRouterKey: @MainActor () -> String?
     let modelCatalog = ModelCatalog()
 
     private let store: Store
     /// Index entries whose folders don't hold their bot right now; kept so the bot returns with it.
     @ObservationIgnored var missing: [Store.Entry] = []
+    /// Why `index.json` couldn't be saved; nil while it is saved. Until a save works (Try Again in
+    /// the sidebar, the next change, or quitting), the sidebar's bots, order and sections since are
+    /// only here.
+    private(set) var indexFailure: SaveFailure?
     @ObservationIgnored private var delegationSessions: [ChatTarget: Set<String>] = [:]
     @ObservationIgnored private var runs: [ChatTarget: AgentRun] = [:]
     /// What each running CLI that takes input mid-turn has been given and has taken back.
@@ -170,19 +182,22 @@ final class AppModel {
     /// The last git work queued in each checkout: worktrees are made one at a time per repository,
     /// since git locks its refs and config.
     @ObservationIgnored private var checkoutWork: [String: Task<Void, Never>] = [:]
-    /// The owner's GitHub repositories, which tasks start from, once read (`loadRepositories`).
+    /// The owner's GitHub repositories, which tasks start from, as saved or synced (`Projects.swift`).
     var repositories: [GitHubLookup.Repo]?
+    /// Why the last sync of the Projects catalog failed.
     var repositoriesError: String?
-    var repositoriesLoading = false
-    @ObservationIgnored var repositoriesTask: Task<Void, Never>?
     var projectRecords: [String: ProjectRecord] = [:]
     var projectErrors: [String: String] = [:]
+    /// A sync of the Projects catalog is under way.
     var projectsLoading = false
-    /// The open pull requests and issues across the repositories, once read (`loadOpenWork`).
+    /// The open pull requests and issues across the repositories, as saved or synced.
     var openItems: [GitHubLookup.OpenItem]?
     var openItemsError: String?
-    var openItemsLoading = false
-    @ObservationIgnored var openItemsReadAt: Date?
+    /// The GitHub account the Projects catalog belongs to, and when it was last synced.
+    var projectsLogin: String?
+    var repositoriesReadAt: Date?
+    /// Keeps the Projects catalog on disk and in step with GitHub.
+    let projectSync: ProjectSync
     let openWorkLookup: @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure>
     /// An issue or pull request (repository, number, whether a pull request) as the Projects sidebar
     /// shows it, and the ones read so far, by `owner/name#number`.
@@ -191,11 +206,12 @@ final class AppModel {
     var githubConnection: ProjectGitHub.Connection?
     var githubChecking = false
     let projectGitHub: ProjectGitHub
-    @ObservationIgnored var repositoriesReadAt: Date?
     /// PROJECT.md's `local:` deploy targets, by repository, once read.
     @ObservationIgnored var deployTargetCache: [String: [(machine: String, path: String)]] = [:]
 
-    init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil, projectGitHub: ProjectGitHub = ProjectGitHub(),
+    init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil,
+         openRouterKey: @escaping @MainActor () -> String? = { Keychain.get(Keychain.openRouterAccount) },
+         projectGitHub: ProjectGitHub = ProjectGitHub(),
          openWorkLookup: @escaping @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure> = { await GitHubLookup.openWork(repos: $0) },
          workDetailLookup: @escaping @Sendable (String, Int, Bool) async -> Result<GitHubLookup.WorkDetail, TaskWorktree.Failure> = {
              await GitHubLookup.detail(number: $1, pullRequest: $2, repo: $0)
@@ -205,8 +221,11 @@ final class AppModel {
         self.workDetailLookup = workDetailLookup
         DevHooks.configure()
         self.store = store ?? DevHooks.dataDir.map { Store(root: $0) } ?? .applicationSupport
+        projectSync = ProjectSync(file: self.store.root.appendingPathComponent("projects.json"), client: ProjectSync.Client(
+            gh: { await projectGitHub.gh($0) }, record: { try await projectGitHub.record(repo: $0) }, openWork: openWorkLookup))
         self.settings = settings ?? AppSettings()
         self.usage = usage ?? DevHooks.usageFetch.map { UsageCache(fetch: $0) } ?? UsageCache()
+        self.openRouterKey = openRouterKey
         self.store.migrateIfNeeded()
         let loaded = self.store.loadBots()
         bots = loaded.bots
@@ -230,7 +249,9 @@ final class AppModel {
         evaluator = makeEvaluator(runner: store == nil && DevHooks.dataDir == nil ? evaluationRunner ?? liveEvaluationRunner() : evaluationRunner)
         delegation = SubagentRuntime(model: self, root: (store != nil || DevHooks.dataDir != nil)
             ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot)
+        telegram = TelegramBridge(model: self, stateURL: self.store.root.appendingPathComponent("telegram.json"))
         selection = bots.first?.id
+        showSavedProjects()
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stopAll() }
         }
@@ -370,7 +391,9 @@ final class AppModel {
         bot.workspace = (bot.workspace as NSString).expandingTildeInPath
         if bot.emoji.isEmpty { bot.emoji = "🤖" }
         // In no section: last among the bots in none, above the sections.
-        bots.insert(bot, at: bots.firstIndex { sections[$0.id] != nil } ?? bots.endIndex)
+        var layout = botSections
+        layout.add(bot.id)
+        bots.insert(bot, at: layout.order.firstIndex(of: bot.id) ?? bots.endIndex)
         conversation(.home(bot.id)).load([])
         tasks[bot.id] = []
         save(bot)
@@ -854,8 +877,10 @@ final class AppModel {
 
     // MARK: Turns
 
+    /// `id` is the message's own: a message from Telegram has one made from it, so the same
+    /// message sent again is recognized.
     @discardableResult
-    func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = []) -> Bool {
+    func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [], id: UUID = UUID()) -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard images.count <= ImageAttachment.maximumCount else {
             attachmentErrors[target] = "Attach up to 8 images per message. Remove an image before sending."
@@ -866,7 +891,7 @@ final class AppModel {
             return beginTurn(text, for: target, message: nil)
         }
         var queue = messageQueues[target] ?? MessageQueue()
-        queue.enqueue(ChatMessage(role: .user, text: text, images: images))
+        queue.enqueue(ChatMessage(id: id, role: .user, text: text, images: images))
         // Save before clearing the composer; a failed write must leave the owner's draft intact.
         guard saveQueue(queue, for: target) else { return false }
         messageQueues[target] = queue
@@ -1059,6 +1084,7 @@ final class AppModel {
         let instructions = Workspace.read(BotDocument.instructions.url(for: bot).path)
         let sharedMemory = Workspace.read(settings.sharedMemoryPath)
         let team = Workspace.read(settings.teamPath)
+        let skills = activeSkills(of: bot)
         let directory: String
         var machine = Machine.thisMac
         var preamble: String?
@@ -1077,14 +1103,14 @@ final class AppModel {
                 preamble = BotContext.taskPreamble(bot: bot, task: task, memory: memory, sharedMemory: sharedMemory, history: history,
                                                    machine: machineDescription(of: task),
                                                    home: machine.isRemote ? thread(.home(id)) : [], soul: soul,
-                                                   instructions: instructions, team: team)
+                                                   instructions: instructions, team: team, skills: skills)
             }
         } else {
             directory = bot.workspace
             if resume == nil {
                 preamble = BotContext.sessionPreamble(bot: bot, memory: memory, sharedMemory: sharedMemory, history: history,
                                                       tasks: openTasks(of: id).map { report(on: $0, of: id, replyLimit: 240) }, soul: soul,
-                                                      instructions: instructions, team: team)
+                                                      instructions: instructions, team: team, skills: skills)
             }
         }
         let ticket = UUID()
@@ -1401,6 +1427,8 @@ final class AppModel {
         for target in Array(runStates.keys) { stop(target) }
         for run in petRuns.values { run.stop() }
         for task in petTasks.values { task.cancel() }
+        // Sidebar changes that couldn't be saved get one more try.
+        if indexFailure != nil { saveIndex() }
     }
 
     /// Saves a turn still running as it stands, with its running tool calls marked interrupted;
@@ -1437,6 +1465,12 @@ final class AppModel {
 
     func append(_ message: ChatMessage, to target: ChatTarget) {
         conversation(target).append(message)
+    }
+
+    /// Adds one of BotChu's own lines to a conversation, and saves it.
+    func note(_ text: String, in target: ChatTarget) {
+        append(ChatMessage(role: .note, text: text), to: target)
+        saveThread(target)
     }
 
     /// Parses the recent replies of every conversation in the background, so a conversation
@@ -1508,9 +1542,10 @@ final class AppModel {
     }
 
     /// Writes `index.json`: the bots in sidebar order, with their sections, then the entries whose
-    /// folders are missing.
+    /// folders are missing. A failure shows in the sidebar until a save works.
     func saveIndex() {
-        try? store.saveIndex(bots.map { Store.Entry(id: $0.id, workspace: $0.workspace, section: sections[$0.id]) } + missing)
+        let failure = store.commitIndex(Store.entries(for: bots, sections: sections, missing: missing))
+        if failure != indexFailure { indexFailure = failure }
     }
 
     /// Saves the conversation, and its queue while it holds messages the CLI took

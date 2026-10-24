@@ -22,28 +22,35 @@ extension RenderingTests {
         try BotHome(workspace: second.workspace).save(second)
         try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace), Store.Entry(id: second.id, workspace: second.workspace)])
         let settings = AppSettings(defaults: defaults)
+        settings.botsRoot = root.appendingPathComponent("bots").path
+        settings.reposRoot = root.appendingPathComponent("repos").path
         let account = Account(id: "custom-research", name: "Research Codex", kind: .codex, defaultCommand: "codex-research", symbol: "terminal")
         settings.customAccounts = [account]
         #expect(AppSettings(defaults: defaults).accounts.last == account)
-        let app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in
-            ProviderUsage(windows: [UsageWindow(id: "session", title: "5-hour", usedPercent: 24, resetsAt: .now.addingTimeInterval(7200)), UsageWindow(id: "week", title: "Weekly", usedPercent: 68, resetsAt: .now.addingTimeInterval(259200))])
-        }, projectGitHub: ProjectGitHub { _, _ in
+        var keyReads = 0
+        let app = AppModel(store: store, settings: settings, usage: UsageCache { _, key in
+            let hasKey = key != nil
+            #expect(!hasKey)
+            return ProviderUsage(windows: [UsageWindow(id: "session", title: "5-hour", usedPercent: 24, resetsAt: .now.addingTimeInterval(7200)), UsageWindow(id: "week", title: "Weekly", usedPercent: 68, resetsAt: .now.addingTimeInterval(259200))])
+        }, openRouterKey: { keyReads += 1; return nil }, projectGitHub: ProjectGitHub { _, _ in
             Issue.record("Library fixtures must not request GitHub")
             return await ProjectGitHub.command(["/usr/bin/false"], body: nil)
-        }, openWorkLookup: { repos in
-            #expect(repos == ["octocat/BotChu", "octocat/Orbit"])
-            let url = URL(string: "https://github.com/octocat/BotChu/pull/7")!
-            return .success(GitHubLookup.OpenWork(items: [
-                GitHubLookup.OpenItem(repo: "octocat/BotChu", number: 7, title: "Show open pull requests in Projects", url: url, isPullRequest: true,
-                                      isDraft: false, author: "octocat", authorAvatar: nil, createdAt: .now.addingTimeInterval(-7200),
-                                      updatedAt: .now.addingTimeInterval(-600), comments: 1, labels: [.init(name: "enhancement", color: "a2eeef")],
-                                      reviewDecision: "REVIEW_REQUIRED", checks: .success, branch: "feat/7-projects", fromFork: false, additions: 120, deletions: 8),
-                GitHubLookup.OpenItem(repo: "octocat/Orbit", number: 3, title: "Invite teammates by email", url: URL(string: "https://github.com/octocat/Orbit/issues/3")!,
-                                      isPullRequest: false, isDraft: false, author: "hubot", authorAvatar: nil, createdAt: .now.addingTimeInterval(-90000),
-                                      updatedAt: .now.addingTimeInterval(-86400), comments: 4, labels: [], reviewDecision: nil, checks: .none,
-                                      branch: nil, fromFork: false, additions: 0, deletions: 0),
-            ]))
+        }, openWorkLookup: { _ in
+            Issue.record("Library fixtures must not request GitHub")
+            return .success(GitHubLookup.OpenWork(items: []))
         })
+        // The open pull requests and issues as saved, which Projects shows without syncing.
+        let url = URL(string: "https://github.com/octocat/BotChu/pull/7")!
+        let openItems: [GitHubLookup.OpenItem] = [
+            GitHubLookup.OpenItem(repo: "octocat/BotChu", number: 7, title: "Show open pull requests in Projects", url: url, isPullRequest: true,
+                                  isDraft: false, author: "octocat", authorAvatar: nil, createdAt: .now.addingTimeInterval(-7200),
+                                  updatedAt: .now.addingTimeInterval(-600), comments: 1, labels: [.init(name: "enhancement", color: "a2eeef")],
+                                  reviewDecision: "REVIEW_REQUIRED", checks: .success, branch: "feat/7-projects", fromFork: false, additions: 120, deletions: 8),
+            GitHubLookup.OpenItem(repo: "octocat/Orbit", number: 3, title: "Invite teammates by email", url: URL(string: "https://github.com/octocat/Orbit/issues/3")!,
+                                  isPullRequest: false, isDraft: false, author: "hubot", authorAvatar: nil, createdAt: .now.addingTimeInterval(-90000),
+                                  updatedAt: .now.addingTimeInterval(-86400), comments: 4, labels: [], reviewDecision: nil, checks: .none,
+                                  branch: nil, fromFork: false, additions: 0, deletions: 0),
+        ]
         let sample: [(String, String, ProjectMetadata.Kind, String)] = [
             ("BotChu", "Persistent agents, projects, and conversations on your Mac.", .local, "local:my-mac:~/apps/BotChu"),
             ("Fieldnotes", "Research notes and ideas for the next big thing.", .docs, "none"),
@@ -53,6 +60,7 @@ extension RenderingTests {
         app.repositories = sample.map { GitHubLookup.Repo(nameWithOwner: "octocat/\($0.0)", description: $0.1, isPrivate: $0.0 == "Fieldnotes",
                                                           openIssues: $0.0 == "Orbit" ? 1 : 0, openPullRequests: $0.0 == "BotChu" ? 1 : 0) }
         app.repositoriesReadAt = Date()
+        app.openItems = openItems
         for (name, _, kind, deploy) in sample {
             let metadata = ProjectMetadata(name: name, kind: kind, deploy: deploy)
             app.projectRecords["octocat/\(name)"] = ProjectRecord(text: try ProjectRecord(text: "", sha: nil).updating(metadata), sha: name)
@@ -100,9 +108,9 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(200))
         try captureLibrary(window, name: "projects-dark")
         app.destination = .providers
-        defaults.set("table", forKey: "providersLayout")
         try await Task.sleep(for: .milliseconds(200))
-        try captureLibrary(window, name: "providers-list")
+        try captureLibrary(window, name: "providers-dark")
+        #expect(keyReads > 0) // A missing test key must never fall back to Keychain.
         NSApp.appearance = nil
         app.show(target)
         #expect(app.destination == nil)

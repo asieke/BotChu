@@ -128,6 +128,8 @@ struct SettingsView: View {
                 }
                 .font(.caption).foregroundStyle(.secondary)
             }
+
+            TelegramSection()
         }
         .formStyle(.grouped)
         .frame(width: 600, height: 840)

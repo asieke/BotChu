@@ -1,9 +1,9 @@
 import Foundation
 
-/// The sections the owner groups bots into in the sidebar. A bot is in one section, by its name, or
-/// in none; the bots in none come first, under Conversations, then each section in turn, each with
-/// its bots in order. A bot's section is kept with its place in `index.json` (`Store.Entry`), so a
-/// section lasts while a bot is in it.
+/// The sections the owner groups bots into in the sidebar and Agents. A bot is in one section, by its
+/// name, or in none; the bots in none come first, under Conversations, then each section in turn,
+/// each with its bots in order. A bot's section is kept with its place in `index.json`
+/// (`Store.Entry`), so a section lasts while a bot is in it.
 public struct BotSections: Equatable, Sendable {
     /// The heading of the bots in no section, which no section can be named.
     public static let unsectioned = "Conversations"
@@ -64,6 +64,19 @@ public struct BotSections: Equatable, Sendable {
         return groups
     }
 
+    /// The headings and bots a search for `query` finds, in order, as Agents shows them: a heading
+    /// whose title has the query in it keeps all its bots, any other only the bots whose `text` has
+    /// it, and a heading with neither is left out. An empty query finds every heading, as `groups`.
+    public func groups(matching query: String, text: (UUID) -> String) -> [Group] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return groups }
+        return groups.compactMap { group in
+            if group.title.localizedCaseInsensitiveContains(query) { return group }
+            let found = group.botIDs.filter { text($0).localizedCaseInsensitiveContains(query) }
+            return found.isEmpty ? nil : Group(name: group.name, botIDs: found)
+        }
+    }
+
     /// The sections' names, in order.
     public var names: [String] { groups.compactMap(\.name) }
 
@@ -75,6 +88,13 @@ public struct BotSections: Equatable, Sendable {
     public func sectionName(_ typed: String) -> String? {
         guard let name = Self.tidy(typed) else { return nil }
         return names.first { $0.caseInsensitiveCompare(name) == .orderedSame } ?? name
+    }
+
+    /// Adds a new bot: in no section, after the bots already there and before the first section. A
+    /// bot already listed stays where it is.
+    public mutating func add(_ id: UUID) {
+        guard !order.contains(id) else { return }
+        order.insert(id, at: order.firstIndex { membership[$0] != nil } ?? order.endIndex)
     }
 
     /// Puts a bot in the section `typed` names, last among its bots, or in none with nil. A new name

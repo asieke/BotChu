@@ -5,8 +5,7 @@ struct SidebarView: View {
     @Environment(AppModel.self) private var model
     @State private var pendingDelete: Bot?
     @State private var expansion = SidebarExpansion()
-    @State private var sectionPrompt: SectionPrompt?
-    @State private var sectionName = ""
+    @State private var naming = SectionNaming()
     @AppStorage(CollapsedSections.storageKey) private var collapsed = CollapsedSections()
 
     var body: some View {
@@ -47,7 +46,7 @@ struct SidebarView: View {
                                     .disabled(model.isRunning(.home(bot.id)))
                                 Button("Show Workspace in Finder") { model.revealWorkspace(bot.id) }
                                 Divider()
-                                MoveToSectionMenu(botID: bot.id) { ask(.new(botID: bot.id)) }
+                                MoveToSectionMenu(botID: bot.id) { naming.ask(.new(botID: bot.id)) }
                                 Divider()
                                 Button("Delete…", role: .destructive) { pendingDelete = bot }
                             }
@@ -63,10 +62,7 @@ struct SidebarView: View {
                         }
                     }
                 } header: {
-                    SidebarSectionHeader(group: group, rename: { ask(.rename($0)) }, remove: { name in
-                        model.removeSection(name)
-                        collapsed.titles.remove(name)
-                    })
+                    SidebarSectionHeader(group: group, rename: { naming.ask(.rename($0)) })
                 }
             }
         }
@@ -75,6 +71,10 @@ struct SidebarView: View {
         // What is selected from elsewhere (Agents, a new bot or task, ⌃Tab) shows, in its section.
         .onChange(of: model.sidebarSelection) { _, selection in
             if let id = selection?.botID { reveal(model.sections[id] ?? BotSections.unsectioned) }
+        }
+        // Above New Bot, while the sidebar's changes aren't saved.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let failure = model.indexFailure { IndexFailureBanner(failure: failure) }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack {
@@ -100,14 +100,7 @@ struct SidebarView: View {
         } message: { bot in
             Text("Its conversation and tasks are deleted. Its workspace folder, \(bot.workspace), and its tasks' worktrees are kept.")
         }
-        .alert(sectionPrompt?.title ?? "", isPresented: Binding(
-            get: { sectionPrompt != nil }, set: { if !$0 { sectionPrompt = nil } }), presenting: sectionPrompt) { prompt in
-            TextField("Section name", text: $sectionName)
-            Button(prompt.confirm) { commit(prompt) }
-            Button("Cancel", role: .cancel) {}
-        } message: { prompt in
-            if let message = prompt.message { Text(message) }
-        }
+        .sectionNamingAlert($naming)
     }
 
     private func isExpanded(_ group: BotSections.Group) -> Binding<Bool> {
@@ -119,27 +112,35 @@ struct SidebarView: View {
     private func reveal(_ title: String) {
         if collapsed.titles.contains(title) { collapsed.titles.remove(title) }
     }
+}
 
-    private func ask(_ prompt: SectionPrompt) {
-        if case .rename(let name) = prompt { sectionName = name } else { sectionName = "" }
-        sectionPrompt = prompt
-    }
+/// Says the sidebar's bots, order and sections couldn't be saved in `index.json`, and why, while
+/// they aren't: it stays until a save works. Try Again saves them as they are now.
+struct IndexFailureBanner: View {
+    @Environment(AppModel.self) private var model
+    let failure: SaveFailure
 
-    /// Makes or renames the section the prompt asked for; an empty name changes nothing.
-    private func commit(_ prompt: SectionPrompt) {
-        guard !sectionName.allSatisfy(\.isWhitespace) else { return }
-        switch prompt {
-        case .new(let botID):
-            model.moveBot(botID, toSection: sectionName)
-            reveal(model.sections[botID] ?? BotSections.unsectioned)
-        case .rename(let old):
-            let before = Set(model.botSections.names)
-            model.renameSection(old, to: sectionName)
-            // A renamed section stays as it was, open or collapsed; merged into another, it is as that one is.
-            if collapsed.titles.remove(old) != nil, let new = Set(model.botSections.names).subtracting(before).first {
-                collapsed.titles.insert(new)
-            }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Sidebar changes not saved", systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.red)
+            Text(failure.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Button("Try Again") { model.saveIndex() }
+                .controlSize(.small)
+                .accessibilityIdentifier("sidebar-index-retry")
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.red.opacity(0.1)))
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sidebar-index-failure")
     }
 }
 

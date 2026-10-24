@@ -14,13 +14,18 @@ import BotChuCore
 /// - `BOTCHU_INSPECTOR=activity|model|session|memory`: select an inspector area on throwaway data.
 /// - `BOTCHU_DEFAULT_MODEL`: an OpenRouter default for a throwaway run only.
 /// - `BOTCHU_WINDOW=compact`: review the main window at its minimum width, on throwaway data.
-/// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review.
+/// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review;
+///   `mixed` gives each kind of profile a different state (`mixedUsage`).
+/// - `BOTCHU_PROFILE`: with `BOTCHU_DATA_DIR`, CLI profiles to add, from `name|family|command`
+///   (`family` as in `AgentKind`), several separated by `;`.
 /// - `BOTCHU_SEND`: send this message to the selected bot's shown conversation at launch (its Home,
 ///   or the tab `BOTCHU_TAB` shows).
 /// - `BOTCHU_TASK`: start a task for the selected bot at launch from `repo|task|host`, as New Task does
 ///   (`repo` is `owner/name` or a checkout's folder in the repositories folder, `host` an optional
 ///   host's nickname, where the checkout is in its repositories folder; a real turn).
 /// - `BOTCHU_TAB`: show the selected bot's tab with this number at launch (0 is Home, 1 its first task).
+/// - `BOTCHU_DRAFT`: with `BOTCHU_DATA_DIR`, put this draft in the shown conversation's message box at
+///   launch (`\n` starts a new line), to review how the box grows and scrolls.
 /// - `BOTCHU_DEMO=activity`: with `BOTCHU_DATA_DIR`, make the shown conversation a long agent run
 ///   in memory (`DemoActivity`), to review the chat's activity cards without a real turn.
 /// - `BOTCHU_DENSITY`: with `BOTCHU_DATA_DIR`, the chat density (`compact`, `detailed` or `raw`).
@@ -36,6 +41,7 @@ import BotChuCore
 /// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
 /// - `BOTCHU_SECTION`: with `BOTCHU_DATA_DIR`, move the selected bot into the sidebar section of this
 ///   name at launch, as Move to Section does.
+/// - `BOTCHU_SEARCH`: with `BOTCHU_DATA_DIR`, the search Agents opens with.
 /// - `BOTCHU_PET`: give the selected bot this pet folder at launch (`video.json`, `stills/`, `clips/`).
 /// - `BOTCHU_DRAW_PET`: give the selected bot this appearance and make its pet at launch (a real Codex
 ///   run, then real clips on OpenRouter, which cost OpenRouter credit).
@@ -55,6 +61,11 @@ enum DevHooks {
         guard dataDir != nil else { return nil }
         if ["inspector-model", "inspector-effort"].contains(env["BOTCHU_OPEN"] ?? "") { return .model }
         return env["BOTCHU_INSPECTOR"].flatMap(InspectorTab.init(rawValue:))
+    }
+
+    /// The search Agents opens with on throwaway data (`BOTCHU_SEARCH`).
+    static var agentsSearch: String {
+        dataDir == nil ? "" : env["BOTCHU_SEARCH"] ?? ""
     }
 
     /// The hosts a throwaway run starts with (`BOTCHU_HOST`).
@@ -89,10 +100,12 @@ enum DevHooks {
 
     static var usageFetch: UsageCache.Fetch? {
         guard dataDir != nil, let fixture = env["BOTCHU_USAGE"],
-              ["sample", "stale", "expired", "unavailable"].contains(fixture) else { return nil }
-        return { _, _ in
+              ["sample", "stale", "expired", "unavailable", "mixed"].contains(fixture) else { return nil }
+        let started = Date()
+        return { request, _ in
             if fixture == "unavailable" { throw UsageFailure("Check the account’s sign-in, then refresh.") }
             let now = Date()
+            if fixture == "mixed", let reading = try mixedUsage(request.account, now: now, started: started) { return reading }
             return ProviderUsage(windows: [
                 UsageWindow(id: "session", title: "5-hour", usedPercent: 24,
                             resetsAt: now.addingTimeInterval(fixture == "expired" ? -60 : 7_200)),
@@ -101,7 +114,42 @@ enum DevHooks {
         }
     }
 
+    /// `BOTCHU_USAGE=mixed`: Antigravity with more windows than a row shows, Muse stale, Pi's key
+    /// without a limit, Codex Work unavailable, and Claude Work whose first reading is followed by
+    /// a failed check (`start` makes it); the others get the sample.
+    nonisolated private static func mixedUsage(_ account: Account, now: Date, started: Date) throws -> ProviderUsage? {
+        switch account.id {
+        case "google":
+            return ProviderUsage(windows: ["Gemini · Weekly", "Gemini · 5-hour", "Claude & GPT · Weekly", "Claude & GPT · 5-hour", "Images · Daily"].enumerated().map {
+                UsageWindow(id: $1, title: $1, usedPercent: Double([22, 4, 97, 0, 61][$0]), resetsAt: now.addingTimeInterval(Double($0 + 1) * 9_000))
+            }, readAt: now)
+        case "muse":
+            return ProviderUsage(windows: [UsageWindow(id: "window", title: "5-hour", usedPercent: 5, resetsAt: now.addingTimeInterval(3_600)),
+                                           UsageWindow(id: "weekly", title: "Weekly", usedPercent: 34, resetsAt: now.addingTimeInterval(172_800))],
+                                 readAt: now.addingTimeInterval(-7_200))
+        case "openrouter": return ProviderUsage(windows: [], note: "No key spending limit · $1.25 used", readAt: now)
+        case "codex-work": throw UsageFailure("Could not read account usage. Check the CLI’s sign-in and command, then refresh.")
+        case "claude-work" where now.timeIntervalSince(started) > 2: throw UsageFailure("Usage check timed out. Try refreshing later.")
+        default: return nil
+        }
+    }
+
     static func start(model: AppModel, openSettings: () -> Void) {
+        if dataDir != nil, let profiles = env["BOTCHU_PROFILE"] {
+            model.settings.customAccounts = profiles.split(separator: ";").enumerated().compactMap { index, profile in
+                let parts = profile.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+                guard parts.count == 3, let kind = AgentKind(rawValue: parts[1]) else { return nil }
+                return Account(id: "custom-review-\(index)", name: parts[0], kind: kind, defaultCommand: parts[2], symbol: "terminal")
+            }
+        }
+        if dataDir != nil, env["BOTCHU_USAGE"] == "mixed", let account = model.settings.accounts.first(where: { $0.id == "claude-work" }) {
+            // A check after Claude Work's first reading, which fails, so the reading shows stale with the error.
+            let request = UsageRequest(account: account, command: model.settings.command(for: account), credentialRevision: model.settings.usageCredentialRevision)
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                _ = await model.usage.read(request, manual: true, now: .now.addingTimeInterval(31))
+            }
+        }
         if dataDir != nil, env["BOTCHU_WINDOW"] == "compact" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 guard let window = NSApp.windows.first(where: { $0.styleMask.contains(.titled) }) else { return }
@@ -127,7 +175,7 @@ enum DevHooks {
             }
         }
         switch env["BOTCHU_OPEN"] {
-        case "projects", "agents", "providers":
+        case "projects", "agents", "providers", "skills":
             model.destination = env["BOTCHU_OPEN"].flatMap(LibraryDestination.init(rawValue:))
             if let repo = env["BOTCHU_PROJECT"] {
                 model.selectProject(repo, tab: env["BOTCHU_PROJECT_TAB"].flatMap(ProjectSelection.Tab.init(rawValue:)) ?? .overview,
@@ -166,6 +214,9 @@ enum DevHooks {
         }
         if dataDir != nil, env["BOTCHU_DEMO"] == "activity", let id = model.selection {
             DemoActivity.install(in: model, target: model.tab(of: id))
+        }
+        if dataDir != nil, let draft = env["BOTCHU_DRAFT"], let id = model.selection {
+            model.drafts[model.tab(of: id)] = draft.replacingOccurrences(of: "\\n", with: "\n")
         }
         if let text = env["BOTCHU_SEND"], let id = model.selection {
             model.send(text, to: model.tab(of: id))
@@ -223,6 +274,8 @@ enum DevHooks {
                     }
                 }
             }
+            // What sits above New Bot while the sidebar's changes aren't saved.
+            if let failure = model.indexFailure { IndexFailureBanner(failure: failure).padding(.horizontal, -10) }
         }
         .padding(10)
         .frame(width: 240, alignment: .leading)

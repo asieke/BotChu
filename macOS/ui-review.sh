@@ -11,12 +11,16 @@
 #   BOTCHU_DRAW_PET="a brass robot" macOS/ui-review.sh  # or make it one (real runs; costs OpenRouter credit)
 #   BOTCHU_TAB=1 macOS/ui-review.sh        # show the first bot's first task tab (0 is Home)
 #   BOTCHU_SECTION=Research macOS/ui-review.sh  # move the first bot into a sidebar section of that name
+#   BOTCHU_DRAFT='One\nTwo' macOS/ui-review.sh   # with this draft in the message box (\n: a new line)
+#   BOTCHU_OPEN=agents BOTCHU_SEARCH=res macOS/ui-review.sh  # open Agents with that search
 #   BOTCHU_DEMO=activity BOTCHU_TAB=1 macOS/ui-review.sh  # that tab as a long agent run (in memory)
 #   BOTCHU_FAKE_HOST=1 BOTCHU_TASK="hello-world|<task>|Far Mac" macOS/ui-review.sh
 #                                          # a task on a host, "Far Mac", whose ssh is a stand-in that
 #                                          # runs the command here, in $data/far (a real turn)
 #   BOTCHU_TASK="hello-world|Add a line" macOS/ui-review.sh  # start a task (a real turn on Claude Dev)
 #   BOTCHU_OPEN=report macOS/ui-review.sh  # open Report a Bug or Feature
+#   BOTCHU_OPEN=providers BOTCHU_USAGE=mixed BOTCHU_PROFILE="A long profile name|claude|claude-long" macOS/ui-review.sh
+#                                          # Providers with a row in each usage state, and an added profile
 #   BOTCHU_OPEN=projects BOTCHU_PROJECT=<owner/name> BOTCHU_PROJECT_TAB=issues BOTCHU_PROJECT_ITEM=<number> macOS/ui-review.sh
 #                                          # open Projects with that repository's sidebar, on a tab and an
 #                                          # issue or pull request there (read with your gh login)
@@ -150,11 +154,14 @@ fi
 [ -n "${BOTCHU_DRAW_PET:-}" ] && args+=(--env "BOTCHU_DRAW_PET=$BOTCHU_DRAW_PET")
 [ -n "${BOTCHU_APPEARANCE:-}" ] && args+=(--env "BOTCHU_APPEARANCE=$BOTCHU_APPEARANCE")
 [ -n "${BOTCHU_USAGE:-}" ] && args+=(--env "BOTCHU_USAGE=$BOTCHU_USAGE")
+[ -n "${BOTCHU_PROFILE:-}" ] && args+=(--env "BOTCHU_PROFILE=$BOTCHU_PROFILE")
 [ -n "${BOTCHU_DEFAULT_MODEL:-}" ] && args+=(--env "BOTCHU_DEFAULT_MODEL=$BOTCHU_DEFAULT_MODEL")
 [ -n "${BOTCHU_WINDOW:-}" ] && args+=(--env "BOTCHU_WINDOW=$BOTCHU_WINDOW")
 [ -n "${BOTCHU_DEMO:-}" ] && args+=(--env "BOTCHU_DEMO=$BOTCHU_DEMO")
 [ -n "${BOTCHU_DENSITY:-}" ] && args+=(--env "BOTCHU_DENSITY=$BOTCHU_DENSITY")
 [ -n "${BOTCHU_SECTION:-}" ] && args+=(--env "BOTCHU_SECTION=$BOTCHU_SECTION")
+[ -n "${BOTCHU_DRAFT:-}" ] && args+=(--env "BOTCHU_DRAFT=$BOTCHU_DRAFT")
+[ -n "${BOTCHU_SEARCH:-}" ] && args+=(--env "BOTCHU_SEARCH=$BOTCHU_SEARCH")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
 # Without restoring windows: after any copy of BotChu crashed, macOS would otherwise stop at a
 # dialog asking whether to reopen them.
