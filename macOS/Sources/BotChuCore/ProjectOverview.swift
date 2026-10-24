@@ -256,7 +256,7 @@ public struct ProjectRow: Identifiable, Equatable, Sendable {
     /// The rows for these repositories, from their PROJECT.md records (or why one couldn't be read), the
     /// owner's chosen locations and hosts, and the open tasks' repositories.
     public static func rows(repos: [GitHubLookup.Repo], records: [String: ProjectRecord], errors: [String: String] = [:],
-                            chosen: [String: RepoLocation], thisMac: String, hosts: [SSHHost], reposRoot: String,
+                            chosen: [String: RepoLocation], hosts: [SSHHost], reposRoot: String,
                             taskRepos: [String]) -> [ProjectRow] {
         var tasks: [String: Int] = [:]
         for repo in taskRepos { tasks[repo.lowercased(), default: 0] += 1 }
@@ -268,8 +268,7 @@ public struct ProjectRow: Identifiable, Equatable, Sendable {
             case let file? where !file.exists: record = .missing
             case let file?: record = (try? file.metadata(repoName: repo.name)).map(Record.present) ?? .invalid
             }
-            let location = Locations.resolve(repo: repo.id, chosen: chosen[repo.id], deployTargets: file.map { Locations.deployTargets(projectFile: $0.text) } ?? [],
-                                             thisMac: thisMac, hosts: hosts, reposRoot: reposRoot)
+            let location = Locations.resolve(repo: repo.id, chosen: chosen[repo.id], hosts: hosts, reposRoot: reposRoot)
             let workplace = location.hostID.flatMap { id in hosts.first { $0.id == id }?.nickname } ?? "This Mac"
             var deploy: [DeployTarget] = []
             if case .present(let metadata) = record { deploy = DeployTarget.parse(metadata.deploy) }

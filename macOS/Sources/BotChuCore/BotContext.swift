@@ -117,8 +117,8 @@ public enum BotContext {
         - `review`: a pull request's number, to review it rather than continue it; add `"comment": true` to post the \
         review on GitHub as well.
         - `task`: what to do, in your words; required without an issue or pull request.
-        - `machine` (optional): the computer to work on: \(names). Otherwise BotChu works where the repository \
-        lives: where your owner chose, else where its PROJECT.md deploys it, else on this Mac.
+        - `machine` (optional): the computer to work on: \(names). Otherwise BotChu works where your owner \
+        chose for the repository, else on this Mac.
         - `branch` and `title` (optional): otherwise BotChu names the branch from the issue's title or the task.
 
         BotChu takes the file within seconds, clones the repository if it isn't checked out there yet\(clonedInto), \

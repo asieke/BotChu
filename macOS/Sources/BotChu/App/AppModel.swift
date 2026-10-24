@@ -213,8 +213,6 @@ final class AppModel {
     var githubConnection: ProjectGitHub.Connection?
     var githubChecking = false
     let projectGitHub: ProjectGitHub
-    /// PROJECT.md's `local:` deploy targets, by repository, once read.
-    @ObservationIgnored var deployTargetCache: [String: [(machine: String, path: String)]] = [:]
 
     init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil,
          openRouterKey: @escaping @MainActor () -> String? = { Keychain.get(Keychain.openRouterAccount) },
@@ -627,9 +625,9 @@ final class AppModel {
                 location = RepoLocation(path: checkout.path)
             } else if let machine = wanted.machine {
                 let host = try host(named: machine).get()
-                location = RepoLocation(hostID: host?.id, path: await folder(of: found.repo, on: host?.id))
+                location = RepoLocation(hostID: host?.id, path: folder(of: found.repo, on: host?.id))
             } else {
-                location = await self.location(of: found.repo)
+                location = self.location(of: found.repo)
             }
             if location.hostID == nil { location.path = (location.path as NSString).expandingTildeInPath }
             let work = wanted.issue.map { BotTask.Work(number: $0, isPullRequest: false, repo: found.repo) }
