@@ -119,11 +119,14 @@ final class TelegramBridge {
     /// Into the bot's Home (never a task), through its queue, under the message's own ID, once a
     /// saved queue holds it (so Telegram's offset moves on only past a message that is kept).
     fileprivate func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64, generation: Int) async -> TelegramDelivery {
+        let target = ChatTarget.home(botID)
+        // A repeated message is recognized in Home's whole history and recovered queue, read first
+        // when Home isn't in memory (#109).
+        _ = await model?.loadedThread(target)
         // No suspension between the final authorization check and AppModel.send. Settings may
         // have changed before observation has had a chance to cancel/restart this gateway.
         guard case .allowed = authorization(for: chat, botID: botID, generation: generation) else { return .discarded }
         guard let model, let bot = model.bot(botID) else { return .unavailable }
-        let target = ChatTarget.home(botID)
         let queued = { model.messageQueues[target]?.messages.contains { $0.id == id } == true }
         if queued() || model.thread(target).contains(where: { $0.id == id }) { return .duplicate }
         guard await model.sendAccepted(text, to: target, id: id) else { return .failed("it couldn't be saved in \(bot.name)'s queue.") }
@@ -132,10 +135,11 @@ final class TelegramBridge {
         return .queued(busy: waiting && model.isRunning(target))
     }
 
-    fileprivate func progress(of id: UUID, for botID: UUID) -> TelegramProgress {
-        guard let model, let bot = model.bot(botID) else { return .gone(TelegramReply.unavailable) }
+    fileprivate func progress(of id: UUID, for botID: UUID) async -> TelegramProgress {
         let target = ChatTarget.home(botID)
-        return .of(id, thread: model.thread(target), queue: model.messageQueues[target], running: model.isRunning(target), botName: bot.name)
+        // From Home's whole history, never a thread that isn't read yet.
+        guard let thread = await model?.loadedThread(target), let model, let bot = model.bot(botID) else { return .gone(TelegramReply.unavailable) }
+        return .of(id, thread: thread, queue: model.messageQueues[target], running: model.isRunning(target), botName: bot.name)
     }
 
     fileprivate func replyFailed(_ id: UUID, for botID: UUID, reason: String, generation: Int) {
@@ -178,8 +182,8 @@ final class TelegramBridge {
         await bridge?.deliver(text, id: id, to: botID, from: chat, generation: generation) ?? .discarded
     }
 
-    func progress(of id: UUID, for botID: UUID) -> TelegramProgress {
-        bridge?.progress(of: id, for: botID) ?? .queued(paused: false)
+    func progress(of id: UUID, for botID: UUID) async -> TelegramProgress {
+        await bridge?.progress(of: id, for: botID) ?? .queued(paused: false)
     }
 
     func replyFailed(_ id: UUID, for botID: UUID, reason: String) {

@@ -58,7 +58,7 @@ struct ChatView: View {
                                     .frame(maxWidth: .infinity)
                                     .padding(.bottom, 4)
                                     .help("\(start) earlier \(start == 1 ? "item" : "items") in this conversation")
-                                } else if transcript.isLoadingEarlier {
+                                } else if transcript.isLoadingEarlier || !model.conversation(target).isLoaded {
                                     ProgressView().controlSize(.small)
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 8)

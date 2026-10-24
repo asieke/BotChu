@@ -16,7 +16,7 @@ extension RenderingTests {
         defer { fixture.cleanUp() }
         let app = fixture.app
         let conversation = app.conversation(fixture.task)
-        conversation.replace(HistoryFixture.messages(5_000))
+        conversation.replace(BrowsingFixture.messages(5_000))
         TranscriptCache.forget(fixture.task)
         app.runStates[fixture.task] = RunState(hasOutput: true)
         app.show(fixture.task)
@@ -48,13 +48,13 @@ extension RenderingTests {
         for page in 0..<10 {
             try await scrollTo(0)
             let seen = try #require(picture(of: scroll, in: window))
-            let anchor = HistoryFixture.anchor(model)
+            let anchor = BrowsingFixture.anchor(model)
             let start = model.start(of: items())
             let state = model.viewport.summary
             model.showEarlier(items: items())
             try await settle(window, frames: 12)
             #expect(model.realized <= limit)
-            let now = anchor.flatMap { HistoryFixture.position(model, $0.row) }
+            let now = anchor.flatMap { BrowsingFixture.position(model, $0.row) }
             #expect(picture(of: scroll, in: window) == seen,
                     "page \(page) from \(start) of \(items().count): reader's row at \(anchor.map { "\($0.at)" } ?? "-"), now \(now.map { "\($0)" } ?? "gone"); clip \(scroll.contentView.bounds.minY); before: \(state); after: \(model.viewport.summary)")
         }
@@ -70,7 +70,7 @@ extension RenderingTests {
         var index = 0
         while items().count < before + 1_000 {
             for _ in 0..<20 {
-                conversation.append(HistoryFixture.message(100_000 + index))
+                conversation.append(BrowsingFixture.message(100_000 + index))
                 index += 1
             }
             try await Task.sleep(for: .milliseconds(5))
@@ -131,7 +131,7 @@ extension RenderingTests {
         let fixture = try ActivityChatFixture()
         defer { fixture.cleanUp() }
         let app = fixture.app
-        let calls = (0..<5_000).map { HistoryFixture.read($0) }
+        let calls = (0..<5_000).map { BrowsingFixture.read($0) }
         app.conversation(fixture.task).replace([ChatMessage(role: .user, text: "Trace every file")] + calls
             + [ChatMessage(role: .assistant, text: "Traced.")])
         TranscriptCache.forget(fixture.task)
@@ -192,7 +192,7 @@ extension RenderingTests {
         let fixture = try ActivityChatFixture()
         defer { fixture.cleanUp() }
         let app = fixture.app
-        app.conversation(fixture.task).replace(HistoryFixture.richMessages(240))
+        app.conversation(fixture.task).replace(BrowsingFixture.richMessages(240))
         TranscriptCache.forget(fixture.task)
         app.show(fixture.task)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 760), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -214,11 +214,11 @@ extension RenderingTests {
             try await settle(window, frames: 2)
         }
         func holds(_ what: String, while change: () async throws -> Void) async throws {
-            let anchor = try #require(HistoryFixture.anchor(model))
+            let anchor = try #require(BrowsingFixture.anchor(model))
             try await change()
-            let now = HistoryFixture.position(model, anchor.row)
+            let now = BrowsingFixture.position(model, anchor.row)
             #expect(now.map { abs($0 - anchor.at) < 1.5 } == true, "\(what): moved from \(anchor.at) to \(now.map { "\($0)" } ?? "gone")")
-            #expect(HistoryFixture.covered(model, scroll), "\(what): blank space in the visible part")
+            #expect(BrowsingFixture.covered(model, scroll), "\(what): blank space in the visible part")
         }
         // Halfway up, with rich replies laid out above it still to render: they render and grow.
         let middle = (scroll.documentView?.frame.height ?? 0) * 0.45
@@ -267,7 +267,7 @@ extension RenderingTests {
     }
 }
 
-@MainActor enum HistoryFixture {
+@MainActor enum BrowsingFixture {
     static func read(_ index: Int) -> ChatMessage {
         let path = "/work/repo/Sources/Folder\(index % 5)/File\(index).swift"
         return ChatMessage(role: .tool, toolID: "r\(index)", toolName: "Read", toolInput: path, toolOutput: "let x = \(index)", toolState: .done)

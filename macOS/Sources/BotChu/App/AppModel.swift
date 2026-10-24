@@ -117,7 +117,9 @@ final class AppModel {
     var visibleBotID: UUID? { destination == nil ? selection : nil }
     var selection: UUID? {
         didSet {
-            guard destination == nil, let selection, selection != oldValue else { return }
+            guard let selection, selection != oldValue else { return }
+            hydrate(tab(of: selection))
+            guard destination == nil else { return }
             react(.greeting, for: tab(of: selection), seconds: 5)
             unread.remove(tab(of: selection))
         }
@@ -249,19 +251,26 @@ final class AppModel {
         missing = loaded.missing
         sections = loaded.sections
         arrange(botSections, save: false)
+        // Only the bots' and tasks' settings are read here; conversations are read when they are
+        // needed (#109). A Home's or open task's queue with something in its files is recovered off
+        // the main thread, with its transcript only when messages wait in it; the others have nothing
+        // to recover, and their digests are read from their indexes. The shown conversation is read first.
         for bot in bots {
-            conversation(.home(bot.id)).load(self.store.loadThread(for: bot))
-            let home = BotHome(workspace: bot.workspace)
-            loadQueue(.home(bot.id), atLaunch: true)
-            tasks[bot.id] = home.loadTasks()
-            for task in tasks[bot.id] ?? [] where !task.isArchived {
-                let target = ChatTarget.task(task.id, of: bot.id)
-                conversation(target).load(home.loadThread(task: task.id))
-                loadQueue(target, atLaunch: true)
-            }
+            tasks[bot.id] = BotHome(workspace: bot.workspace).loadTasks()
             reloadPet(bot.id)
         }
-        warmMarkdown()
+        let shown = bots.first.map { ChatTarget.home($0.id) }
+        for bot in bots {
+            let home = BotHome(workspace: bot.workspace)
+            for target in [ChatTarget.home(bot.id)] + openTasks(of: bot.id).map({ .task($0.id, of: bot.id) }) {
+                if target == shown || home.hasQueueFiles(task: target.taskID) {
+                    recover(target, load: target == shown)
+                } else {
+                    conversation(target).history = .clean
+                    readDigest(target)
+                }
+            }
+        }
         // Reviews spend the accounts' allowance: only the real app runs them by itself.
         evaluator = makeEvaluator(runner: store == nil && DevHooks.dataDir == nil ? evaluationRunner ?? liveEvaluationRunner() : evaluationRunner)
         delegation = SubagentRuntime(model: self, root: (store != nil || DevHooks.dataDir != nil)
@@ -278,11 +287,7 @@ final class AppModel {
         evaluator.load(bots: bots.map { ($0.id, $0.workspace) })
         evaluationRecords = evaluator.records
         // Follow-ups left queued when BotChu quit go out on their own, unless Stop or a failure
-        // paused them; once the window is up, so a turn's first output has somewhere to go.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            for target in Array(self.messageQueues.keys) { self.sendNextQueued(to: target) }
-        }
+        // paused them, once their own conversation is recovered (`recovered`), after the window is up.
     }
 
     func bot(_ id: UUID) -> Bot? { bots.first { $0.id == id } }
@@ -329,6 +334,7 @@ final class AppModel {
         openTask[target.botID] = target.taskID
         unread.remove(target)
         if selection != target.botID { selection = target.botID }
+        hydrate(target)
     }
 
     /// Shows the tab `offset` places after the shown one (before, when negative), wrapping around.
@@ -414,7 +420,7 @@ final class AppModel {
         var layout = botSections
         layout.add(bot.id)
         bots.insert(bot, at: layout.order.firstIndex(of: bot.id) ?? bots.endIndex)
-        conversation(.home(bot.id)).load([])
+        conversation(.home(bot.id)).start()
         tasks[bot.id] = []
         save(bot)
         destination = nil
@@ -492,7 +498,14 @@ final class AppModel {
         bots.removeAll { $0.id == id }
         sections[id] = nil
         tasks[id] = nil
-        // Its threads, turns, queues and reactions, and how its chats were shown.
+        // Its threads, turns, queues and reactions, and how its chats were shown; what waited for
+        // its history hears that it went, and a read under way finds it gone.
+        for (target, conversation) in conversations where target.botID == id {
+            historyBudget.remove(target)
+            let waited = conversation.waiting
+            conversation.waiting = []
+            for waiting in waited { waiting.cancel?() }
+        }
         conversations = conversations.filter { $0.key.botID != id }
         TranscriptCache.forget(bot: id)
         waiting = waiting.filter { $0.key.botID != id }
@@ -547,7 +560,7 @@ final class AppModel {
         guard bot(botID) != nil else { return }
         let target = ChatTarget.task(task.id, of: botID)
         tasks[botID, default: []].append(task)
-        conversation(target).load([])
+        conversation(target).start()
         saveTask(task, of: botID)
         postReceipt(TaskReceipt.started(task), task: task.id, for: botID)
         if show { self.show(target) }
@@ -565,6 +578,7 @@ final class AppModel {
         unread.remove(target)
         TranscriptCache.forget(target)
         if openTask[target.botID] == target.taskID { openTask[target.botID] = nil }
+        trimHistories()
         if task.review != nil, let folder = task.folder, case .success(let machine) = machine(of: task) {
             Task {
                 guard await TaskWorktree.remove(folder, checkout: task.checkout, on: machine).ok, let i = taskIndex(target) else { return }
@@ -578,9 +592,10 @@ final class AppModel {
         guard let i = taskIndex(target), bot(target.botID) != nil else { return }
         tasks[target.botID]?[i].archivedAt = nil
         saveTask(tasks[target.botID]![i], of: target.botID)
-        if !conversation(target).isLoaded, let files = files(target) {
-            conversation(target).load(files.load())
-            loadQueue(target)
+        // A closed task's queue wasn't recovered at launch: it is now, with its transcript, and
+        // what waits in it goes out once it is (`recovered`).
+        if conversation(target).history.recovery != .recovered {
+            recover(target, load: true)
         }
         show(target)
         sendNextQueued(to: target)
@@ -648,7 +663,7 @@ final class AppModel {
             if let checkout = found.checkout {
                 location = RepoLocation(path: checkout.path)
             } else if let machine = wanted.machine {
-                let host = try host(named: machine).get()
+                let host = try await host(named: machine).get()
                 location = RepoLocation(hostID: host?.id, path: folder(of: found.repo, on: host?.id))
             } else {
                 location = self.location(of: found.repo)
@@ -690,6 +705,8 @@ final class AppModel {
     /// replaces it, so a task that keeps working doesn't fill Home.
     private func postReceipt(_ text: String, task taskID: UUID?, for botID: UUID) {
         let home = ChatTarget.home(botID)
+        // Home's thread decides whether it replaces the last receipt: once it is in memory.
+        if later(home, needs: .history, { [weak self] in self?.postReceipt(text, task: taskID, for: botID) }) { return }
         let receipt = ChatMessage(role: .receipt, text: text, taskID: taskID)
         if let taskID, let last = thread(home).last, last.role == .receipt, last.taskID == taskID {
             conversation(home).edit { $0[$0.count - 1] = receipt }
@@ -744,17 +761,23 @@ final class AppModel {
         return BotContext.taskUpdates(reports)
     }
 
-    /// A task as its bot's Home hears of it; `replyLimit` keeps an overview of many tasks short.
+    /// The tasks a Home turn reports on (`taskUpdates`): those with receipts in `history`.
+    private func reportedTasks(of botID: UUID, in history: [ChatMessage]) -> [UUID] {
+        history.compactMap { $0.role == .receipt ? $0.taskID : nil }
+    }
+
+    /// A task as its bot's Home hears of it; `replyLimit` keeps an overview of many tasks short. A
+    /// task whose thread isn't in memory is told from its digest (`digests(of:)` reads those first),
+    /// so a Home turn reads no task's transcript.
     private func report(on task: BotTask, of botID: UUID, replyLimit: Int = BotContext.maxReportReply) -> String {
-        let target = ChatTarget.task(task.id, of: botID)
-        let conversation = conversation(target)
-        // A closed task's thread isn't read at launch.
-        if !conversation.isLoaded, let files = files(target) {
-            conversation.load(files.load())
+        let conversation = conversation(.task(task.id, of: botID))
+        let status = BotStatus.make(settings: task, summary: conversation.summary, run: conversation.run)
+        if conversation.isLoaded {
+            return BotContext.taskReport(task, status: status, pullRequest: task.pullRequest,
+                                         lastReply: conversation.messages.last(where: { $0.role == .assistant })?.text, replyLimit: replyLimit)
         }
-        return BotContext.taskReport(task, status: BotStatus.make(settings: task, summary: conversation.summary, run: conversation.run),
-                                     pullRequest: task.pullRequest, lastReply: conversation.messages.last(where: { $0.role == .assistant })?.text,
-                                     replyLimit: replyLimit)
+        return BotContext.taskReport(task, status: status, pullRequest: task.pullRequest, lastReply: conversation.digest?.lastReply,
+                                     replyCut: conversation.digest?.lastReplyCut ?? false, replyLimit: replyLimit)
     }
 
     /// Whether a task on this Mac has its worktree to run in. A task on a host is asked there.
@@ -949,9 +972,6 @@ final class AppModel {
         if !visible {
             return beginTurn(text, for: target, message: nil)
         }
-        var queue = messageQueues[target] ?? MessageQueue()
-        queue.enqueue(ChatMessage(id: id, role: .user, text: text, images: images, references: references), unsaved: true)
-        messageQueues[target] = queue
         // An idle conversation is busy from now on, so nothing else starts in it before this message
         // does, and Stop withdraws it.
         let ticket = isRunning(target) ? nil : UUID()
@@ -959,6 +979,23 @@ final class AppModel {
             waiting[target] = ticket
             runStates[target] = RunState(preparing: true)
         }
+        // The queue changes once it is recovered after the launch, so what was saved in it isn't lost.
+        if later(target, needs: .recovery, { [weak self] in self?.enqueue(text, to: target, images: images, id: id, references: references,
+                                                                         reserved: ticket, accepted: accepted) },
+                 cancel: { accepted?(false) }) {
+            return true
+        }
+        enqueue(text, to: target, images: images, id: id, references: references, reserved: ticket, accepted: accepted)
+        return true
+    }
+
+    /// Queues a message being sent, saves the queue, then sends it (`send`); `reserved` is the
+    /// ticket that keeps the conversation busy meanwhile.
+    private func enqueue(_ text: String, to target: ChatTarget, images: [ImageAttachment], id: UUID, references: [MessageReference],
+                         reserved ticket: UUID?, accepted: (@MainActor @Sendable (Bool) -> Void)?) {
+        var queue = messageQueues[target] ?? MessageQueue()
+        queue.enqueue(ChatMessage(id: id, role: .user, text: text, images: images, references: references), unsaved: true)
+        messageQueues[target] = queue
         saveQueue(for: target) { [weak self] saved in
             guard let self else { return accepted?(false) ?? () }
             if let ticket, self.waiting[target] == ticket {
@@ -973,7 +1010,6 @@ final class AppModel {
             }
             accepted?(saved)
         }
-        return true
     }
 
     /// `send`, returning once the message's save is done: whether a saved queue holds it.
@@ -994,6 +1030,7 @@ final class AppModel {
 
     /// Resume a paused queue: its next message goes out now, or, during a turn, as a follow-up.
     func resumeQueuedMessages(to target: ChatTarget) {
+        if later(target, needs: .recovery, { [weak self] in self?.resumeQueuedMessages(to: target) }) { return }
         guard messageQueues[target]?.messages.isEmpty == false else { return }
         messageQueues[target]?.resume()
         saveQueue(for: target)
@@ -1003,6 +1040,7 @@ final class AppModel {
     /// Takes a pending message out of the queue now; if the queue can't be saved without it, it
     /// goes back where it was, so what is queued is what is saved.
     func removeQueuedMessage(_ id: UUID, from target: ChatTarget) {
+        if later(target, needs: .recovery, { [weak self] in self?.removeQueuedMessage(id, from: target) }) { return }
         guard var queue = messageQueues[target], let index = queue.messages.firstIndex(where: { $0.id == id }) else { return }
         let message = queue.messages[index]
         queue.remove(id)
@@ -1016,6 +1054,7 @@ final class AppModel {
     }
 
     func editQueuedMessage(_ id: UUID, in target: ChatTarget) {
+        if later(target, needs: .recovery, { [weak self] in self?.editQueuedMessage(id, in: target) }) { return }
         guard let message = messageQueues[target]?.messages.first(where: { $0.id == id }),
               messageQueues[target]?.isInFlight(id) == false else { return }
         removeQueuedMessage(id, from: target)
@@ -1039,7 +1078,21 @@ final class AppModel {
             sendFollowUps(to: target)
             return
         }
-        guard let message = messageQueues[target]?.next else { return }
+        // A queue not recovered yet has nothing to send; its recovery sends what waits in it.
+        guard conversation(target).history.recovery != .recovering, let message = messageQueues[target]?.next else { return }
+        // The turn starts from the conversation's history: once it is read, unless Stop withdraws it.
+        guard conversation(target).isLoaded else {
+            let ticket = UUID()
+            waiting[target] = ticket
+            runStates[target] = RunState(preparing: true)
+            hydrate(target, then: { [weak self] in
+                guard let self, self.waiting[target] == ticket else { return }
+                self.waiting[target] = nil
+                self.runStates[target] = nil
+                self.sendNextQueued(to: target)
+            })
+            return
+        }
         // It leaves the queue once the saved transcript holds it (`beginTurn`).
         guard beginTurn(message.text, for: target, message: message) else {
             pauseQueue(target)
@@ -1081,19 +1134,18 @@ final class AppModel {
     /// Withdraws automatic delivery, remembered across relaunches: after Stop or a real failure,
     /// the queue waits for the owner. Quitting BotChu doesn't count.
     private func pauseQueue(_ target: ChatTarget) {
+        if later(target, needs: .recovery, { [weak self] in self?.pauseQueue(target) }) { return }
         guard !terminating, messageQueues[target]?.messages.isEmpty == false else { return }
         messageQueues[target]?.pause()
         saveQueue(for: target)
     }
 
     private func beginTurn(_ text: String, for target: ChatTarget, message: ChatMessage?) -> Bool {
-        guard !isRunning(target), let bot = bot(target.botID), let current = runSettings(of: target) else { return false }
+        guard !isRunning(target), conversation(target).isLoaded, let bot = bot(target.botID), let current = runSettings(of: target) else { return false }
         let history = thread(target)
-        // Home hears what its tasks did since the owner's last message there, and every conversation
-        // what became of the notes it asked to remember.
-        let sections = [target.taskID == nil ? taskUpdates(for: bot.id, in: history) : nil,
-                        BotContext.memoryUpdates(memoryReports.removeValue(forKey: target) ?? [])].compactMap { $0 }
-        let updates = sections.isEmpty ? nil : sections.joined(separator: "\n\n")
+        // Every conversation hears what became of the notes it asked to remember (and Home what its
+        // tasks did since the owner's last message there, as its turn launches).
+        let updates = BotContext.memoryUpdates(memoryReports.removeValue(forKey: target) ?? [])
         // What the message's mentions point at goes with it, in a new session or a resumed one.
         let text = message.map { deliveredText(of: $0, for: target) } ?? text
 
@@ -1223,7 +1275,6 @@ final class AppModel {
         let skills = activeSkills(of: bot)
         let directory: String
         var machine = Machine.thisMac
-        var preamble: String?
         if let task {
             guard let folder = task.folder else { return }
             switch self.machine(of: task) {
@@ -1234,25 +1285,37 @@ final class AppModel {
                 return
             }
             directory = folder
-            if resume == nil {
-                // A task on a host can't open the bot's folder, so it hears the recent Home conversation.
-                preamble = BotContext.taskPreamble(bot: bot, task: task, memory: memory, sharedMemory: sharedMemory, history: history,
-                                                   machine: machineDescription(of: task),
-                                                   home: machine.isRemote ? thread(.home(id)) : [], soul: soul,
-                                                   instructions: instructions, team: team, skills: skills)
-            }
         } else {
             directory = bot.workspace
-            if resume == nil {
-                preamble = BotContext.sessionPreamble(bot: bot, memory: memory, sharedMemory: sharedMemory, history: history,
-                                                      tasks: openTasks(of: id).map { report(on: $0, of: id, replyLimit: 240) }, soul: soul,
-                                                      instructions: instructions, team: team, skills: skills)
-            }
         }
         let ticket = UUID()
         waiting[target] = ticket
         runStates[target] = RunState(preparing: true)
+        let remote = machine
         Task { [self] in
+            // What the turn's context reads of conversations that may not be in memory: the digests
+            // of Home's tasks (never their transcripts), or, for a task on a host, which can't open
+            // the bot's folder, the recent Home conversation.
+            var preamble: String?
+            var updates = updates
+            if let task {
+                if resume == nil {
+                    let home = remote.isRemote ? await loadedThread(.home(id)) ?? [] : []
+                    preamble = BotContext.taskPreamble(bot: bot, task: task, memory: memory, sharedMemory: sharedMemory, history: history,
+                                                       machine: machineDescription(of: task), home: home, soul: soul,
+                                                       instructions: instructions, team: team, skills: skills)
+                }
+            } else {
+                await digests(of: (resume == nil ? openTasks(of: id).map(\.id) : []) + reportedTasks(of: id, in: history), of: id)
+                if resume == nil {
+                    preamble = BotContext.sessionPreamble(bot: bot, memory: memory, sharedMemory: sharedMemory, history: history,
+                                                          tasks: openTasks(of: id).map { report(on: $0, of: id, replyLimit: 240) }, soul: soul,
+                                                          instructions: instructions, team: team, skills: skills)
+                }
+                // Home hears what its tasks did since the owner's last message there.
+                let sections = [taskUpdates(for: id, in: history), updates].compactMap { $0 }
+                updates = sections.isEmpty ? nil : sections.joined(separator: "\n\n")
+            }
             do {
                 let context = try await delegation.prepareCaller(target: target, directory: directory, machine: machine, hostID: task?.hostID)
                 guard waiting[target] == ticket else { delegation.endCaller(context.id); return }
@@ -1587,6 +1650,9 @@ final class AppModel {
     /// system log, and its files stay as they were (with any messages the CLI took in their queue).
     func stopAll() {
         terminating = true
+        // What waits for a conversation's history or its recovery is done now, so quitting loses
+        // none of it: read here, in order with its writes, in the place of a read under way.
+        for (target, conversation) in conversations where !conversation.waiting.isEmpty { settleNow(target) }
         // What each CLI printed last goes into its thread, and the thread is saved: BotChu may
         // quit before the turn's end would save it, and nothing streamed may be lost.
         for (target, run) in Array(runs) {
@@ -1634,9 +1700,287 @@ final class AppModel {
         }
     }
 
+    // MARK: History (#109)
+
+    /// At most this many bytes of the inactive conversations' histories stay in memory (those not
+    /// shown, running, unsaved or being read); the least recently shown go first. Their digests
+    /// stay, and they are read again when they are needed.
+    nonisolated static let inactiveHistoryBytes = 48 << 20
+    @ObservationIgnored var historyBudget = HistoryBudget<ChatTarget>(limit: AppModel.inactiveHistoryBytes)
+    /// Conversations whose index is made again, one at a time, off the main thread.
+    @ObservationIgnored private var reindexing: [ChatTarget] = []
+    @ObservationIgnored private var isReindexing = false
+
+    /// The conversation shown, or remembered behind a gallery.
+    private var shownTarget: ChatTarget? { selection.map(tab(of:)) }
+
+    /// Runs `action` now or, while the conversation's queue is being recovered (or, for `.history`,
+    /// while its history isn't in memory, or is being read or recovered), once that is done, after
+    /// what waits already for the same; returns whether it waits. What `action` asks for in turn while
+    /// it runs goes first. A queue being read doesn't hold up changes to its queue. A conversation
+    /// whose bot or task is gone runs it now.
+    @discardableResult
+    func later(_ target: ChatTarget, needs: ConversationState.Waiting.Need, _ action: @escaping () -> Void,
+               cancel: (() -> Void)? = nil) -> Bool {
+        guard files(target) != nil else { return false }
+        let conversation = conversation(target)
+        if meets(conversation, needs), conversation.draining || !conversation.waiting.contains(where: { $0.need == needs }) { return false }
+        let waiting = ConversationState.Waiting(need: needs, run: action, cancel: cancel)
+        if conversation.draining {
+            conversation.waiting.insert(waiting, at: min(conversation.insertion, conversation.waiting.count))
+            conversation.insertion += 1
+        } else {
+            conversation.waiting.append(waiting)
+        }
+        startWaitingRead(target)
+        return true
+    }
+
+    private func meets(_ conversation: ConversationState, _ need: ConversationState.Waiting.Need) -> Bool {
+        switch need {
+        case .recovery: conversation.history.recovery != .recovering
+        case .idle: !conversation.history.isBusy
+        case .history: !conversation.history.isBusy && conversation.isLoaded
+        }
+    }
+
+    /// Runs what waits for the conversation, each kind in the order asked, as far as it can; reads
+    /// its history when something waits for it.
+    private func drain(_ target: ChatTarget) {
+        guard let conversation = conversations[target], !conversation.draining else { return }
+        conversation.draining = true
+        var index = 0
+        while index < conversation.waiting.count {
+            let next = conversation.waiting[index]
+            guard meets(conversation, next.need) else {
+                index += 1
+                continue
+            }
+            conversation.waiting.remove(at: index)
+            conversation.insertion = index
+            next.run()
+        }
+        conversation.draining = false
+        startWaitingRead(target)
+    }
+
+    private func startWaitingRead(_ target: ChatTarget) {
+        guard let conversation = conversations[target], !conversation.history.isBusy, !conversation.isLoaded,
+              conversation.waiting.contains(where: { $0.need == .history }) else { return }
+        startRead(target)
+    }
+
+    /// Reads the conversation's history into memory, off the main thread on its lane, unless it is
+    /// there (the chat shows a spinner meanwhile); `then` runs once it is, at once when it is already.
+    func hydrate(_ target: ChatTarget, then: (() -> Void)? = nil, cancel: (() -> Void)? = nil) {
+        if later(target, needs: .history, { then?() }, cancel: cancel) { return }
+        if conversations[target]?.isLoaded == true, let conversation = conversations[target] {
+            historyBudget.use(target, bytes: HistoryBudget<ChatTarget>.estimate(conversation.messages))
+            trimHistories()
+        }
+        then?()
+    }
+
+    /// The conversation's history, once it is in memory (read for it when it isn't); nil when its
+    /// bot or task is gone.
+    func loadedThread(_ target: ChatTarget) async -> [ChatMessage]? {
+        guard files(target) != nil else { return nil }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            hydrate(target, then: { continuation.resume() }, cancel: { continuation.resume() })
+        }
+        return files(target) == nil ? nil : thread(target)
+    }
+
+    /// Waits until no read or recovery of the conversation is under way.
+    private func settled(_ target: ChatTarget) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if !later(target, needs: .idle, { continuation.resume() }, cancel: { continuation.resume() }) { continuation.resume() }
+        }
+    }
+
+    private func startRead(_ target: ChatTarget) {
+        guard let files = files(target) else { return }
+        let conversation = conversation(target)
+        guard let ticket = conversation.history.begin(load: true, recover: false) else { return }
+        let home = files.home, task = target.taskID, lane = files.lane
+        storage.submit(lane, label: "read", work: { home.loadHistory(task: task) }) { [weak self, weak conversation] result in
+            guard let self, let conversation else { return }
+            self.read(target, conversation, ticket: ticket, lane: lane, result: result)
+        }
+    }
+
+    /// A read is taken only by the conversation it was for, while it is the latest: one that ends
+    /// after its bot or task was deleted, or after the conversation was read, recovered or dropped
+    /// from memory again, is ignored, and one from where its bot's folder was is made again where
+    /// it is now.
+    private func read(_ target: ChatTarget, _ conversation: ConversationState, ticket: Int, lane: String, result: Result<HistoryLoad, Error>) {
+        guard conversations[target] === conversation, let files = files(target) else { return }
+        guard files.lane == lane else {
+            conversation.history.abandon(ticket)
+            drain(target)
+            return
+        }
+        // Only a folder going away (its bot deleted) fails a read.
+        guard case .success(let history) = result else { return conversation.history.abandon(ticket) }
+        guard conversation.history.finish(ticket, loaded: true, recovered: false) else { return }
+        took(history, into: conversation, target)
+        drain(target)
+        trimHistories()
+    }
+
+    private func took(_ history: HistoryLoad, into conversation: ConversationState, _ target: ChatTarget) {
+        conversation.load(history.messages, summary: history.digest.summary)
+        historyBudget.use(target, bytes: HistoryBudget<ChatTarget>.estimate(history.messages))
+        if target == shownTarget { warmMarkdown(target) }
+    }
+
+    /// Recovers a Home's or open task's queue (at launch, or as a closed task opens again) off the
+    /// main thread, on its lane: messages the CLI took that the transcript lacks go back into it,
+    /// and what waits in the queue goes out once that's done, as nothing else in the conversation
+    /// changes before. The transcript is read only when recovery needs it, or `load` asks for it.
+    private func recover(_ target: ChatTarget, load: Bool) {
+        guard let files = files(target) else { return }
+        let conversation = conversation(target)
+        let given = conversation.isLoaded ? conversation.messages : nil
+        guard let ticket = conversation.history.begin(load: load, recover: true) else {
+            later(target, needs: .idle, { [weak self] in self?.recover(target, load: load) })
+            return
+        }
+        let home = files.home, task = target.taskID, lane = files.lane
+        storage.submit(lane, label: "recover", work: { home.recover(task: task, transcript: given, load: load) }) { [weak self, weak conversation] result in
+            guard let self, let conversation else { return }
+            self.recovered(target, conversation, ticket: ticket, lane: lane, inMemory: given != nil, load: load, result: result)
+        }
+    }
+
+    private func recovered(_ target: ChatTarget, _ conversation: ConversationState, ticket: Int, lane: String, inMemory: Bool, load: Bool,
+                           result: Result<HistoryRecovery, Error>) {
+        guard conversations[target] === conversation, let files = files(target) else { return }
+        guard files.lane == lane, case .success(let recovery) = result else {
+            conversation.history.abandon(ticket)
+            if files.lane != lane { recover(target, load: load) }
+            return
+        }
+        guard conversation.history.finish(ticket, loaded: recovery.history != nil, recovered: true) else { return }
+        if let history = recovery.history {
+            if !inMemory {
+                took(history, into: conversation, target)
+            } else if history.messages.count != conversation.messages.count {
+                conversation.replace(history.messages)
+            }
+        } else if let digest = recovery.digest {
+            conversation.know(digest)
+        } else {
+            reindex(target)
+        }
+        messageQueues[target] = recovery.queue
+        show(recovery.failures, in: target)
+        drain(target)
+        sendNextQueued(to: target)
+        trimHistories()
+    }
+
+    /// Quitting: recovers the conversation, or reads its history, at once, then runs what waits for it.
+    private func settleNow(_ target: ChatTarget) {
+        guard let files = files(target), let conversation = conversations[target] else { return }
+        let home = files.home, task = target.taskID
+        if conversation.history.recovery == .recovering {
+            let given = conversation.isLoaded ? conversation.messages : nil
+            let recovery = storage.sync(files.lane, label: "recover") { home.recover(task: task, transcript: given, load: true) }
+            conversation.history.took(loaded: true, recovered: true)
+            if let history = recovery.history {
+                if given == nil { took(history, into: conversation, target) } else { conversation.replace(history.messages) }
+            }
+            messageQueues[target] = recovery.queue
+            show(recovery.failures, in: target)
+        } else if !conversation.isLoaded, conversation.waiting.contains(where: { $0.need == .history }) {
+            let history = storage.sync(files.lane, label: "read") { home.loadHistory(task: task) }
+            conversation.history.took(loaded: true, recovered: false)
+            took(history, into: conversation, target)
+        }
+        drain(target)
+    }
+
+    /// Makes sure Home can report on each task without reading its transcript: in memory, or its
+    /// digest read from its index (made again when it doesn't match), off the main thread.
+    private func digests(of taskIDs: [UUID], of botID: UUID) async {
+        var reads: [(ConversationState, Task<ThreadDigest?, Never>)] = []
+        for id in Set(taskIDs) {
+            let target = ChatTarget.task(id, of: botID)
+            await settled(target)
+            guard let files = files(target), let conversation = conversations[target] ?? (task(target) != nil ? conversation(target) : nil),
+                  !conversation.isLoaded, conversation.digest == nil else { continue }
+            let home = files.home, storage = storage, lane = files.lane
+            reads.append((conversation, Task { try? await storage.perform(lane, label: "digest") { home.readDigest(task: id) ?? home.rebuildDigest(task: id) } }))
+        }
+        for (conversation, read) in reads {
+            if let digest = await read.value, !conversation.history.isBusy { conversation.know(digest) }
+        }
+    }
+
+    /// Reads the digest of a conversation not in memory from its index, off the main thread, or
+    /// makes its index again when it doesn't match its transcript (`reindex`).
+    private func readDigest(_ target: ChatTarget) {
+        guard let files = files(target) else { return }
+        let home = files.home, task = target.taskID
+        storage.submit(files.lane, label: "digest", work: { home.readDigest(task: task) }) { [weak self] result in
+            guard let self, let conversation = self.conversations[target], !conversation.isLoaded, !conversation.history.isBusy,
+                  case .success(let found) = result else { return }
+            if let found { conversation.know(found) } else { self.reindex(target) }
+        }
+    }
+
+    /// Makes a conversation's index again, one conversation at a time, in the background: a launch
+    /// after an upgrade, or after a transcript changed outside BotChu.
+    private func reindex(_ target: ChatTarget) {
+        reindexing.append(target)
+        reindexNext()
+    }
+
+    private func reindexNext() {
+        guard !isReindexing, !reindexing.isEmpty else { return }
+        let target = reindexing.removeFirst()
+        guard let files = files(target), let conversation = conversations[target], !conversation.isLoaded,
+              !conversation.history.isBusy, conversation.digest == nil else { return reindexNext() }
+        isReindexing = true
+        let home = files.home, task = target.taskID
+        storage.submit(files.lane, label: "reindex", work: { home.rebuildDigest(task: task) }) { [weak self, weak conversation] result in
+            guard let self else { return }
+            self.isReindexing = false
+            if case .success(let digest) = result, let conversation, self.conversations[target] === conversation,
+               !conversation.history.isBusy { conversation.know(digest) }
+            self.reindexNext()
+        }
+    }
+
+    /// Drops inactive histories from memory, the least recently shown first, while they take more
+    /// than `inactiveHistoryBytes`. Never the one shown (or remembered behind a gallery), one with
+    /// a turn, a sub-agent, a worktree being made, a read or recovery under way, changes waiting
+    /// for it, or anything not saved yet; its draft, queue, settings and session stay as they are.
+    private func trimHistories() {
+        delegation?.trimThreads()
+        let shown = shownTarget
+        for target in historyBudget.overflow(pinned: { !self.evictable($0, shown: shown) }) {
+            guard let conversation = conversations[target], conversation.history.evict() else { continue }
+            conversation.unload()
+            historyBudget.remove(target)
+            TranscriptCache.forget(target)
+        }
+    }
+
+    private func evictable(_ target: ChatTarget, shown: ChatTarget?) -> Bool {
+        guard target != shown, let conversation = conversations[target], conversation.isLoaded, conversation.isSaved,
+              !conversation.history.isBusy, conversation.waiting.isEmpty, conversation.run == nil, waiting[target] == nil,
+              runs[target] == nil, makings[target] == nil, (delegation?.activeCount(target) ?? 0) == 0,
+              let files = files(target) else { return false }
+        return storage.isIdle(under: files.lane)
+    }
+
     // MARK: Storage
 
+    /// Adds a message to the conversation; to one not in memory, once it is read (`later`).
     func append(_ message: ChatMessage, to target: ChatTarget) {
+        if later(target, needs: .history, { [weak self] in self?.append(message, to: target) }) { return }
         conversation(target).append(message)
     }
 
@@ -1646,18 +1990,23 @@ final class AppModel {
         saveThread(target)
     }
 
-    /// Parses the recent replies of every conversation in the background, so a conversation
-    /// shown for the first time finds them parsed and doesn't parse them on the main thread.
-    private func warmMarkdown() {
-        let replies = conversations.values.flatMap { conversation in
-            conversation.messages.reversed().lazy.filter { $0.role == .assistant }.prefix(Self.warmedReplies).map(\.text)
-        }
+    /// Parses the latest replies of a conversation just read, in the background, so it finds
+    /// them parsed and doesn't parse them on the main thread. Only the conversation being shown is
+    /// warmed, and only so much of it: the rest parse as they show.
+    private func warmMarkdown(_ target: ChatTarget) {
+        var budget = Self.warmedBytes
+        let replies = Array(thread(target).reversed().lazy.filter { $0.role == .assistant }.prefix(Self.warmedReplies).map(\.text)
+            .prefix { text in
+                budget -= text.utf8.count
+                return budget >= 0
+            })
         guard !replies.isEmpty else { return }
         DispatchQueue.global(qos: .utility).async { MarkdownCache.shared.warm(replies) }
     }
 
-    /// How many of each conversation's latest replies are parsed ahead.
+    /// How many of a conversation's latest replies are parsed ahead, and at most how much text.
     static let warmedReplies = 60
+    static let warmedBytes = 256 << 10
 
     private func taskIndex(_ target: ChatTarget) -> Int? {
         target.taskID.flatMap { id in tasks[target.botID]?.firstIndex { $0.id == id } }
@@ -1751,16 +2100,32 @@ final class AppModel {
     /// messages the CLI took, or the turn starts with, that the saved transcript holds leave its
     /// queue (`ConversationStorage.saveTranscript`). `done` says whether a transcript holding
     /// everything in it now was saved.
+    ///
+    /// A conversation not in memory is never saved as it is (that would write an empty or partial
+    /// transcript over the full one): it is read first, the changes asked for meanwhile go into it,
+    /// in order, then it is saved; when nothing changed, what is on disk is already it.
     func saveThread(_ target: ChatTarget, done: (@MainActor @Sendable (Bool) -> Void)? = nil) {
+        saveThread(target, skippingUnchanged: false, done: done)
+    }
+
+    private func saveThread(_ target: ChatTarget, skippingUnchanged: Bool, done: (@MainActor @Sendable (Bool) -> Void)?) {
         guard let files = files(target) else { done?(false); return }
+        if later(target, needs: .history, { [weak self] in self?.saveThread(target, skippingUnchanged: true, done: done) },
+                 cancel: { done?(false) }) { return }
         let conversation = conversation(target)
+        if skippingUnchanged, conversation.isSaved, storage.isIdle(under: files.lane) { done?(true); return }
+        let revision = conversation.revision
         files.saveTranscript(conversation.messages, version: conversation.version, queue: queueAccess(target),
-                             failed: { [weak self] failures in self?.show(failures, in: target) }, done: done)
+                             failed: { [weak self] failures in self?.show(failures, in: target) }) { [weak conversation] saved in
+            if saved { conversation?.saved(revision) }
+            done?(saved)
+        }
     }
 
     /// Saves the conversation's queue as it is now, off the main thread; when it can't be saved,
     /// the queue pauses and the conversation says why. `done` says whether it was saved.
     private func saveQueue(for target: ChatTarget, done: (@MainActor @Sendable (Bool) -> Void)? = nil) {
+        if later(target, needs: .recovery, { [weak self] in self?.saveQueue(for: target, done: done) }, cancel: { done?(false) }) { return }
         guard let files = files(target), let queue = messageQueues[target] else { done?(false); return }
         files.saveQueue(queue) { [weak self] failure in
             guard let failure else { done?(true); return }
@@ -1772,22 +2137,10 @@ final class AppModel {
         }
     }
 
-    /// Reads a conversation's queue, after its thread, putting back into its transcript any messages
-    /// the CLI took before the transcript could be saved, and noting any it couldn't read, and where
-    /// their original file is kept. At launch nothing is being written (`init` waited for this
-    /// process's writes); later, it reads (and repairs) in order with the conversation's writes.
-    private func loadQueue(_ target: ChatTarget, atLaunch: Bool = false) {
-        guard let files = files(target) else { return }
-        var transcript = thread(target)
-        let recovered = atLaunch ? files.home.recoverQueue(transcript: &transcript, task: target.taskID) : files.recover(&transcript)
-        if transcript.count != thread(target).count { conversation(target).replace(transcript) }
-        messageQueues[target] = recovered.queue
-        show(recovered.failures, in: target)
-    }
-
     /// Says in the conversation why its files couldn't be saved; once while the same failure repeats.
     private func show(_ failures: [SaveFailure], in target: ChatTarget) {
-        guard bot(target.botID) != nil else { return }
+        guard bot(target.botID) != nil, !failures.isEmpty else { return }
+        if later(target, needs: .history, { [weak self] in self?.show(failures, in: target) }) { return }
         for failure in failures where thread(target).last(where: { $0.role == .error })?.text != failure.message {
             append(ChatMessage(role: .error, text: failure.message), to: target)
         }
