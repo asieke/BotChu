@@ -95,10 +95,8 @@ final class TranscriptModel {
         switch item {
         case .message(let message):
             guard message.role == .assistant else { return 1 + 3 * Double(message.images.count) }
-            let text = message.text
-            let fences = text.components(separatedBy: "```").count - 1
-            let rich = text.contains("$") || text.contains("\\(") || text.contains("```mermaid")
-            return 2 + Double(text.utf8.count) / 400 + 2.5 * Double(fences) + (rich ? 15 : 0)
+            let shape = MarkdownShape(message.text)
+            return 2 + Double(shape.bytes) / 400 + 2.5 * Double(shape.fences) + (shape.mayBeRich ? 15 : 0)
         case .exploration:
             return 2.5
         case .tool:

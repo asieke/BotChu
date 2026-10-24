@@ -2,12 +2,14 @@ import AppKit
 import Foundation
 import SwiftUI
 import Testing
-import BotChuCore
+import WebKit
+@testable import BotChuCore
 @testable import BotChu
 
-/// Chat latency with realistic histories (#48): conversation switching, streamed replies, a live
-/// many-call exploration, seventeen sub-agents, expanding a group or a large output, and the
-/// grouping itself. Not part of
+/// Chat latency with realistic histories (#48): conversation switching, streamed replies (also a
+/// long one being written, with the composer typed in meanwhile, and a rich one until WebKit has
+/// drawn it, #106), a live many-call exploration, seventeen sub-agents, expanding a group or a
+/// large output, and the grouping itself. Not part of
 /// `scripts/check.sh`, and it asserts nothing about time, which varies with load: it runs only with
 /// `BOTCHU_BENCHMARK` set, prints a table and, when the variable names a file, writes it there.
 ///
@@ -102,6 +104,113 @@ extension RenderingTests {
             try await idle(20)
         }
         report.add("Stream delta, long conversation", deltas)
+
+        // #106: a long reply being written: 128 KB of prose given 100 rapid deltas, while the
+        // composer is typed in. A probe posts to the main thread every 5 ms from another thread:
+        // how long it waits is how long a key press or Stop would wait.
+        let paragraph = "A **measured** answer has `code`, a [link](https://example.test), and explanation.\n\n"
+        long.append(ChatBenchFixture.message(["role": "assistant", "text": String(repeating: paragraph, count: 131_072 / paragraph.utf8.count)]))
+        for _ in 0..<100 where MarkdownCache.shared.cached(long.messages.last!.text) == nil { try await idle(20) }
+        try await idle(200)
+        let content = try #require(window.contentView)
+        let editor = try #require(composerTextView(in: content))
+        let workerBefore = MarkdownWorker.shared.statistics
+        let parsedOnMain = MarkdownParses.main
+        // At once: 100 deltas, 10 ms apart.
+        var longDeltas: [Double] = []
+        for i in 0..<100 {
+            longDeltas.append(time {
+                long.stream { $0[$0.count - 1].text += " delta \(i) with **bold** words" }
+            })
+            try await idle(10)
+        }
+        let finalText = long.messages.last!.text
+        let lastDelta = DispatchTime.now().uptimeNanoseconds
+        try await waitUntil(steps: 1_000, every: .milliseconds(2)) { MarkdownCache.shared.cached(finalText) != nil }
+        draw()
+        let settled = Double(DispatchTime.now().uptimeNanoseconds - lastDelta) / 1_000_000
+        let worker = MarkdownWorker.shared.statistics
+        report.add("Stream delta, 128 KB reply", longDeltas)
+        report.add("Last delta to its rendering drawn", [settled])
+        report.note("128 KB reply, 100 deltas: parses started \(worker.started - workerBefore.started), completed \(worker.completed - workerBefore.completed), replaced while waiting \(worker.superseded - workerBefore.superseded), most at once \(worker.peak) (limit \(MarkdownWorker.shared.limit)), on the main thread \(MarkdownParses.main - parsedOnMain)")
+        // As the app delivers output, a few times a second: 30 deltas 200 ms apart, with a key
+        // press in the message box between each two. Meanwhile a typist, on its own schedule,
+        // presses a key every 40 ms: from the press until the message box has drawn it is how
+        // long typing waits; and from when each delta is due until its text is drawn, how fresh
+        // the reply's text is.
+        try await idle(300)
+        // The same probe with nothing happening: what the Mac's load alone costs.
+        let quiet = MainThreadProbe()
+        try await Task.sleep(for: .seconds(3))
+        report.add("Main-thread wait, nothing streaming", quiet.stop())
+        let probe = MainThreadProbe()
+        let typist = MainThreadProbe(every: 40_000) {
+            editor.insertText("b", replacementRange: NSRange(location: NSNotFound, length: 0))
+            draw()
+        }
+        var paced: [Double] = [], keys: [Double] = [], fresh: [Double] = []
+        let clock = ContinuousClock()
+        let begin = clock.now
+        for i in 0..<30 {
+            let due = begin.advanced(by: .milliseconds(200 * i))
+            try await Task.sleep(until: due, clock: clock)
+            paced.append(time { long.stream { $0[$0.count - 1].text += " paced \(i) with **bold** words" } })
+            let late = (clock.now - due).components
+            fresh.append(Double(late.seconds) * 1_000 + Double(late.attoseconds) / 1e15)
+            try await Task.sleep(until: due.advanced(by: .milliseconds(100)), clock: clock)
+            keys.append(time { editor.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0)) })
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        let typed = typist.stop()
+        let waits = probe.stop()
+        report.add("Stream delta, 128 KB reply, 5 a second", paced)
+        report.add("  …from when it was due until drawn", fresh)
+        report.add("Key press in the composer, meanwhile", keys)
+        report.add("Key press every 40 ms, from it until drawn", typed)
+        report.add("Main-thread wait, meanwhile", waits)
+        editor.string = ""
+        app.drafts[bench.long] = nil
+        // Each revision the worker prepares, shown on its own: the longest the main thread is held
+        // from the delta's text drawn until a while after the worker has the revision, which is
+        // showing it (a probe posting every millisecond, so to within one).
+        try await idle(300)
+        let fine = MainThreadProbe(every: 1_000)
+        var shown: [Double] = []
+        for i in 0..<30 {
+            long.stream { $0[$0.count - 1].text += " shown \(i) with **bold** words" }
+            draw()
+            let drawn = DispatchTime.now().uptimeNanoseconds
+            let text = long.messages.last!.text
+            try await waitUntil(steps: 2_000, every: .milliseconds(1)) { MarkdownCache.shared.cached(text) != nil }
+            try await Task.sleep(for: .milliseconds(150))
+            shown.append(fine.longest(postedAfter: drawn))
+        }
+        _ = fine.stop()
+        report.add("A prepared 128 KB revision shown", shown)
+
+        // A rich reply being written: 32 KB with 282 equations, then 60 deltas with one more each,
+        // timed on the main thread and until WebKit has drawn the last.
+        let rich = paragraph + "The equation is $x^2+y^2=z^2$.\n\n"
+        let marker = UUID().uuidString
+        long.append(ChatBenchFixture.message(["role": "assistant", "text": "Rich reply \(marker)\n\n" + String(repeating: rich, count: 32_768 / rich.utf8.count)]))
+        func richView() -> ChatWebView? {
+            webViews(in: window.contentView!).compactMap { $0 as? ChatWebView }.first { $0.rendered?.html.contains(marker) == true }
+        }
+        for _ in 0..<200 where richView()?.alphaValue != 1 { try await idle(20) }
+        let richWeb = try #require(richView())
+        let rendersBefore = richWeb.renders, skippedBefore = richWeb.skipped
+        var richDeltas: [Double] = []
+        for i in 0..<60 {
+            richDeltas.append(time { long.stream { $0[$0.count - 1].text += " Then $y_{\(i)}^2$ follows." } })
+            try await idle(10)
+        }
+        let finalHTML = try #require(RichMarkdown.html(long.messages.last!.text))
+        let richLast = DispatchTime.now().uptimeNanoseconds
+        try await waitUntil(steps: 2_000, every: .milliseconds(2)) { richWeb.rendered?.html == finalHTML && !richWeb.busy }
+        let richSettled = Double(DispatchTime.now().uptimeNanoseconds - richLast) / 1_000_000
+        report.add("Stream delta, 32 KB rich reply", richDeltas)
+        report.add("Last rich delta to WebKit's render done", [richSettled])
+        report.note("32 KB rich reply, 60 deltas: WebKit renders \(richWeb.renders - rendersBefore), revisions skipped while one rendered \(richWeb.skipped - skippedBefore)")
         app.runStates[bench.long] = nil
 
         // A live exploration: 400 (or 5,000) read-only calls so far, then each new call starts and
@@ -285,6 +394,75 @@ extension RenderingTests {
     }
 }
 
+/// How long blocks posted to the main thread every 5 ms wait to run, from when it is made until
+/// `stop`: as long as a key press or a click would wait.
+final class MainThreadProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waits: [Double] = []
+    private var posts: [UInt64] = []
+    private var running = true
+
+    /// Posts to the main thread every `interval` microseconds, from a thread of its own, and
+    /// records how long until the main thread has run it, and `work` with it.
+    init(every interval: useconds_t = 5_000, _ work: (@MainActor () -> Void)? = nil) {
+        nonisolated(unsafe) let work = work
+        Thread.detachNewThread { [self] in
+            while isRunning {
+                let posted = DispatchTime.now().uptimeNanoseconds
+                DispatchQueue.main.async { [self] in
+                    if let work { MainActor.assumeIsolated { work() } }
+                    record(Double(DispatchTime.now().uptimeNanoseconds - posted) / 1_000_000, posted: posted)
+                }
+                usleep(interval)
+            }
+        }
+    }
+
+    private var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return running
+    }
+
+    private func record(_ wait: Double, posted: UInt64) {
+        lock.lock()
+        waits.append(wait)
+        posts.append(posted)
+        lock.unlock()
+    }
+
+    /// The longest wait of those posted after `start` (`DispatchTime` nanoseconds) and run so far.
+    func longest(postedAfter start: UInt64) -> Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return zip(posts, waits).filter { $0.0 >= start }.map(\.1).max() ?? 0
+    }
+
+    func stop() -> [Double] {
+        lock.lock()
+        defer { lock.unlock() }
+        running = false
+        return waits
+    }
+}
+
+/// Waits a step at a time, at most `steps` of them, until `done`; it stops looking once it is, as a
+/// timing that follows must not include looking again.
+@MainActor private func waitUntil(steps: Int, every step: Duration, _ done: () -> Bool) async throws {
+    for _ in 0..<steps {
+        if done() { return }
+        try await Task.sleep(for: step)
+    }
+}
+
+@MainActor private func composerTextView(in view: NSView) -> ComposerTextView? {
+    (view as? ComposerTextView) ?? view.subviews.lazy.compactMap { composerTextView(in: $0) }.first
+}
+
+@MainActor private func webViews(in view: NSView) -> [WKWebView] {
+    (view as? WKWebView).map { [$0] } ?? view.subviews.flatMap { webViews(in: $0) }
+}
+
 /// The chat of the selected bot's shown conversation, as ContentView shows it, without the rest.
 private struct ChatColumn: View {
     @Environment(AppModel.self) private var model
@@ -318,7 +496,9 @@ struct ChatBenchReport {
             guard !sorted.isEmpty else { lines.append("\(name): no samples"); continue }
             let median = sorted[sorted.count / 2]
             let p95 = sorted[min(sorted.count - 1, Int((Double(sorted.count) * 0.95).rounded(.up)) - 1)]
-            lines.append(String(format: "%-44@ %6.2fms %6.2fms %6.2fms %4d", name as NSString, median, p95, sorted.last!, sorted.count))
+            // A p95 of fewer than 30 samples would only be their maximum again.
+            let p95Text = sorted.count >= 30 ? String(format: "%6.2fms", p95) : "      -  "
+            lines.append(String(format: "%-44@ %6.2fms %@ %6.2fms %4d", name as NSString, median, p95Text as NSString, sorted.last!, sorted.count))
         }
         return (lines + notes).joined(separator: "\n")
     }
