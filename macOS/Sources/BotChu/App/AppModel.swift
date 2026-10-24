@@ -1482,8 +1482,9 @@ final class AppModel {
         }
     }
 
-    /// Reads a conversation's queue, putting back into its transcript any messages the CLI took
-    /// before the transcript could be saved.
+    /// Reads a conversation's queue, after its thread, putting back into its transcript any messages
+    /// the CLI took before the transcript could be saved, and noting any it couldn't read, and where
+    /// their original file is kept.
     private func loadQueue(_ target: ChatTarget) {
         guard let bot = bot(target.botID) else { return }
         var transcript = thread(target)
