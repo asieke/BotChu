@@ -228,6 +228,8 @@ enum DevHooks {
                     }
                 }
             }
+            // What sits above New Bot while the sidebar's changes aren't saved.
+            if let failure = model.indexFailure { IndexFailureBanner(failure: failure).padding(.horizontal, -10) }
         }
         .padding(10)
         .frame(width: 240, alignment: .leading)

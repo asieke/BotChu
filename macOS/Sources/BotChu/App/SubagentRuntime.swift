@@ -353,11 +353,13 @@ final class SubagentRuntime {
                     return
                 }
                 var sessions: [String] = []
+                var reported: String?
                 live.update { messages in
                     for event in events {
                         switch event {
                         case .session(let session):
                             sessions.append(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: session))
+                        case .model(let id): reported = id
                         case .finished: finished = true
                         case .failed(let reason): failure = reason
                         default: break
@@ -369,6 +371,9 @@ final class SubagentRuntime {
                 }
                 if state != live.state { live.state = state }
                 for session in sessions { self.modify(id) { $0.sessionID = session } }
+                if let reported, self.run(id)?.resolvedModel != reported {
+                    self.modify(id) { $0.recordReportedModel(reported, requested: $0.model) }
+                }
                 guard let record = self.run(id) else { return }
                 let failed: @MainActor (Error) -> Void = { [weak self] error in
                     guard let self, persistenceFailure == nil, self.run(id)?.phase.isActive == true else { return }
@@ -469,14 +474,15 @@ final class SubagentRuntime {
         var messages = live.messages
         ThreadAssembler.closeRunningTools(&messages)
         if let error { messages.append(ChatMessage(role: phase == .stopped ? .note : .error, text: error)) }
+        // What the run asked to remember goes into the called bot's memory, which its Home hears
+        // about; a save that fails waits to be tried again, and doesn't fail the handoff.
+        if phase == .completed, let model, let targetBot = model.bot(record.targetBotID) {
+            messages += model.saveMemory(from: messages, of: targetBot, reportTo: .home(targetBot.id))
+        }
         live.messages = messages
         live.state = nil
         preparations[id] = nil
         do {
-            if phase == .completed, let targetBot = model?.bot(record.targetBotID) {
-                let notes = MemoryNotes.remembered(in: messages)
-                try MemoryNotes.append(notes, toMemoryAt: targetBot.workspace + "/MEMORY.md")
-            }
             // The handoff goes back only once its record is durable.
             try persist(record, messages: messages)
         }

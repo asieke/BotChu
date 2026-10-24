@@ -17,9 +17,10 @@ Progress goes to stderr. A caller must collect its children before its turn ends
 parent stops remaining descendants. A child is a fresh session using its target bot's account,
 model, effort, instructions (`INSTRUCTIONS.md`), soul and memory, with the shared `TEAM.md`
 playbook when it has one. It never resumes or appends to that bot's Home.
-Explicit `<remember>` notes in a successful handoff are applied to the target bot's local memory
-(deduplicating existing bullets, updating entries in place with `Replace: old -> new`, removing
-entries with `Forget: old`, and filtering out credentials/secrets).
+Explicit `<remember>` notes in a successful handoff (and `<remember scope="shared">` ones) are
+saved to the target bot's memory on this Mac, as from every conversation (README, **Saving
+memory**): the run's transcript says how it went, and the bot's Home hears it at its next turn. A
+save that fails waits to be tried again and doesn't fail the handoff.
 
 The default `shared` workspace is the caller's directory and machine, including for nested
 delegation on SSH hosts. `bot_home` uses the called bot's folder on this Mac. The prompt tells
