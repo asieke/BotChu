@@ -33,11 +33,10 @@ import Testing
         let record = ProjectRecord(text: "", sha: nil)
         let text = try record.updating(ProjectMetadata(name: "Café", kind: .local, deploy: "local:far-mac:~/apps/café"))
         #expect(text.contains("deploy: local:far-mac:~/apps/café\n"))
-        let targets = Locations.deployTargets(projectFile: text)
-        #expect(targets.count == 1)
-        #expect(targets.first?.machine == "far-mac")
-        #expect(targets.first?.path == "~/apps/café")
-        #expect(Locations.deployTargets(projectFile: "---\ndeploy: 'local:far-mac:~/apps/repo' # comment\n---").first?.machine == "far-mac")
+        let targets = DeployTarget.parse(try ProjectRecord(text: text, sha: "1").metadata(repoName: "café").deploy)
+        #expect(targets == [DeployTarget(kind: .local, name: "far-mac", path: "~/apps/café")])
+        let quoted = ProjectRecord(text: "---\nname: repo\ntype: local\ndeploy: 'local:far-mac:~/apps/repo' # comment\n---", sha: "2")
+        #expect(DeployTarget.parse(try quoted.metadata(repoName: "repo").deploy).first?.name == "far-mac")
     }
 
     @Test func validatesDeploymentAgainstProjectType() {

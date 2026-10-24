@@ -86,7 +86,6 @@ extension RenderingTests {
         app.openItems = items
         for (name, kind, status, _, _) in sample {
             let repo = "octocat/\(name)"
-            app.deployTargetCache[repo] = []
             // Scratch has no PROJECT.md.
             guard let status else { app.projectRecords[repo] = ProjectRecord(text: "", sha: nil); continue }
             let metadata = ProjectMetadata(name: name, kind: kind, status: status, deploy: kind == .hosted ? "vercel:orbit" : "none", merge: "agent")

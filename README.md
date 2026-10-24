@@ -83,8 +83,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     reviewing yet with parallel sub-agents, each in a detached worktree of its own. Every start
     opens New Task with the agent, the repository and the issue, pull request or fan-out brief
     chosen, so the account and workspace can be checked (and the brief edited) first. Its tasks work
-    where the project deploys; when that computer isn't connected in Settings ▸ Hosts, New Task says
-    so and offers **Work on This Mac**, which is remembered for the project.
+    on this Mac, wherever the project deploys.
   - **Project metadata:** **Edit Metadata…** edits the name, type, status, deployment, and merge
     policy in `PROJECT.md`. **Create Metadata PR** uses `gh api` to create a documentation branch,
     commit only that file, and open a PR; it never clones the repo or runs its test suite. Repository
@@ -225,11 +224,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     go with the task's first message, and ⌘↩ starts it. Opened from Projects for an issue or pull
     request, it works on that, and the box adds to it. The task runs on its bot's account (change
     it in the status sidebar), and BotChu names and manages branches automatically. A repository
-    is worked on where you chose for it
-    (Settings lists those choices), else where its `PROJECT.md` deploys it (`local:<machine>:<path>`,
-    on this Mac or a host of that machine name), else in the repositories folder on this Mac
-    (`~/Desktop/WORKSPACE` by default); BotChu clones it there if it isn't yet (`gh repo clone`, or
-    `git clone` over HTTPS). BotChu makes the worktree before the first
+    is worked on where you chose for it (Settings lists those choices), else in the repositories
+    folder on this Mac (`~/Desktop/WORKSPACE` by default), whatever its `PROJECT.md` deploys: a
+    host's live checkout is for running the app, not for work. BotChu clones it there if it isn't
+    yet (`gh repo clone`, or `git clone` over HTTPS). BotChu makes the worktree before the first
     turn, in `.claude/worktrees/<type>-<slug>` of the checkout: with the repository's own
     `scripts/worktree.sh` when it follows the workspace standard (which also links a new
     `<type>/<number>-<slug>` branch to its issue on GitHub), else with git; a pull request's task
@@ -699,7 +697,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     a quit (`JobEngine.swift`), tasks: the task, its title
     and branch names, its pull request, receipts, dispatch requests and the briefs of tasks that fan
     out to sub-agents (`Tasks.swift`), hosts and
-    where a repository is worked on, from a `PROJECT.md`'s deploy targets (`Hosts.swift`), running
+    where a repository is worked on (`Hosts.swift`), running
     a command on this Mac or a host, the checkouts in the repositories folder, cloning, task and
     review worktrees, and what `gh` says about your repositories, issues and pull requests
     (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
@@ -759,7 +757,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     full from `gh`'s output, and fan-out briefs; the Projects catalog and its sync through a stand-in
     `gh` (the saved catalog shown before any request completes, checks for changes that read only
     what changed, failures, removals, coalesced refreshes, another account, a missing or unreadable
-    file, and the four-request limit); and hosts: their `ssh` command lines, deploy targets, clones,
+    file, and the four-request limit); and hosts: their `ssh` command lines, where a repository is worked on, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
     from a remote task; memory: #88's Home sequence (a routing preference saved in the turn that
     agrees, and recalled by a fresh session), what is left out, bot or shared scope, repeats,
@@ -909,7 +907,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
 ## Test
 - `scripts/check.sh` runs the standard gate (`scripts/gate.sh`), shell syntax for every script, then
   `macOS/test.sh` (the unit tests) and `macOS/build.sh` into a temporary folder. `scripts/check.sh
-  --report` posts the `check` status a PR needs before merging. `scripts/verify-pr.sh`, given a PR
+  --secrets` runs only the hygiene checks and the secret scan, before every push; `scripts/check.sh
+  --report` runs the full check once on the pushed head and posts the `check` status a PR needs
+  before merging. `scripts/verify-pr.sh`, given a PR
   number, tests someone else's PR on this machine and posts its `check` status; with `--no-report`
   first, it posts nothing (for reviews). There is no CI: the checks need a Mac with full Xcode.
 - `macOS/test.sh` requires every test bundle to finish and rejects explicit failure summaries,
@@ -1023,10 +1023,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   quit again unless it was already open).
 
 ## Deploy
-- **Host machine:** `Alexs-MacBook-Pro-92440`. The live checkout is `~/Desktop/WORKSPACE/BotChu`, which always stays on `main`; the app is installed to `~/Applications/BotChu.app`.
+- **Live checkout:** `Alexs-MacBook-Pro-92440` runs the app from `~/Desktop/WORKSPACE/BotChu`, which stays on `main` and is never edited; the app is installed to `~/Applications/BotChu.app`.
 - **Secrets:** None in the repository or `.env`. The OpenRouter key and the Telegram bot token live in the Keychain, entered in Settings.
-- **Deploy only on request:** `scripts/deploy.sh` sets `DEPLOY_ON_REQUEST=1`, because installing restarts BotChu and stops any bot mid-turn. A full `scripts/sync.sh` fetches and reports how far `origin/main` is ahead of what is live, and changes nothing; run `scripts/deploy.sh` in the live checkout to test and install `main` (`--force` reinstalls anyway). Every attempt is a line in `.git/deploys`.
-- **Sync first:** run `scripts/sync.sh` before running or restarting the app or using its live data, and after merging a pull request. It refuses if `~/Desktop/WORKSPACE/BotChu` has local edits or commits not on `origin/main`; fix those through a pull request. Unless it refuses, it then removes worktrees whose pull request merged. Run from a worktree, it removes them too, but does not deploy.
-- **Session start:** Claude Code runs `scripts/sync.sh --inspect`, and every other agent runs it first. It fetches and reports the live checkout's state and what a full sync would do, but deploys nothing, so a session that only reviews or inspects never touches the app. A full sync that refuses blocks live-app operations, not reviews.
+- **Deploy:** `scripts/deploy.sh`, run in `~/Desktop/WORKSPACE/BotChu`, moves it to `origin/main`, runs `macOS/test.sh`, installs the app with `macOS/install.sh` (which restarts BotChu if it was open and smoke-tests that it starts), and records the attempt in `.git/deploys`. Nothing else deploys. Restarting BotChu stops every turn under way, its bots' tasks and sub-agents included, so deploy only when the owner asks and no turns are running. It refuses if `~/Desktop/WORKSPACE/BotChu` has local edits or commits; fix those through a pull request.
+- **Recovery:** A failed deploy says so and names the last good release; `DEPLOY_REV=<commit> scripts/deploy.sh` deploys that release again, and `scripts/deploy.sh --force` retries (or reinstalls what is live).
 - **Scheduled jobs:** none.
-- **Branch work:** Every task runs in its own worktree: for example, `scripts/worktree.sh feat/12-add-login` creates `~/Desktop/WORKSPACE/BotChu/.claude/worktrees/feat-12-add-login` from `origin/main`, with `.env` linked. Never edit `~/Desktop/WORKSPACE/BotChu` directly; changes only reach the live app by merging a pull request to `main` and deploying.
+- **Development:** On this Mac, in task worktrees of `~/Desktop/WORKSPACE/BotChu` (`scripts/worktree.sh feat/12-add-login` creates `.claude/worktrees/feat-12-add-login` from `origin/main`, with `.env` linked). Changes reach the live app only by merging a pull request to `main` and deploying it.

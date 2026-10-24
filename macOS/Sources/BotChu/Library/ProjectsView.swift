@@ -23,7 +23,7 @@ struct ProjectsView: View {
 
     private var rows: [ProjectRow] {
         ProjectRow.rows(repos: model.repositories ?? [], records: model.projectRecords, errors: model.projectErrors, chosen: model.settings.repoLocations,
-                        thisMac: model.settings.thisMacName, hosts: model.settings.hosts, reposRoot: model.settings.expandedReposRoot,
+                        hosts: model.settings.hosts, reposRoot: model.settings.expandedReposRoot,
                         taskRepos: model.openTasks.map(\.task.repo))
         .filter { row in
             let kind = row.metadata?.kind
