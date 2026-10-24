@@ -49,8 +49,24 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     it in the repository's sidebar, and double-click on GitHub; its menu reviews a pull request
     (**Review with**, **Review and Comment with**), continues it (unless it comes from a fork) or
     starts a task on an issue with a bot, opening New Task with it chosen, or opens the task already
-    on it. These are read with one GraphQL query per page of repositories and one per ten busy
-    repositories, at most every ten minutes unless refreshed.
+    on it. They are read with one GraphQL query per ten repositories whose open work changed (below).
+  - **Saved and synced:** the repositories, their `PROJECT.md`, and the open pull requests and
+    issues with GitHub's counts are kept on this Mac (`projects.json`) for the account `gh` is signed
+    in to, with when they were last synced, so Projects, New Task and Home's task requests have them
+    at once after a relaunch, and a sync goes on behind them, after GitChu's: at launch and when
+    Projects opens, if what was saved is over two minutes old; every two minutes while Projects
+    shows; and with **Refresh**. A sync asks who is signed in and for GitHub's repository list with
+    the ETags from last time, and probes each repository with anything open (its most recently
+    updated issue or pull request), which cost nothing when nothing changed; it then reads only the
+    `PROJECT.md` of a repository pushed to since, and the open work of one whose list entry or probe
+    moved or whose pull request's checks are running, four and two requests at a time, and shows
+    each answer as it arrives. Refresh, and a sync over half an hour after the last such one, also
+    read the list afresh, so a repository that is gone goes (once GitHub confirms it), and try again
+    what failed. Refresh is never disabled: asked for during a sync, it runs once that ends, however
+    often. The header says when it was last synced. A sync that fails (offline, signed out, a GitHub
+    error) or reads only part keeps what it has and says why; it never empties the list. When `gh` is
+    signed in to another account, the saved catalog goes and that account's is read; a missing or
+    unreadable file starts empty.
   - **Project sidebar:** selecting a repository, in the table or the gallery, shows it on the right
     with three tabs; closing the sidebar deselects it, and an issue or pull request count in the
     table opens that tab. **Overview** has its open work, its type, status, merge policy and
@@ -75,7 +91,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     checks and merge requirements still apply. Other frontmatter and the Markdown body are preserved;
     ambiguous YAML and a file changed since editing began are refused. Interrupted saves can retry
     the same branch without duplicate commits or PRs. The project and task placement update only
-    after the metadata PR merges and **Refresh** reads the default branch again. BotChu needs write
+    after the metadata PR merges and a sync reads the default branch again. BotChu needs write
     access for this flow; forks can be used through GitHub. The editor creates no commits directly
     on the default branch and never merges metadata PRs.
   - **Agents:** a searchable gallery of the existing bots, showing their personality summary,
@@ -487,6 +503,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
     or proposing it through GitHub with retryable, metadata-only PRs (`ProjectGitHub.swift`), the Projects
     tables' rows, their status filter and the open pull requests and issues across repositories (`ProjectOverview.swift`),
+    the saved Projects catalog, what a sync reads again and how it takes the answers, GitHub's REST
+    answers, and the projects offline readers such as completion see (`ProjectCatalog.swift`), and the
+    sync that keeps it on disk and in step with GitHub, with its ETags, probes, bounded requests and
+    coalesced refreshes (`ProjectSync.swift`),
     an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store, with
     the index saved whole or a failure to show (`Store.swift`), with conversations' files read without losing
     what can't be read (`Transcript.swift`), and the `Process` runner that launches
@@ -520,7 +540,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     Claude Code and Muse report running), how models are named, command lines,
     context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
     made in throwaway repositories, the project status filter, issues and pull requests read in
-    full from `gh`'s output, and fan-out briefs; and hosts: their `ssh` command lines, deploy targets, clones,
+    full from `gh`'s output, and fan-out briefs; the Projects catalog and its sync through a stand-in
+    `gh` (the saved catalog shown before any request completes, checks for changes that read only
+    what changed, failures, removals, coalesced refreshes, another account, a missing or unreadable
+    file, and the four-request limit); and hosts: their `ssh` command lines, deploy targets, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
     from a remote task; memory: #88's Home sequence (a routing preference saved in the turn that
     agrees, and recalled by a fresh session), what is left out, bot or shared scope, repeats,
@@ -574,8 +597,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   with the section each is in.
   Versions before bot folders kept everything in `bots.json` and `threads/` there; the first launch
   moves them into the bots' folders and keeps the old files in `backup-before-bot-folders/`.
-  Project metadata stays in each repository’s `PROJECT.md` on GitHub; its fetched catalog is cached
-  in memory. Settings, with added CLI profiles, the hosts and where you chose to work on repositories, are in the `defaults` domain
+  Project metadata stays in each repository’s `PROJECT.md` on GitHub; what Projects read from GitHub
+  for the signed-in account is saved in `projects.json` there, written off the main thread. Settings, with added CLI profiles, the hosts and where you chose to work on repositories, are in the `defaults` domain
   `local.BotChu`; the OpenRouter key is in the Keychain (service `local.BotChu`). Bot workspaces are
   under `~/BotChu/` by default; tasks run in worktrees of checkouts on this Mac or on a host. No
   database and no port.
@@ -614,10 +637,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   even if SwiftPM returns success. The native-click sidebar test runs in its own process because
   AppKit's window-animation callbacks can stop the Swift test runner's event loop during later
   tests; all its assertions still run. The script also runs the project-loading regression tests in Release. They check every
-  repository result, the four-request limit, and completion of children when navigating away or
-  cancelling a load. Swift 6.4 has an [optimizer bug](https://github.com/swiftlang/swift/issues/93208)
-  in task-group children returning String-first tuples from `do`/`catch`; project and pet loading
-  use named results with one return to avoid it. Debug tests alone cannot detect this regression.
+  repository result, the four-request limit, and that a sync finishes when the view that asked for
+  it goes away. Swift 6.4 has an [optimizer bug](https://github.com/swiftlang/swift/issues/93208)
+  in task-group children returning String-first tuples from `do`/`catch`; the Projects sync and pet
+  loading use named results with one return to avoid it. Debug tests alone cannot detect this regression.
 - Accounts end to end: `swift run --package-path macOS botchu-smoke [account id …]` runs, for each
   account (all of them when none is named), a new session that opens with the bot's context and
   runs a shell command, then a resumed session that must recall a code word from the first, and
@@ -683,6 +706,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.
+- Projects loading: `BOTCHU_PROJECTS_BENCHMARK=<file> swift test --package-path macOS --filter
+  projectsBenchmark` times, with your `gh` login (read-only) and a temporary catalog, a first sync
+  (until the list shows, and until everything is read), a relaunch (until the saved catalog shows),
+  a check for changes and a full sync, three times, and writes the table to the file. It asserts
+  nothing about time and isn't part of `check`.
 - Account allowance end to end: `swift run --package-path macOS botchu-smoke --usage [account id …]`
   reads each account's usage through the same client as the inspector. It prints only the normalized
   usage fields, never raw CLI output or credentials. Muse makes its brief usage request; OpenRouter

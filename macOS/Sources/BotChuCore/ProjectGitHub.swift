@@ -22,6 +22,9 @@ public struct ProjectGitHub: Sendable {
         return .connected(login: login, version: version.output.components(separatedBy: .newlines).first ?? "gh")
     }
 
+    /// Runs a gh command through the same runner (a stand-in in tests).
+    public func gh(_ arguments: [String]) async -> Shell.Result { await run(arguments, nil) }
+
     public func record(repo: String, ref: String? = nil) async throws -> ProjectRecord {
         var args = ["gh", "api", "--hostname", "github.com", "repos/\(repo)/contents/PROJECT.md", "--method", "GET"]
         if let ref { args += ["-f", "ref=\(ref)"] }

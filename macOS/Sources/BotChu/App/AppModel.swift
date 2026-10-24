@@ -168,19 +168,22 @@ final class AppModel {
     /// The last git work queued in each checkout: worktrees are made one at a time per repository,
     /// since git locks its refs and config.
     @ObservationIgnored private var checkoutWork: [String: Task<Void, Never>] = [:]
-    /// The owner's GitHub repositories, which tasks start from, once read (`loadRepositories`).
+    /// The owner's GitHub repositories, which tasks start from, as saved or synced (`Projects.swift`).
     var repositories: [GitHubLookup.Repo]?
+    /// Why the last sync of the Projects catalog failed.
     var repositoriesError: String?
-    var repositoriesLoading = false
-    @ObservationIgnored var repositoriesTask: Task<Void, Never>?
     var projectRecords: [String: ProjectRecord] = [:]
     var projectErrors: [String: String] = [:]
+    /// A sync of the Projects catalog is under way.
     var projectsLoading = false
-    /// The open pull requests and issues across the repositories, once read (`loadOpenWork`).
+    /// The open pull requests and issues across the repositories, as saved or synced.
     var openItems: [GitHubLookup.OpenItem]?
     var openItemsError: String?
-    var openItemsLoading = false
-    @ObservationIgnored var openItemsReadAt: Date?
+    /// The GitHub account the Projects catalog belongs to, and when it was last synced.
+    var projectsLogin: String?
+    var repositoriesReadAt: Date?
+    /// Keeps the Projects catalog on disk and in step with GitHub.
+    let projectSync: ProjectSync
     let openWorkLookup: @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure>
     /// An issue or pull request (repository, number, whether a pull request) as the Projects sidebar
     /// shows it, and the ones read so far, by `owner/name#number`.
@@ -189,7 +192,6 @@ final class AppModel {
     var githubConnection: ProjectGitHub.Connection?
     var githubChecking = false
     let projectGitHub: ProjectGitHub
-    @ObservationIgnored var repositoriesReadAt: Date?
     /// PROJECT.md's `local:` deploy targets, by repository, once read.
     @ObservationIgnored var deployTargetCache: [String: [(machine: String, path: String)]] = [:]
 
@@ -203,6 +205,8 @@ final class AppModel {
         self.workDetailLookup = workDetailLookup
         DevHooks.configure()
         self.store = store ?? DevHooks.dataDir.map { Store(root: $0) } ?? .applicationSupport
+        projectSync = ProjectSync(file: self.store.root.appendingPathComponent("projects.json"), client: ProjectSync.Client(
+            gh: { await projectGitHub.gh($0) }, record: { try await projectGitHub.record(repo: $0) }, openWork: openWorkLookup))
         self.settings = settings ?? AppSettings()
         self.usage = usage ?? DevHooks.usageFetch.map { UsageCache(fetch: $0) } ?? UsageCache()
         self.store.migrateIfNeeded()
@@ -227,6 +231,7 @@ final class AppModel {
         delegation = SubagentRuntime(model: self, root: (store != nil || DevHooks.dataDir != nil)
             ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot)
         selection = bots.first?.id
+        showSavedProjects()
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stopAll() }
         }

@@ -3,28 +3,6 @@ import Testing
 @testable import BotChuCore
 
 @Suite struct ProjectOverviewTests {
-    @Test func readsRepositoriesWithTheirOpenWork() {
-        // As `gh api graphql --paginate … --jq '… | @tsv'` prints them (repositoriesFields).
-        let tsv = """
-            asieke/BotChu\t\tfalse\t2026-10-23T01:41:28Z\tfalse\thttps://avatars.githubusercontent.com/u/4070885?s=64&v=4\tUser\tfalse\tSwift\t2\t3
-            Humanist-Venture-Studio/internal-brain\tInternal knowledge\\tand ways\tfalse\t2026-10-22T23:28:21Z\ttrue\thttps://avatars.githubusercontent.com/u/293191397?s=64&v=4\tOrganization\ttrue\t\t1\t0
-            asieke/old\t\ttrue\t2026-10-01T00:00:00Z\tfalse\t\tUser\tfalse\t\t0\t0
-            """
-        let repos = GitHubLookup.parseRepositories(tsv)
-        #expect(repos.map(\.nameWithOwner) == ["asieke/BotChu", "Humanist-Venture-Studio/internal-brain"])
-        #expect(repos[0].openIssues == 2)
-        #expect(repos[0].openPullRequests == 3)
-        #expect(repos[0].language == "Swift")
-        #expect(repos[0].ownerAvatar?.host == "avatars.githubusercontent.com")
-        #expect(!repos[0].ownerIsOrganization)
-        #expect(repos[1].ownerIsOrganization)
-        #expect(repos[1].isFork)
-        #expect(repos[1].isPrivate)
-        #expect(repos[1].language == nil)
-        #expect(repos[1].description == "Internal knowledge and ways")
-        #expect(repos[1].owner == "Humanist-Venture-Studio")
-    }
-
     @Test func readsOpenPullRequestsAndIssuesDespiteAMissingRepository() throws {
         // A real answer to openWorkQuery (trimmed to two of each), with a repository GitHub can't
         // resolve: gh exits 1 then, but still prints the data for the rest.
