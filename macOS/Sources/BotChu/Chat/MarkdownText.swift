@@ -17,6 +17,14 @@ struct MarkdownText: View {
             switch display.rendering {
             case .rich(let html):
                 RichMarkdownText(html: html)
+            case .blocks(let blocks) where blocks.count >= SeparateBlocks.threshold:
+                // Chunks that are written, each laid out apart, then the one being written.
+                let settled = (blocks.count - 1) / SeparateBlocks.chunk * SeparateBlocks.chunk
+                ForEach(Array(stride(from: 0, to: settled, by: SeparateBlocks.chunk)), id: \.self) { start in
+                    SeparateBlocks(blocks: Array(blocks[start..<start + SeparateBlocks.chunk]))
+                }
+                MarkdownBlocks(blocks: Array(blocks[settled...]))
+                    .textSelection(.enabled)
             case .blocks(let blocks):
                 MarkdownBlocks(blocks: blocks)
                     .textSelection(.enabled)
@@ -41,6 +49,65 @@ struct MarkdownText: View {
 
     init() {
         core.onPublish = { [weak self] in self?.revision += 1 }
+    }
+}
+
+/// A long reply's blocks, a chunk of them in a hosting view of its own, measured once for each
+/// width: the chat's layout passes, for a key press, a delta or another row, see one view for each
+/// chunk rather than every block and its selectable text (beside a reply of 1,500 blocks, about
+/// 0.1 ms rather than 7). A chunk is laid out again only when its blocks, the appearance or the font
+/// change; as a reply is written, its revisions keep the blocks they don't change (`reusing`), so
+/// comparing them takes microseconds.
+private struct SeparateBlocks: NSViewRepresentable {
+    /// From about 20 KB of prose; shorter replies cost little to lay out with the rest.
+    static let threshold = 256
+    static let chunk = 128
+    let blocks: [MarkdownBlock]
+
+    final class Coordinator {
+        var controller: NSHostingController<AnyView>?
+        var shown: Shown?
+        var heights: [CGFloat: CGFloat] = [:]
+    }
+
+    struct Shown: Equatable {
+        let blocks: [MarkdownBlock]
+        let colorScheme: ColorScheme
+        let font: Font?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let controller = NSHostingController(rootView: content(context))
+        controller.sizingOptions = []
+        context.coordinator.controller = controller
+        context.coordinator.shown = shown(context)
+        return controller.view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        let shown = shown(context)
+        guard shown != context.coordinator.shown else { return }
+        context.coordinator.shown = shown
+        context.coordinator.heights.removeAll()
+        context.coordinator.controller?.rootView = content(context)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, let controller = context.coordinator.controller else { return nil }
+        if let height = context.coordinator.heights[width] { return CGSize(width: width, height: height) }
+        let height = ceil(controller.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height)
+        context.coordinator.heights[width] = height
+        return CGSize(width: width, height: height)
+    }
+
+    private func shown(_ context: Context) -> Shown {
+        Shown(blocks: blocks, colorScheme: context.environment.colorScheme, font: context.environment.font)
+    }
+
+    private func content(_ context: Context) -> AnyView {
+        AnyView(MarkdownBlocks(blocks: blocks).textSelection(.enabled).environment(\.self, context.environment))
     }
 }
 

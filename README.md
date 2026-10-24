@@ -168,7 +168,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     agent's tool work shows as activity (below). A reply being written is parsed off the main thread, two replies at a time
     across every conversation and only the newest revision of each, so a long reply never holds up typing, switching or
     Stop: its last rendering shows meanwhile, and once the reply is over 16 KB the text written since shows as it is until
-    the rendering catches up. Headings, nested lists, quotes,
+    the rendering catches up. A reply of 256 blocks or more is laid out in chunks of 128, each apart from the rest of
+    the chat, so typing, another row or the next delta doesn't lay out the chunks already written again. Headings, nested lists, quotes,
     tables and fenced code use native block layouts; code has a Copy button. A table's cells stay on
     one line, each row ruled straight across whatever its cells hold (empty, or inline code), and a
     table wider than the chat scrolls sideways. Replies have soft rounded

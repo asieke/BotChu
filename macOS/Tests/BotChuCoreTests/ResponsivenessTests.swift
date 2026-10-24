@@ -233,6 +233,9 @@ import Testing
         #expect(cache.cached("Hello there, how are you?") != nil)
         #expect(cache.cached("Hello there,") == nil)
         #expect(cache.cached("Done.") != nil)
+        // An empty reply, as one starts, is no earlier version of every other.
+        _ = cache.rendering(for: "")
+        #expect(cache.earlierVersion(of: "Something else") == nil)
     }
 
     @Test func keepsTheRepliesUsedMostRecently() {

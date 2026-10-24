@@ -122,10 +122,12 @@ public final class MarkdownCache: @unchecked Sendable {
     public func store(_ rendering: MarkdownRendering, for source: String) {
         lock.lock()
         defer { lock.unlock() }
-        if let previous = growing.first(where: { $0 != source && source.extends($0) }) { remove(previous) }
-        growing.removeAll { $0 == source }
-        growing.insert(source, at: 0)
-        if growing.count > Self.growingLimit { growing.removeLast() }
+        if !source.isEmpty {
+            if let previous = growing.first(where: { $0 != source && source.extends($0) }) { remove(previous) }
+            growing.removeAll { $0 == source }
+            growing.insert(source, at: 0)
+            if growing.count > Self.growingLimit { growing.removeLast() }
+        }
         insert(rendering, for: source)
     }
 

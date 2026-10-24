@@ -118,6 +118,10 @@ extension RenderingTests {
         // As the app delivers output, a few times a second: 30 deltas 200 ms apart, with a key
         // press in the message box between each two.
         try await idle(300)
+        // The same probe with nothing happening: what the Mac's load alone costs.
+        let quiet = MainThreadProbe()
+        try await Task.sleep(for: .seconds(3))
+        report.add("Main-thread wait, nothing streaming", quiet.stop())
         let probe = MainThreadProbe()
         var paced: [Double] = [], keys: [Double] = []
         for i in 0..<30 {
