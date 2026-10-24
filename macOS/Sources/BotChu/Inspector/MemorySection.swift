@@ -37,7 +37,7 @@ struct MemorySection: View {
 }
 
 /// The bot's skills: its own, and the shared ones, each of which can be turned off for it.
-private struct SkillsSection: View {
+struct SkillsSection: View {
     @Environment(AppModel.self) private var model
     let botID: UUID
     @State private var entries: [SkillEntry] = []

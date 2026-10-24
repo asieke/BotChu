@@ -116,13 +116,13 @@ extension RenderingTests {
         let expandedRowCount = table.numberOfRows
         // Programmatic native selection exercises List's binding without requiring the test
         // runner to become the active application (synthetic row clicks are ignored otherwise).
-        table.selectRowIndexes(IndexSet(integer: 5), byExtendingSelection: false)
+        table.selectRowIndexes(IndexSet(integer: firstBotRow), byExtendingSelection: false)
         try await Task.sleep(for: .milliseconds(100))
         #expect(model.sidebarSelection == .botHome(bot.id))
-        table.selectRowIndexes(IndexSet(integer: 7), byExtendingSelection: false)
+        table.selectRowIndexes(IndexSet(integer: firstBotRow + 2), byExtendingSelection: false)
         try await Task.sleep(for: .milliseconds(100))
         #expect(model.sidebarSelection == .botTask(botID: bot.id, taskID: fixture.tasks[1].id))
-        let botCell = try #require(table.view(atColumn: 0, row: 5, makeIfNecessary: false))
+        let botCell = try #require(table.view(atColumn: 0, row: firstBotRow, makeIfNecessary: false))
         let disclosure = try #require(sidebarButtons(in: botCell).first)
         disclosure.performClick(nil)
         try await Task.sleep(for: .milliseconds(100))
@@ -132,7 +132,7 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(table.numberOfRows == expandedRowCount)
         #expect(model.sidebarSelection == .botTask(botID: bot.id, taskID: fixture.tasks[0].id))
-        let newTaskCell = try #require(table.view(atColumn: 0, row: 9, makeIfNecessary: false))
+        let newTaskCell = try #require(table.view(atColumn: 0, row: firstBotRow + 4, makeIfNecessary: false))
         let newTask = try #require(sidebarButtons(in: newTaskCell).first)
         newTask.performClick(nil)
         #expect(model.taskSheet?.botID == bot.id)
@@ -367,11 +367,13 @@ extension RenderingTests {
         }
         try await name(row: table.numberOfRows - 1, item: "New Section…", in: "Move to Section", as: "  Research ")
         #expect(model.sections == [quiet.id: "Research"])
-        #expect(table.numberOfRows == 12)
+        // Below the first bot, its three tasks and New task: Research's heading, then Scout.
+        let heading = firstBotRow + 5
+        #expect(table.numberOfRows == heading + 2)
         // Rename Section… starts from its name; Escape keeps it.
-        try await name(row: 10, item: "Rename Section…", from: "Research", as: "Ignored", key: ("\u{1B}", 53))
+        try await name(row: heading, item: "Rename Section…", from: "Research", as: "Ignored", key: ("\u{1B}", 53))
         #expect(model.botSections.names == ["Research"])
-        try await name(row: 10, item: "Rename Section…", from: "Research", as: "Scouting")
+        try await name(row: heading, item: "Rename Section…", from: "Research", as: "Scouting")
         #expect(model.botSections.names == ["Scouting"])
         #expect(fixture.store.loadIndex().map(\.section) == [nil, "Scouting"])
     }
@@ -427,6 +429,9 @@ extension RenderingTests {
         [a.redComponent - b.redComponent, a.greenComponent - b.greenComponent,
          a.blueComponent - b.blueComponent, a.alphaComponent - b.alphaComponent].allSatisfy { abs($0) < 0.02 }
     }
+
+    /// The first bot's row, below the Workspace heading, its galleries and the Conversations heading.
+    private var firstBotRow: Int { LibraryDestination.allCases.count + 2 }
 
     /// The context menu a right click on the row shows, as AppKit asks the views under the pointer for it.
     private func sidebarMenu(row: Int, of table: NSTableView, in host: NSView) throws -> NSMenu {
