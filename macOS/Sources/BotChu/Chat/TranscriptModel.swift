@@ -52,10 +52,29 @@ final class TranscriptModel {
     @ObservationIgnored private var holding = false
     /// Counts the loads finished, so the chat shows what they grouped.
     private var loaded = 0
-    /// The first item shown; nil shows the newest `page`, following new ones.
+    /// The first item that can be scrolled to; nil, the newest `page`, following new ones. Only
+    /// the rows near the visible part of it are laid out (`TranscriptViewport`).
     var windowStart: Int?
     /// Cards opened (true) or closed (false) by a click, overriding the density.
     var overrides: [UUID: Bool] = [:]
+    /// Calls whose input and output are shown, in a group's entries or as Raw cards: kept here,
+    /// not in their rows, which go once scrolled far enough away.
+    private(set) var expanded: Set<UUID> = []
+    /// Changes whenever `expanded` does, so heights that depend on it are worked out again.
+    @ObservationIgnored private var expansions = 0
+    /// Which rows are laid out, their heights and the reader's place among them.
+    @ObservationIgnored private(set) var viewport = TranscriptViewport()
+    /// Bumped when the rows laid out should be worked out again: the reader scrolled past them,
+    /// measured rows no longer cover what is near the visible part, or the chat changed size.
+    private var replans = 0
+    /// The scroll view's watcher, which moves the visible part to keep the reader's place.
+    @ObservationIgnored weak var probe: ChatScrollProbeView?
+    /// The width the rows are laid out at, as the scroll view last said.
+    @ObservationIgnored private(set) var width = 0
+    /// Rows laid out now, and the most at once, counted as they appear and go (for tests and the
+    /// benchmark: what is realized, not what was planned).
+    @ObservationIgnored private(set) var realized = 0
+    @ObservationIgnored var peakRealized = 0
 
     /// How many more items each "Show earlier" adds, and the most the chat lays out at first.
     static let page = 40
@@ -186,6 +205,57 @@ final class TranscriptModel {
     func toggle(_ id: UUID, default open: Bool) {
         overrides[id] = !(overrides[id] ?? open)
     }
+
+    func isExpanded(_ id: UUID) -> Bool { expanded.contains(id) }
+
+    func toggleExpanded(_ id: UUID) {
+        if expanded.remove(id) == nil { expanded.insert(id) }
+        expansions += 1
+    }
+
+    // MARK: Rows laid out
+
+    /// The rows of `items` from `start` to lay out now, and the space above and below them.
+    func plan(_ items: ChunkedArray<ActivityItem>, from start: Int, inputs: TranscriptViewport.Inputs, pinned: Bool,
+              style: (Int, ActivityItem) -> TranscriptViewport.Style) -> TranscriptViewport.Plan {
+        _ = replans
+        var inputs = inputs
+        inputs.width = width
+        let plan = viewport.plan(items, from: start, inputs: inputs, pinned: pinned, expanded: expanded, expansions: expansions, style: style)
+        if viewport.correction != nil { probe?.correctAfterLayout() }
+        return plan
+    }
+
+    /// The scroll view's visible part, in the rows' coordinates, and the rows' width.
+    func scrolled(top: Double, height: Double, width: Double) {
+        let width = Int(width.rounded())
+        var replan = viewport.scrolled(top: top, height: height)
+        if width != self.width, width > 0 {
+            self.width = width
+            replan = true
+        }
+        if replan { replans += 1 }
+    }
+
+    /// A row's height as laid out.
+    func measured(_ id: TranscriptViewport.RowID, signature: Int, height: Double) {
+        if viewport.measured(id, signature: signature, height: height) { replans += 1 }
+        if viewport.correction != nil { probe?.correctNow() }
+    }
+
+    func corrected(to top: Double) { viewport.corrected(to: top) }
+
+    func hold(visibleTop top: Double) { viewport.hold(visibleTop: top) }
+
+    func rowAppeared() {
+        realized += 1
+        peakRealized = max(peakRealized, realized)
+    }
+
+    func rowDisappeared() { realized -= 1 }
+
+    /// Lets the rows' heights go, as under memory pressure: they're estimated again, then measured.
+    func forgetHeights() { viewport.forgetHeights() }
 }
 
 /// Recent conversations' transcripts: switching back to one regroups only what arrived
@@ -198,6 +268,8 @@ enum TranscriptCache {
     private static var order: [ChatTarget] = []
     static let capacity = 48
 
+    private static var pressure: DispatchSourceMemoryPressure?
+
     static func model(for target: ChatTarget) -> TranscriptModel {
         order.removeAll { $0 == target }
         order.append(target)
@@ -205,7 +277,21 @@ enum TranscriptCache {
         let model = TranscriptModel()
         models[target] = model
         while order.count > capacity { models[order.removeFirst()] = nil }
+        watchPressure()
         return model
+    }
+
+    /// Under memory pressure, the rows' heights of every conversation but the one shown last go.
+    static func relievePressure() {
+        for target in order.dropLast() { models[target]?.forgetHeights() }
+    }
+
+    private static func watchPressure() {
+        guard pressure == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { MainActor.assumeIsolated { relievePressure() } }
+        source.activate()
+        pressure = source
     }
 
     static func contains(_ target: ChatTarget) -> Bool { models[target] != nil }
