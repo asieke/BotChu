@@ -107,6 +107,22 @@ import Testing
         #expect(titles(sections).first == "Conversations")
     }
 
+    @Test func searchFindsBotsInTheirSectionsAndSectionsByName() {
+        let sections = BotSections(order: [a, b, c, d, e], membership: [b: "Engineering", c: "Engineering", d: "QA"])
+        let text: [UUID: String] = [a: "Scout researcher", b: "Builder Claude", c: "Reviewer Codex", d: "Duck tester", e: "Fox product"]
+        func search(_ query: String) -> [BotSections.Group] { sections.groups(matching: query) { text[$0] ?? "" } }
+        // A bot is found in its own section, whatever the case; headings without a match are left out.
+        #expect(search("CODEX") == [.init(name: "Engineering", botIDs: [c])])
+        #expect(search("d") == [.init(name: nil, botIDs: [e]), .init(name: "Engineering", botIDs: [b, c]), .init(name: "QA", botIDs: [d])])
+        // A section's name finds all its bots, as Conversations finds the bots in none.
+        #expect(search(" engin ") == [.init(name: "Engineering", botIDs: [b, c])])
+        #expect(search("qa") == [.init(name: "QA", botIDs: [d])])
+        #expect(search("Conversations") == [.init(name: nil, botIDs: [a, e])])
+        // An empty search finds everything; one that matches nothing, nothing.
+        #expect(search("  ") == sections.groups)
+        #expect(search("zebra").isEmpty)
+    }
+
     @Test func theIndexKeepsEachBotsSectionAndReadsIndexesFromBefore() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-sections-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
