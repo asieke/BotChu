@@ -388,6 +388,8 @@ final class AppModel {
             }
         }
         let moved = bot.workspace != bots[i].workspace
+        // The editor doesn't change what a turn reported while it was open.
+        bot.reportedModel = bots[i].reportedModel
         bots[i] = bot
         save(bot)
         prepareWorkspace(bot)
@@ -1146,6 +1148,7 @@ final class AppModel {
                         return
                     }
                     var sessions: [String] = []
+                    var reported: String?
                     var settles: [TimeInterval] = []
                     var delivered = false
                     conversation.stream { messages in
@@ -1157,6 +1160,8 @@ final class AppModel {
                             switch event {
                             case .session(let reported):
                                 sessions.append(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: reported))
+                            case .model(let id):
+                                reported = id
                             case .inputTaken:
                                 guard self.inputs[target] != nil else { break }
                                 if self.inputs[target]?.ledger.taken() == true {
@@ -1197,6 +1202,7 @@ final class AppModel {
                         self.recordSession(session, accountID: accountID, for: target)
                         self.delegationSessions[target, default: []].insert(session)
                     }
+                    if let reported { self.recordReportedModel(reported, requested: current.model, accountID: accountID, for: target) }
                     if delivered {
                         // Transcript first: recovery drops a queued copy of a delivered message.
                         self.saveThread(target)
@@ -1358,6 +1364,13 @@ final class AppModel {
         } else {
             try? home.saveThread(messages)
         }
+    }
+
+    /// The model the CLI said it ran, for the model choice the turn ran with. Changes no choice.
+    private func recordReportedModel(_ id: String, requested: String, accountID: String, for target: ChatTarget) {
+        guard var current = runSettings(of: target), current.accountID == accountID,
+              current.recordReportedModel(id, requested: requested) else { return }
+        change(target) { $0.recordReportedModel(id, requested: requested) }
     }
 
     private func recordSession(_ sessionID: String, accountID: String, for target: ChatTarget) {

@@ -13,8 +13,24 @@ public enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
 
 public struct ModelOption: Identifiable, Equatable, Sendable {
     public let id: String
+    /// The full name with its version, or for a moving alias the name without one.
     public let name: String
     public let efforts: [ReasoningEffort]
+    /// A CLI alias that moves to newer versions, such as Claude Code's `opus`, not a pinned version.
+    public var moving = false
+}
+
+/// How a model choice reads wherever it is chosen or shown. The title has a version number only
+/// when the ID pins one or the CLI reported the one it ran; a moving alias says "latest", and the
+/// account's default says so. The detail gives the ID and, for an alias or default, what resolved.
+public struct ModelLabel: Equatable, Sendable {
+    public let title: String
+    public let detail: String
+
+    public init(title: String, detail: String) {
+        self.title = title
+        self.detail = detail
+    }
 }
 
 /// Starter choices verified against the installed CLIs. Custom ids remain available because
@@ -25,9 +41,14 @@ public enum GenerationOptions {
         let extended = common + [.xhigh, .max]
         switch kind {
         case .claude:
-            return [ModelOption(id: "opus", name: "Opus", efforts: extended),
-                    ModelOption(id: "sonnet", name: "Sonnet", efforts: extended),
-                    ModelOption(id: "haiku", name: "Haiku", efforts: [])]
+            // Each alias, then the version it resolved to on every Claude profile (2026-10-24),
+            // which stays put when the alias moves on.
+            return [ModelOption(id: "opus", name: "Claude Opus", efforts: extended, moving: true),
+                    ModelOption(id: "claude-opus-5-5", name: "Claude Opus 5.5", efforts: extended),
+                    ModelOption(id: "sonnet", name: "Claude Sonnet", efforts: extended, moving: true),
+                    ModelOption(id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", efforts: extended),
+                    ModelOption(id: "haiku", name: "Claude Haiku", efforts: [], moving: true),
+                    ModelOption(id: "claude-haiku-5-5", name: "Claude Haiku 5.5", efforts: [])]
         case .codex:
             return [ModelOption(id: "gpt-6.1-sol", name: "GPT-6.1 Sol", efforts: extended + [.ultra]),
                     ModelOption(id: "gpt-6-astra", name: "GPT-6 Astra", efforts: extended + [.ultra]),
@@ -79,8 +100,74 @@ public enum GenerationOptions {
         return antigravityFamily(option.id) + "-" + effort.rawValue
     }
 
-    public static func name(for model: String, kind: AgentKind) -> String {
-        option(for: model, kind: kind)?.name ?? (model.isEmpty ? "Default model" : model)
+    /// `model` is the ID sent to the CLI, empty for the account's default; `resolved` is the ID the
+    /// CLI reported running for it (`RunSettings.resolvedModel`), if it has. Nothing here guesses a
+    /// version: without a report, an alias or default shows none.
+    public static func label(for model: String, kind: AgentKind, resolved: String? = nil) -> ModelLabel {
+        let model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = resolved.flatMap { $0.isEmpty ? nil : $0 }
+        // Claude Code and Muse report the model a turn ran; the others never say, so stay unresolved.
+        let pending = "version unresolved"
+        if model.isEmpty {
+            if let resolved {
+                return ModelLabel(title: "\(fullName(resolved, kind: kind)) · default",
+                                  detail: "Chosen by \(kind.displayName) · last ran \(resolved)")
+            }
+            return ModelLabel(title: "\(kind.displayName) default", detail: "Chosen by \(kind.displayName) · \(pending)")
+        }
+        if let alias = movingAlias(model, kind: kind) {
+            if let resolved {
+                return ModelLabel(title: "\(fullName(resolved, kind: kind)) · latest",
+                                  detail: "\(model) · moving alias · last ran \(resolved)")
+            }
+            return ModelLabel(title: "\(alias) · latest", detail: "\(model) · moving alias · \(pending)")
+        }
+        // An ID the CLI ran as something else is an alias too, if not one BotChu knows.
+        if let resolved, resolved != model, fullName(resolved, kind: kind) != fullName(model, kind: kind) {
+            return ModelLabel(title: "\(fullName(resolved, kind: kind)) · \(model)", detail: "\(model) · alias · last ran \(resolved)")
+        }
+        return ModelLabel(title: fullName(model, kind: kind), detail: model)
+    }
+
+    /// The full name and version of a model ID: a starter choice's name, a Claude or Muse ID spelled
+    /// out (`claude-opus-5-5` is Claude Opus 5.5), else the ID itself.
+    public static func fullName(_ model: String, kind: AgentKind) -> String {
+        if let option = option(for: model, kind: kind), !option.moving { return option.name }
+        return claudeName(model) ?? (kind == .muse ? museName(model) : nil) ?? model
+    }
+
+    /// Claude Code's aliases, which follow the newest version it knows for the account: the
+    /// starters, and those it documents besides (`fable`, and any with `[1m]` for 1M context).
+    private static func movingAlias(_ model: String, kind: AgentKind) -> String? {
+        guard kind == .claude else { return nil }
+        let (base, context) = model.lowercased().hasSuffix("[1m]") ? (String(model.dropLast(4)), " (1M context)") : (model, "")
+        let names = ["opus": "Claude Opus", "sonnet": "Claude Sonnet", "haiku": "Claude Haiku", "fable": "Claude Fable"]
+        return names[base.lowercased()].map { $0 + context }
+    }
+
+    /// `claude-opus-5-5`, `claude-sonnet-4-5-20250929` and `claude-3-5-haiku-20241022` as Claude
+    /// Opus 5.5, Claude Sonnet 4.5 and Claude Haiku 3.5; nil for anything else.
+    static func claudeName(_ model: String) -> String? {
+        var id = model.lowercased()
+        var context = ""
+        if id.hasSuffix("[1m]") { id.removeLast(4); context = " (1M context)" }
+        var parts = id.split(separator: "-", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 3, parts.removeFirst() == "claude" else { return nil }
+        if let last = parts.last, last.count == 8, last.allSatisfy(isDigit) { parts.removeLast() }
+        let numbers = parts.filter { !$0.isEmpty && $0.count <= 2 && $0.allSatisfy(isDigit) }
+        let words = parts.filter { !$0.isEmpty && $0.allSatisfy(\.isLetter) }
+        guard words.count == 1, (1...2).contains(numbers.count), numbers.count + words.count == parts.count else { return nil }
+        return "Claude \(words[0].capitalized) \(numbers.joined(separator: "."))\(context)"
+    }
+
+    private static func isDigit(_ character: Character) -> Bool { character.isASCII && character.isNumber }
+
+    /// `muse-wonder-full-1.0` as Muse Wonder Full 1.0; nil for anything else.
+    static func museName(_ model: String) -> String? {
+        let parts = model.split(separator: "-").map(String.init)
+        guard parts.count >= 2, parts[0].lowercased() == "muse",
+              parts.allSatisfy({ $0.allSatisfy { $0.isLetter || isDigit($0) || $0 == "." } }) else { return nil }
+        return parts.map { $0.first?.isLetter == true ? $0.capitalized : $0 }.joined(separator: " ")
     }
 
     /// The model sent on the next turn. Native CLI defaults stay unspecified; OpenRouter always
