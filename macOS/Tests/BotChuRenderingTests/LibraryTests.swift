@@ -100,9 +100,8 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(200))
         try captureLibrary(window, name: "projects-dark")
         app.destination = .providers
-        defaults.set("table", forKey: "providersLayout")
         try await Task.sleep(for: .milliseconds(200))
-        try captureLibrary(window, name: "providers-list")
+        try captureLibrary(window, name: "providers-dark")
         NSApp.appearance = nil
         app.show(target)
         #expect(app.destination == nil)
