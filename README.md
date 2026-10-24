@@ -164,8 +164,12 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     Wherever an account or a CLI family is shown, so is the family's logo, as in GitChu: Claude's
     spark, OpenAI's knot for Codex, Google's G for Antigravity, Facebook's f for Muse, and π for Pi.
   - **Chat:** one continuous thread per bot (its **Home**), and one per task. Replies stream in, rendered as Markdown (each reply
-    is parsed once, and recent ones ahead of time, so showing a conversation again doesn't parse it again); the
-    agent's tool work shows as activity (below). Headings, nested lists, quotes,
+    is parsed once, and recent ones ahead of time, so showing a conversation again doesn't parse it again; parsed replies are
+    kept within about 64 MB, and none once macOS reports memory pressure); the
+    agent's tool work shows as activity (below). A reply being written is parsed off the main thread, two replies at a time
+    across every conversation and only the newest revision of each, so a long reply never holds up typing, switching or
+    Stop: its last rendering shows meanwhile, and once the reply is over 16 KB the text written since shows as it is until
+    the rendering catches up. Headings, nested lists, quotes,
     tables and fenced code use native block layouts; code has a Copy button. A table's cells stay on
     one line, each row ruled straight across whatever its cells hold (empty, or inline code), and a
     table wider than the chat scrolls sideways. Replies have soft rounded
@@ -173,7 +177,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     source/copy and fit/actual-size controls. Both render offline in system WebKit, including inside
     tables and lists; a reply's web view is made as it nears the visible part of the chat, with only
     the renderer it uses, and shows once the reply has rendered, at its final height, so neither a
-    blank page nor the source flashes first. Rendered replies' web views are kept, hidden, when
+    blank page nor the source flashes first. It renders one revision of its reply at a time (the
+    newest written meanwhile follows), keeping the blocks that haven't changed, with their math and
+    diagrams. Rendered replies' web views are kept, hidden, when
     their conversation closes, so opening it again shows them at once: up to about 200 MB of them
     (a reply with a diagram takes about 85, one with math alone about 20), each for ten minutes,
     and none once macOS reports memory pressure. Unsupported or incomplete expressions and diagrams stay
@@ -682,8 +688,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `Store.swift`), how tall the message box is for its draft and how far its text may scroll
     (`ComposerLayout.swift`), what
     the status sidebar shows about a bot, from a summary of its thread kept as the thread grows, and
-    its `MEMORY.md` (`BotStatus.swift`), replies' parsed Markdown, cached by their text
-    (`MarkdownCache.swift`), pets: the activity a tool call means
+    its `MEMORY.md` (`BotStatus.swift`), replies' parsed Markdown, cached by their text within a
+    budget of bytes (`MarkdownCache.swift`), and parsed off the main thread as they are written, one
+    revision at a time for each reply (`MarkdownPreparation.swift`), pets: the activity a tool call means
     and the clips that show it (`Pet.swift`), making a pet: its poses and clips, the Codex prompt
     for the stills, the OpenRouter request and job, the cost estimate, the manifest and install
     (`PetVideo.swift`), scheduled jobs: their schedules in their own time zones, runs, history and
@@ -759,7 +766,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     corrections and forgets, concurrent saves, and saves that fail, wait (also across a relaunch)
     and are tried again; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
-    and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
+    within its budget (ten 128 KB replies written in revisions, then memory pressure), replies being
+    written parsed off the main thread (100 rapid deltas coalesced, the worker's limit shared, a slow
+    earlier revision never shown over a newer one, the last always settling as a full parse), one
+    parse for replies without math (shell code with `$HOME`, prices, the word Mermaid) and hundreds
+    of expressions put back in one pass, and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
     commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
     streamed update regroups only the tail; the sidebar's sections of bots, and searching them; follow-ups the CLI
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
@@ -797,7 +808,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     them, a review that reports a tool call, and the review's own session through a stand-in CLI,
     killed at its timeout.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
-    across every column, streaming updates, source
+    across every column, streaming updates (a long reply being written never parsed on the main
+    thread, and a rich reply's web view rendering one revision at a time, ignoring late heights), source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
     saves, a follow-up taken while the transcript can't be saved (back in it after a relaunch), model-picker keyboard interaction and persisted choices,
@@ -980,10 +992,19 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   --filter chatBenchmark` times, from the change until the window has drawn it, switching to long
   conversations (1,500 messages; outputs of 200 KB to 1 MB; a 400-call exploration; seventeen running
   sub-agents), a streamed delta, a new call in a live exploration, a sub-agent's update, and opening
-  a large group or output, and writes the table to the file. `BOTCHU_BENCHMARK_SCOPE=chat` times the
+  a large group or output, and writes the table to the file. It also streams 100 deltas into a 128 KB
+  reply while typing in the message box, with how long the main thread keeps a key press waiting
+  and how long until the last delta's rendering is drawn, then 60 into a 32 KB reply with 282
+  equations, until WebKit has drawn the last, with the worker's and WebKit's counts. `BOTCHU_BENCHMARK_SCOPE=chat` times the
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.
+- Markdown: `BOTCHU_MARKDOWN_BENCHMARK=<file> swift test --configuration release --package-path macOS
+  --filter markdownBenchmark` times converting the next revision of prose, code, shell code with
+  `$HOME`, equation-heavy, and table-and-diagram replies of 2 to 128 KB, gives a 128 KB reply 100
+  rapid deltas (with the worker's counts and the main thread's time for each), and measures what
+  ten 128 KB replies keep, then release under memory pressure. It needs no window, asserts nothing
+  about time and isn't part of `check`.
 - Projects loading: `BOTCHU_PROJECTS_BENCHMARK=<file> swift test --package-path macOS --filter
   projectsBenchmark` times, with your `gh` login (read-only) and a temporary catalog, a first sync
   (until the list shows, and until everything is read), a relaunch (until the saved catalog shows),

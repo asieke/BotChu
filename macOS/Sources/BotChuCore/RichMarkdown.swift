@@ -4,13 +4,20 @@ import Foundation
 /// Ordinary replies use native views; rich replies are rendered offline by the bundled libraries.
 public enum RichMarkdown {
     public static func html(_ source: String) -> String? {
-        guard source.contains("$") || source.contains("\\(") || source.contains("\\[")
-                || source.localizedCaseInsensitiveContains("mermaid") else { return nil }
+        if case .rich(let html) = rendering(source) { return html }
+        return nil
+    }
+
+    /// How the reply is drawn, from one Markdown parse. A reply without math has nothing masked,
+    /// so the blocks parsed to look for a diagram are its own: a `$HOME` in shell code, a price or
+    /// the word "mermaid" doesn't parse it twice.
+    static func rendering(_ source: String) -> MarkdownRendering {
+        guard MarkdownShape(source).mayBeRich else { return .blocks(MarkdownBlock.split(source)) }
         let scanned = Scanner(source)
         let blocks = MarkdownBlock.split(scanned.masked)
-        guard !scanned.expressions.isEmpty || containsDiagram(blocks) else { return nil }
-        let renderer = Renderer(expressions: scanned.expressions)
-        return blocks.map(renderer.block).joined()
+        guard !scanned.expressions.isEmpty || containsDiagram(blocks) else { return .blocks(blocks) }
+        let renderer = Renderer(prefix: Array(scanned.prefix.utf8), expressions: scanned.expressions)
+        return .rich(html: blocks.map(renderer.block).joined())
     }
 
     private static func containsDiagram(_ blocks: [MarkdownBlock]) -> Bool {
@@ -34,13 +41,15 @@ public enum RichMarkdown {
         }
     }
 
+    /// The source with each expression replaced by a token, `<prefix><number>END`, that the
+    /// Markdown parser leaves alone; the prefix is one the source doesn't contain.
     private struct Scanner {
         var masked = ""
-        var expressions: [String: Expression] = [:]
+        var expressions: [Expression] = []
+        var prefix = "BCHUMATH"
 
         init(_ source: String) {
             let chars = Array(source)
-            var prefix = "BCHUMATH"
             while source.contains(prefix) { prefix += "X" }
             var index = 0
             var fence: (Character, Int)?
@@ -99,7 +108,7 @@ public enum RichMarkdown {
                 var complete = false
                 while end < chars.count {
                     if !display, chars[end] == "\n" { break }
-                    if end + closing.count <= chars.count, Array(chars[end..<end + closing.count]) == closing {
+                    if end + closing.count <= chars.count, chars[end] == closing[0], closing.count == 1 || chars[end + 1] == closing[1] {
                         let after = end + closing.count
                         // Single-dollar math cannot close before a digit: "$5 and $10" is currency.
                         if display || backslashMath || (end > begin && !chars[end - 1].isWhitespace && (after == chars.count || !chars[after].isNumber)) {
@@ -120,16 +129,17 @@ public enum RichMarkdown {
                     masked.append(chars[index]); index += 1; continue
                 }
                 let finish = complete ? end + closing.count : end
-                let token = "\(prefix)\(expressions.count)END"
-                expressions[token] = Expression(source: String(chars[index..<finish]), body: body, display: display, complete: complete)
-                masked += token
+                masked += "\(prefix)\(expressions.count)END"
+                expressions.append(Expression(source: String(chars[index..<finish]), body: body, display: display, complete: complete))
                 index = finish
             }
         }
     }
 
     private struct Renderer {
-        let expressions: [String: Expression]
+        /// The tokens' prefix, in UTF-8.
+        let prefix: [UInt8]
+        let expressions: [Expression]
 
         func block(_ value: MarkdownBlock) -> String {
             let children = { value.children.map(block).joined() }
@@ -172,10 +182,7 @@ public enum RichMarkdown {
                 let intent = run.inlinePresentationIntent ?? []
                 var html: String
                 if intent.contains(.code) { html = "<code>\(restore(raw).htmlEscaped)</code>" }
-                else {
-                    html = raw.htmlEscaped
-                    for (token, expression) in expressions { html = html.replacingOccurrences(of: token, with: expression.html) }
-                }
+                else { html = substitute(raw.htmlEscaped, with: \.html) }
                 if intent.contains(.stronglyEmphasized) { html = "<strong>\(html)</strong>" }
                 if intent.contains(.emphasized) { html = "<em>\(html)</em>" }
                 if intent.contains(.strikethrough) { html = "<s>\(html)</s>" }
@@ -188,7 +195,45 @@ public enum RichMarkdown {
         }
 
         func restore(_ text: String) -> String {
-            expressions.reduce(text) { $0.replacingOccurrences(of: $1.key, with: $1.value.source) }
+            substitute(text, with: \.source)
+        }
+
+        /// The text with each token replaced by its expression's `value`, found where the text
+        /// has the prefix: one pass over the text, however many expressions the reply has.
+        /// Escaping leaves tokens as they are, as they are only capitals and digits.
+        func substitute(_ text: String, with value: (Expression) -> String) -> String {
+            guard !expressions.isEmpty else { return text }
+            var text = text
+            return text.withUTF8 { bytes in
+                var result = ""
+                var copied = 0
+                var index = 0
+                while index + prefix.count <= bytes.count {
+                    guard bytes[index] == prefix[0], (1..<prefix.count).allSatisfy({ bytes[index + $0] == prefix[$0] }) else {
+                        index += 1
+                        continue
+                    }
+                    var end = index + prefix.count
+                    var number = 0
+                    while end < bytes.count, end - index - prefix.count < 9, (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(bytes[end]) {
+                        number = number * 10 + Int(bytes[end] - UInt8(ascii: "0"))
+                        end += 1
+                    }
+                    guard end > index + prefix.count, end + 3 <= bytes.count, bytes[end] == UInt8(ascii: "E"),
+                          bytes[end + 1] == UInt8(ascii: "N"), bytes[end + 2] == UInt8(ascii: "D"), number < expressions.count else {
+                        index += 1
+                        continue
+                    }
+                    // The prefix and token are ASCII, so these are whole characters.
+                    result += String(decoding: UnsafeBufferPointer(rebasing: bytes[copied..<index]), as: UTF8.self)
+                    result += value(expressions[number])
+                    index = end + 3
+                    copied = index
+                }
+                guard copied > 0 else { return String(decoding: bytes, as: UTF8.self) }
+                result += String(decoding: UnsafeBufferPointer(rebasing: bytes[copied...]), as: UTF8.self)
+                return result
+            }
         }
     }
 }

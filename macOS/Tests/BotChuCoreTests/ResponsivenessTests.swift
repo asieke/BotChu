@@ -206,7 +206,7 @@ import Testing
 
 @Suite struct MarkdownCacheTests {
     @Test func aReplyIsParsedOnceAndKeepsItsKind() {
-        let cache = MarkdownCache(capacity: 16)
+        let cache = MarkdownCache()
         guard case .blocks(let blocks) = cache.rendering(for: "## Title\n\nSome **bold** text.") else {
             Issue.record("A plain reply is drawn natively")
             return
@@ -222,7 +222,7 @@ import Testing
     }
 
     @Test func aStreamingReplyReplacesItsShorterVersions() {
-        let cache = MarkdownCache(capacity: 16)
+        let cache = MarkdownCache()
         _ = cache.rendering(for: "Done.")
         var text = ""
         for word in ["Hello", " there,", " how", " are", " you?"] {
@@ -236,7 +236,9 @@ import Testing
     }
 
     @Test func keepsTheRepliesUsedMostRecently() {
-        let cache = MarkdownCache(capacity: 8)
+        // Room for eight replies: their text and about 48 bytes parsed for each byte of it.
+        let each = "Reply number 0 of eight".utf8.count * 49
+        let cache = MarkdownCache(budget: each * 8 + each / 2)
         for i in 0..<8 { _ = cache.rendering(for: "Reply number \(i) of eight") }
         _ = cache.rendering(for: "Reply number 0 of eight")
         for i in 8..<12 { _ = cache.rendering(for: "Reply number \(i) of eight") }
@@ -247,7 +249,7 @@ import Testing
     }
 
     @Test func warmingParsesAheadWithoutDroppingReplies() async {
-        let cache = MarkdownCache(capacity: 64)
+        let cache = MarkdownCache()
         let replies = (0..<20).map { "Reply \($0): see `code` and a [link](https://example.test/\($0))." } + ["Reply 1", "Reply 12"]
         await Task.detached { cache.warm(replies) }.value
         #expect(cache.count == replies.count)

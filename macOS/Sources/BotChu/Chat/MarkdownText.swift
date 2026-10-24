@@ -2,18 +2,45 @@ import SwiftUI
 import BotChuCore
 
 /// A reply's Markdown, parsed once per text (`MarkdownCache`): drawing a conversation again, or a
-/// reply that didn't change, doesn't parse it again.
+/// reply that didn't change, doesn't parse it again. A reply being written is parsed off the main
+/// thread (`MarkdownPreparation`): it shows its latest rendering meanwhile and, once it is long,
+/// the text written since as it is. The rendering keeps its place in the view as it is replaced,
+/// so a rich reply keeps its web view.
 struct MarkdownText: View {
     let text: String
+    @State private var preparation = PreparedMarkdown()
 
     var body: some View {
-        switch MarkdownCache.shared.rendering(for: text) {
-        case .rich(let html):
-            RichMarkdownText(html: html)
-        case .blocks(let blocks):
-            MarkdownBlocks(blocks: blocks)
-                .textSelection(.enabled)
+        let _ = preparation.revision
+        let display = preparation.core.display(for: text)
+        VStack(alignment: .leading, spacing: 10) {
+            switch display.rendering {
+            case .rich(let html):
+                RichMarkdownText(html: html)
+            case .blocks(let blocks):
+                MarkdownBlocks(blocks: blocks)
+                    .textSelection(.enabled)
+            case nil:
+                EmptyView()
+            }
+            if let pending = display.pending {
+                Text(pending)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+        .onChange(of: text, initial: true) { preparation.core.update(text) }
+    }
+}
+
+/// A `MarkdownText`'s preparation, drawn again each time the worker's rendering is shown.
+@MainActor @Observable private final class PreparedMarkdown {
+    @ObservationIgnored let core = MarkdownPreparation()
+    private(set) var revision = 0
+
+    init() {
+        core.onPublish = { [weak self] in self?.revision += 1 }
     }
 }
 
