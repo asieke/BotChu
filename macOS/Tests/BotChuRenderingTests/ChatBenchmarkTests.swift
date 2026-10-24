@@ -277,21 +277,34 @@ extension RenderingTests {
         report.add("Sub-agent update, history + 37 sub-agents", childUpdates)
         app.runStates[bench.combined] = nil
 
-        // Expanding: the 400-call exploration group, and a command card with a megabyte of output,
-        // each drawn closed and then opened in the chat's column, as a click on it does.
-        let transcript = TranscriptModel()
-        let group: ExplorationGroup = {
-            var activity = ActivityTranscript(root: "/Users/me/project")
-            activity.update(app.thread(bench.explore))
-            for item in activity.items { if case .exploration(let group) = item { return group } }
-            fatalError("The exploration fixture has no group")
-        }()
+        // Expanding: the 400-call and the 5,000-call exploration groups, clicked open in the chat
+        // (only the rows near the visible part are laid out, #110); and a command card with a
+        // megabyte of output, drawn closed and then opened in the chat's column.
+        for (name, target, calls) in [("400-call", bench.explore, 400), ("5,000-call", bench.explore5k, 5_000)] {
+            app.show(target)
+            try await idle(400)
+            let model = TranscriptCache.model(for: target)
+            while model.isLoadingEarlier { try await Task.sleep(for: .milliseconds(10)) }
+            try await idle(200)
+            let id = try #require(ChatBenchFixture.group(in: app.thread(target), calls: calls))
+            var opens: [Double] = [], rows: [Int] = []
+            for _ in 0..<6 {
+                opens.append(time { model.toggle(id, default: false) })
+                try await idle(150)
+                rows.append(ChatRows.realized(model, app: app, target: target))
+                model.toggle(id, default: false)
+                try await idle(150)
+            }
+            report.add("Expand the \(name) group in the chat", opens)
+            report.note("Rows laid out with the \(name) group open: at most \(rows.max() ?? 0)")
+        }
         let command: ToolCallItem = {
             var activity = ActivityTranscript(root: "/Users/me/project")
             activity.update(app.thread(bench.outputs))
             for item in activity.items { if case .tool(let tool) = item, (tool.message.toolOutput?.utf8.count ?? 0) > 900_000 { return tool } }
             fatalError("The outputs fixture has no large command")
         }()
+        let transcript = TranscriptModel()
         let column = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 900), styleMask: [.titled], backing: .buffered, defer: false)
         column.isReleasedWhenClosed = false
         defer { column.contentView = nil; column.close() }
@@ -306,15 +319,31 @@ extension RenderingTests {
             host.layoutSubtreeIfNeeded(); column.displayIfNeeded()
             return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
         }
-        var groups: [Double] = [], outputs: [Double] = []
+        var outputs: [Double] = []
         for _ in 0..<6 {
-            groups.append(try await expansion(ExplorationCard(group: group, live: false, density: .detailed, open: false, kind: .claude),
-                                              ExplorationCard(group: group, live: false, density: .detailed, open: true, kind: .claude)))
             outputs.append(try await expansion(CommandCard(item: command, density: .detailed, open: false, kind: .claude),
                                                CommandCard(item: command, density: .detailed, open: true, kind: .claude)))
         }
-        report.add("Expand the 400-call group", groups)
         report.add("Expand a 1 MB command output", outputs)
+        window.makeKeyAndOrderFront(nil)
+
+        // In Raw, the 5,000-call group is a card per call.
+        defaults.set(ChatDensity.raw.rawValue, forKey: ChatDensity.storageKey)
+        app.show(bench.home)
+        try await idle(200)
+        var raws: [Double] = [], rawRows: [Int] = []
+        for _ in 0..<5 {
+            app.show(bench.home)
+            try await idle(150)
+            raws.append(time { app.show(bench.explore5k) })
+            try await idle(300)
+            rawRows.append(ChatRows.realized(TranscriptCache.model(for: bench.explore5k), app: app, target: bench.explore5k))
+        }
+        report.add("Switch to 5,000-call exploration, Raw", raws)
+        report.note("Rows laid out in Raw with 5,000 calls: at most \(rawRows.max() ?? 0)")
+        defaults.set(ChatDensity.detailed.rawValue, forKey: ChatDensity.storageKey)
+
+        try await historyBenchmark(bench: bench, window: window, report: &report, time: time, idle: idle)
 
         // Grouping alone (Core), for a streamed delta at the end of the 1,500-message thread.
         var core = ActivityTranscript(root: "/Users/me/project")
@@ -463,6 +492,135 @@ final class MainThreadProbe: @unchecked Sendable {
     (view as? WKWebView).map { [$0] } ?? view.subviews.flatMap { webViews(in: $0) }
 }
 
+extension RenderingTests {
+    /// #110: browsing older history while the agent goes on working, in a 5,000-message
+    /// conversation: ten pages of earlier items, a reader paused at an old message while 1,000 new
+    /// items arrive and the reply streams, scrolling through what is open, back to the newest, and
+    /// switching away and back 30 times; with the rows laid out at each step.
+    @MainActor func historyBenchmark(bench: ChatBenchFixture, window: NSWindow, report: inout ChatBenchReport,
+                                     time: (() -> Void) -> Double, idle: (Int) async throws -> Void) async throws {
+        let app = bench.app, target = bench.paging
+        func draw() {
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        app.show(bench.home)
+        try await idle(150)
+        app.show(target)
+        app.runStates[target] = RunState(hasOutput: true)
+        try await idle(300)
+        let model = TranscriptCache.model(for: target)
+        while model.isLoadingEarlier { try await Task.sleep(for: .milliseconds(10)) }
+        try await idle(300)
+        let conversation = app.conversation(target)
+        let scroll = try #require(Self.chatScrollView(in: window.contentView!))
+        func scrollTo(_ y: CGFloat) {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, y)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        func items() -> ChunkedArray<ActivityItem> {
+            model.items(for: app.thread(target), root: app.task(target)?.folder ?? bench.bot.workspace, epoch: conversation.epoch)
+        }
+        var rows = ChatRows.realized(model, app: app, target: target)
+        report.note("History benchmark: \(app.thread(target).count) messages, \(items().count) items; rows laid out at the newest: \(rows)")
+
+        // Ten pages of earlier items, each clicked with the reader at the top.
+        var pages: [Double] = []
+        for _ in 0..<10 {
+            scrollTo(0)
+            try await idle(120)
+            pages.append(time { model.showEarlier(items: items()) })
+            try await idle(150)
+            rows = max(rows, ChatRows.realized(model, app: app, target: target))
+        }
+        report.add("Show earlier, 10 pages of 5,000 messages", pages)
+        report.note("Rows laid out after 10 pages: at most \(rows)")
+
+        // Paused at an old message, while 1,000 items arrive below and the reply streams.
+        scrollTo((scroll.documentView?.frame.height ?? 0) * 0.3)
+        try await idle(300)
+        ChatRows.resetPeak(model)
+        let held = ChatRows.anchor(model)
+        var appends: [Double] = []
+        for i in 0..<1_000 {
+            let message = i % 2 == 0
+                ? ChatBenchFixture.toolCall(index: 50_000 + i, kind: 3, state: "done")
+                : ChatBenchFixture.message(["role": "assistant", "text": "Step \(i) done.\n\n" + ChatBenchFixture.reply])
+            appends.append(time { conversation.append(message) })
+            if i % 20 == 19 { try await idle(10) }
+        }
+        try await idle(200)
+        var deltas: [Double] = []
+        for i in 0..<40 {
+            deltas.append(time { conversation.stream { $0[$0.count - 1].text += " token\(i) with **some** words" } })
+            try await idle(20)
+        }
+        report.add("Item arriving, reader paused (1,000)", appends)
+        report.add("Stream delta, reader paused", deltas)
+        let drift = held.flatMap { ChatRows.position(model, $0.row).map { abs($0 - held!.at) } }
+        report.note("Rows laid out while 1,000 items arrived: at most \(ChatRows.peak(model, app: app, target: target)); the reader's row moved \(drift.map { String(format: "%.1f", $0) } ?? "n/a") pt")
+
+        // Steady scrolling through what is open: 40 points a frame, up and then down again.
+        var steps: [Double] = []
+        ChatRows.resetPeak(model)
+        let middle = scroll.contentView.bounds.minY
+        for step in 0..<300 {
+            let y = step < 150 ? middle - CGFloat(step + 1) * 40 : middle - CGFloat(300 - step) * 40
+            steps.append(time { scrollTo(y) })
+        }
+        report.add("Scroll 40 pt (300 steps)", steps)
+        report.note("Scrolling: \(steps.count(where: { $0 > 1000.0 / 60 })) of \(steps.count) steps over a 60 Hz frame; rows laid out at most \(ChatRows.peak(model, app: app, target: target))")
+
+        // Back to the newest, then away and back 30 times: until the newest is drawn, and the next
+        // update; then a key press in the message box.
+        let latest = time { scrollTo(scroll.documentView?.frame.height ?? 0) }
+        try await idle(300)
+        report.add("Jump to the newest", [latest])
+        let before = ChatBenchReport.footprint()
+        var switches: [Double] = [], deferred: [Double] = [], keys: [Double] = []
+        var switchedRows = 0
+        for _ in 0..<30 {
+            app.show(bench.home)
+            try await idle(100)
+            switches.append(time { app.show(target) })
+            deferred.append(time {})
+            if let editor = composerTextView(in: window.contentView!) {
+                keys.append(time { editor.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0)) })
+            }
+            try await idle(100)
+            switchedRows = max(switchedRows, ChatRows.realized(model, app: app, target: target))
+        }
+        let after = ChatBenchReport.footprint()
+        report.add("Switch back to the 5,000 messages: drawn", switches)
+        report.add("  …its next update (deferred work)", deferred)
+        report.add("  …then a key press in the composer", keys)
+        report.note(String(format: "Switching back 30 times: rows laid out at most %d; footprint %.0f MB before, %.0f MB after",
+                           switchedRows, Double(before) / 1_048_576, Double(after) / 1_048_576))
+        app.drafts[target] = nil
+        if let editor = composerTextView(in: window.contentView!) { editor.string = "" }
+        app.runStates[target] = nil
+    }
+}
+
+/// What the chat has laid out (#110): rows realized now (counted as they appear and go), and where
+/// the reader's row is on the screen.
+@MainActor enum ChatRows {
+    static func realized(_ model: TranscriptModel, app: AppModel, target: ChatTarget) -> Int { model.realized }
+    static func peak(_ model: TranscriptModel, app: AppModel, target: ChatTarget) -> Int { model.peakRealized }
+    static func resetPeak(_ model: TranscriptModel) { model.peakRealized = model.realized }
+
+    static func anchor(_ model: TranscriptModel) -> (row: TranscriptViewport.RowID, at: Double)? {
+        guard let top = model.viewport.visibleTop,
+              let row = model.viewport.plan.rows.first(where: { $0.top + $0.height > top }) else { return nil }
+        return (row.id, row.top - top)
+    }
+
+    static func position(_ model: TranscriptModel, _ id: TranscriptViewport.RowID) -> Double? {
+        guard let top = model.viewport.visibleTop, let row = model.viewport.plan.rows.first(where: { $0.id == id }) else { return nil }
+        return row.top - top
+    }
+}
+
 /// The chat of the selected bot's shown conversation, as ContentView shows it, without the rest.
 private struct ChatColumn: View {
     @Environment(AppModel.self) private var model
@@ -481,6 +639,16 @@ struct ChatBenchReport {
 
     mutating func add(_ name: String, _ samples: [Double]) { rows.append((name, samples)) }
     mutating func note(_ line: String) { notes.append(line) }
+
+    /// The process's memory footprint, as Activity Monitor shows it.
+    static func footprint() -> Int {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        return result == KERN_SUCCESS ? Int(info.phys_footprint) : 0
+    }
 
     /// Bytes allocated on the heap and not yet freed, in every malloc zone.
     static func heapInUse() -> Int {
@@ -526,6 +694,8 @@ struct ChatBenchReport {
     let subagents: ChatTarget
     let explore5k: ChatTarget
     let combined: ChatTarget
+    /// 5,000 messages, for paging through history (#110).
+    let paging: ChatTarget
     var runs: [SubagentRun] = []
     /// The long history's running children.
     var combinedRuns: [SubagentRun] = []
@@ -564,6 +734,7 @@ struct ChatBenchReport {
         explore5k = try task("explore5k", Self.exploration(calls: 5_000))
         let history = Self.historyWithChildren()
         combined = try task("combined", history.messages)
+        paging = try task("paging", Self.longConversation(turns: 500))
         home = .home(bot.id)
         try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
         app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No allowance in benchmarks.") })
@@ -629,9 +800,9 @@ struct ChatBenchReport {
     Next I'll check how long threads load.
     """
 
-    static func longConversation() -> [[String: Any]] {
+    static func longConversation(turns: Int = 150) -> [[String: Any]] {
         var messages: [[String: Any]] = []
-        for turn in 0..<150 {
+        for turn in 0..<turns {
             messages.append(["role": "user", "text": "Step \(turn): keep going with the next part."])
             for call in 0..<6 {
                 messages.append(toolDictionary(index: turn * 10 + call, kind: call % 4, state: "done",
@@ -703,6 +874,14 @@ struct ChatBenchReport {
         messages.append(["role": "tool", "text": "", "toolID": "wait", "toolName": "Bash",
                          "toolInput": "botchu-subagent wait " + waiting.joined(separator: " "), "toolState": "running"])
         return (messages, children)
+    }
+
+    /// The id of the exploration group of `calls` calls in a thread.
+    static func group(in thread: [ChatMessage], calls: Int) -> UUID? {
+        var activity = ActivityTranscript(root: "/Users/me/project")
+        activity.update(thread)
+        for item in activity.items { if case .exploration(let group) = item, group.calls.count >= calls { return group.id } }
+        return nil
     }
 
     // MARK: Messages

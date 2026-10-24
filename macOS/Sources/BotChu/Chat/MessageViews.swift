@@ -172,14 +172,20 @@ struct BotTurnRow<Content: View>: View {
 /// One tool call as it was before grouping, and as Raw density shows every call: its name and
 /// input, opening to its arguments and output.
 struct ToolCard: View {
+    /// In a chat, which keeps it opened while its row is gone out of view; elsewhere, nil.
+    @Environment(TranscriptModel.self) private var transcript: TranscriptModel?
     let message: ChatMessage
     let kind: AgentKind
-    @State private var expanded = false
+    @State private var opened = false
+
+    private var expanded: Bool { transcript?.isExpanded(message.id) ?? opened }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    if let transcript { transcript.toggleExpanded(message.id) } else { opened.toggle() }
+                }
             } label: {
                 HStack(spacing: 8) {
                     status

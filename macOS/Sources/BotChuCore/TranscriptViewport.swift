@@ -217,8 +217,8 @@ public struct TranscriptViewport: Sendable {
         let height = viewport ?? Self.defaultViewport
         var top = max(0, total - height)
         correction = nil
-        if !pinned, let anchor {
-            if let anchorAt {
+        if !pinned {
+            if let anchor, let anchorAt {
                 top = rowTop(item: anchorAt, part: anchor.row.part) + anchor.offset
                 if let visibleTop, abs(visibleTop - top) > 0.5 { correction = top }
             } else if let visibleTop {

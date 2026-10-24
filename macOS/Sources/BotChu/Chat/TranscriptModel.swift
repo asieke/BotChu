@@ -14,6 +14,15 @@ enum ChatDensity: String, CaseIterable, Identifiable {
     static let storageKey = "chat.density"
     var id: Self { self }
 
+    /// As the rows' heights record it.
+    var layoutValue: Int {
+        switch self {
+        case .compact: 0
+        case .detailed: 1
+        case .raw: 2
+        }
+    }
+
     var title: String {
         switch self {
         case .compact: "Compact"
@@ -219,6 +228,11 @@ final class TranscriptModel {
         _ = replans
         var inputs = inputs
         inputs.width = width
+        var pinned = pinned
+        if #unavailable(macOS 15) {
+            // Before macOS 15 the chat always follows: the reader is pinned only while at the bottom.
+            if let top = viewport.visibleTop, let height = viewport.viewport, top + height < viewport.plan.total - 40 { pinned = false }
+        }
         let plan = viewport.plan(items, from: start, inputs: inputs, pinned: pinned, expanded: expanded, expansions: expansions, style: style)
         if viewport.correction != nil { probe?.correctAfterLayout() }
         return plan
