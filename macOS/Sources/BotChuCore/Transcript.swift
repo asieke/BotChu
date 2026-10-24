@@ -56,6 +56,12 @@ public struct TranscriptRead: Equatable, Sendable {
                 read.malformed += 1
             }
         }
+        let decoded = read.messages.count
+        HistoryCounters.shared.record(url) {
+            $0.reads += 1
+            $0.bytesRead += data.count
+            $0.decoded += decoded
+        }
         if read.isDamaged { read.keep(url, now: now) }
         return read
     }
@@ -111,6 +117,7 @@ public struct TranscriptRead: Equatable, Sendable {
                 try files.moveItem(at: url, to: target)
             }
             kept = target
+            HistoryCounters.shared.record(url) { $0.copies += 1 }
         } catch {
             keepFailure = error.localizedDescription
         }

@@ -294,7 +294,10 @@ public struct BotHome: Sendable {
         let read = TranscriptRead.read(url)
         guard let note = read.note(for: .conversation) else { return read.messages }
         let messages = read.messages + [note]
-        if read.kept != nil { try? writeThread(messages, to: url) }
+        if read.kept != nil {
+            HistoryCounters.shared.record(url) { $0.repairs += 1 }
+            try? writeThread(messages, to: url)
+        }
         return messages
     }
 
@@ -302,7 +305,10 @@ public struct BotHome: Sendable {
     /// be read, so the next read finds nothing new to keep. Its note is for its conversation.
     static func readKeeping(_ url: URL) -> TranscriptRead {
         let read = TranscriptRead.read(url)
-        if read.kept != nil { try? writeThread(read.messages, to: url) }
+        if read.kept != nil {
+            HistoryCounters.shared.record(url) { $0.repairs += 1 }
+            try? writeThread(read.messages, to: url)
+        }
         return read
     }
 
@@ -316,6 +322,10 @@ public struct BotHome: Sendable {
             data.append(0x0A)
         }
         try data.write(to: url, options: .atomic)
+        HistoryCounters.shared.record(url) {
+            $0.writes += 1
+            $0.bytesWritten += data.count
+        }
         return data.count
     }
 
