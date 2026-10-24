@@ -283,6 +283,47 @@ extension RenderingTests {
         #expect(!app.thread(target).contains { $0.role == .error })
     }
 
+    /// #77: Claude Code takes a follow-up while the task's transcript can't be saved (its file is
+    /// locked). The message stays in the saved queue as taken, the chat says why once, and a
+    /// relaunch puts it back into the transcript without running the CLI again.
+    @Test func followUpTakenWhileTheTranscriptCantBeSavedSurvivesARelaunch() async throws {
+        let fixture = try ConversationFixture(accountID: "claude-dev", script: ConversationFixture.claudeScript)
+        defer { fixture.cleanUp() }
+        let app = fixture.app, target = fixture.taskTarget, taskID = try #require(target.taskID)
+        let transcript = fixture.home.taskThreadURL(taskID)
+        func lock(_ locked: Bool) throws { try FileManager.default.setAttributes([.immutable: locked], ofItemAtPath: transcript.path) }
+        defer { try? lock(false) }
+        app.send("WAIT", to: target)
+        try await fixture.wait { app.runStates[target]?.takesInput == true }
+        try lock(true)
+        app.send("steer me", to: target)
+        try await fixture.wait { FileManager.default.fileExists(atPath: fixture.folder(target).appendingPathComponent("received").path) }
+        try fixture.release(target)
+        try await fixture.wait { !app.isRunning(target) }
+        #expect(app.thread(target).filter { $0.role == .user }.map(\.text) == ["WAIT", "steer me"])
+        let errors = app.thread(target).filter { $0.role == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.text.hasPrefix("Couldn't save this conversation (") == true)
+        #expect(app.messageQueues[target]?.messages.isEmpty == true)
+        #expect(app.messageQueues[target]?.taken.map(\.text) == ["steer me"])
+        #expect(fixture.home.loadThread(task: taskID).filter { $0.role == .user }.map(\.text) == ["WAIT"])
+        #expect(fixture.home.loadQueuedMessages(task: taskID).isEmpty)
+        #expect(fixture.home.loadQueue(delivered: fixture.home.loadThread(task: taskID), task: taskID).taken.map(\.text) == ["steer me"])
+
+        try lock(false)
+        let relaunched = AppModel(store: fixture.store, settings: fixture.settings)
+        defer { relaunched.stopAll() }
+        #expect(relaunched.thread(target).filter { $0.role == .user }.map(\.text) == ["WAIT", "steer me"])
+        #expect(relaunched.thread(target).last?.role == .note)
+        #expect(relaunched.messageQueues[target]?.messages.isEmpty == true)
+        #expect(relaunched.messageQueues[target]?.taken.isEmpty == true)
+        #expect(fixture.home.loadThread(task: taskID).filter { $0.role == .user }.map(\.text) == ["WAIT", "steer me"])
+        // Launch sends what is still queued once the window is up; nothing is, so the CLI doesn't run.
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(!relaunched.isRunning(target))
+        #expect(try fixture.calls(target).count == 1)
+    }
+
     @Test func failedTurnPausesQueueAndExplicitResumeSendsIt() async throws {
         let fixture = try ConversationFixture()
         defer { fixture.cleanUp() }

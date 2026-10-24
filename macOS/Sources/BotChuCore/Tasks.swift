@@ -70,6 +70,7 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var reasoningEffort: ReasoningEffort?
     public var sessionID: String?
     public var sessionAccountID: String?
+    public var reportedModel: ReportedModel?
     public var createdAt: Date
     /// When its tab was closed. Its record and conversation stay, and it can be opened again.
     public var archivedAt: Date?

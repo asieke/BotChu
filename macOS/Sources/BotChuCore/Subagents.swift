@@ -44,6 +44,7 @@ public struct SubagentRun: Identifiable, Codable, Equatable, Sendable, RunSettin
     public var reasoningEffort: ReasoningEffort?
     public var sessionID: String?
     public var sessionAccountID: String?
+    public var reportedModel: ReportedModel?
     public var phase: SubagentPhase
     public var createdAt: Date
     public var startedAt: Date?
