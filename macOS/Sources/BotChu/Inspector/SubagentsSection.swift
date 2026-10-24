@@ -123,6 +123,10 @@ private struct SubagentCard: View {
         model.bot(run.targetBotID) ?? Bot(id: run.targetBotID, name: run.targetBotName, emoji: run.targetBotEmoji,
                                         workspace: run.targetBotWorkspace, appearance: run.targetBotAppearance)
     }
+    private var modelLabel: ModelPickerData {
+        ModelPickerData(kind: run.account.kind, model: run.model, openRouterDefault: model.settings.openRouterModel,
+                        catalog: model.modelCatalog.models, resolved: run.resolvedModel)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -191,10 +195,11 @@ private struct SubagentCard: View {
                     }.padding(8).background(RoundedRectangle(cornerRadius: 6).fill(Palette.accent.opacity(0.08)))
                 }
                 if let error = run.errorMessage { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
-                ProviderLabel(title: [run.account.name, run.model.isEmpty ? "Default model" : run.model,
+                ProviderLabel(title: [run.account.name, modelLabel.title,
                                       run.workspaceMode == .sharedCallerWorkspace ? "Shared workspace" : "Bot workspace"].joined(separator: " · "),
                               kind: run.account.kind, size: 11)
                     .font(.system(size: 10)).foregroundStyle(Palette.secondaryText)
+                    .help(modelLabel.detail)
                 Text(run.workingDirectory).font(.system(size: 10, design: .monospaced))
                     .fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(Palette.secondaryText).textSelection(.enabled)

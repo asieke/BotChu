@@ -208,14 +208,12 @@ final class AppModel {
         for bot in bots {
             conversation(.home(bot.id)).load(self.store.loadThread(for: bot))
             let home = BotHome(workspace: bot.workspace)
-            messageQueues[.home(bot.id)] = MessageQueue(saved: home.loadQueuedMessages(), delivered: thread(.home(bot.id)),
-                                                        paused: home.loadQueuePaused())
+            loadQueue(.home(bot.id))
             tasks[bot.id] = home.loadTasks()
             for task in tasks[bot.id] ?? [] where !task.isArchived {
                 let target = ChatTarget.task(task.id, of: bot.id)
                 conversation(target).load(home.loadThread(task: task.id))
-                messageQueues[target] = MessageQueue(saved: home.loadQueuedMessages(task: task.id), delivered: thread(target),
-                                                     paused: home.loadQueuePaused(task: task.id))
+                loadQueue(target)
             }
             reloadPet(bot.id)
         }
@@ -391,6 +389,8 @@ final class AppModel {
             }
         }
         let moved = bot.workspace != bots[i].workspace
+        // The editor doesn't change what a turn reported while it was open.
+        bot.reportedModel = bots[i].reportedModel
         bots[i] = bot
         save(bot)
         prepareWorkspace(bot)
@@ -513,9 +513,7 @@ final class AppModel {
         saveTask(tasks[target.botID]![i], of: target.botID)
         if !conversation(target).isLoaded, let id = target.taskID {
             conversation(target).load(BotHome(workspace: bot.workspace).loadThread(task: id))
-            let home = BotHome(workspace: bot.workspace)
-            messageQueues[target] = MessageQueue(saved: home.loadQueuedMessages(task: id), delivered: thread(target),
-                                                 paused: home.loadQueuePaused(task: id))
+            loadQueue(target)
         }
         show(target)
         sendNextQueued(to: target)
@@ -1151,6 +1149,7 @@ final class AppModel {
                         return
                     }
                     var sessions: [String] = []
+                    var reported: String?
                     var settles: [TimeInterval] = []
                     var delivered = false
                     conversation.stream { messages in
@@ -1162,6 +1161,8 @@ final class AppModel {
                             switch event {
                             case .session(let reported):
                                 sessions.append(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: reported))
+                            case .model(let id):
+                                reported = id
                             case .inputTaken:
                                 guard self.inputs[target] != nil else { break }
                                 if self.inputs[target]?.ledger.taken() == true {
@@ -1202,10 +1203,10 @@ final class AppModel {
                         self.recordSession(session, accountID: accountID, for: target)
                         self.delegationSessions[target, default: []].insert(session)
                     }
+                    if let reported { self.recordReportedModel(reported, requested: current.model, accountID: accountID, for: target) }
                     if delivered {
-                        // Transcript first: recovery drops a queued copy of a delivered message.
+                        // The taken message leaves the saved queue only once the saved transcript holds it.
                         self.saveThread(target)
-                        if let queue = self.messageQueues[target] { _ = self.saveQueue(queue, for: target) }
                     }
                     // Messages queued before the CLI could take them.
                     self.sendFollowUps(to: target)
@@ -1365,6 +1366,13 @@ final class AppModel {
         }
     }
 
+    /// The model the CLI said it ran, for the model choice the turn ran with. Changes no choice.
+    private func recordReportedModel(_ id: String, requested: String, accountID: String, for target: ChatTarget) {
+        guard var current = runSettings(of: target), current.accountID == accountID,
+              current.recordReportedModel(id, requested: requested) else { return }
+        change(target) { $0.recordReportedModel(id, requested: requested) }
+    }
+
     private func recordSession(_ sessionID: String, accountID: String, for target: ChatTarget) {
         guard let current = runSettings(of: target),
               current.sessionID != sessionID || current.sessionAccountID != accountID else { return }
@@ -1460,30 +1468,47 @@ final class AppModel {
         try? store.saveIndex(bots.map { Store.Entry(id: $0.id, workspace: $0.workspace, section: sections[$0.id]) } + missing)
     }
 
+    /// Saves the conversation, and its queue while it holds messages the CLI took
+    /// (`BotHome.checkpoint`); true when the transcript was saved.
     @discardableResult
     private func saveThread(_ target: ChatTarget) -> Bool {
         guard let bot = bot(target.botID) else { return false }
-        let home = BotHome(workspace: bot.workspace)
-        do {
-            if let taskID = target.taskID {
-                guard task(taskID, of: bot.id) != nil else { return false }
-                try home.saveThread(thread(target), task: taskID)
-            } else {
-                try home.saveThread(thread(target))
-            }
-            return true
-        } catch { return false }
+        if let taskID = target.taskID, task(taskID, of: bot.id) == nil { return false }
+        var queue = messageQueues[target] ?? MessageQueue()
+        let result = BotHome(workspace: bot.workspace).checkpoint(thread(target), queue: &queue, task: target.taskID)
+        if messageQueues[target] != nil, queue != messageQueues[target] { messageQueues[target] = queue }
+        show(result.failures, in: target)
+        return result.saved
     }
 
     private func saveQueue(_ queue: MessageQueue, for target: ChatTarget) -> Bool {
         guard let bot = bot(target.botID) else { return false }
         do {
-            try BotHome(workspace: bot.workspace).saveQueuedMessages(queue.messages, paused: queue.isPaused, task: target.taskID)
+            try BotHome(workspace: bot.workspace).saveQueue(queue, task: target.taskID)
             return true
         } catch {
             messageQueues[target]?.pause()
-            append(ChatMessage(role: .error, text: "Couldn't save pending messages: \(error.localizedDescription)"), to: target)
+            show([SaveFailure(.pendingMessages, file: BotHome(workspace: bot.workspace).queueURL(task: target.taskID), error: error)], in: target)
             return false
+        }
+    }
+
+    /// Reads a conversation's queue, after its thread, putting back into its transcript any messages
+    /// the CLI took before the transcript could be saved, and noting any it couldn't read, and where
+    /// their original file is kept.
+    private func loadQueue(_ target: ChatTarget) {
+        guard let bot = bot(target.botID) else { return }
+        var transcript = thread(target)
+        let recovered = BotHome(workspace: bot.workspace).recoverQueue(transcript: &transcript, task: target.taskID)
+        if transcript.count != thread(target).count { conversation(target).replace(transcript) }
+        messageQueues[target] = recovered.queue
+        show(recovered.failures, in: target)
+    }
+
+    /// Says in the conversation why its files couldn't be saved; once while the same failure repeats.
+    private func show(_ failures: [SaveFailure], in target: ChatTarget) {
+        for failure in failures where thread(target).last(where: { $0.role == .error })?.text != failure.message {
+            append(ChatMessage(role: .error, text: failure.message), to: target)
         }
     }
 
