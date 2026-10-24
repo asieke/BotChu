@@ -420,6 +420,8 @@ extension RenderingTests {
         try fixture.home.saveSubagent(child)
         let restored = AppModel(store: fixture.store, settings: fixture.settings)
         defer { restored.stopAll() }
+        // Stopped once that is saved, off the main thread (#107).
+        await restored.storage.settle()
         #expect(restored.delegation.run(parent.id)?.phase == .stopped)
         #expect(restored.delegation.run(child.id)?.phase == .completed)
         #expect(fixture.home.loadSubagents(taskID: fixture.target.taskID).allSatisfy { !$0.phase.isActive })
@@ -454,6 +456,7 @@ extension RenderingTests {
         restored.delegation.records[fixture.target] = [parent, child]
         restored.delegation.states[parent.id] = nil
         restored.delegation.clear(parent.id)
+        await restored.storage.settle()
         #expect(restored.delegation.all.isEmpty)
     }
 
