@@ -147,6 +147,64 @@ extension RenderingTests {
     }
 
     /// A closed task's transcript and a deleted bot's go, and the cache keeps only recent ones.
+    /// A long conversation opened anew (#108) shows its newest items in the update that opens it,
+    /// grouped from a bounded part of the thread, and groups its history off the main thread; then a
+    /// reply streaming in is the only thing grouped again, and the cards' placement is left alone.
+    @Test func aLongConversationOpensAtOnceAndGroupsItsHistoryOffTheMainThread() async throws {
+        _ = NSApplication.shared
+        let fixture = try ActivityChatFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app
+        var messages: [ChatMessage] = []
+        for turn in 0..<200 {
+            messages.append(ChatMessage(role: .user, text: "Step \(turn)"))
+            for call in 0..<9 {
+                let path = "/work/repo/Sources/Folder\(call % 3)/File\(turn)-\(call).swift"
+                messages.append(ChatMessage(role: .tool, toolID: "\(turn)-\(call)", toolName: "Read", toolInput: path,
+                                            toolOutput: "let x = 1", toolState: .done))
+            }
+            messages.append(ChatMessage(role: .tool, toolID: "\(turn)-build", toolName: "Bash", toolInput: "swift build",
+                                        toolOutput: "Build complete!", toolState: .done))
+            messages.append(ChatMessage(role: .assistant, text: "Turn \(turn) done."))
+        }
+        let conversation = app.conversation(fixture.task)
+        conversation.replace(messages)
+        TranscriptCache.forget(fixture.task)
+        app.show(fixture.task)
+        let defaults = UserDefaults(suiteName: fixture.domain)!
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 900),
+                              styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close(); app.runStates.removeAll() }
+        window.contentView = NSHostingView(rootView: ContentView().environment(app).defaultAppStorage(defaults))
+        window.makeKeyAndOrderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let model = TranscriptCache.model(for: fixture.task)
+        // Opened: the newest part grouped here, the rest still being grouped.
+        #expect(model.isLoadingEarlier)
+        #expect(model.lastWork.processed <= TranscriptModel.recentMessages + TranscriptModel.coldLimit)
+        for _ in 0..<500 where model.isLoadingEarlier { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(!model.isLoadingEarlier)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let root = app.task(fixture.task)?.folder
+        var whole = ActivityTranscript(root: root)
+        whole.update(app.thread(fixture.task))
+        let items = model.items(for: app.thread(fixture.task), root: root, epoch: conversation.epoch)
+        #expect(items.map(\.id) == whole.items.map(\.id))
+        // A reply streaming in.
+        app.runStates[fixture.task] = RunState(hasOutput: true)
+        conversation.append(ChatMessage(role: .assistant, text: "Streaming"))
+        try await Task.sleep(for: .milliseconds(100))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let rebuilds = model.placementRebuilds
+        for i in 0..<10 {
+            conversation.stream { $0[$0.count - 1].text += " more \(i)" }
+            window.contentView?.layoutSubtreeIfNeeded()
+            #expect(model.lastWork.processed <= 1)
+        }
+        #expect(model.placementRebuilds == rebuilds)
+    }
+
     @Test func transcriptsOfClosedTasksAndDeletedBotsAreForgotten() throws {
         let fixture = try ActivityChatFixture()
         defer { fixture.cleanUp() }

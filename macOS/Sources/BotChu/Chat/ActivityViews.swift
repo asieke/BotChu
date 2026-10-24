@@ -97,7 +97,7 @@ struct ExplorationCard: View, Equatable {
             if live {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(group.entries.suffix(3)) { entry in
-                        ExplorationEntryRow(entry: entry, kind: kind, live: true)
+                        ExplorationEntryRow(entry: entry, calls: group.calls(of: entry), kind: kind, live: true)
                     }
                 }
                 .padding(.horizontal, 12)
@@ -106,7 +106,7 @@ struct ExplorationCard: View, Equatable {
                 // Opened, its calls name every file: no chips.
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(group.entries.prefix(shownEntries)) { entry in
-                        ExplorationEntryRow(entry: entry, kind: kind, live: false)
+                        ExplorationEntryRow(entry: entry, calls: group.calls(of: entry), kind: kind, live: false)
                     }
                     if group.entries.count > shownEntries {
                         let more = group.entries.count - shownEntries
@@ -257,6 +257,7 @@ struct FailureRow: View {
 /// its range. Clicking it shows the call's input and output.
 struct ExplorationEntryRow: View {
     let entry: ExplorationEntry
+    let calls: Slice<ChunkedArray<ChatMessage>>
     let kind: AgentKind
     let live: Bool
     @State private var expanded = false
@@ -268,7 +269,7 @@ struct ExplorationEntryRow: View {
                 .disabled(entry.state == .running)
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(entry.calls) { call in ToolDetail(message: call.message, kind: kind) }
+                    ForEach(calls) { call in ToolDetail(message: call, kind: kind) }
                 }
                 .padding(.leading, 24)
                 .padding(.bottom, 6)
@@ -289,7 +290,7 @@ struct ExplorationEntryRow: View {
             }
             Spacer(minLength: 8)
             // The range or count stays whole; the folder gives way first.
-            if let failure = entry.calls.last?.activity.failure {
+            if let failure = entry.failure {
                 Text(failure).foregroundStyle(ActivityStyle.failure).fixedSize().layoutPriority(2)
             } else if let detail = entry.detail {
                 Text(detail).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).fixedSize().layoutPriority(2)
@@ -499,7 +500,7 @@ struct SubagentChatCard: View {
     }
 
     @ViewBuilder private func statusLine(activity: BotActivity) -> some View {
-        let counts = SubagentCounts(messages: model.delegation.threads[run.id] ?? [])
+        let counts = model.delegation.threads.counts(run.id)
         if run.phase.isActive {
             TimelineView(.periodic(from: .now, by: 1)) { timeline in
                 HStack(spacing: 5) {
@@ -525,24 +526,6 @@ struct SubagentChatCard: View {
                     .help(handoff)
             }
         }
-    }
-}
-
-/// `23 tool calls · 5 shell`, from a sub-agent's thread.
-struct SubagentCounts {
-    var tools = 0
-    var shell = 0
-
-    init(messages: [ChatMessage]) {
-        for message in messages where message.role == .tool {
-            tools += 1
-            if ToolActivity.isShell(toolName: message.toolName ?? "") { shell += 1 }
-        }
-    }
-
-    var parts: [String] {
-        guard tools > 0 else { return [] }
-        return ["\(tools) tool \(tools == 1 ? "call" : "calls")"] + (shell > 0 ? ["\(shell) shell"] : [])
     }
 }
 

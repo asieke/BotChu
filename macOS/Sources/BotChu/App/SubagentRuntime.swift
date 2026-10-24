@@ -671,7 +671,16 @@ final class SubagentRoot {
 /// A run's transcript and turn as they stream in, observed apart from every other run's.
 @MainActor @Observable
 final class SubagentLive {
-    var messages: [ChatMessage] = []
+    var messages: [ChatMessage] = [] {
+        didSet {
+            tally.update(messages)
+            if tally.counts != counts { counts = tally.counts }
+        }
+    }
+    /// Its tool calls, counted as they stream in (`ToolCallTally`), and observed apart from the
+    /// transcript: a card showing only the counts isn't redrawn by every delta.
+    private(set) var counts = ToolCounts()
+    @ObservationIgnored private var tally = ToolCallTally()
     var state: RunState?
 
     /// Changes the transcript in place, without copying it.
@@ -700,6 +709,9 @@ final class SubagentLive {
             if let newValue { runtime.live(id).messages = newValue } else { runtime.dropLive(id) }
         }
     }
+
+    /// How many tool calls a run's transcript holds.
+    func counts(_ id: UUID) -> ToolCounts { runtime.live(id).counts }
 }
 
 /// `states[id]`: a run's turn, while it runs.

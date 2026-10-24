@@ -34,9 +34,24 @@ enum ChatDensity: String, CaseIterable, Identifiable {
 /// One conversation as the chat shows it: its messages as activity items, regrouped a tail at a
 /// time as they stream in (`ActivityTranscript`), the part of the history shown, and the groups and
 /// cards opened or closed by hand. Lives as long as the chat view of that conversation.
+///
+/// A long conversation it hasn't grouped yet (never shown, or forgotten by `TranscriptCache`) is
+/// grouped off the main thread: its newest messages show at once, and earlier items once the whole
+/// is ready, so opening it never waits for its whole history.
 @MainActor @Observable
 final class TranscriptModel {
     @ObservationIgnored private var transcript = ActivityTranscript()
+    @ObservationIgnored private var placement = SubagentCardsCache()
+    /// The conversation's `epoch` at the last update: when it changes, the thread was replaced or
+    /// edited, not only written into by a turn.
+    @ObservationIgnored private var epoch: Int?
+    @ObservationIgnored private var verifyNext = false
+    /// Grouping the whole thread, off the main thread.
+    @ObservationIgnored private var loading: Task<Void, Never>?
+    /// While it loads, the newest messages couldn't be grouped on their own: nothing shows yet.
+    @ObservationIgnored private var holding = false
+    /// Counts the loads finished, so the chat shows what they grouped.
+    private var loaded = 0
     /// The first item shown; nil shows the newest `page`, following new ones.
     var windowStart: Int?
     /// Cards opened (true) or closed (false) by a click, overriding the density.
@@ -49,6 +64,10 @@ final class TranscriptModel {
     /// with fewer rows, which still fill a couple of screens.
     static let firstItems = 8
     static let firstBudget = 60.0
+    /// More messages to group than this, and the whole thread is grouped off the main thread, with
+    /// about its newest `recentMessages` grouped at once.
+    static let coldLimit = 600
+    static let recentMessages = 300
 
     /// A rough cost, in milliseconds, of laying out an item the first time, from measurements on
     /// an M-series Mac: replies by their length and code blocks, which are the dearest; math and
@@ -68,16 +87,74 @@ final class TranscriptModel {
         }
     }
 
-    /// The conversation's items, updated for `messages`. Only the messages after the last settled
-    /// item are looked at again.
-    func items(for messages: [ChatMessage], root: String?) -> [ActivityItem] {
-        if transcript.root != root { transcript = ActivityTranscript(root: root) }
-        transcript.update(messages)
+    /// Earlier items are still being grouped.
+    var isLoadingEarlier: Bool { loading != nil }
+
+    /// What the last update did, for tests.
+    var lastWork: ActivityTranscript.Work { transcript.lastWork }
+    /// How many times the cards' placement was worked out, for tests.
+    var placementRebuilds: Int { placement.rebuilds }
+
+    /// The conversation's items, updated for `messages`: only what changed since is looked at again.
+    /// `epoch` is the conversation's (`ConversationState.epoch`).
+    func items(for messages: [ChatMessage], root: String?, epoch: Int) -> ChunkedArray<ActivityItem> {
+        _ = loaded
+        if transcript.root != root {
+            loading?.cancel()
+            loading = nil
+            holding = false
+            transcript = ActivityTranscript(root: root)
+        }
+        if let last = self.epoch, last != epoch { verifyNext = true }
+        self.epoch = epoch
+        if loading == nil, transcript.backlog(messages) > Self.coldLimit { load(messages, root: root) }
+        if holding { return [] }
+        transcript.update(messages, verify: verifyNext)
+        verifyNext = false
         return transcript.items
     }
 
+    /// Groups the whole thread off the main thread; meanwhile its newest messages, from where an
+    /// item starts, are grouped here.
+    private func load(_ messages: [ChatMessage], root: String?) {
+        if let start = ActivityTranscript.recentStart(in: messages, keeping: Self.recentMessages, scanning: Self.coldLimit) {
+            transcript = ActivityTranscript(root: root, skipping: start, of: messages)
+        } else {
+            holding = true
+        }
+        let snapshot = messages
+        loading = Task { [weak self] in
+            let whole = await Task.detached(priority: .userInitiated) {
+                var transcript = ActivityTranscript(root: root)
+                transcript.update(snapshot)
+                return transcript
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            self.adopt(whole)
+        }
+    }
+
+    private func adopt(_ whole: ActivityTranscript) {
+        // The shown part stays on the same items, now further down.
+        if let windowStart, let first = transcript.items.first?.id, let offset = whole.items.firstIndex(where: { $0.id == first }) {
+            self.windowStart = windowStart + offset
+        }
+        transcript = whole
+        // The thread may have changed in any way meanwhile.
+        verifyNext = true
+        holding = false
+        loading = nil
+        loaded += 1
+    }
+
+    /// Which delegated runs show where, worked out again only when the calls that started them or
+    /// their records change.
+    func cards(runs: [SubagentRun]) -> SubagentCards {
+        placement.cards(for: transcript, runs: runs)
+    }
+
     /// Where the shown part of `items` starts: the newest page, fewer when its replies are long.
-    func start(of items: [ActivityItem]) -> Int {
+    func start(of items: ChunkedArray<ActivityItem>) -> Int {
         if let windowStart { return min(windowStart, max(0, items.count - 1)) }
         var index = items.count
         var cost = 0.0
@@ -92,7 +169,7 @@ final class TranscriptModel {
     /// While the reader looks at earlier content, the shown part stays where it is, so new items
     /// don't push what they read away. Back at the newest items, a part grown long slides again,
     /// dropping items far above the window.
-    func follow(_ following: Bool, items: [ActivityItem]) {
+    func follow(_ following: Bool, items: ChunkedArray<ActivityItem>) {
         if !following {
             if windowStart == nil { windowStart = start(of: items) }
         } else if let windowStart, items.count - windowStart > Self.page * 2 {
@@ -100,7 +177,7 @@ final class TranscriptModel {
         }
     }
 
-    func showEarlier(items: [ActivityItem]) {
+    func showEarlier(items: ChunkedArray<ActivityItem>) {
         windowStart = max(0, start(of: items) - Self.page)
     }
 
