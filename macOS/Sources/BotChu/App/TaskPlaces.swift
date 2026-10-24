@@ -9,38 +9,15 @@ extension AppModel {
         await loadProjects(force: force)
     }
 
-    /// Where a repository is worked on: where the owner chose, else where its PROJECT.md deploys it
-    /// (on this Mac or on a host of that machine name), else in the repositories folder here.
-    func location(of repo: String) async -> RepoLocation {
-        Locations.resolve(repo: repo, chosen: settings.repoLocations[repo], deployTargets: await deployTargets(of: repo),
-                          thisMac: settings.thisMacName, hosts: settings.hosts, reposRoot: settings.expandedReposRoot)
+    /// Where a repository is worked on: where the owner chose, else in the repositories folder here.
+    func location(of repo: String) -> RepoLocation {
+        Locations.resolve(repo: repo, chosen: settings.repoLocations[repo], hosts: settings.hosts, reposRoot: settings.expandedReposRoot)
     }
 
-    /// Where the repository is worked on by default, without the owner's choice.
-    func defaultLocation(of repo: String) async -> RepoLocation {
-        Locations.resolve(repo: repo, chosen: nil, deployTargets: await deployTargets(of: repo),
-                          thisMac: settings.thisMacName, hosts: settings.hosts, reposRoot: settings.expandedReposRoot)
-    }
-
-    /// The folder a repository has on a computer: where its PROJECT.md deploys it there, else in that
-    /// computer's repositories folder.
-    func folder(of repo: String, on hostID: UUID?) async -> String {
-        let targets = await deployTargets(of: repo)
-        let machine = settings.host(hostID)?.machine ?? settings.thisMacName
-        if let target = targets.first(where: { !machine.isEmpty && $0.machine.caseInsensitiveCompare(machine) == .orderedSame }) {
-            return hostID == nil ? (target.path as NSString).expandingTildeInPath : target.path
-        }
+    /// The folder a repository has on a computer: in that computer's repositories folder.
+    func folder(of repo: String, on hostID: UUID?) -> String {
         let root = settings.host(hostID)?.reposFolder ?? settings.expandedReposRoot
         return (root as NSString).appendingPathComponent(TaskNaming.repoName(repo))
-    }
-
-    /// PROJECT.md's `local:` deploy targets for a repository on GitHub, read once.
-    private func deployTargets(of repo: String) async -> [(machine: String, path: String)] {
-        if let known = deployTargetCache[repo] { return known }
-        guard repo.contains("/") else { return [] }
-        let targets = await GitHubLookup.projectFile(repo: repo).map(Locations.deployTargets(projectFile:)) ?? []
-        deployTargetCache[repo] = targets
-        return targets
     }
 
     /// Where a task's commands run: this Mac, or its host, which must still be in Settings.
