@@ -633,7 +633,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     to render isolated gallery/table (sidebar, chat, or Agents' sections, wide and narrow) screenshots
     with sample data. These
     share a serialized suite because AppKit
-    window focus is global; all use isolated windows and no real bot data.
+    window focus is global; all use isolated windows and no real bot data. Providers and OpenRouter
+    inspector fixtures inject both the usage cache and the key lookup, so tests never read Keychain.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
     `macOS/build/`), signed with the local "Apple Development" certificate when there is one, ad hoc
     otherwise. It records the SDK the app was linked against in the binary (`vtool`), because

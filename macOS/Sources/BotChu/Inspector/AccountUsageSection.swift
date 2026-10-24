@@ -87,7 +87,7 @@ struct AccountUsageSection: View {
         guard !loading else { return }
         loading = true
         defer { loading = false }
-        let key = request.account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil
+        let key = request.account.kind == .pi ? model.openRouterKey() : nil
         let result = await model.usage.read(request, openRouterKey: key, manual: manual)
         guard !Task.isCancelled else { return }
         state = result

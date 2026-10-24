@@ -28,7 +28,9 @@ extension RenderingTests {
         settings.customAccounts = [Account(id: "custom-long", name: "Claude Research and Long-Form Writing Profile", kind: .claude,
                                            defaultCommand: "~/.local/bin/claude-research-and-long-form-writing", symbol: "terminal")]
         let claudeWork = FailAfterFirst()
-        let usage = UsageCache { request, _ in
+        let usage = UsageCache { request, key in
+            let usesExpectedKey = key == (request.account.kind == .pi ? "test-openrouter-key" : nil)
+            #expect(usesExpectedKey)
             let now = Date()
             switch request.account.id {
             case "google":
@@ -53,7 +55,9 @@ extension RenderingTests {
         let stale = await usage.read(request, manual: true)
         #expect(stale.reading != nil && stale.error != nil)
 
-        let app = AppModel(store: Store(root: root.appendingPathComponent("index")), settings: settings, usage: usage)
+        var keyReads = 0
+        let app = AppModel(store: Store(root: root.appendingPathComponent("index")), settings: settings, usage: usage,
+                           openRouterKey: { keyReads += 1; return "test-openrouter-key" })
         let host = NSHostingView(rootView: ProvidersView().environment(app).defaultAppStorage(defaults))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 1100), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -70,7 +74,7 @@ extension RenderingTests {
                 window.layoutIfNeeded()
                 table = providersTable(in: host)
                 // Loaded once Google's row has grown to its windows.
-                if let table, (0..<table.numberOfRows).contains(where: { table.rect(ofRow: $0).height > 60 }) { break }
+                if let table, keyReads > 0, (0..<table.numberOfRows).contains(where: { table.rect(ofRow: $0).height > 60 }) { break }
             }
             let rows = try #require(table)
             #expect(segmentedControls(in: host).isEmpty) // no gallery/list switcher
@@ -81,6 +85,7 @@ extension RenderingTests {
             #expect(rows.bounds.width <= (rows.enclosingScrollView?.contentView.bounds.width ?? .infinity) + 1)
             try captureProviders(window, name: "providers-\(Int(width))-\(appearance == .darkAqua ? "dark" : "light")")
         }
+        #expect(keyReads > 0) // The OpenRouter row uses the stand-in, even with an injected usage cache.
     }
 
     private func providersTable(in view: NSView) -> NSTableView? {

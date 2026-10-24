@@ -39,7 +39,7 @@ struct ProvidersView: View {
                     TableColumn("Updated") { (account: Account) in
                         let request = request(account)
                         ProviderFreshnessCell(request: request, state: board.states[request], checking: board.checking.contains(request)) {
-                            Task { await board.refresh(request, usage: model.usage, manual: true) }
+                            Task { await board.refresh(request, usage: model.usage, openRouterKey: model.openRouterKey, manual: true) }
                         }
                     }
                     .width(min: 104, ideal: 132, max: 180)
@@ -49,7 +49,7 @@ struct ProvidersView: View {
         }.background(Color(nsColor: .windowBackgroundColor)).frame(minWidth: 580, maxWidth: .infinity, maxHeight: .infinity).navigationTitle("Providers")
         .sheet(isPresented: $adding) { AddProviderSheet().environment(model) }
         // Every profile, not only the ones the search shows; the cache decides when a check is due.
-        .task(id: requests) { await board.watch(requests, usage: model.usage) }
+        .task(id: requests) { await board.watch(requests, usage: model.usage, openRouterKey: model.openRouterKey) }
     }
 }
 
@@ -61,12 +61,12 @@ struct ProvidersView: View {
     private(set) var found: [String: Bool] = [:]
 
     /// Reads each profile's usage now and every minute, until the table goes.
-    func watch(_ requests: [UsageRequest], usage: UsageCache) async {
+    func watch(_ requests: [UsageRequest], usage: UsageCache, openRouterKey: @escaping @MainActor () -> String?) async {
         await withTaskGroup(of: Void.self) { group in
             for request in requests {
                 group.addTask {
                     while !Task.isCancelled {
-                        await self.refresh(request, usage: usage)
+                        await self.refresh(request, usage: usage, openRouterKey: openRouterKey)
                         do { try await Task.sleep(for: .seconds(60)) } catch { break }
                     }
                 }
@@ -77,11 +77,11 @@ struct ProvidersView: View {
         }
     }
 
-    func refresh(_ request: UsageRequest, usage: UsageCache, manual: Bool = false) async {
+    func refresh(_ request: UsageRequest, usage: UsageCache, openRouterKey: @MainActor () -> String?, manual: Bool = false) async {
         guard !checking.contains(request) else { return }
         checking.insert(request)
         defer { checking.remove(request) }
-        let key = request.account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil
+        let key = request.account.kind == .pi ? openRouterKey() : nil
         states[request] = await usage.read(request, openRouterKey: key, manual: manual)
     }
 
