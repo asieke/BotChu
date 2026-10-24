@@ -81,11 +81,16 @@ extension RenderingTests {
         let store = Store(root: root.appendingPathComponent("index"))
         try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
         let settings = AppSettings(defaults: defaults)
+        settings.botsRoot = root.appendingPathComponent("bots").path
+        settings.reposRoot = root.appendingPathComponent("repos").path
         settings.hosts = [remote]
         let readings = InspectorUsageProbe()
-        let model = AppModel(store: store, settings: settings, usage: UsageCache { request, _ in
-            await readings.read(request.account.id)
-        })
+        var keyReads = 0
+        let model = AppModel(store: store, settings: settings, usage: UsageCache { request, key in
+            let usesExpectedKey = key == (request.account.kind == .pi ? "test-openrouter-key" : nil)
+            #expect(usesExpectedKey)
+            return await readings.read(request.account.id)
+        }, openRouterKey: { keyReads += 1; return "test-openrouter-key" })
         let taskTarget = ChatTarget.task(task.id, of: bot.id)
         model.runStates[taskTarget] = RunState(hasOutput: true, activity: .coding)
         defer { model.runStates.removeAll() }
@@ -119,6 +124,19 @@ extension RenderingTests {
         // Mounting the model area on Home and the task reads their own accounts, once each;
         // other areas never start allowance queries, and remounting uses the shared cache.
         #expect(await readings.accounts == ["codex-dev", "claude-work"])
+        #expect(keyReads == 0) // Other providers never ask for an OpenRouter key.
+
+        // Switching Home to OpenRouter exercises the inspector's injected credential lookup too.
+        let homeTarget = ChatTarget.home(bot.id)
+        model.setAccount("openrouter", for: homeTarget)
+        model.show(homeTarget)
+        defaults.set(InspectorTab.model.rawValue, forKey: InspectorTab.storageKey)
+        for _ in 0..<40 {
+            if await readings.accounts.contains("openrouter") { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(await readings.accounts == ["codex-dev", "claude-work", "openrouter"])
+        #expect(keyReads > 0)
     }
 
     private func pressInspectorKey(_ text: String, code: UInt16, window: NSWindow) {

@@ -19,6 +19,8 @@
 #                                          # runs the command here, in $data/far (a real turn)
 #   BOTCHU_TASK="hello-world|Add a line" macOS/ui-review.sh  # start a task (a real turn on Claude Dev)
 #   BOTCHU_OPEN=report macOS/ui-review.sh  # open Report a Bug or Feature
+#   BOTCHU_OPEN=providers BOTCHU_USAGE=mixed BOTCHU_PROFILE="A long profile name|claude|claude-long" macOS/ui-review.sh
+#                                          # Providers with a row in each usage state, and an added profile
 #   BOTCHU_OPEN=projects BOTCHU_PROJECT=<owner/name> BOTCHU_PROJECT_TAB=issues BOTCHU_PROJECT_ITEM=<number> macOS/ui-review.sh
 #                                          # open Projects with that repository's sidebar, on a tab and an
 #                                          # issue or pull request there (read with your gh login)
@@ -152,6 +154,7 @@ fi
 [ -n "${BOTCHU_DRAW_PET:-}" ] && args+=(--env "BOTCHU_DRAW_PET=$BOTCHU_DRAW_PET")
 [ -n "${BOTCHU_APPEARANCE:-}" ] && args+=(--env "BOTCHU_APPEARANCE=$BOTCHU_APPEARANCE")
 [ -n "${BOTCHU_USAGE:-}" ] && args+=(--env "BOTCHU_USAGE=$BOTCHU_USAGE")
+[ -n "${BOTCHU_PROFILE:-}" ] && args+=(--env "BOTCHU_PROFILE=$BOTCHU_PROFILE")
 [ -n "${BOTCHU_DEFAULT_MODEL:-}" ] && args+=(--env "BOTCHU_DEFAULT_MODEL=$BOTCHU_DEFAULT_MODEL")
 [ -n "${BOTCHU_WINDOW:-}" ] && args+=(--env "BOTCHU_WINDOW=$BOTCHU_WINDOW")
 [ -n "${BOTCHU_DEMO:-}" ] && args+=(--env "BOTCHU_DEMO=$BOTCHU_DEMO")

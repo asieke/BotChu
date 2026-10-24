@@ -14,7 +14,10 @@ import BotChuCore
 /// - `BOTCHU_INSPECTOR=activity|model|session|memory`: select an inspector area on throwaway data.
 /// - `BOTCHU_DEFAULT_MODEL`: an OpenRouter default for a throwaway run only.
 /// - `BOTCHU_WINDOW=compact`: review the main window at its minimum width, on throwaway data.
-/// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review.
+/// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review;
+///   `mixed` gives each kind of profile a different state (`mixedUsage`).
+/// - `BOTCHU_PROFILE`: with `BOTCHU_DATA_DIR`, CLI profiles to add, from `name|family|command`
+///   (`family` as in `AgentKind`), several separated by `;`.
 /// - `BOTCHU_SEND`: send this message to the selected bot's shown conversation at launch (its Home,
 ///   or the tab `BOTCHU_TAB` shows).
 /// - `BOTCHU_TASK`: start a task for the selected bot at launch from `repo|task|host`, as New Task does
@@ -97,10 +100,12 @@ enum DevHooks {
 
     static var usageFetch: UsageCache.Fetch? {
         guard dataDir != nil, let fixture = env["BOTCHU_USAGE"],
-              ["sample", "stale", "expired", "unavailable"].contains(fixture) else { return nil }
-        return { _, _ in
+              ["sample", "stale", "expired", "unavailable", "mixed"].contains(fixture) else { return nil }
+        let started = Date()
+        return { request, _ in
             if fixture == "unavailable" { throw UsageFailure("Check the account’s sign-in, then refresh.") }
             let now = Date()
+            if fixture == "mixed", let reading = try mixedUsage(request.account, now: now, started: started) { return reading }
             return ProviderUsage(windows: [
                 UsageWindow(id: "session", title: "5-hour", usedPercent: 24,
                             resetsAt: now.addingTimeInterval(fixture == "expired" ? -60 : 7_200)),
@@ -109,7 +114,42 @@ enum DevHooks {
         }
     }
 
+    /// `BOTCHU_USAGE=mixed`: Antigravity with more windows than a row shows, Muse stale, Pi's key
+    /// without a limit, Codex Work unavailable, and Claude Work whose first reading is followed by
+    /// a failed check (`start` makes it); the others get the sample.
+    nonisolated private static func mixedUsage(_ account: Account, now: Date, started: Date) throws -> ProviderUsage? {
+        switch account.id {
+        case "google":
+            return ProviderUsage(windows: ["Gemini · Weekly", "Gemini · 5-hour", "Claude & GPT · Weekly", "Claude & GPT · 5-hour", "Images · Daily"].enumerated().map {
+                UsageWindow(id: $1, title: $1, usedPercent: Double([22, 4, 97, 0, 61][$0]), resetsAt: now.addingTimeInterval(Double($0 + 1) * 9_000))
+            }, readAt: now)
+        case "muse":
+            return ProviderUsage(windows: [UsageWindow(id: "window", title: "5-hour", usedPercent: 5, resetsAt: now.addingTimeInterval(3_600)),
+                                           UsageWindow(id: "weekly", title: "Weekly", usedPercent: 34, resetsAt: now.addingTimeInterval(172_800))],
+                                 readAt: now.addingTimeInterval(-7_200))
+        case "openrouter": return ProviderUsage(windows: [], note: "No key spending limit · $1.25 used", readAt: now)
+        case "codex-work": throw UsageFailure("Could not read account usage. Check the CLI’s sign-in and command, then refresh.")
+        case "claude-work" where now.timeIntervalSince(started) > 2: throw UsageFailure("Usage check timed out. Try refreshing later.")
+        default: return nil
+        }
+    }
+
     static func start(model: AppModel, openSettings: () -> Void) {
+        if dataDir != nil, let profiles = env["BOTCHU_PROFILE"] {
+            model.settings.customAccounts = profiles.split(separator: ";").enumerated().compactMap { index, profile in
+                let parts = profile.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+                guard parts.count == 3, let kind = AgentKind(rawValue: parts[1]) else { return nil }
+                return Account(id: "custom-review-\(index)", name: parts[0], kind: kind, defaultCommand: parts[2], symbol: "terminal")
+            }
+        }
+        if dataDir != nil, env["BOTCHU_USAGE"] == "mixed", let account = model.settings.accounts.first(where: { $0.id == "claude-work" }) {
+            // A check after Claude Work's first reading, which fails, so the reading shows stale with the error.
+            let request = UsageRequest(account: account, command: model.settings.command(for: account), credentialRevision: model.settings.usageCredentialRevision)
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                _ = await model.usage.read(request, manual: true, now: .now.addingTimeInterval(31))
+            }
+        }
         if dataDir != nil, env["BOTCHU_WINDOW"] == "compact" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 guard let window = NSApp.windows.first(where: { $0.styleMask.contains(.titled) }) else { return }

@@ -148,6 +148,8 @@ final class AppModel {
     @ObservationIgnored var issueFiler = DevHooks.issueFiler
     let settings: AppSettings
     let usage: UsageCache
+    /// Usage views inject this lookup in tests so they never read the owner's Keychain.
+    let openRouterKey: @MainActor () -> String?
     let modelCatalog = ModelCatalog()
 
     private let store: Store
@@ -201,7 +203,9 @@ final class AppModel {
     /// PROJECT.md's `local:` deploy targets, by repository, once read.
     @ObservationIgnored var deployTargetCache: [String: [(machine: String, path: String)]] = [:]
 
-    init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil, projectGitHub: ProjectGitHub = ProjectGitHub(),
+    init(store: Store? = nil, settings: AppSettings? = nil, usage: UsageCache? = nil,
+         openRouterKey: @escaping @MainActor () -> String? = { Keychain.get(Keychain.openRouterAccount) },
+         projectGitHub: ProjectGitHub = ProjectGitHub(),
          openWorkLookup: @escaping @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure> = { await GitHubLookup.openWork(repos: $0) },
          workDetailLookup: @escaping @Sendable (String, Int, Bool) async -> Result<GitHubLookup.WorkDetail, TaskWorktree.Failure> = {
              await GitHubLookup.detail(number: $1, pullRequest: $2, repo: $0)
@@ -215,6 +219,7 @@ final class AppModel {
             gh: { await projectGitHub.gh($0) }, record: { try await projectGitHub.record(repo: $0) }, openWork: openWorkLookup))
         self.settings = settings ?? AppSettings()
         self.usage = usage ?? DevHooks.usageFetch.map { UsageCache(fetch: $0) } ?? UsageCache()
+        self.openRouterKey = openRouterKey
         self.store.migrateIfNeeded()
         let loaded = self.store.loadBots()
         bots = loaded.bots

@@ -10,7 +10,8 @@ struct AccountUsageSection: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            let now = context.date
+            // The timeline's date is its last tick, before a reading made since ("in 0 sec.").
+            let now = max(context.date, Date())
             InspectorSection("Usage") {
                 InspectorCard(padded: true) {
                     VStack(alignment: .leading, spacing: 12) {
@@ -86,7 +87,7 @@ struct AccountUsageSection: View {
         guard !loading else { return }
         loading = true
         defer { loading = false }
-        let key = request.account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil
+        let key = request.account.kind == .pi ? model.openRouterKey() : nil
         let result = await model.usage.read(request, openRouterKey: key, manual: manual)
         guard !Task.isCancelled else { return }
         state = result
@@ -110,18 +111,7 @@ struct UsageWindowView: View {
             }
             .font(.system(size: 12))
             if let percent {
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Palette.rowDivider)
-                        Capsule().fill(percent >= 100 ? Palette.dynamic(0xD93A2F, 0xFF6B60)
-                                       : percent >= 80 ? Palette.dynamic(0xB96D00, 0xF5A623) : Palette.violet)
-                            .frame(width: geometry.size.width * min(100, max(0, percent)) / 100)
-                    }
-                }
-                    .frame(height: 5)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(window.title) allowance used")
-                    .accessibilityValue("\(percent.formatted(.number.precision(.fractionLength(0)))) percent")
+                UsageBar(title: window.title, percent: percent).frame(height: 5)
             }
             if let detail = window.detail, !window.hasReset(at: now) {
                 Text(detail).font(.system(size: 11)).foregroundStyle(Palette.secondaryText)
@@ -138,5 +128,25 @@ struct UsageWindowView: View {
         if let date = window.resetsAt { return "Resets \(date.formatted(.dateTime.weekday(.abbreviated).hour().minute()))" }
         if let text = window.resetDescription { return text == "No scheduled reset" ? text : "Resets \(text)" }
         return "Reset time not reported"
+    }
+}
+
+/// How much of an allowance window is used, here and in the Providers table.
+struct UsageBar: View {
+    let title: String
+    let percent: Double
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Palette.rowDivider)
+                Capsule().fill(percent >= 100 ? Palette.dynamic(0xD93A2F, 0xFF6B60)
+                               : percent >= 80 ? Palette.dynamic(0xB96D00, 0xF5A623) : Palette.violet)
+                    .frame(width: geometry.size.width * min(100, max(0, percent)) / 100)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title) allowance used")
+        .accessibilityValue("\(percent.formatted(.number.precision(.fractionLength(0)))) percent")
     }
 }
