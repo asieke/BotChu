@@ -61,6 +61,7 @@ public struct ClaudeParser: StreamParser {
     /// The content block index of each text block of the current message.
     private var textBlocks: Set<Int> = []
     private var toolNames: [String: String] = [:]
+    private var reportedModel: String?
 
     public init() {}
 
@@ -95,6 +96,12 @@ public struct ClaudeParser: StreamParser {
             guard let message = obj["message"] as? JSON, let content = message["content"] as? [JSON] else { return [] }
             let streamed = (message["id"] as? String).map { streamedMessages.contains($0) } ?? false
             var events: [AgentEvent] = []
+            // The model that wrote the message. The init event only repeats the --model asked for,
+            // even one that doesn't exist; a message Claude Code makes up itself says "<synthetic>".
+            if let model = message["model"] as? String, !model.isEmpty, !model.hasPrefix("<"), model != reportedModel {
+                reportedModel = model
+                events.append(.model(model))
+            }
             for block in content {
                 switch block["type"] as? String {
                 case "text":
@@ -302,6 +309,14 @@ public struct MuseParser: StreamParser {
                 streamed = true
                 events.append(.textDelta(text))
             }
+        case "run.usage":
+            // The models the run used, by calls. `run.model.configured` only repeats the --model
+            // asked for, even one that doesn't exist.
+            let models = (payload["models"] as? [JSON] ?? []).compactMap { entry -> (String, Int)? in
+                guard let model = entry["model"] as? String, !model.isEmpty else { return nil }
+                return (model, entry["calls"] as? Int ?? 0)
+            }
+            if let top = models.max(by: { $0.1 < $1.1 }) { events.append(.model(top.0)) }
         case "tool.result":
             let id = payload["call_id"] as? String ?? UUID().uuidString
             let facts = payload["correlation_facts"] as? JSON

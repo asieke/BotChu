@@ -138,6 +138,38 @@ extension RenderingTests {
         #expect(!Workspace.read(fixture.parent.workspace + "/MEMORY.md").contains("REMOTE-LESSON"))
     }
 
+    @Test func aTaskTurnSavesItsNotesReportsAFailedSaveAndRetriesIt() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let memory = fixture.parent.workspace + "/MEMORY.md"
+        fixture.app.send("FIRST", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        let before = Workspace.read(memory)
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: memory)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: memory) }
+
+        fixture.app.send("TASK_MEMORY", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        let thread = fixture.app.thread(fixture.target)
+        #expect(thread.contains { $0.role == .error && $0.text.hasPrefix("Couldn't save 1 note to Parent's memory (MEMORY.md): ") })
+        #expect(thread.last?.role == .note && thread.last?.text == "Saved to the shared memory: “SHARED-LESSON”")
+        #expect(Workspace.read(fixture.settings.sharedMemoryPath).contains("\n- SHARED-LESSON\n"))
+        #expect(Workspace.read(memory) == before)
+        #expect(fixture.app.unsavedMemory[fixture.parent.id] == 1)
+
+        // The next turn hears that the note wasn't saved, and BotChu tries it again after that turn.
+        fixture.app.send("MEMORY_REPORT", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+        #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text == "MEMORY-REPORTED")
+        #expect(fixture.app.unsavedMemory[fixture.parent.id] == 1)
+
+        try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: memory)
+        fixture.app.retryMemory(for: fixture.target)
+        #expect(fixture.app.thread(fixture.target).last?.text == "Saved to Parent's memory: “TASK-LESSON”")
+        #expect(Workspace.read(memory).components(separatedBy: "\n").filter { $0 == "- TASK-LESSON" }.count == 1)
+        #expect(fixture.app.unsavedMemory[fixture.parent.id] == 0)
+    }
+
     @Test func restartRedeliversCompletedAndInterruptedHandoffsToTheRemoteMailbox() async throws {
         let fixture = try SubagentFixture(remote: true)
         defer { fixture.cleanUp() }
@@ -583,6 +615,11 @@ private final class ArchiveWrites: @unchecked Sendable {
         answer = helper("call", "--agent", "Worker", "--brief", "REMEMBER")
     elif brief == "REMEMBER":
         answer = "Handoff Report: complete. <remember>REMOTE-LESSON</remember>"
+    elif brief == "TASK_MEMORY":
+        answer = "That's my default now.\n<remember>\n- TASK-LESSON\n</remember>\n<remember scope=\"shared\">\n- SHARED-LESSON\n</remember>"
+    elif brief == "MEMORY_REPORT":
+        reported = "<memory_updates>" in prompt and "Couldn't save 1 note to your MEMORY.md" in prompt
+        answer = "MEMORY-REPORTED" if reported else "NO-MEMORY-REPORT"
     elif brief == "LOCATION":
         machine = sys.argv[sys.argv.index("--machine") + 1]
         answer = "LOCATION|" + os.getcwd() + "|" + machine + "|" + os.environ["HOME"]
