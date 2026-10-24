@@ -4,9 +4,9 @@ import Foundation
 /// across them, read with `gh` as the owner signed it in.
 extension GitHubLookup {
     /// An open pull request or issue in one of the owner's repositories.
-    public struct OpenItem: Identifiable, Hashable, Sendable {
+    public struct OpenItem: Identifiable, Hashable, Codable, Sendable {
         /// The combined state of a pull request's latest commit's checks.
-        public enum Checks: Int, Comparable, Sendable {
+        public enum Checks: Int, Comparable, Codable, Sendable {
             case none, pending, failure, success
             public static func < (a: Checks, b: Checks) -> Bool { a.rawValue < b.rawValue }
             public var label: String {
@@ -18,7 +18,7 @@ extension GitHubLookup {
                 }
             }
         }
-        public struct Label: Hashable, Sendable {
+        public struct Label: Hashable, Codable, Sendable {
             public var name: String
             /// Six hex digits, without `#`.
             public var color: String
@@ -77,23 +77,36 @@ extension GitHubLookup {
     static let openWorkBatch = 10
     static let openWorkPerRepo = 30
 
-    /// What `openWork` read: the items, and the repositories GitHub couldn't answer for.
+    /// How many open issues and pull requests GitHub counts in a repository.
+    public struct OpenCounts: Hashable, Codable, Sendable {
+        public var issues: Int
+        public var pullRequests: Int
+        public init(issues: Int, pullRequests: Int) { self.issues = issues; self.pullRequests = pullRequests }
+    }
+
+    /// What `openWork` read: the items, how many GitHub counts open in each repository that
+    /// answered (by `owner/name` as asked), and the repositories GitHub couldn't answer for.
     public struct OpenWork: Equatable, Sendable {
         public var items: [OpenItem]
         public var unreadable: [String]
-        public init(items: [OpenItem], unreadable: [String] = []) { self.items = items; self.unreadable = unreadable }
+        public var counts: [String: OpenCounts]
+        public init(items: [OpenItem], unreadable: [String] = [], counts: [String: OpenCounts] = [:]) {
+            self.items = items; self.unreadable = unreadable; self.counts = counts
+        }
     }
 
     /// The open pull requests and issues of these repositories (`owner/name`), most recently
     /// updated first. A repository GitHub can't resolve is listed as unreadable rather than failing
-    /// the rest; it fails when it could read none of them.
-    public static func openWork(repos: [String]) async -> Result<OpenWork, TaskWorktree.Failure> {
+    /// the rest; it fails when it could read none of them. `run` runs gh (a stand-in in tests).
+    public static func openWork(repos: [String], run gh: @escaping @Sendable ([String]) async -> Shell.Result = {
+        await Shell.run($0, in: NSHomeDirectory())
+    }) async -> Result<OpenWork, TaskWorktree.Failure> {
         var all = OpenWork(items: [], unreadable: repos.filter { !isSafeName($0) })
         var lastRun: Shell.Result?
         let valid = repos.filter(isSafeName)
         for start in stride(from: 0, to: valid.count, by: openWorkBatch) {
             let batch = Array(valid[start..<min(start + openWorkBatch, valid.count)])
-            let run = await Shell.run(["gh", "api", "graphql", "-f", "query=\(openWorkQuery(batch))"], in: NSHomeDirectory())
+            let run = await gh(["gh", "api", "graphql", "-f", "query=\(openWorkQuery(batch))"])
             lastRun = run
             // gh exits non-zero when any repository fails, but still prints the others.
             guard let read = parseOpenWork(run.output, asked: batch) else {
@@ -101,6 +114,7 @@ extension GitHubLookup {
             }
             all.items += read.items
             all.unreadable += read.unreadable
+            all.counts.merge(read.counts) { _, new in new }
         }
         if !repos.isEmpty, all.unreadable.count == repos.count {
             return .failure(TaskWorktree.Failure(step: "Couldn't read open pull requests and issues of any repository with gh",
@@ -122,11 +136,11 @@ extension GitHubLookup {
             let parts = repo.split(separator: "/")
             return """
                 r\(index): repository(owner: "\(parts[0])", name: "\(parts[1])") { nameWithOwner \
-                pullRequests(states: OPEN, first: \(each), orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { \
+                pullRequests(states: OPEN, first: \(each), orderBy: {field: UPDATED_AT, direction: DESC}) { totalCount nodes { \
                 number title url isDraft createdAt updatedAt author { login avatarUrl(size: 64) } reviewDecision headRefName \
                 isCrossRepository comments { totalCount } additions deletions labels(first: 5) { nodes { name color } } \
                 commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } \
-                issues(states: OPEN, first: \(each), orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { \
+                issues(states: OPEN, first: \(each), orderBy: {field: UPDATED_AT, direction: DESC}) { totalCount nodes { \
                 number title url createdAt updatedAt author { login avatarUrl(size: 64) } comments { totalCount } \
                 labels(first: 5) { nodes { name color } } } } }
                 """
@@ -140,10 +154,16 @@ extension GitHubLookup {
         guard let root = json(output) as? [String: Any], let data = root["data"] as? [String: Any] else { return nil }
         let dates = ISO8601DateFormatter()
         var items: [OpenItem] = []
+        var counts: [String: OpenCounts] = [:]
         var answered = Set<String>()
         for case let repository as [String: Any] in data.values {
             guard let repo = repository["nameWithOwner"] as? String else { continue }
             answered.insert(repo.lowercased())
+            let total = { (key: String) in (repository[key] as? [String: Any])?["totalCount"] as? Int }
+            if let issues = total("issues"), let pulls = total("pullRequests"),
+               let name = asked.first(where: { $0.caseInsensitiveCompare(repo) == .orderedSame }) {
+                counts[name] = OpenCounts(issues: issues, pullRequests: pulls)
+            }
             for pullRequest in [true, false] {
                 let nodes = (repository[pullRequest ? "pullRequests" : "issues"] as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
                 for node in nodes {
@@ -175,7 +195,7 @@ extension GitHubLookup {
                 }
             }
         }
-        return OpenWork(items: items, unreadable: asked.filter { !answered.contains($0.lowercased()) })
+        return OpenWork(items: items, unreadable: asked.filter { !answered.contains($0.lowercased()) }, counts: counts)
     }
 }
 

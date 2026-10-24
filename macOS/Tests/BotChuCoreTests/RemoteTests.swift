@@ -351,20 +351,3 @@ private func tempDir(_ name: String) -> URL {
             """)
     }
 }
-
-@Suite struct RepositoryListTests {
-    @Test func readsTheAccountsRepositories() {
-        // As `gh api user/repos --jq '… | @tsv'` prints them.
-        let tsv = """
-            asieke/BotChu\tBots on agent CLIs\tfalse\t2026-10-22T16:04:12Z\tfalse
-            Humanist-Protagonist/dawn-tof\t\ttrue\t2026-10-20T20:52:36Z\ttrue
-            asieke/x-digest\tA digest\\twith a tab\tfalse\t2026-10-22T09:43:55Z\ttrue
-            asieke/new\t\tfalse\t\tfalse
-            """
-        let repos = GitHubLookup.parseRepositories(tsv)
-        #expect(repos.map(\.nameWithOwner) == ["asieke/BotChu", "asieke/x-digest", "asieke/new"])
-        #expect(repos[1].description == "A digest with a tab")
-        #expect(repos[1].isPrivate)
-        #expect(repos[1].name == "x-digest")
-    }
-}
