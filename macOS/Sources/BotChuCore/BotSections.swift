@@ -77,6 +77,13 @@ public struct BotSections: Equatable, Sendable {
         return names.first { $0.caseInsensitiveCompare(name) == .orderedSame } ?? name
     }
 
+    /// Adds a new bot: in no section, after the bots already there and before the first section. A
+    /// bot already listed stays where it is.
+    public mutating func add(_ id: UUID) {
+        guard !order.contains(id) else { return }
+        order.insert(id, at: order.firstIndex { membership[$0] != nil } ?? order.endIndex)
+    }
+
     /// Puts a bot in the section `typed` names, last among its bots, or in none with nil. A new name
     /// starts a section, listed last. A bot already there keeps its place.
     public mutating func move(_ id: UUID, to typed: String?) {

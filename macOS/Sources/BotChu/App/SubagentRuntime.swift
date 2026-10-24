@@ -474,14 +474,15 @@ final class SubagentRuntime {
         var messages = live.messages
         ThreadAssembler.closeRunningTools(&messages)
         if let error { messages.append(ChatMessage(role: phase == .stopped ? .note : .error, text: error)) }
+        // What the run asked to remember goes into the called bot's memory, which its Home hears
+        // about; a save that fails waits to be tried again, and doesn't fail the handoff.
+        if phase == .completed, let model, let targetBot = model.bot(record.targetBotID) {
+            messages += model.saveMemory(from: messages, of: targetBot, reportTo: .home(targetBot.id))
+        }
         live.messages = messages
         live.state = nil
         preparations[id] = nil
         do {
-            if phase == .completed, let targetBot = model?.bot(record.targetBotID) {
-                let notes = MemoryNotes.remembered(in: messages)
-                try MemoryNotes.append(notes, toMemoryAt: targetBot.workspace + "/MEMORY.md")
-            }
             // The handoff goes back only once its record is durable.
             try persist(record, messages: messages)
         }

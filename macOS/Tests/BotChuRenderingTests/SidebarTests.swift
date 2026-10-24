@@ -211,6 +211,64 @@ extension RenderingTests {
         #expect(fixture.store.loadIndex().map(\.section) == [nil, "Building", nil])
     }
 
+    /// #78: `index.json` can't be saved (its file is locked) while the bots' folders can. A section
+    /// change and a new bot stay in the sidebar, which says why they aren't saved, until Try Again
+    /// saves them, once, with the missing bot's entry; a relaunch reads them. Quitting tries again.
+    @Test func sidebarChangesThatCantBeSavedShowUntilARetrySavesThem() throws {
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot, quiet = fixture.quiet
+        model.settings.botsRoot = fixture.root.appendingPathComponent("bots").path
+        model.settings.reposRoot = fixture.root.appendingPathComponent("repos").path
+        let gone = Store.Entry(id: UUID(), workspace: fixture.root.appendingPathComponent("gone").path, section: "Research")
+        model.missing = [gone]
+        model.saveIndex()
+        #expect(model.indexFailure == nil)
+        let index = fixture.store.root.appendingPathComponent("index.json")
+        func lock(_ locked: Bool) throws { try FileManager.default.setAttributes([.immutable: locked], ofItemAtPath: index.path) }
+        defer { try? lock(false) }
+        try lock(true)
+
+        // The section change shows at once, and so does why it isn't saved.
+        model.moveBot(quiet.id, toSection: "Research")
+        #expect(model.botSections.groups == [.init(name: nil, botIDs: [bot.id]), .init(name: "Research", botIDs: [quiet.id])])
+        let failure = try #require(model.indexFailure)
+        #expect(failure.item == .botIndex)
+        #expect(failure.message.hasPrefix("Couldn't save the sidebar's bots and sections ("))
+        #expect(fixture.store.loadBots().sections.isEmpty)
+
+        // So does a new bot: its folder saves, the index doesn't. Its first turn runs a stand-in.
+        let helper = Bot(name: "Helper", accountID: "codex-dev", workspace: fixture.root.appendingPathComponent("helper").path)
+        model.settings.commands[helper.accountID] = "/usr/bin/true"
+        model.create(helper)
+        defer { model.stopAll() }
+        #expect(model.bots.map(\.id) == [bot.id, helper.id, quiet.id])
+        #expect(model.indexFailure == failure)
+        #expect(BotHome(workspace: helper.workspace).exists)
+        #expect(fixture.store.loadBots().bots.map(\.id) == [bot.id, quiet.id])
+
+        // Once the index can be saved, Try Again saves both, each bot once, with the missing one.
+        try lock(false)
+        model.saveIndex()
+        #expect(model.indexFailure == nil)
+        #expect(fixture.store.loadIndex().map(\.id) == [bot.id, helper.id, quiet.id, gone.id])
+        let relaunched = AppModel(store: fixture.store, settings: AppSettings(defaults: fixture.defaults),
+                                  usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
+        defer { relaunched.stopAll() }
+        #expect(relaunched.botSections == model.botSections)
+        #expect(relaunched.missing == [gone])
+
+        // A change still unsaved when BotChu quits gets one more try.
+        try lock(true)
+        model.moveBot(bot.id, toSection: "Building")
+        #expect(model.indexFailure != nil)
+        try lock(false)
+        model.stopAll()
+        #expect(model.indexFailure == nil)
+        #expect(fixture.store.loadIndex().map(\.id) == [helper.id, quiet.id, bot.id, gone.id])
+        #expect(fixture.store.loadIndex().map(\.section) == [nil, "Research", "Building", "Research"])
+    }
+
     // Model and defaults changes only: no native clicks, so it can share the test process.
     @Test func sectionsShowAsHeadingsThatCollapseAndRevealTheShownBot() async throws {
         _ = NSApplication.shared

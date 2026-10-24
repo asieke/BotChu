@@ -130,8 +130,7 @@ struct ProjectOverviewTab: View {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Retry") { Task { await model.loadProjects(force: true) } }
-                        .disabled(model.projectsLoading)
+                    Button("Retry") { Task { await model.refreshProjects() } }
                 }
                 .font(.callout)
             }
@@ -241,7 +240,7 @@ struct ProjectWorkList: View {
             .padding(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
             if items.isEmpty {
                 Group {
-                    if total > 0, model.openItems == nil || model.openItemsLoading {
+                    if total > 0, model.openItems == nil, model.projectsLoading {
                         ProgressView("Reading open \(noun(2))…").controlSize(.small)
                     } else if total > 0 {
                         ContentUnavailableView {
@@ -249,7 +248,7 @@ struct ProjectWorkList: View {
                         } description: {
                             Text(model.openItemsError ?? "GitHub counts \(total) open, but none were read. Refresh to try again.")
                         } actions: {
-                            Button("Refresh") { Task { await model.loadOpenWork(force: true) } }
+                            Button("Refresh") { Task { await model.refreshProjects() } }
                         }
                     } else {
                         ContentUnavailableView("No Open \(pulls ? "Pull Requests" : "Issues")", systemImage: "checkmark.circle")

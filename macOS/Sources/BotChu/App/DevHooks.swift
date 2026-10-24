@@ -21,6 +21,8 @@ import BotChuCore
 ///   (`repo` is `owner/name` or a checkout's folder in the repositories folder, `host` an optional
 ///   host's nickname, where the checkout is in its repositories folder; a real turn).
 /// - `BOTCHU_TAB`: show the selected bot's tab with this number at launch (0 is Home, 1 its first task).
+/// - `BOTCHU_DRAFT`: with `BOTCHU_DATA_DIR`, put this draft in the shown conversation's message box at
+///   launch (`\n` starts a new line), to review how the box grows and scrolls.
 /// - `BOTCHU_DEMO=activity`: with `BOTCHU_DATA_DIR`, make the shown conversation a long agent run
 ///   in memory (`DemoActivity`), to review the chat's activity cards without a real turn.
 /// - `BOTCHU_DENSITY`: with `BOTCHU_DATA_DIR`, the chat density (`compact`, `detailed` or `raw`).
@@ -167,6 +169,9 @@ enum DevHooks {
         if dataDir != nil, env["BOTCHU_DEMO"] == "activity", let id = model.selection {
             DemoActivity.install(in: model, target: model.tab(of: id))
         }
+        if dataDir != nil, let draft = env["BOTCHU_DRAFT"], let id = model.selection {
+            model.drafts[model.tab(of: id)] = draft.replacingOccurrences(of: "\\n", with: "\n")
+        }
         if let text = env["BOTCHU_SEND"], let id = model.selection {
             model.send(text, to: model.tab(of: id))
         }
@@ -223,6 +228,8 @@ enum DevHooks {
                     }
                 }
             }
+            // What sits above New Bot while the sidebar's changes aren't saved.
+            if let failure = model.indexFailure { IndexFailureBanner(failure: failure).padding(.horizontal, -10) }
         }
         .padding(10)
         .frame(width: 240, alignment: .leading)
