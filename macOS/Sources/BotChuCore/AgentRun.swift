@@ -299,6 +299,16 @@ public final class AgentRun: @unchecked Sendable {
         }
     }
 
+    /// Ends the CLI at once (SIGKILL) if it is still running: for a run that must not outlive its
+    /// limit once `stop` has asked it to end (a run review). On this Mac only.
+    public func kill() {
+        lock.lock()
+        stopped = true
+        lock.unlock()
+        guard remote == nil, process.isRunning else { return }
+        Darwin.kill(process.processIdentifier, SIGKILL)
+    }
+
     private func takeLines(appending data: Data) -> [String] {
         lock.lock()
         defer { lock.unlock() }

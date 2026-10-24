@@ -1,9 +1,10 @@
 import Foundation
 import BotChuCore
 
-/// Run reviews (`RunEvaluator`): after a task turn or a sub-agent run, a background review of what
-/// went well and what didn't, whose justified lessons go to the bot's memory or instructions. The
-/// turn, its receipt, the handoff and the queue never wait for it.
+/// Run reviews (`RunEvaluator`): after a task turn or a sub-agent run, a background review, in a
+/// session without tools, of what went well and what didn't, whose justified notes go to the bot's
+/// memory and whose other changes are proposals for the owner. The turn, its receipt, the handoff
+/// and the queue never wait for it.
 extension AppModel {
     func makeEvaluator(runner: RunEvaluator.Runner?) -> RunEvaluator {
         let evaluator = RunEvaluator(workspace: { [weak self] id in self?.bot(id)?.workspace },
@@ -20,8 +21,7 @@ extension AppModel {
     func liveEvaluationRunner() -> RunEvaluator.Runner {
         { [weak self] job in
             guard let launch = await self?.evaluationLaunch(for: job) else { throw EvaluationRunError("BotChu is closing") }
-            if let problem = launch.problem { throw EvaluationRunError(problem) }
-            return try await EvaluationCLI.run(job, command: launch.command, model: launch.model, openRouterKey: launch.key, log: launch.home)
+            return try await EvaluationCLI.run(job, command: launch.command, model: launch.model, log: launch.home)
         }
     }
 
@@ -77,20 +77,17 @@ extension AppModel {
         saveThread(.home(record.botID))
     }
 
+    /// What a review runs with. Reviews run only on CLIs that need no OpenRouter key
+    /// (`CommandBuilder.runsToolFree`), so the Keychain isn't read for them.
     private struct EvaluationLaunch: Sendable {
         var command: String
         var model: String
-        var key: String?
         var home: BotHome?
-        var problem: String?
     }
 
     private func evaluationLaunch(for job: EvaluationJob) -> EvaluationLaunch {
-        let key = job.account.kind == .pi ? openRouterKey() : nil
-        return EvaluationLaunch(
-            command: settings.command(for: job.account),
-            model: GenerationOptions.effectiveModel(job.model, kind: job.account.kind, openRouterDefault: settings.openRouterModel),
-            key: key, home: bot(job.botID).map { BotHome(workspace: $0.workspace) },
-            problem: job.account.kind == .pi && (key?.isEmpty ?? true) ? "No OpenRouter API key: add it in BotChu ▸ Settings" : nil)
+        EvaluationLaunch(command: settings.command(for: job.account),
+                         model: GenerationOptions.effectiveModel(job.model, kind: job.account.kind, openRouterDefault: settings.openRouterModel),
+                         home: bot(job.botID).map { BotHome(workspace: $0.workspace) })
     }
 }

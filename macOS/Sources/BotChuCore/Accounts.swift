@@ -108,15 +108,8 @@ public enum CommandBuilder {
         newID: () -> String = { UUID().uuidString.lowercased() }
     ) -> Invocation {
         let input = liveInput ? inputLine(kind: kind, text: prompt).map { [$0] } : nil
-        // A prompt that starts with "-" would be read as an option.
-        let prompt = prompt.hasPrefix("-") ? " " + prompt : prompt
-        let model = model.flatMap { value -> String? in
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : GenerationOptions.modelArgument(trimmed, kind: kind, effort: reasoningEffort)
-        }
-        let effort = reasoningEffort.flatMap {
-            GenerationOptions.efforts(for: kind, model: model ?? "").contains($0) ? $0.rawValue : nil
-        }
+        let prompt = argument(prompt)
+        let (model, effort) = generation(kind: kind, model: model, reasoningEffort: reasoningEffort)
         var args: [String] = []
         var env: [String: String] = [:]
         var session = sessionID
@@ -166,6 +159,88 @@ public enum CommandBuilder {
             if let openRouterKey, !openRouterKey.isEmpty { env["OPENROUTER_API_KEY"] = openRouterKey }
         }
         return Invocation(arguments: args, environment: env, sessionID: session, input: input)
+    }
+
+    /// A prompt as an argument: one that starts with "-" would be read as an option.
+    private static func argument(_ prompt: String) -> String {
+        prompt.hasPrefix("-") ? " " + prompt : prompt
+    }
+
+    /// The model as the CLI names it, and an effort the CLI and that model take, when chosen.
+    private static func generation(kind: AgentKind, model: String?, reasoningEffort: ReasoningEffort?) -> (model: String?, effort: String?) {
+        let model = model.flatMap { value -> String? in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : GenerationOptions.modelArgument(trimmed, kind: kind, effort: reasoningEffort)
+        }
+        let effort = reasoningEffort.flatMap {
+            GenerationOptions.efforts(for: kind, model: model ?? "").contains($0) ? $0.rawValue : nil
+        }
+        return (model, effort)
+    }
+
+    /// Whether the CLI can run a session with no tools, enforced by the CLI itself rather than asked
+    /// of the model, as run reviews need (`toolFreeInvocation`). Antigravity has no such mode. Pi has
+    /// `--no-tools`, but no real run has checked it yet, so reviews skip it as well.
+    public static func runsToolFree(_ kind: AgentKind) -> Bool {
+        switch kind {
+        case .claude, .codex, .muse: true
+        case .antigravity, .pi: false
+        }
+    }
+
+    /// The Codex features a tool-free session turns off: running commands (the shell, unified exec
+    /// and code mode, which reaches the patch tool), sub-agents, apps and plugins, the browser and
+    /// computer use, images, goals, sleeping, tool suggestions, skills and hooks.
+    static let codexToolFeatures = ["shell_tool", "unified_exec", "code_mode", "code_mode_host", "multi_agent", "multi_agent_v2",
+                                    "apps", "plugins", "browser_use", "computer_use", "image_generation", "view_image", "goals",
+                                    "sleep_tool", "tool_suggest", "skill_search", "hooks"]
+
+    /// One headless turn in a new session that has no tools, for a run review; nil for a CLI without
+    /// such a mode (`runsToolFree`). Nothing bypasses permissions, and no session is saved. Claude
+    /// Code has no built-in tools (`--tools ""`), every tool denied, no MCP servers, skills or
+    /// commands, and asks nobody (`dontAsk`). Codex runs in its read-only sandbox approving nothing,
+    /// without the user's configuration (its MCP servers and plugins) or rules, with web search and
+    /// `codexToolFeatures` off. Muse runs its empty preset, with the shell, writes, web tools,
+    /// questions and reminder agents off.
+    public static func toolFreeInvocation(kind: AgentKind, prompt: String, model: String?, reasoningEffort: ReasoningEffort? = nil,
+                                          newID: () -> String = { UUID().uuidString.lowercased() }) -> Invocation? {
+        let prompt = argument(prompt)
+        let (model, effort) = generation(kind: kind, model: model, reasoningEffort: reasoningEffort)
+        var args: [String]
+        var session: String?
+        switch kind {
+        case .claude:
+            // `--tools` and `--disallowedTools` take several values: an option must follow each.
+            let id = newID()
+            session = id
+            args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+                    "--tools", "", "--disallowedTools", "*", "--strict-mcp-config", "--disable-slash-commands",
+                    "--permission-mode", "dontAsk", "--no-session-persistence", "--session-id", id]
+            if let model { args += ["--model", model] }
+            if let effort { args += ["--effort", effort] }
+        case .codex:
+            args = ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "-c", "approval_policy=\"never\"",
+                    "-c", "web_search=\"disabled\"", "--ephemeral", "--ignore-user-config", "--ignore-rules"]
+            args += codexToolFeatures.flatMap { ["--disable", $0] }
+            if let model { args += ["-m", model] }
+            if let effort { args += ["-c", "model_reasoning_effort=\"\(effort)\""] }
+        case .muse:
+            // Without a session id, which Muse refuses without a saved session log.
+            args = ["exec", "--json", "--preset", "empty", "--disable-shell", "--disable-write",
+                    "--disable-web-tools", "--disable-request-user-input", "--disable-reminders", "--no-session-log"]
+            if let model { args += ["--model", model] }
+            if let effort { args += ["--reasoning-effort", effort] }
+        case .antigravity, .pi:
+            return nil
+        }
+        args.append(prompt)
+        return Invocation(arguments: args, sessionID: session)
+    }
+
+    /// Whether an error a tool-free session reports is only its CLI saying that a tool is off, as
+    /// asked, while the turn goes on: Codex reports its code mode turned off as an error item.
+    public static func isToolFreeNotice(_ message: String, kind: AgentKind) -> Bool {
+        kind == .codex && message.localizedCaseInsensitiveContains("code-mode host is disabled")
     }
 
     /// The id that resumes a run's session, once its stream reports one: Muse and Pi resume by the

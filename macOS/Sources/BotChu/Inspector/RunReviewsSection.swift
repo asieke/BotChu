@@ -3,8 +3,8 @@ import BotChuCore
 
 /// Activity's run reviews (`RunEvaluator`): Home lists those about the bot's guidance, a task those
 /// of its turns and of the sub-agents it delegated. Each row opens to the review's findings and
-/// evidence, the changes it saved (as the lines added and removed), its proposals and what it left
-/// out, with Revert and Retry. Hidden while there are none.
+/// evidence, the changes it saved (every line added and removed), its proposals and what it left
+/// out, with Revert (and what Revert left as the owner had changed it) and Retry. Hidden while there are none.
 struct RunReviewsSection: View {
     @Environment(AppModel.self) private var model
     let target: ChatTarget
@@ -108,7 +108,7 @@ private struct RunReviewRow: View {
         case .skipped: "minus.circle"
         case .done:
             switch record.outcome {
-            case .memoryUpdated?, .instructionsUpdated?: record.revertedAt == nil ? "brain" : "arrow.uturn.backward.circle"
+            case .memoryUpdated?: record.revertedAt == nil ? "brain" : "arrow.uturn.backward.circle"
             case .proposed?: "lightbulb"
             case .noChange?, nil: "checkmark.circle"
             }
@@ -119,7 +119,7 @@ private struct RunReviewRow: View {
         switch record.phase {
         case .failed: StatusLook.error.dot
         case .running, .applying: StatusLook.working.dot
-        case .done where record.outcome == .memoryUpdated || record.outcome == .instructionsUpdated || record.outcome == .proposed:
+        case .done where record.outcome == .memoryUpdated || record.outcome == .proposed:
             Palette.accent
         default: Palette.secondaryText
         }
@@ -140,10 +140,11 @@ private struct RunReviewDetail: View {
                 list("Evidence", findings.evidence, monospaced: true)
             }
             ForEach(Array(record.applied.enumerated()), id: \.offset) { _, change in
-                diff(change, title: "Saved to \(change.destination == .instructions ? "INSTRUCTIONS.md" : "MEMORY.md")")
+                diff(change, title: "Saved to \(place(change.destination))")
             }
             if let revertedAt = record.revertedAt {
                 Text("Reverted \(BotInspector.ago(revertedAt))").foregroundStyle(Palette.secondaryText)
+                list("Not reverted", record.unreverted)
             }
             ForEach(Array(record.proposals.enumerated()), id: \.offset) { _, proposal in
                 VStack(alignment: .leading, spacing: 3) {
@@ -158,7 +159,10 @@ private struct RunReviewDetail: View {
                 }
             }
             list("Left out", record.leftOut)
-            ForEach([record.failure?.message, record.skipReason, record.saveError, record.revertError].compactMap { $0 }, id: \.self) { problem in
+            if let reason = record.skipReason {
+                Text(reason).foregroundStyle(Palette.secondaryText).textSelection(.enabled)
+            }
+            ForEach([record.failure?.message, record.saveError, record.revertError].compactMap { $0 }, id: \.self) { problem in
                 Text(problem).foregroundStyle(StatusLook.error.dot).textSelection(.enabled)
             }
             Text(footer).foregroundStyle(Palette.secondaryText)
@@ -218,14 +222,17 @@ private struct RunReviewDetail: View {
         }
     }
 
+    /// Every line the save removed and added, blank ones included, hunk by hunk.
     private func diff(_ change: AppliedChange, title: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             heading(title)
-            ForEach(Array(change.removed.enumerated()), id: \.offset) { _, line in
-                Text("− " + line).foregroundStyle(StatusLook.error.dot)
-            }
-            ForEach(Array(change.added.enumerated()), id: \.offset) { _, line in
-                Text("+ " + line).foregroundStyle(Color.green)
+            ForEach(Array(change.hunks.enumerated()), id: \.offset) { _, hunk in
+                ForEach(Array(hunk.removed.enumerated()), id: \.offset) { _, line in
+                    Text("− " + (line.isEmpty ? "(blank line)" : line)).foregroundStyle(StatusLook.error.dot)
+                }
+                ForEach(Array(hunk.added.enumerated()), id: \.offset) { _, line in
+                    Text("+ " + (line.isEmpty ? "(blank line)" : line)).foregroundStyle(Color.green)
+                }
             }
         }
         .font(.system(size: 11, design: .monospaced))

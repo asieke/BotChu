@@ -86,7 +86,7 @@ struct SettingsView: View {
             } header: {
                 Text("Run reviews")
             } footer: {
-                Text("A minute after a task turn or a sub-agent run that used tools or failed, BotChu reviews it in a fresh session on the same account: one review at a time, only while that account is idle, at most \(model.evaluator.limits.perAccountPerDay) a day per account, each stopped after \(Int(model.evaluator.limits.timeout / 60)) minutes. Concise, evidence-backed lessons go to the bot's MEMORY.md or to the lessons section of its INSTRUCTIONS.md, where you can revert them in the status sidebar's Activity; anything else is kept as a proposal for you. Reviews use the account's allowance (OpenRouter credit for Pi).")
+                Text("A minute after a task turn or a sub-agent run that used tools or failed, BotChu reviews it in a fresh session on the same account, with every tool turned off by the CLI itself: one review at a time, only while that account is idle, at most \(model.evaluator.limits.perAccountPerDay) model calls a day per account, each stopped after \(Int(model.evaluator.limits.timeout / 60)) minutes. Concise, evidence-backed notes go to the bot's MEMORY.md, where you can revert them in the status sidebar's Activity; changes to INSTRUCTIONS.md and anything else are kept as proposals for you. Reviews use the account's allowance; runs on Antigravity and Pi aren't reviewed, since BotChu can't run them without tools.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
