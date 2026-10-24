@@ -219,7 +219,7 @@ extension BotHome {
         let digest = ThreadDigest(messages)
         guard let before else { return HistoryLoad(messages: messages, digest: digest, bytes: 0, reindexed: false) }
         let index = readIndex(task: id)
-        let current = index.map { $0.stamp == before && $0.hash == ContentHash.of(content) && $0.digest == digest } ?? false
+        let current = index.map { $0.stamp == before && $0.hash == ContentHash.of(content) } ?? false
         // Only a transcript that didn't change while it was read gets an index made from it.
         if !current, FileStamp.of(transcript) == before {
             writeIndex(for: content, messages: messages, task: id)

@@ -16,7 +16,7 @@ import BotChuCore
 /// Each launch makes the model over the folder, puts the window up and draws it, then types into the
 /// composer, waits for the selected conversation's messages, and opens a conversation never shown,
 /// each timed from the launch's start (the last from its click) until the window has drawn it.
-/// `BOTCHU_LAUNCH_SAMPLES` sets how many launches (30 by default). One more launch then opens every
+/// `BOTCHU_LAUNCH_SAMPLES` sets how many launches (30 by default). A launch before them opens every
 /// Home and open task, one after another, and reads how much memory the process keeps. Counters say
 /// how many files were read, decoded, written and copied by the time the window was drawn, and once
 /// background work settled.
@@ -35,6 +35,8 @@ extension RenderingTests {
         report.note("Machine: \(LaunchBenchFixture.machine()); warm file cache (the fixture was just written and is read again each launch)")
         report.note("Load before: \(ChatBenchReport.load())")
         let samples = Int(environment["BOTCHU_LAUNCH_SAMPLES"] ?? "") ?? 30
+        // Memory first, while nothing else has run in the process.
+        let memory = try await bench.visitEverything()
 
         var initTimes: [Double] = [], windows: [Double] = [], inputs: [Double] = [], contents: [Double] = []
         var opens: [Double] = [], openedShown: [Double] = []
@@ -62,7 +64,24 @@ extension RenderingTests {
         report.note("Counters by the first window (launch 1): \(atWindow.summary)")
         report.note("Counters once background work settled (launch 1): \(settled.summary)")
 
-        let memory = try await bench.visitEverything()
+        // The first launch after an upgrade: no conversation has its index yet.
+        var bareWindows: [Double] = [], bareContents: [Double] = []
+        var bareWindow = HistoryCounters.Counts(), bareSettled = HistoryCounters.Counts()
+        for index in 0..<5 {
+            try bench.removeIndexes()
+            let sample = try await bench.launch(opening: bench.openTasks[index])
+            bareWindows.append(sample.window)
+            bareContents.append(sample.content)
+            if index == 0 {
+                bareWindow = sample.atWindow
+                bareSettled = sample.settled
+            }
+        }
+        report.add("No indexes yet: first usable window", bareWindows)
+        report.add("No indexes yet: first selected content", bareContents)
+        report.note("No indexes yet, counters by the first window: \(bareWindow.summary)")
+        report.note("No indexes yet, counters once settled: \(bareSettled.summary)")
+
         report.add("Open each of 48 histories in turn (shown)", memory.visits)
         report.note(String(format: "Memory after visiting all 48 histories: footprint %.1f MB (%.1f MB above the fixture's baseline), heap in use %.1f MB; %d conversations hold %.1f MB of messages",
                            Double(memory.footprint) / 1_000_000, Double(memory.footprint - memory.baseline) / 1_000_000,
@@ -178,6 +197,14 @@ extension RenderingTests {
         if open {
             expected[target] = thread.count
             openMessages += thread.count
+        }
+    }
+
+    /// Every conversation's `thread.index.json`, as before #109.
+    func removeIndexes() throws {
+        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
+        while let file = files?.nextObject() as? URL {
+            if file.lastPathComponent == "thread.index.json" { try FileManager.default.removeItem(at: file) }
         }
     }
 
