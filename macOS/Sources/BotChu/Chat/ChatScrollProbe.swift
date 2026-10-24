@@ -101,28 +101,38 @@ final class ChatScrollProbeView: NSView {
         transcript.scrolled(top: visible.minY, height: visible.height, width: bounds.width)
     }
 
-    /// Once the chat has laid out what it planned.
-    func correctAfterLayout() {
+    /// Once the chat has laid out what it planned. Tried again a few times while the rows aren't
+    /// tall enough yet for the visible part to go where it should.
+    func correctAfterLayout(attempt: Int = 0) {
         guard !scheduled else { return }
         scheduled = true
         DispatchQueue.main.async { [weak self] in
-            self?.scheduled = false
-            self?.correctNow()
+            guard let self else { return }
+            self.scheduled = false
+            if !self.correctNow(settling: attempt >= 3, retrying: false) { self.correctAfterLayout(attempt: attempt + 1) }
         }
     }
 
-    /// Moves the visible part where the transcript says the reader's row needs it, as near as the
-    /// scroll view goes.
-    func correctNow() {
-        guard !correcting, let clip, let transcript, let target = transcript.viewport.correction, window != nil else { return }
+    /// Moves the visible part where the transcript says the reader's row needs it. As the
+    /// scroll view's rows may not have grown yet to where that is, it goes as near as it can and
+    /// tries again after layout, until `settling`, when as near as it can is where it stays. True
+    /// when there is nothing more to do.
+    @discardableResult func correctNow(settling: Bool = false, retrying: Bool = true) -> Bool {
+        guard !correcting, let clip, let transcript, let target = transcript.viewport.correction, window != nil else { return true }
         correcting = true
         let wanted = clip.convert(NSRect(x: 0, y: target, width: 1, height: clip.bounds.height), from: self)
         var bounds = clip.bounds
         bounds.origin.y = wanted.minY
-        clip.setBoundsOrigin(clip.constrainBoundsRect(bounds).origin)
-        enclosingScrollView?.reflectScrolledClipView(clip)
-        transcript.corrected(to: convert(clip.bounds, from: clip).minY)
+        let origin = clip.constrainBoundsRect(bounds).origin
+        if abs(origin.y - clip.bounds.minY) > 0.25 {
+            clip.setBoundsOrigin(origin)
+            enclosingScrollView?.reflectScrolledClipView(clip)
+        }
+        let reached = convert(clip.bounds, from: clip).minY
+        let done = abs(reached - target) <= 0.5 || settling
+        if done { transcript.corrected(to: reached) }
         correcting = false
-        report()
+        if done { report() } else if retrying { correctAfterLayout() }
+        return done
     }
 }

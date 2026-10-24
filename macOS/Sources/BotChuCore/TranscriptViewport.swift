@@ -150,6 +150,10 @@ public struct TranscriptViewport: Sendable {
     /// How much the rows laid out grew, as measured, since they were planned.
     private var shift = 0.0
     private var anchor: Anchor?
+    /// The reader is at the very end of what can be scrolled to, though not following it: they
+    /// stay at the end as rows above it grow (a jump to the newest that its rows' measurements
+    /// would otherwise take away from).
+    private var atEnd = false
     private var pinned = true
     /// The visible part, in the rows' coordinates: 0 at the first scrollable row's top.
     public private(set) var visibleTop: Double?
@@ -180,7 +184,7 @@ public struct TranscriptViewport: Sendable {
         return "pinned \(pinned), start \(plan.start), rows \(plan.rows.count) \(rows)…\(last) of \(Int(plan.total)), "
             + "visible \(visibleTop.map { "\(Int($0))" } ?? "-")+\(viewport.map { "\(Int($0))" } ?? "-"), "
             + "anchor \(anchor.map { "\(ids.firstIndex(of: $0.row.item).map { "\(plan.start + $0)" } ?? "gone")/\($0.row.part)+\(Int($0.offset))" } ?? "-"), "
-            + "correction \(correction.map { "\(Int($0))" } ?? "-")"
+            + "correction \(correction.map { "\(Int($0))" } ?? "-")\(atEnd ? ", at the end" : "")"
     }
 
     /// Lets every height go, as under memory pressure: rows are estimated again, then measured.
@@ -231,7 +235,9 @@ public struct TranscriptViewport: Sendable {
         var top = max(0, total - height)
         correction = nil
         if !pinned {
-            if let anchor, let anchorAt {
+            if atEnd {
+                if let visibleTop, abs(visibleTop - top) > 0.5 { correction = top }
+            } else if let anchor, let anchorAt {
                 top = rowTop(item: anchorAt, part: anchor.row.part) + anchor.offset
                 if let visibleTop, abs(visibleTop - top) > 0.5 { correction = top }
             } else if let visibleTop {
@@ -347,6 +353,7 @@ public struct TranscriptViewport: Sendable {
             self.correction = nil
         } else {
             anchor = anchor(at: top)
+            atEnd = isAtEnd(top: top, height: height)
         }
         return resized || uncovered(top: top, height: height)
     }
@@ -355,7 +362,7 @@ public struct TranscriptViewport: Sendable {
     /// coordinates without the reader scrolling: `correction` takes it back to the reader's row.
     public mutating func hold(visibleTop top: Double) {
         guard !pinned, let anchor, let at = planned[anchor.row] else { return }
-        let wanted = plan.rows[at].top + anchor.offset
+        let wanted = atEnd ? max(0, plan.total - (viewport ?? Self.defaultViewport)) : plan.rows[at].top + anchor.offset
         if abs(wanted - top) > 0.5 { correction = wanted }
     }
 
@@ -364,7 +371,15 @@ public struct TranscriptViewport: Sendable {
         guard let correction else { return }
         self.correction = nil
         visibleTop = top
-        if abs(correction - top) > 0.5 { anchor = anchor(at: top) }
+        if abs(correction - top) > 0.5 {
+            anchor = anchor(at: top)
+            atEnd = isAtEnd(top: top, height: viewport ?? Self.defaultViewport)
+        }
+    }
+
+    /// The visible part ends where what can be scrolled to does, below the top.
+    private func isAtEnd(top: Double, height: Double) -> Bool {
+        !plan.rows.isEmpty && plan.below < 0.5 && top > 0.5 && top + height >= plan.total - 1
     }
 
     /// The reader's row is no longer laid out near the visible part.
@@ -404,7 +419,10 @@ public struct TranscriptViewport: Sendable {
         for later in (index + 1)..<plan.rows.count { plan.rows[later].top += delta }
         plan.total += delta
         shift += delta
-        if !pinned, let anchor, let at = planned[anchor.row], at > index {
+        if !pinned, atEnd, let viewport {
+            let top = max(0, plan.total - viewport)
+            if let visibleTop, abs(visibleTop - top) > 0.5 { correction = top } else { correction = nil }
+        } else if !pinned, let anchor, let at = planned[anchor.row], at > index {
             let top = plan.rows[at].top + anchor.offset
             if let visibleTop, abs(visibleTop - top) > 0.5 { correction = top } else { correction = nil }
         }

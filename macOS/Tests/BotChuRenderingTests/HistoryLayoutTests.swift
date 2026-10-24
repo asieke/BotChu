@@ -24,7 +24,7 @@ extension RenderingTests {
         window.isReleasedWhenClosed = false
         defer { window.contentView = nil; window.close(); app.runStates.removeAll() }
         let defaults = UserDefaults(suiteName: fixture.domain)!
-        let host = NSHostingView(rootView: AnyView(ChatView(target: fixture.task).environment(app).defaultAppStorage(defaults)))
+        let host = NSHostingView(rootView: AnyView(ChatView(target: fixture.task).id(fixture.task).environment(app).defaultAppStorage(defaults)))
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
         let model = TranscriptCache.model(for: fixture.task)
@@ -111,10 +111,10 @@ extension RenderingTests {
         #expect(model.realized <= limit)
         let below = (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.maxY
         #expect(below < 40)
-        host.rootView = AnyView(ChatView(target: .home(fixture.task.botID)).environment(app).defaultAppStorage(defaults))
+        host.rootView = AnyView(ChatView(target: .home(fixture.task.botID)).id(ChatTarget.home(fixture.task.botID)).environment(app).defaultAppStorage(defaults))
         try await settle(window)
         #expect(model.realized == 0)
-        host.rootView = AnyView(ChatView(target: fixture.task).environment(app).defaultAppStorage(defaults))
+        host.rootView = AnyView(ChatView(target: fixture.task).id(fixture.task).environment(app).defaultAppStorage(defaults))
         try await settle(window, frames: 10)
         #expect(model.realized > 0)
         #expect(model.realized <= limit)
@@ -141,7 +141,7 @@ extension RenderingTests {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 760), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.contentView = nil; window.close() }
-        let host = NSHostingView(rootView: AnyView(ChatView(target: fixture.task).environment(app).defaultAppStorage(defaults)))
+        let host = NSHostingView(rootView: AnyView(ChatView(target: fixture.task).id(fixture.task).environment(app).defaultAppStorage(defaults)))
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
         let model = TranscriptCache.model(for: fixture.task)
@@ -200,7 +200,7 @@ extension RenderingTests {
         window.appearance = NSAppearance(named: .aqua)
         defer { window.contentView = nil; window.close() }
         let defaults = UserDefaults(suiteName: fixture.domain)!
-        let host = NSHostingView(rootView: AnyView(ChatView(target: fixture.task).environment(app).defaultAppStorage(defaults)))
+        let host = NSHostingView(rootView: AnyView(ChatView(target: fixture.task).id(fixture.task).environment(app).defaultAppStorage(defaults)))
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
         try await settle(window, frames: 20)
