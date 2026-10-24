@@ -1050,8 +1050,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   reply, until the last delta's rendering is drawn, with the worker's counts; then 30 more at 5 a second
   while a key is pressed in the message box every 40 ms, with how long from each delta's time and each
   key press until it is drawn, and how long the main thread keeps other work waiting meanwhile (and with
-  nothing streaming); then 60 deltas into a 32 KB reply with 282 equations, until WebKit has drawn the
-  last, with WebKit's counts. `BOTCHU_BENCHMARK_SCOPE=chat` times the
+  nothing streaming), and how long the main thread is held to show each revision the worker prepares;
+  then 60 deltas into a 32 KB reply with 282 equations, until WebKit has drawn the last, with WebKit's
+  counts. `BOTCHU_BENCHMARK_SCOPE=chat` times the
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.

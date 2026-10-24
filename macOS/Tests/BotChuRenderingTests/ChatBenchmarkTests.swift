@@ -170,6 +170,23 @@ extension RenderingTests {
         report.add("Main-thread wait, meanwhile", waits)
         editor.string = ""
         app.drafts[bench.long] = nil
+        // Each revision the worker prepares, shown on its own: the longest the main thread is held
+        // from the delta's text drawn until a while after the worker has the revision, which is
+        // showing it (a probe posting every millisecond, so to within one).
+        try await idle(300)
+        let fine = MainThreadProbe(every: 1_000)
+        var shown: [Double] = []
+        for i in 0..<30 {
+            long.stream { $0[$0.count - 1].text += " shown \(i) with **bold** words" }
+            draw()
+            let drawn = DispatchTime.now().uptimeNanoseconds
+            let text = long.messages.last!.text
+            for _ in 0..<2_000 where MarkdownCache.shared.cached(text) == nil { try await Task.sleep(for: .milliseconds(1)) }
+            try await Task.sleep(for: .milliseconds(150))
+            shown.append(fine.longest(postedAfter: drawn))
+        }
+        _ = fine.stop()
+        report.add("A prepared 128 KB revision shown", shown)
 
         // A rich reply being written: 32 KB with 282 equations, then 60 deltas with one more each,
         // timed on the main thread and until WebKit has drawn the last.
@@ -382,6 +399,7 @@ extension RenderingTests {
 final class MainThreadProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var waits: [Double] = []
+    private var posts: [UInt64] = []
     private var running = true
 
     /// Posts to the main thread every `interval` microseconds, from a thread of its own, and
@@ -393,7 +411,7 @@ final class MainThreadProbe: @unchecked Sendable {
                 let posted = DispatchTime.now().uptimeNanoseconds
                 DispatchQueue.main.async { [self] in
                     if let work { MainActor.assumeIsolated { work() } }
-                    record(Double(DispatchTime.now().uptimeNanoseconds - posted) / 1_000_000)
+                    record(Double(DispatchTime.now().uptimeNanoseconds - posted) / 1_000_000, posted: posted)
                 }
                 usleep(interval)
             }
@@ -406,10 +424,18 @@ final class MainThreadProbe: @unchecked Sendable {
         return running
     }
 
-    private func record(_ wait: Double) {
+    private func record(_ wait: Double, posted: UInt64) {
         lock.lock()
         waits.append(wait)
+        posts.append(posted)
         lock.unlock()
+    }
+
+    /// The longest wait of those posted after `start` (`DispatchTime` nanoseconds) and run so far.
+    func longest(postedAfter start: UInt64) -> Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return zip(posts, waits).filter { $0.0 >= start }.map(\.1).max() ?? 0
     }
 
     func stop() -> [Double] {
