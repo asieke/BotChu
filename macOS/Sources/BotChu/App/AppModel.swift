@@ -206,14 +206,12 @@ final class AppModel {
         for bot in bots {
             conversation(.home(bot.id)).load(self.store.loadThread(for: bot))
             let home = BotHome(workspace: bot.workspace)
-            messageQueues[.home(bot.id)] = MessageQueue(saved: home.loadQueuedMessages(), delivered: thread(.home(bot.id)),
-                                                        paused: home.loadQueuePaused())
+            loadQueue(.home(bot.id), from: home)
             tasks[bot.id] = home.loadTasks()
             for task in tasks[bot.id] ?? [] where !task.isArchived {
                 let target = ChatTarget.task(task.id, of: bot.id)
                 conversation(target).load(home.loadThread(task: task.id))
-                messageQueues[target] = MessageQueue(saved: home.loadQueuedMessages(task: task.id), delivered: thread(target),
-                                                     paused: home.loadQueuePaused(task: task.id))
+                loadQueue(target, from: home)
             }
             reloadPet(bot.id)
         }
@@ -509,10 +507,9 @@ final class AppModel {
         tasks[target.botID]?[i].archivedAt = nil
         saveTask(tasks[target.botID]![i], of: target.botID)
         if !conversation(target).isLoaded, let id = target.taskID {
-            conversation(target).load(BotHome(workspace: bot.workspace).loadThread(task: id))
             let home = BotHome(workspace: bot.workspace)
-            messageQueues[target] = MessageQueue(saved: home.loadQueuedMessages(task: id), delivered: thread(target),
-                                                 paused: home.loadQueuePaused(task: id))
+            conversation(target).load(home.loadThread(task: id))
+            loadQueue(target, from: home)
         }
         show(target)
         sendNextQueued(to: target)
@@ -1462,6 +1459,18 @@ final class AppModel {
             }
             return true
         } catch { return false }
+    }
+
+    /// Reads a conversation's unsent follow-ups, after its thread; the conversation notes any it
+    /// couldn't read, and where their original file is kept.
+    private func loadQueue(_ target: ChatTarget, from home: BotHome) {
+        let queued = home.readQueuedMessages(task: target.taskID)
+        messageQueues[target] = MessageQueue(saved: queued.messages, delivered: thread(target),
+                                             paused: home.loadQueuePaused(task: target.taskID))
+        if let note = queued.note(for: .queue) {
+            append(note, to: target)
+            saveThread(target)
+        }
     }
 
     private func saveQueue(_ queue: MessageQueue, for target: ChatTarget) -> Bool {

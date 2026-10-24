@@ -78,7 +78,16 @@ public struct BotHome: Sendable {
 
     /// Unsent follow-ups live beside their conversation, including while a task is closed.
     public func loadQueuedMessages(task id: UUID? = nil) -> [ChatMessage] {
-        Self.readThread((id.map(taskURL) ?? url).appendingPathComponent("queued.jsonl"))
+        readQueuedMessages(task: id).messages
+    }
+
+    /// The unsent follow-ups and what couldn't be read of them, which their conversation notes
+    /// (`note(for: .queue)`). Once the original is kept, the file is saved with what could be read.
+    public func readQueuedMessages(task id: UUID? = nil) -> TranscriptRead {
+        let file = (id.map(taskURL) ?? url).appendingPathComponent("queued.jsonl")
+        let read = TranscriptRead.read(file)
+        if read.kept != nil { try? Self.writeThread(read.messages, to: file) }
+        return read
     }
 
     /// Whether the owner's Stop or a failed turn paused the queue, which then waits for the owner
@@ -190,9 +199,14 @@ public struct BotHome: Sendable {
         try FileManager.default.createDirectory(at: dispatchURL, withIntermediateDirectories: true)
     }
 
+    /// The messages that could be read, followed by a note on any that couldn't (`TranscriptRead`).
+    /// Once the original is kept, the note is saved with them, so it stays in the conversation.
     static func readThread(_ url: URL) -> [ChatMessage] {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
-        return text.split(separator: "\n").compactMap { try? Store.decoder.decode(ChatMessage.self, from: Data($0.utf8)) }
+        let read = TranscriptRead.read(url)
+        guard let note = read.note(for: .conversation) else { return read.messages }
+        let messages = read.messages + [note]
+        if read.kept != nil { try? writeThread(messages, to: url) }
+        return messages
     }
 
     static func writeThread(_ messages: [ChatMessage], to url: URL) throws {

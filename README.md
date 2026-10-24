@@ -304,8 +304,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     pet (`pet/`: `video.json`, `stills/<pose>.png`, `clips/<activity>.mp4` and the appearance it
     was made from) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
     is told it can search them for earlier conversations. **History & Logs** in the status sidebar
-    opens the folder. Each bot needs its own workspace, and not the bots folder itself; moving a
-    bot's workspace in its editor moves its `.botchu/`, `INSTRUCTIONS.md`, `MEMORY.md` and `SOUL.md` with it. Moving
+    opens the folder. An entry BotChu can't read in a conversation's file (a line that isn't JSON,
+    or a message this version doesn't know, such as one with a newer role) is never lost when the
+    conversation is next saved, nor is a file it can't read at all: BotChu first keeps the original,
+    unchanged, beside it as `<name>.unreadable-<time>.jsonl` (moving a file it can't read there),
+    and the conversation says, in a note, how many entries it left out and where the original is.
+    This holds for Home's, tasks' and sub-agents' threads and for pending messages, whose note goes
+    in their conversation; a missing or empty file is just an empty conversation. Each bot needs
+    its own workspace, and not the bots folder itself; moving a bot's workspace in its editor moves its `.botchu/`, `INSTRUCTIONS.md`, `MEMORY.md` and `SOUL.md` with it. Moving
     waits until its turns finish and refuses to overwrite files at the destination. Deleting a bot
     puts only its `.botchu/` in the Trash.
   - **Memory and personality:** each bot's workspace has a `MEMORY.md` for facts and notes it keeps
@@ -435,7 +441,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
     or proposing it through GitHub with retryable, metadata-only PRs (`ProjectGitHub.swift`), the Projects
     tables' rows, their status filter and the open pull requests and issues across repositories (`ProjectOverview.swift`),
-    an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store (`Store.swift`), and the `Process` runner that launches
+    an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store (`Store.swift`), with conversations' files read without losing what can't be read (`Transcript.swift`), and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
     `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (transcripts saved off the main thread
@@ -468,7 +474,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
     and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
     commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
-    streamed update regroups only the tail; and the sidebar's sections of bots.
+    streamed update regroups only the tail; the sidebar's sections of bots; and conversations'
+    files with a line that isn't JSON, an unknown role, or no readable text, kept before the next save.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
