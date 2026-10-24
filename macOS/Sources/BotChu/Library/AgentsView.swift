@@ -99,6 +99,7 @@ struct AgentCard: View {
     var body: some View {
         let status = model.status(of: bot)
         let tasks = model.openTasks(of: bot.id).count
+        let jobs = model.jobs.jobs(of: bot.id).count
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 BotAvatar(bot: bot, size: 56, activity: status.activity, animates: model.isBusy(bot.id))
@@ -113,6 +114,10 @@ struct AgentCard: View {
             Divider()
             HStack {
                 Text(tasks == 1 ? "1 task" : "\(tasks) tasks").font(.caption).foregroundStyle(.secondary)
+                Text("·").font(.caption).foregroundStyle(.tertiary)
+                Button(jobs == 1 ? "1 job" : "\(jobs) jobs") { jobs == 0 ? model.jobs.newJob(for: bot.id) : model.showJobs(for: bot.id) }
+                    .buttonStyle(.link).font(.caption)
+                    .help(jobs == 0 ? "New Job… for \(bot.name)" : "Show \(bot.name)'s jobs in Jobs")
                 Spacer()
                 Menu { MoveToSectionItems(botID: bot.id, newSection: newSection) } label: { Image(systemName: "folder") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
@@ -126,6 +131,9 @@ struct AgentCard: View {
         .contextMenu {
             Button("Open Chat") { model.show(model.tab(of: bot.id)) }
             Button("Edit…") { model.edit(bot.id) }
+            Divider()
+            Button("New Job…") { model.jobs.newJob(for: bot.id) }
+            Button("Show Jobs") { model.showJobs(for: bot.id) }
             Divider()
             MoveToSectionMenu(botID: bot.id, newSection: newSection)
         }

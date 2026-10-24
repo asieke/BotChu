@@ -151,6 +151,8 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     /// (`MessageReference`). Nil in messages without any, and in threads saved before.
     public var references: [MessageReference]?
     public var mentions: [MessageReference] { references ?? [] }
+    /// On a receipt about a scheduled job's run (`JobReceipt`), the run it reports on.
+    public var jobRun: JobRunLink?
 
     public init(
         id: UUID = UUID(), role: Role, text: String = "", date: Date = Date(), toolID: String? = nil,

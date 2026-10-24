@@ -339,7 +339,8 @@ public struct BotHome: Sendable {
         try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
     }
 
-    private func prepare() throws {
+    /// Creates the folder, with its `.gitignore`.
+    func prepare() throws {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         let ignore = url.appendingPathComponent(".gitignore")
         if !FileManager.default.fileExists(atPath: ignore.path) {

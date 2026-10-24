@@ -68,6 +68,7 @@ extension AppModel {
             case .agents: screen = .agents
             case .providers: screen = .providers
             case .skills: screen = .skills
+            case .jobs: screen = .jobs
             }
         } else if let id = selection, bot(id) != nil {
             let target = tab(of: id)

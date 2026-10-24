@@ -26,6 +26,9 @@
 #   BOTCHU_OPEN=projects BOTCHU_PROJECT=<owner/name> BOTCHU_PROJECT_TAB=issues BOTCHU_PROJECT_ITEM=<number> macOS/ui-review.sh
 #                                          # open Projects with that repository's sidebar, on a tab and an
 #                                          # issue or pull request there (read with your gh login)
+#   BOTCHU_JOBS=sample BOTCHU_OPEN=jobs macOS/ui-review.sh  # Jobs, with sample jobs in every state and
+#                                          # history (none ever runs); BOTCHU_OPEN=job-editor or job-history
+#                                          # opens a new job's editor or the first job's history instead
 #   BOTCHU_REPORT="It crashed" macOS/ui-review.sh  # and file this report, with a stand-in gh that
 #                                          # keeps it in $data/reports (BOTCHU_REPORT_FAIL=1: it fails)
 # Prints the snapshot folder. Quit the app with `pkill -x BotChu` when done.
@@ -165,6 +168,7 @@ fi
 [ -n "${BOTCHU_DRAFT:-}" ] && args+=(--env "BOTCHU_DRAFT=$BOTCHU_DRAFT")
 [ -n "${BOTCHU_TYPE:-}" ] && args+=(--env "BOTCHU_TYPE=$BOTCHU_TYPE")
 [ -n "${BOTCHU_SEARCH:-}" ] && args+=(--env "BOTCHU_SEARCH=$BOTCHU_SEARCH")
+[ -n "${BOTCHU_JOBS:-}" ] && args+=(--env "BOTCHU_JOBS=$BOTCHU_JOBS")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
 # Without restoring windows: after any copy of BotChu crashed, macOS would otherwise stop at a
 # dialog asking whether to reopen them.

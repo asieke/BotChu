@@ -9,7 +9,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
 
 ## Scope
 - Does:
-  - **Workspace:** the left sidebar has **Projects**, **Agents**, **Providers** and **Skills**, followed by
+  - **Workspace:** the left sidebar has **Projects**, **Agents**, **Providers**, **Skills** and **Jobs**, followed by
     the bots’ conversations, in sections (below). Opening a gallery keeps the selected conversation and unsent draft;
     turns that finish while a gallery is shown still get an unread badge. In dark mode the sidebar
     takes the status sidebar's darker shade, with a hairline along its edge, so it stands apart from
@@ -287,6 +287,53 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     runaway fan-out. Interrupted records become stopped on relaunch. The helper needs Python 3 on
     each execution machine; SSH mailboxes are polled independently of CLI output. See
     [delegation protocol](docs/subagents.md) for lifecycle and persistence details.
+  - **Jobs:** an agent can own scheduled jobs, saved instructions it runs on a schedule, such as a
+    morning issue triage on weekdays at 9:00. **Jobs** in the sidebar is one table of every agent's
+    jobs: the job, its agent, its schedule and time zone, its next run, its state (on, paused,
+    waiting or running) and how its last run went, filtered by agent, by state or by search. A row's
+    menu runs it now (also a paused job, which stays paused), pauses or resumes it, stops its run
+    (which leaves its schedule alone), edits or deletes it, or opens its history (also a
+    double-click): its runs, newest first, each with the time it was for and the time it started,
+    how late that was, how long it took, what it ran on and its transcript, live while it runs.
+    Opening Jobs or a history never runs anything. An agent's card in **Agents** counts its jobs
+    (opening Jobs filtered to it) and its menu has **New Job…**; its status sidebar's **Activity**
+    lists them under its tasks, with **New Job…** and **All Jobs**. The editor sets the agent (chosen
+    already from an agent's own places, and fixed once the job exists), title, instructions, how often
+    it runs (every day, weekdays or chosen days at a time; every so many minutes, from 5, or hours,
+    from a start time), its time zone (the Mac's at first, shown with the job everywhere), missed
+    times, the time limit and whether it is on, with the schedule in words and its next three times.
+    BotChu runs jobs itself, only while it is open and the Mac is awake: there is no background
+    helper or login item, and Jobs says so. It looks for due jobs every 20 seconds, when the Mac
+    wakes and when the clock changes. A job keeps its own time zone, so travelling or changing the
+    Mac's never moves it; a time a daylight-saving change skips runs when the clock jumps, a time it
+    repeats runs once, and every so many minutes or hours counts true durations from the start time.
+    **Run once if missed** (the default) runs once for the latest time missed while BotChu was closed
+    or the Mac asleep, if that was within its catch-up window (seven days unless set shorter), and
+    tells the agent when the run was meant for and how late it is; **Skip missed runs** records them
+    skipped. Earlier missed times are never made up, nor are times while a job was paused, or before
+    its schedule changed. Each run is a fresh CLI session of its agent's, with its identity,
+    instructions, team playbook, personality, memory and skills, then the job's instructions, but not
+    its Home conversation, on the agent's account, model and effort (recorded with the run), in its
+    workspace; it never resumes Home's session or touches Home's queue, draft or receipts, and gets
+    nothing written to it while it runs. A job never overlaps itself (a time due while its run waits
+    or runs is recorded skipped, once however many); one agent's runs go one at a time, and wait
+    (**Waiting**) for its Home turn or a sub-agent in its workspace to finish; at most two run at
+    once. A run is stopped at its time limit (30 minutes by default) and counts as failed; three
+    failed runs in a row pause the job, saying why. BotChu never runs one again on its own. A run
+    asks for repository work as Home does, with a task request (which names the job), and BotChu
+    starts the task when the run ends. Every run is kept, with how it was started (on schedule,
+    caught up, or Run Now) and how it went: succeeded, nothing to report, failed (with what to do:
+    sign in, wait for the allowance, fix the command, check the network or the disk), stopped,
+    skipped or interrupted, and a line about it; the history keeps the latest 50 and always the last
+    success. A run whose reply ends with `NOTHING_TO_REPORT` stays in the history only. A finding, a
+    failure or an interrupted run adds one receipt to its agent's Home, with **Open Run**, marked as
+    news, which Home's next turn hears of; an empty reply counts as failed, not quiet. Before a run
+    starts, its time is reserved in the job's `job.json`, in one save, so a timer, a wake or a
+    relaunch never starts it twice; when that save fails, nothing starts and the job says why. After
+    a quit or a crash, a run that was running is recorded interrupted (it may have done part of its
+    work) and isn't run again. Jobs are kept in their agent's folder, so they move with its
+    workspace and stay its own when it is renamed; deleting the agent deletes them, as its
+    confirmation says, and a job whose folder has gone doesn't run.
   - **Message box:** a multiline writing area with account, model/effort and send/stop controls in
     its bottom row. Return sends; Shift-Return (or Option-Return) inserts a new line. The box grows with your draft, its first line staying in place as lines are added or removed, then scrolls at its maximum height with the line being typed in view; the report and New Task boxes do the same. Send stays available during a
     run: follow-ups appear in a queue above the composer and reach the bot on their own, in order,
@@ -369,7 +416,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     conversation (`thread.jsonl`, one message per line), its tasks (`tasks/<id>/`: `task.json` with
     the repository, computer, branch, worktree, session and pull request, and the task's
     `thread.jsonl`), the
-    task requests it writes (`dispatch/`), a log of every turn (`logs/<date>.log`:
+    task requests it writes (`dispatch/`), its scheduled jobs (`jobs/<id>/`: `job.json` with the
+    job, where its schedule is up to and its runs, and each run's transcript in `runs/<run>.jsonl`),
+    a log of every turn and job run (`logs/<date>.log`:
     the command, where it ran, how long it took, the exit status, any error and the CLI's error output), notes
     it couldn't save to memory yet (`memory-unsaved.json`, `shared-memory-unsaved.json`) and its
     pet (`pet/`: `video.json`, `stills/<pose>.png`, `clips/<activity>.mp4` and the appearance it
@@ -544,7 +593,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     there are. Conversations, instructions, memory, prompts, tool calls, error text, paths and the
     names of bots, tasks, accounts, hosts and repositories never go into it.
 - Does not: run a bot's Home anywhere but this Mac, or tasks anywhere but this Mac and SSH hosts
-  (no containers or cloud), schedule routines, ask for approval of tool calls (every CLI runs with
+  (no containers or cloud), run scheduled jobs while BotChu is quit or the Mac asleep, ask for approval of tool calls (every CLI runs with
   its permission prompts bypassed, inside the bot's folder or the task's worktree), or keep any
   secret outside the Keychain and the CLIs' own logins.
 
@@ -575,7 +624,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     (`MarkdownCache.swift`), pets: the activity a tool call means
     and the clips that show it (`Pet.swift`), making a pet: its poses and clips, the Codex prompt
     for the stills, the OpenRouter request and job, the cost estimate, the manifest and install
-    (`PetVideo.swift`), tasks: the task, its title
+    (`PetVideo.swift`), scheduled jobs: their schedules in their own time zones, runs, history and
+    storage, what is due, a run's context and how it went (`Jobs.swift`), and the scheduler that
+    reserves a time before its run starts, makes runs wait, records how they end and recovers after
+    a quit (`JobEngine.swift`), tasks: the task, its title
     and branch names, its pull request, receipts, dispatch requests and the briefs of tasks that fan
     out to sub-agents (`Tasks.swift`), hosts and
     where a repository is worked on, from a `PROJECT.md`'s deploy targets (`Hosts.swift`), running
@@ -613,9 +665,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, the
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
-    `TelegramBridge.swift`, and what mentions complete from and tell a bot, `Mentions.swift`),
-    `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers and Skills), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
-    status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
+    `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, and the runs
+    of scheduled jobs, `JobRuntime.swift`),
+    `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
+    status sidebar, a bot's and a task's, with a bot's jobs), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
     the hosts and Telegram), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
@@ -653,10 +706,18 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     gateway against a stand-in Bot API: round trips, refused and revoked chats, each chat's own bot,
     busy conversations, repeated updates, cancelled batches, relaunches, forwarded input,
     pending-work limits, shared rate-limit waits, reconnecting, failed sends and checkpoints, and
-    long replies; and mentions: where a query starts (not in email addresses, URLs, headings or
+    long replies; mentions: where a query starts (not in email addresses, URLs, headings or
     `#123`), agents with spaces and namesakes, ranking, what a choice inserts, trimming and taking a
     message back into the draft, links that no longer resolve, and the context a message carries,
-    kept through the queue and the saved thread.
+    kept through the queue and the saved thread; and scheduled jobs, with a fake clock and store and
+    no CLI: times across daylight-saving changes and in their own zones, chosen days, intervals that
+    stay true durations, missed times run once or skipped within a window, a reservation saved before
+    a run starts (and nothing started when it can't be), repeated ticks and relaunches that start
+    nothing twice, runs waiting for their agent's workspace and a slot, a job that never overlaps
+    itself, pausing, resuming and editing that never make up time, Run Now while paused, failures
+    that pause a job, the history's bounds, crash recovery, jobs moving with their agent, a run's
+    context (its agent, when it was meant for, how late, no Home), its fresh session, and quiet,
+    empty and failed results.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
     across every column, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
@@ -681,15 +742,18 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     the toolbar kept, the message box focused in the same update, the chat at its very end, pets
     that never blink out while a clip loads, rich replies shown only once rendered and shown
     again at once from those kept, within their budget, and typing dots that move, a Telegram
-    message answered in its bot's Home, with stand-ins for the CLI and Telegram, and `@` and `#`
+    message answered in its bot's Home, with stand-ins for the CLI and Telegram, `@` and `#`
     completion: Return and Tab that insert and never send, Escape, an edited label unlinked and undo
     linking it again (and redo unlinking it), a draft taken back from the queue shown linked, pasted
     text that opens nothing, links kept through copy and paste, a message's
-    links and their context through sending, and the report and New Task boxes without it. Set
+    links and their context through sending, and the report and New Task boxes without it, and a job
+    made for its agent, shown in Jobs, delivered to Home as a receipt that leaves Home's draft and
+    queue alone, and deleted with its agent. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
-    `activityChatRendersGroupsCardsAndLiveWork`, or `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`)
+    `activityChatRendersGroupsCardsAndLiveWork`, `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`, or
+    `jobsBelongToTheirAgentAndReachHomeOnlyAsReceipts`)
     to render isolated gallery/table (sidebar, chat, or Agents' sections, wide and narrow) screenshots
     with sample data. These
     share a serialized suite because AppKit
@@ -775,11 +839,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor`, `BOTCHU_OPEN=task` or `BOTCHU_OPEN=settings` opens the bot editor, New
   Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository).
-  `BOTCHU_OPEN=projects`, `agents`, `providers` or `skills` opens that workspace screen;
+  `BOTCHU_OPEN=projects`, `agents`, `providers`, `skills` or `jobs` opens that workspace screen;
   with `projects`, `BOTCHU_PROJECT=<owner/name>` shows that repository's sidebar, and
   `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
   tab and an issue or pull request there, read with your `gh` login.
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
+  `BOTCHU_JOBS=sample` gives the demo bots sample jobs, with a history of every kind of run and a
+  receipt in the first bot's Home, and runs no job (Run Now records a failed run), so nothing starts a CLI; `BOTCHU_OPEN=job-editor`
+  or `job-history` opens a new job's editor or the first job's history.
   `BOTCHU_SECTION=<name>` moves the first bot into a sidebar section of that name, and
   `BOTCHU_SEARCH=<text>` opens Agents (`BOTCHU_OPEN=agents`) with that search.
   `BOTCHU_TAB=<n>` shows the first bot's nth conversation (and the message goes there), and
