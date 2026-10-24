@@ -117,7 +117,7 @@ struct ChatView: View {
                     if let unsaved = model.unsavedMemory[target.botID], unsaved > 0 {
                         UnsavedMemory(count: unsaved) { model.retryMemory(for: target) }
                     }
-                    if let queue = model.messageQueues[target], !queue.messages.isEmpty {
+                    if let queue = model.messageQueues[target], !queue.pending.isEmpty {
                         QueuedMessages(queue: queue, running: running, preparing: model.runStates[target]?.preparing == true,
                             midTurn: model.takesFollowUpsMidTurn(target),
                             resume: { model.resumeQueuedMessages(to: target) },
@@ -173,7 +173,12 @@ struct ChatView: View {
         let draft = model.drafts[target] ?? ""
         let images = model.draftImages[target] ?? []
         guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
-        if model.send(draft, to: target, images: images, references: model.draftReferences[target] ?? []) {
+        let references = model.draftReferences[target] ?? []
+        let target = target, model = model
+        // The message shows queued at once; should the queue not save, it comes back to the draft.
+        if model.send(draft, to: target, images: images, references: references, accepted: { accepted in
+            if !accepted { model.returnToDraft(draft, references: references, images: images, in: target) }
+        }) {
             model.drafts[target] = nil
             model.draftReferences[target] = nil
             model.draftImages[target] = nil

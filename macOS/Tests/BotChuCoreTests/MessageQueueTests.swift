@@ -354,4 +354,44 @@ import Testing
         #expect(failed.failures.last?.message.hasPrefix("Couldn't save pending messages (") == true)
         #expect(queue.taken == [steer])
     }
+
+    /// #107: a message is sent only once a saved queue holds it, and one starting a turn shows in the
+    /// conversation, stays saved in the queue until a saved transcript holds it, and can't be taken back.
+    @Test func unsavedAndStartingMessagesAreHeldBackUntilTheirSavesAreDone() {
+        let first = ChatMessage(role: .user, text: "Start")
+        let second = ChatMessage(role: .user, text: "Then this")
+        var queue = MessageQueue()
+        queue.enqueue(first, unsaved: true)
+        queue.enqueue(second)
+        #expect(queue.next == second, "Not sent before a saved queue holds it")
+        queue.accepted(first.id)
+        #expect(queue.next == first)
+        queue.deliver(first.id)
+        #expect(queue.pending == [second], "It shows in the conversation now, not the queue")
+        #expect(queue.messages == [first, second], "Still saved with the queue")
+        #expect(queue.next == second)
+        queue.remove(first.id)
+        #expect(queue.messages.contains(first), "Starting a turn: it can't be taken back")
+        // Its transcript couldn't be saved: it waits again, first.
+        queue.undeliver(first.id)
+        #expect(queue.next == first)
+        queue.deliver(first.id)
+        // A transcript that doesn't hold it leaves it; one that does takes it out of the queue.
+        queue.saved([ChatMessage(role: .note, text: "Other")])
+        #expect(queue.delivering == [first.id])
+        queue.saved([first])
+        #expect(queue.messages == [second])
+        #expect(queue.delivering.isEmpty)
+    }
+
+    @Test func aRemovalThatCantBeSavedPutsTheMessageBackWhereItWas() {
+        let messages = ["one", "two", "three"].map { ChatMessage(role: .user, text: $0) }
+        var queue = MessageQueue()
+        for message in messages { queue.enqueue(message) }
+        queue.remove(messages[1].id)
+        queue.restore(messages[1], at: 1)
+        #expect(queue.messages == messages)
+        queue.restore(messages[1], at: 0)
+        #expect(queue.messages == messages, "Never twice")
+    }
 }

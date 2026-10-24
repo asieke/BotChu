@@ -38,6 +38,8 @@ final class JobRuntime {
     @ObservationIgnored weak var model: AppModel?
     @ObservationIgnored private(set) var engine: JobEngine!
     @ObservationIgnored private var lives: [UUID: JobLive] = [:]
+    /// Finished runs' transcripts until their last save is written, so their history shows them.
+    @ObservationIgnored private var saving: [UUID: [ChatMessage]] = [:]
     @ObservationIgnored private var runners: [UUID: AgentRun] = [:]
     @ObservationIgnored private var timedOut: Set<UUID> = []
     @ObservationIgnored private var quitting = false
@@ -80,6 +82,7 @@ final class JobRuntime {
     /// A run's transcript: as it streams, or as saved.
     func thread(of run: UUID, in job: Job) -> [ChatMessage] {
         if let live = lives[run] { return live.messages }
+        if let saved = saving[run] { return saved }
         guard let bot = model?.bot(job.botID) else { return [] }
         return BotHome(workspace: bot.workspace).loadJobThread(job: job.id, run: run)
     }
@@ -154,8 +157,9 @@ final class JobRuntime {
         refresh()
     }
 
-    /// BotChu is quitting: each run's transcript is saved as it stands, and its CLI stopped. The
-    /// next launch records the run interrupted (`JobEngine.load`) and tells its agent's Home.
+    /// BotChu is quitting: each run's transcript is saved as it stands (quitting waits for it), and
+    /// its CLI stopped. The next launch records the run interrupted (`JobEngine.load`) and tells its
+    /// agent's Home.
     func stopAll() {
         quitting = true
         timer?.invalidate()
@@ -284,22 +288,27 @@ final class JobRuntime {
                     messages.append(ChatMessage(role: .error, text: result.summary))
                 }
             }
-            try? home.appendLog(TurnLog.ended(at: Date(), startedAt: startedAt, status: status, stopped: runner.stopped,
-                                              toolCalls: messages.filter { $0.role == .tool }.count,
-                                              error: result.outcome == .failed ? result.summary : nil, stderr: stderr, what: what))
-            // What the run asked to remember goes into the agent's memory, as for its other sessions.
-            if result.outcome == .succeeded, let bot = self.model?.bot(job.botID) {
-                let lines = self.model?.saveMemory(from: messages, of: bot, reportTo: .home(bot.id)) ?? []
-                live?.update { $0 += lines }
+            self.model?.log(TurnLog.ended(at: Date(), startedAt: startedAt, status: status, stopped: runner.stopped,
+                                          toolCalls: messages.filter { $0.role == .tool }.count,
+                                          error: result.outcome == .failed ? result.summary : nil, stderr: stderr, what: what), in: home)
+            let finish: @MainActor @Sendable () -> Void = { [weak self] in
+                guard let self else { return }
+                self.finish(runID, outcome: result.outcome, quiet: result.quiet, summary: result.summary)
+                // Tasks the run asked for start now, as Home's do after its turns.
+                self.model?.takeDispatches(for: job.botID)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.model?.takeDispatches(for: job.botID) }
             }
-            self.finish(runID, outcome: result.outcome, quiet: result.quiet, summary: result.summary)
-            // Tasks the run asked for start now, as Home's do after its turns.
-            self.model?.takeDispatches(for: job.botID)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.model?.takeDispatches(for: job.botID) }
+            // What the run asked to remember goes into the agent's memory, as for its other sessions,
+            // saved off the main thread; the run ends once that is done.
+            guard result.outcome == .succeeded, let model = self.model, let bot = model.bot(job.botID) else { return finish() }
+            model.saveMemory(from: messages, of: bot, reportTo: .home(bot.id)) { lines in
+                live?.update { $0 += lines }
+                finish()
+            }
         }
         do {
-            try? home.appendLog(TurnLog.started(at: startedAt, account: account, command: command, arguments: invocation.arguments,
-                                                prompt: prompt, resuming: nil, what: what))
+            model.log(TurnLog.started(at: startedAt, account: account, command: command, arguments: invocation.arguments,
+                                      prompt: prompt, resuming: nil, what: what), in: home)
             try runner.start()
             runners[runID] = runner
             saveThread(runID, of: job)
@@ -325,6 +334,7 @@ final class JobRuntime {
                 lives[runID] = live
             }
             saveThread(runID, of: job)
+            if let live = lives[runID] { saving[runID] = live.messages }
             if let run = job.runs.first(where: { $0.id == runID }) { deliver(job, run: run) }
         }
         lives[runID]?.state = nil
@@ -340,13 +350,18 @@ final class JobRuntime {
         model?.postJobReceipt(JobReceipt.text(job: job, run: run), job: job.id, run: run.id, to: job.botID)
     }
 
+    /// Saves the run's transcript as it is now, off the main thread, in its own lane: a newer state
+    /// takes the place of one not written yet, and none is written twice. A failure is noted on the job.
     private func saveThread(_ runID: UUID, of job: Job) {
-        guard let live = lives[runID], let bot = model?.bot(job.botID) else { return }
-        do {
-            try BotHome(workspace: bot.workspace).saveJobThread(live.messages, job: job.id, run: runID)
-        } catch {
-            notes[job.id] = "Couldn't save the run's transcript: \(error.localizedDescription)"
-            refresh()
+        guard let live = lives[runID], let model, let bot = model.bot(job.botID) else { return }
+        let home = BotHome(workspace: bot.workspace), jobID = job.id, messages = live.messages
+        model.storage.replace(home.jobRunLane(job: jobID, run: runID), slot: "transcript", value: messages,
+                              write: { try home.saveJobThread($0, job: jobID, run: runID) }) { [weak self] result in
+            guard let self else { return }
+            if self.saving[runID] == messages { self.saving[runID] = nil }
+            guard case .failure(let error) = result, (error as? StorageQueue.Failure) == nil, self.engine.job(jobID) != nil else { return }
+            self.notes[jobID] = "Couldn't save the run's transcript: \(error.localizedDescription)"
+            self.refresh()
         }
     }
 

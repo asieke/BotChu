@@ -245,6 +245,7 @@ extension RenderingTests {
         // The thread keeps the links, through a save and a reload; the duck got nothing.
         let sent = model.thread(target).filter { $0.role == .user }
         #expect(sent.map(\.mentions) == [[mention], [mention]])
+        await model.storage.settle()
         #expect(BotHome(workspace: scout.workspace).loadThread().filter { $0.role == .user }.map(\.mentions) == [[mention], [mention]])
         #expect(model.thread(.home(duck.id)).isEmpty)
         #expect(!FileManager.default.fileExists(atPath: (duck.workspace as NSString).appendingPathComponent("prompts.jsonl")))

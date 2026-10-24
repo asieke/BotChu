@@ -1,12 +1,13 @@
 import Foundation
 
-/// Saves sub-agents' transcripts and records (`BotHome.saveSubagentThread`, `saveSubagent`) on a
-/// queue of its own. While a run streams, its latest state is written off the caller's thread at
-/// most once per `interval` (`checkpoint`), each write replacing the transcript atomically, rather
-/// than on every batch of output. A run's start and end are saved at once (`save`), after any
-/// checkpoint under way, so a handoff never goes back to its caller before its record is durable
-/// and an older checkpoint never replaces a newer state. `flush` writes every checkpoint still
-/// waiting, for quitting.
+/// Saves sub-agents' transcripts and records (`BotHome.saveSubagentThread`, `saveSubagent`) off the
+/// caller's thread, each run in its own lane of a `StorageQueue`, so one run's write never waits
+/// for another's. While a run streams, its latest state is written at most once per `interval`
+/// (`checkpoint`), each write replacing the transcript atomically, rather than on every batch of
+/// output. A run's start and end (`save`) drop the checkpoint still waiting and are written at
+/// once, after any write of that run under way, so an older checkpoint never replaces a newer
+/// state; the caller waits for them without blocking, and a handoff goes back only once its record
+/// is durable. `flush` writes every checkpoint still waiting, for quitting.
 public final class SubagentArchive: @unchecked Sendable {
     public struct Snapshot: Sendable {
         public var record: SubagentRun
@@ -19,20 +20,22 @@ public final class SubagentArchive: @unchecked Sendable {
             self.messages = messages
             self.home = home
         }
+
+        /// The run's lane: its folder.
+        public var lane: String { home.subagentURL(id: record.id, taskID: record.rootTaskID).path }
     }
 
     public typealias Writer = @Sendable (Snapshot) throws -> Void
 
     /// The longest a checkpoint waits; changes in between are written together.
     public let interval: TimeInterval
+    public let storage: StorageQueue
     private let write: Writer
-    private let queue = DispatchQueue(label: "BotChu.SubagentArchive", qos: .utility)
-    private let lock = NSLock()
-    private var pending: [UUID: (snapshot: Snapshot, failed: @MainActor (Error) -> Void)] = [:]
-    private var scheduled: Set<UUID> = []
 
-    public init(interval: TimeInterval = 1, write: @escaping Writer = { try SubagentArchive.writeToDisk($0) }) {
+    public init(interval: TimeInterval = 1, storage: StorageQueue = StorageQueue(qos: .utility),
+                write: @escaping Writer = { try SubagentArchive.writeToDisk($0) }) {
         self.interval = interval
+        self.storage = storage
         self.write = write
     }
 
@@ -44,44 +47,49 @@ public final class SubagentArchive: @unchecked Sendable {
     /// Keeps the run's latest state and writes it within `interval`, off the caller's thread. A
     /// write that fails is reported to `failed`, on the main queue.
     public func checkpoint(_ snapshot: Snapshot, failed: @escaping @MainActor (Error) -> Void) {
-        let id = snapshot.record.id
-        lock.lock()
-        pending[id] = (snapshot, failed)
-        let schedule = scheduled.insert(id).inserted
-        lock.unlock()
-        guard schedule else { return }
-        queue.asyncAfter(deadline: .now() + interval) { [self] in
-            lock.lock()
-            let entry = pending.removeValue(forKey: id)
-            scheduled.remove(id)
-            lock.unlock()
-            guard let entry else { return }
-            do {
-                try write(entry.snapshot)
-            } catch {
-                DispatchQueue.main.async { MainActor.assumeIsolated { entry.failed(error) } }
-            }
+        // Called on the main actor only.
+        nonisolated(unsafe) let failed = failed
+        let write = write
+        storage.replace(snapshot.lane, slot: Self.slot, value: snapshot, delay: interval, write: { try write($0); return 0 }) { result in
+            guard case .failure(let error) = result, (error as? StorageQueue.Failure) == nil else { return }
+            failed(error)
         }
     }
 
-    /// Writes the run's state now, after any write of it under way, and returns once it is
-    /// written. A checkpoint still waiting is dropped: this state is newer.
-    public func save(_ snapshot: Snapshot) throws {
-        lock.lock()
-        pending[snapshot.record.id] = nil
-        lock.unlock()
-        try queue.sync { try write(snapshot) }
-    }
-
-    /// Writes every checkpoint still waiting, and waits for writes under way. For quitting, so
-    /// nothing a sub-agent streamed is lost; a write that fails then isn't reported.
-    public func flush() {
-        lock.lock()
-        let waiting = pending.values.map(\.snapshot)
-        pending = [:]
-        lock.unlock()
-        queue.sync {
-            for snapshot in waiting { try? write(snapshot) }
+    /// Writes the run's state now, after any write of it under way, without blocking the caller;
+    /// `done` gets why it couldn't, or nil once it is written, on the main queue. A checkpoint still
+    /// waiting is dropped: this state is newer.
+    public func save(_ snapshot: Snapshot, done: @escaping @MainActor @Sendable (Error?) -> Void) {
+        storage.cancel(snapshot.lane, slot: Self.slot)
+        let write = write
+        storage.submit(snapshot.lane, label: "save", work: { try write(snapshot) }) { result in
+            if case .failure(let error) = result { done(error) } else { done(nil) }
         }
     }
+
+    /// Writes the run's state now, as `save(_:done:)` does, and returns once it is written.
+    public func save(_ snapshot: Snapshot) async throws {
+        storage.cancel(snapshot.lane, slot: Self.slot)
+        let write = write
+        try await storage.perform(snapshot.lane, label: "save") { try write(snapshot) }
+    }
+
+    /// Removes a finished run's folder, after any write of it, so nothing written later makes it
+    /// again; `done` gets why it couldn't, or nil, on the main queue.
+    public func remove(_ id: UUID, taskID: UUID?, home: BotHome, done: @escaping @MainActor @Sendable (Error?) -> Void) {
+        let lane = home.subagentURL(id: id, taskID: taskID).path
+        storage.cancel(lane, slot: Self.slot)
+        storage.submit(lane, label: "remove", work: { try home.removeSubagent(id: id, taskID: taskID) }) { result in
+            if case .failure(let error) = result { done(error) } else { done(nil) }
+        }
+    }
+
+    /// Writes every checkpoint still waiting, and waits up to `timeout` for the writes under way.
+    /// For quitting, so nothing a sub-agent streamed is lost; a write that fails then isn't reported.
+    @discardableResult
+    public func flush(timeout: TimeInterval = 10) -> [String] {
+        storage.wait(timeout: timeout)
+    }
+
+    static let slot = "run"
 }

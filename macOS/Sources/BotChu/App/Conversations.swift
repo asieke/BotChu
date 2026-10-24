@@ -22,6 +22,11 @@ final class ConversationState {
     var queue: MessageQueue?
     /// Whether the thread was read: a closed task's isn't, at launch.
     @ObservationIgnored private(set) var isLoaded = false
+    /// Which state of the thread this is, so a save of a state already written is skipped
+    /// (`StorageQueue.replace`): this conversation's own id and a count of its changes.
+    @ObservationIgnored private let id = UUID()
+    @ObservationIgnored private var revision = 0
+    var version: AnyHashable { AnyHashable([id.uuidString, String(revision)]) }
 
     func load(_ messages: [ChatMessage]) {
         isLoaded = true
@@ -29,11 +34,13 @@ final class ConversationState {
     }
 
     func replace(_ messages: [ChatMessage]) {
+        revision += 1
         self.messages = messages
         summarize(ThreadSummary(messages))
     }
 
     func append(_ message: ChatMessage) {
+        revision += 1
         messages.append(message)
         var summary = self.summary
         summary.extend(with: messages, from: messages.count - 1)
@@ -44,6 +51,7 @@ final class ConversationState {
     /// or tool calls already in it written further, but none removed, reordered or given another
     /// role. `write` mustn't read or change this thread otherwise.
     func stream(_ write: (inout [ChatMessage]) -> Void) {
+        revision += 1
         let start = messages.count
         write(&messages)
         var summary = self.summary
@@ -53,6 +61,7 @@ final class ConversationState {
 
     /// Any other change to the thread.
     func edit(_ change: (inout [ChatMessage]) -> Void) {
+        revision += 1
         change(&messages)
         summarize(ThreadSummary(messages))
     }

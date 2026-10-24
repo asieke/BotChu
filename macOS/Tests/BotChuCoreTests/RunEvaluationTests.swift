@@ -226,6 +226,8 @@ private actor Gate {
         // The handover returns while the review is still held: nothing after it waits for one.
         #expect(fixture.evaluator.enqueue(request))
         #expect(fixture.evaluator.records[request.subject.key]?.phase == .running)
+        // Its record is saved off the main actor, before the model is asked.
+        await fixture.evaluator.storage.settle()
         #expect(FileManager.default.fileExists(atPath: BotHome(workspace: fixture.bot.workspace).evaluationURL(request.subject.key).path))
         await gate.release()
         await fixture.evaluator.settle()
@@ -283,6 +285,8 @@ private actor Gate {
         let again = fixture.makeEvaluator()
         again.runner = { _ in ReviewFixture.reply() }
         again.load(bots: [(fixture.bot.id, fixture.bot.workspace)])
+        // Applied once its record is saved.
+        await again.settle()
         #expect(again.records[applying.id]?.phase == .done)
         #expect(again.records[applying.id]?.outcome == .noChange)
         #expect(fixture.memoryLines(Self.lesson) == 1)
@@ -317,6 +321,8 @@ private actor Gate {
         let later = fixture.request(task: BotTask(repo: "asieke/BotChu", checkout: "/tmp/BotChu", folder: "/tmp/wt", brief: "later", accountID: "codex-dev"))
         #expect(fixture.evaluator.enqueue(later))
         #expect(fixture.evaluator.records[later.subject.key]?.phase == .pending, "Nothing starts while quitting")
+        // Quitting waits for the records being saved (`AppModel.stopAll`).
+        await fixture.evaluator.storage.settle()
 
         fixture.evaluator = fixture.makeEvaluator()
         fixture.answer(ReviewFixture.reply())
@@ -520,6 +526,7 @@ private actor Gate {
             #expect(fixture.memoryLines(note) == 1, "\(note)")
         }
         // Saved, so it survives a relaunch.
+        await fixture.evaluator.settle()
         #expect(BotHome(workspace: fixture.bot.workspace).loadEvaluations().first?.revertedAt != nil)
     }
 
@@ -1045,6 +1052,7 @@ private actor Gate {
         let request = fixture.request(thread: thread)
         fixture.evaluator.enqueue(request)
         let home = BotHome(workspace: fixture.bot.workspace)
+        await fixture.evaluator.storage.settle()
         let waiting = try String(contentsOf: home.evaluationURL(request.subject.key), encoding: .utf8)
         #expect(!waiting.contains(value), "Neither in the snapshot nor in memory as it was at the run")
         await gate.release()
@@ -1165,3 +1173,103 @@ private actor Gate {
         #expect(fixture.evaluator.records[second.subject.key]?.phase == .done)
     }
 }
+
+/// What `prepare` saw each time it was called: whether the CLI could review, and on which thread.
+private final class Preparations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [(toolFree: Bool, main: Bool)] = []
+    func record(toolFree: Bool) { lock.withLock { calls.append((toolFree, Thread.isMainThread)) } }
+    var count: Int { lock.withLock { calls.count } }
+    var toolFree: [Bool] { lock.withLock { calls.map(\.toolFree) } }
+    var onMain: Bool { lock.withLock { calls.contains { $0.main } } }
+}
+
+/// #107: a run is claimed before anything about it is built, and what a review sees is built off
+/// the main actor, only for a run that will be reviewed.
+extension RunEvaluationTests {
+    private func preparing(_ fixture: ReviewFixture, task: BotTask = ReviewFixture.task, seen: Preparations,
+                           hold: DispatchSemaphore? = nil) -> (EvaluationSubject, @Sendable (Bool) -> EvaluationRequest?) {
+        let bot = fixture.bot, thread = ReviewFixture.thread
+        let subject = EvaluationRequest.taskTurnSubject(task, of: bot, thread: thread, turnStart: 1)!
+        return (subject, { toolFree in
+            seen.record(toolFree: toolFree)
+            hold?.wait()
+            return EvaluationRequest.taskTurn(task, of: bot, thread: thread, turnStart: 1, ending: .finished, error: nil,
+                                              machine: "This Mac", snapshot: toolFree)
+        })
+    }
+
+    @Test func nothingIsBuiltWhenReviewsAreOffWithoutARunnerOrWhileQuitting() async throws {
+        let fixture = try ReviewFixture()
+        defer { fixture.remove() }
+        let seen = Preparations()
+        let (subject, prepare) = preparing(fixture, seen: seen)
+        let account = ReviewFixture.task.account
+        #expect(!fixture.evaluator.enqueue(subject, workspace: fixture.bot.workspace, account: account, prepare: prepare), "No runner")
+        fixture.answer(ReviewFixture.reply())
+        fixture.evaluator.isEnabled = { false }
+        #expect(!fixture.evaluator.enqueue(subject, workspace: fixture.bot.workspace, account: account, prepare: prepare), "Turned off")
+        fixture.evaluator.isEnabled = { true }
+        fixture.evaluator.stopAll()
+        #expect(!fixture.evaluator.enqueue(subject, workspace: fixture.bot.workspace, account: account, prepare: prepare), "Quitting")
+        await fixture.evaluator.settle()
+        #expect(seen.count == 0)
+        #expect(fixture.evaluator.records.isEmpty)
+    }
+
+    @Test func aRunIsClaimedOnceAndWhatItSeesIsBuiltOffTheMainActor() async throws {
+        let fixture = try ReviewFixture()
+        defer { fixture.remove() }
+        fixture.answer(ReviewFixture.reply())
+        let seen = Preparations(), hold = DispatchSemaphore(value: 0)
+        let (subject, prepare) = preparing(fixture, seen: seen, hold: hold)
+        let account = ReviewFixture.task.account
+        // Handing it over returns while its request is still being built.
+        #expect(fixture.evaluator.enqueue(subject, workspace: fixture.bot.workspace, account: account, prepare: prepare))
+        #expect(fixture.evaluator.records[subject.key] == nil)
+        #expect(!fixture.evaluator.enqueue(subject, workspace: fixture.bot.workspace, account: account, prepare: prepare),
+                "The same end, reported again before its request is ready")
+        hold.signal()
+        await fixture.evaluator.settle()
+        #expect(seen.count == 1)
+        #expect(!seen.onMain)
+        #expect(fixture.evaluator.records[subject.key]?.phase == .done)
+        #expect(fixture.calls.count == 1)
+        #expect(!fixture.evaluator.enqueue(subject, workspace: fixture.bot.workspace, account: account, prepare: prepare))
+    }
+
+    @Test func reviewsTurnedOffWhileARunIsBuiltLeaveItUnreviewed() async throws {
+        let fixture = try ReviewFixture()
+        defer { fixture.remove() }
+        fixture.answer(ReviewFixture.reply())
+        let seen = Preparations(), hold = DispatchSemaphore(value: 0)
+        let (subject, prepare) = preparing(fixture, seen: seen, hold: hold)
+        #expect(fixture.evaluator.enqueue(subject, workspace: fixture.bot.workspace, account: ReviewFixture.task.account, prepare: prepare))
+        fixture.evaluator.isEnabled = { false }
+        hold.signal()
+        await fixture.evaluator.settle()
+        #expect(seen.count == 1)
+        #expect(fixture.evaluator.records[subject.key] == nil)
+        #expect(fixture.calls.count == 0)
+    }
+
+    @Test func aRunOnACLIThatCantReviewIsRecordedWithoutBuildingWhatItSaw() async throws {
+        let fixture = try ReviewFixture()
+        defer { fixture.remove() }
+        fixture.answer(ReviewFixture.reply())
+        var task = ReviewFixture.task
+        task.accountID = "google"
+        let seen = Preparations()
+        let (subject, prepare) = preparing(fixture, task: task, seen: seen)
+        #expect(fixture.evaluator.enqueue(subject, workspace: fixture.bot.workspace, account: task.account, prepare: prepare))
+        await fixture.evaluator.settle()
+        #expect(seen.toolFree == [false])
+        let record = try #require(fixture.evaluator.records[subject.key])
+        #expect(record.phase == .skipped)
+        #expect(record.snapshot == nil)
+        #expect(record.skipReason == RunEvaluator.unavailable(task.account.kind))
+        #expect(fixture.calls.count == 0)
+        #expect(BotHome(workspace: fixture.bot.workspace).loadEvaluations().map(\.id) == [subject.key])
+    }
+}
+
