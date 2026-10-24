@@ -98,7 +98,10 @@ struct SidebarView: View {
             get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { bot in
             Button("Delete", role: .destructive) { model.delete(bot.id) }
         } message: { bot in
-            Text("Its conversation and tasks are deleted. Its workspace folder, \(bot.workspace), and its tasks' worktrees are kept.")
+            let jobs = model.jobs.jobs(of: bot.id).count
+            Text("Its conversation and tasks are deleted"
+                 + (jobs == 0 ? "" : ", and its \(jobs == 1 ? "scheduled job stops and is" : "\(jobs) scheduled jobs stop and are") deleted with them")
+                 + ". Its workspace folder, \(bot.workspace), and its tasks' worktrees are kept.")
         }
         .sectionNamingAlert($naming)
     }

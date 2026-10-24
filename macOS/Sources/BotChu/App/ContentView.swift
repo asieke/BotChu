@@ -45,6 +45,14 @@ struct ContentView: View {
             ReportIssueSheet(request: request)
                 .environment(model)
         }
+        .sheet(item: Binding(get: { model.jobs.editor }, set: { model.jobs.editor = $0 })) { request in
+            JobEditor(request: request)
+                .environment(model)
+        }
+        .sheet(item: Binding(get: { model.jobs.history }, set: { model.jobs.history = $0 })) { request in
+            JobHistorySheet(request: request)
+                .environment(model)
+        }
         .task {
             guard !hooksStarted else { return }
             hooksStarted = true
@@ -79,6 +87,7 @@ private struct DetailColumn: View {
             case .agents: AgentsView()
             case .providers: ProvidersView()
             case .skills: SkillsView()
+            case .jobs: JobsView()
             }
         } else if let id = model.selection, model.bot(id) != nil {
             let tab = model.tab(of: id)

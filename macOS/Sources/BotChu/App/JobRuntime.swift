@@ -1,0 +1,405 @@
+import AppKit
+import Foundation
+import Observation
+import BotChuCore
+
+/// The job editor, open for a new job (with its agent chosen) or an existing one.
+struct JobEditorRequest: Identifiable {
+    let id = UUID()
+    var job: Job
+    var isNew: Bool
+}
+
+/// A job's history, open on one of its runs.
+struct JobHistoryRequest: Identifiable {
+    let id = UUID()
+    var jobID: UUID
+    var runID: UUID?
+}
+
+/// Runs agents' scheduled jobs while BotChu is open and the Mac is awake: there is no background
+/// helper or login item, so nothing runs while BotChu is quit or the Mac sleeps, and missed times
+/// follow each job's policy when it is open again. `JobEngine` decides what starts; this starts each
+/// run as a fresh CLI session of its agent's, in its workspace, apart from Home (its session,
+/// queue, draft and receipts), and tells Home only of findings and failures.
+@MainActor @Observable
+final class JobRuntime {
+    /// Every agent's jobs, as the engine keeps them; reassigned after each change.
+    private(set) var jobs: [Job] = []
+    /// Why each job's last save failed, while it does.
+    private(set) var problems: [UUID: String] = [:]
+    var editor: JobEditorRequest?
+    var history: JobHistoryRequest?
+    /// The agent the Jobs view shows; nil for every agent.
+    var agentFilter: UUID?
+    /// How often due jobs are looked for, besides at a wake or a clock change.
+    nonisolated static let tickInterval: TimeInterval = 20
+
+    @ObservationIgnored weak var model: AppModel?
+    @ObservationIgnored private(set) var engine: JobEngine!
+    @ObservationIgnored private var lives: [UUID: JobLive] = [:]
+    @ObservationIgnored private var runners: [UUID: AgentRun] = [:]
+    @ObservationIgnored private var timedOut: Set<UUID> = []
+    @ObservationIgnored private var quitting = false
+    /// False in a review copy with sample jobs: nothing starts, not even with Run Now.
+    @ObservationIgnored private let runs: Bool
+    /// Why the owner's last action on each job didn't work (beside the engine's save failures).
+    @ObservationIgnored private var notes: [UUID: String] = [:]
+    @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+
+    /// `runs: false` loads the jobs without ever starting one (review screens with sample jobs).
+    init(model: AppModel, now: @escaping () -> Date = Date.init, runs: Bool = true) {
+        self.model = model
+        self.runs = runs
+        engine = makeEngine(jobs: [], now: now)
+        var interrupted: [JobEngine.Launch] = []
+        for bot in model.bots { interrupted += engine.load(BotHome(workspace: bot.workspace).loadJobs(of: bot.id)) }
+        refresh()
+        for launch in interrupted { deliver(launch.job, run: launch.run) }
+        guard runs else { return }
+        // Nothing starts before every job is loaded; then due jobs, at once and on each tick.
+        DispatchQueue.main.async { [weak self] in self?.tick() }
+        timer = Timer.scheduledTimer(withTimeInterval: Self.tickInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+        for (center, name) in [(NSWorkspace.shared.notificationCenter, NSWorkspace.didWakeNotification),
+                               (NotificationCenter.default, Notification.Name.NSSystemClockDidChange)] {
+            observers.append((center, center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.tick() }
+            }))
+        }
+    }
+
+    func jobs(of botID: UUID) -> [Job] { jobs.filter { $0.botID == botID } }
+    func job(_ id: UUID) -> Job? { jobs.first { $0.id == id } }
+    /// Whether one of the agent's jobs is running, in its workspace.
+    func isRunning(botID: UUID) -> Bool { jobs.contains { $0.botID == botID && $0.activeRun?.outcome == .running } }
+    func live(_ runID: UUID) -> JobLive? { lives[runID] }
+
+    /// A run's transcript: as it streams, or as saved.
+    func thread(of run: UUID, in job: Job) -> [ChatMessage] {
+        if let live = lives[run] { return live.messages }
+        guard let bot = model?.bot(job.botID) else { return [] }
+        return BotHome(workspace: bot.workspace).loadJobThread(job: job.id, run: run)
+    }
+
+    // MARK: Owner actions
+
+    func newJob(for botID: UUID?) {
+        guard let model, let botID = botID ?? model.bots.first?.id else { return }
+        var schedule = JobSchedule()
+        // Intervals start at the next whole hour.
+        let hour = Calendar.current.dateInterval(of: .hour, for: Date())?.end ?? Date()
+        schedule.anchor = hour
+        editor = JobEditorRequest(job: Job(botID: botID, schedule: schedule), isNew: true)
+    }
+
+    func edit(_ id: UUID) {
+        guard let job = job(id) else { return }
+        editor = JobEditorRequest(job: job, isNew: false)
+    }
+
+    func showHistory(_ id: UUID, run: UUID? = nil) {
+        history = JobHistoryRequest(jobID: id, runID: run)
+    }
+
+    /// Saves a new or edited job; throws why it couldn't.
+    func save(_ job: Job) throws {
+        defer { refresh() }
+        guard model?.bot(job.botID) != nil else { throw JobEngine.Problem.invalid("Choose an agent.") }
+        // A job stays with the agent that owns it, with its history in that agent's folder.
+        if let old = self.job(job.id), old.botID != job.botID { throw JobEngine.Problem.invalid("A job stays with its agent.") }
+        try engine.save(job)
+        notes[job.id] = nil
+        tick()
+    }
+
+    func setEnabled(_ id: UUID, _ enabled: Bool) {
+        do { try engine.setEnabled(id, enabled) } catch { notes[id] = error.localizedDescription }
+        refresh()
+        if enabled { tick() }
+    }
+
+    func runNow(_ id: UUID) {
+        do { launch(try engine.runNow(id, busy: busy)) } catch { notes[id] = error.localizedDescription }
+        refresh()
+    }
+
+    /// Stops a run: one under way stops its CLI; one waiting doesn't start. The job keeps its schedule.
+    func stop(run runID: UUID) {
+        if let runner = runners[runID] {
+            runner.stop()
+        } else {
+            engine.cancel(runID)
+            refresh()
+        }
+    }
+
+    func delete(_ id: UUID) {
+        do {
+            if let running = try engine.delete(id) { runners[running.id]?.stop() }
+            if history?.jobID == id { history = nil }
+        } catch { notes[id] = error.localizedDescription }
+        refresh()
+    }
+
+    // MARK: Agents
+
+    /// An agent is being deleted: its runs stop, and its jobs go with its folder.
+    func removeBot(_ botID: UUID) {
+        for run in engine.forget(botID: botID) { runners[run.id]?.stop() }
+        if agentFilter == botID { agentFilter = nil }
+        if let history, job(history.jobID)?.botID == botID { self.history = nil }
+        refresh()
+    }
+
+    /// BotChu is quitting: each run's transcript is saved as it stands, and its CLI stopped. The
+    /// next launch records the run interrupted (`JobEngine.load`) and tells its agent's Home.
+    func stopAll() {
+        quitting = true
+        timer?.invalidate()
+        for (runID, runner) in runners {
+            runner.flushOutput()
+            if let job = jobs.first(where: { $0.runs.contains { $0.id == runID } }) { saveThread(runID, of: job) }
+            runner.stop()
+        }
+    }
+
+    // MARK: Running
+
+    /// Interactive work in an agent's workspace: a Home turn, or a sub-agent working there.
+    private func busy(_ botID: UUID) -> Bool {
+        guard let model, let bot = model.bot(botID) else { return true }
+        let folder = AppModel.standardized(bot.workspace)
+        return model.isRunning(.home(botID))
+            || model.delegation.all.contains { $0.phase.isActive && AppModel.standardized($0.workingDirectory) == folder }
+    }
+
+    func tick() {
+        guard !quitting else { return }
+        launch(engine.tick(busy: busy))
+        refresh()
+    }
+
+    private func launch(_ launches: [JobEngine.Launch]) {
+        for launch in launches {
+            guard runs else {
+                finish(launch.run.id, outcome: .failed, summary: "This review copy of BotChu runs no jobs.")
+                continue
+            }
+            start(launch)
+        }
+    }
+
+    private func start(_ launch: JobEngine.Launch) {
+        let job = launch.job, runID = launch.run.id
+        guard let model, let bot = model.bot(job.botID), BotHome(workspace: bot.workspace).exists else {
+            return finish(runID, outcome: .failed, summary: "The agent's folder is missing, so the run didn't start.")
+        }
+        let account = bot.account
+        let key = account.kind == .pi ? model.openRouterKey() : nil
+        if account.kind == .pi, key?.isEmpty ?? true {
+            return finish(runID, outcome: .failed, summary: "Add your OpenRouter API key in BotChu ▸ Settings first.")
+        }
+        let startedAt = launch.run.startedAt ?? Date()
+        let preamble = JobLaunch.preamble(
+            bot: bot, job: job, run: launch.run, startedAt: startedAt, memory: Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.memoryFile)),
+            sharedMemory: Workspace.read(model.settings.sharedMemoryPath), soul: Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.soulFile)),
+            instructions: Workspace.read(BotDocument.instructions.url(for: bot).path), team: Workspace.read(model.settings.teamPath),
+            skills: model.activeSkills(of: bot), locale: .current)
+        let prompt = BotContext.prompt(for: job.prompt, preamble: preamble)
+        let invocation = JobLaunch.invocation(for: bot, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key)
+        let command = model.settings.command(for: account)
+        let runner = AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: bot.workspace, isDirectory: true))
+        let modelChoice = GenerationOptions.effectiveModel(bot.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel)
+        engine.amend(runID) {
+            $0.accountID = account.id
+            $0.accountName = account.name
+            $0.model = modelChoice
+            $0.reasoningEffort = bot.reasoningEffort
+        }
+        let live = JobLive()
+        live.messages = [ChatMessage(role: .note, text: "Started on \(account.name)")]
+        live.state = RunState()
+        lives[runID] = live
+        var assembler = ThreadAssembler()
+        var outcome = TurnOutcome()
+        var lastSave = Date()
+        let home = BotHome(workspace: bot.workspace)
+        let what = "job “\(job.title)” run"
+
+        runner.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak runner] events in
+            guard let self, let runner, self.runners[runID] === runner, let live = self.lives[runID] else { return }
+            var state = live.state
+            state?.hasOutput = true
+            var session: String?
+            var reported: String?
+            live.update { messages in
+                for event in events {
+                    outcome.record(event)
+                    switch event {
+                    case .session(let id): session = CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: id)
+                    case .model(let id): reported = id
+                    default: break
+                    }
+                    if let activity = BotActivity.next(after: event) { _ = state?.move(to: activity) }
+                    state?.settle()
+                    assembler.apply(event, to: &messages)
+                }
+            }
+            if state != live.state { live.state = state }
+            if session != nil || reported != nil {
+                self.engine.amend(runID) { run in
+                    if let session { run.sessionID = session }
+                    if let reported { run.reportedModel = reported }
+                }
+                self.refresh()
+            }
+            // A crash loses at most a few seconds of the transcript.
+            if Date().timeIntervalSince(lastSave) > 5, let job = self.job(job.id) {
+                lastSave = Date()
+                self.saveThread(runID, of: job)
+            }
+        }
+        runner.onExit = { [weak self, weak runner] status, stderr in
+            guard let self, let runner, self.runners[runID] === runner else { return }
+            self.runners[runID] = nil
+            // Quitting: the next launch records it interrupted.
+            guard !self.quitting else { return }
+            let live = self.lives[runID]
+            live?.update { messages in
+                assembler.apply(.textEnd, to: &messages)
+                ThreadAssembler.closeRunningTools(&messages)
+            }
+            let messages = live?.messages ?? []
+            let timedOut = self.timedOut.remove(runID) != nil
+            let result = JobResult.classify(reply: messages.last(where: { $0.role == .assistant })?.text,
+                                            failure: outcome.ended ? outcome.failure : nil, status: status,
+                                            finished: outcome.ended && outcome.failure == nil, stopped: runner.stopped,
+                                            timedOut: timedOut, timeLimit: job.timeLimit, accountName: account.name, stderr: stderr)
+            live?.update { messages in
+                if result.outcome == .stopped { messages.append(ChatMessage(role: .note, text: "Stopped")) }
+                if result.outcome == .failed, messages.last?.role != .error {
+                    messages.append(ChatMessage(role: .error, text: result.summary))
+                }
+            }
+            try? home.appendLog(TurnLog.ended(at: Date(), startedAt: startedAt, status: status, stopped: runner.stopped,
+                                              toolCalls: messages.filter { $0.role == .tool }.count,
+                                              error: result.outcome == .failed ? result.summary : nil, stderr: stderr, what: what))
+            // What the run asked to remember goes into the agent's memory, as for its other sessions.
+            if result.outcome == .succeeded, let bot = self.model?.bot(job.botID) {
+                let lines = self.model?.saveMemory(from: messages, of: bot, reportTo: .home(bot.id)) ?? []
+                live?.update { $0 += lines }
+            }
+            self.finish(runID, outcome: result.outcome, quiet: result.quiet, summary: result.summary)
+            // Tasks the run asked for start now, as Home's do after its turns.
+            self.model?.takeDispatches(for: job.botID)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.model?.takeDispatches(for: job.botID) }
+        }
+        do {
+            try? home.appendLog(TurnLog.started(at: startedAt, account: account, command: command, arguments: invocation.arguments,
+                                                prompt: prompt, resuming: nil, what: what))
+            try runner.start()
+            runners[runID] = runner
+            saveThread(runID, of: job)
+            DispatchQueue.main.asyncAfter(deadline: .now() + job.timeLimit) { [weak self, weak runner] in
+                guard let self, let runner, self.runners[runID] === runner else { return }
+                self.timedOut.insert(runID)
+                runner.stop()
+            }
+        } catch {
+            finish(runID, outcome: .failed, summary: JobFailure.explain("Couldn't start \(account.name): \(error.localizedDescription)", accountName: account.name))
+        }
+    }
+
+    /// Records how a run ended, saves its transcript, tells Home when it should hear, and starts
+    /// what waited for it.
+    private func finish(_ runID: UUID, outcome: JobOutcome, quiet: Bool = false, summary: String) {
+        let next = engine.finish(runID, outcome: outcome, quiet: quiet, summary: summary, busy: busy)
+        if let job = engine.jobs.first(where: { $0.runs.contains { $0.id == runID } }) {
+            if lives[runID] == nil, outcome == .failed {
+                // It never started: its transcript is the reason.
+                let live = JobLive()
+                live.messages = [ChatMessage(role: .error, text: summary)]
+                lives[runID] = live
+            }
+            saveThread(runID, of: job)
+            if let run = job.runs.first(where: { $0.id == runID }) { deliver(job, run: run) }
+        }
+        lives[runID]?.state = nil
+        lives[runID] = nil
+        refresh()
+        launch(next)
+        refresh()
+    }
+
+    /// A finding, a failure or an interrupted run, as one line in its agent's Home with Open Run.
+    private func deliver(_ job: Job, run: JobRun) {
+        guard run.needsReceipt else { return }
+        model?.postJobReceipt(JobReceipt.text(job: job, run: run), job: job.id, run: run.id, to: job.botID)
+    }
+
+    private func saveThread(_ runID: UUID, of job: Job) {
+        guard let live = lives[runID], let bot = model?.bot(job.botID) else { return }
+        do {
+            try BotHome(workspace: bot.workspace).saveJobThread(live.messages, job: job.id, run: runID)
+        } catch {
+            notes[job.id] = "Couldn't save the run's transcript: \(error.localizedDescription)"
+            refresh()
+        }
+    }
+
+    // MARK: Storage
+
+    private func write(_ job: Job) throws {
+        guard let bot = model?.bot(job.botID) else { throw JobEngine.Problem.invalid("The job's agent is gone.") }
+        let home = BotHome(workspace: bot.workspace)
+        // A folder that went away (unmounted, moved outside BotChu) doesn't keep firing jobs from memory.
+        guard home.exists else {
+            throw JobEngine.Problem.storage("\((bot.workspace as NSString).abbreviatingWithTildeInPath) doesn't hold \(bot.name) any more")
+        }
+        try home.save(job)
+    }
+
+    private func erase(_ job: Job) throws {
+        guard let bot = model?.bot(job.botID) else { return }
+        try BotHome(workspace: bot.workspace).removeJob(job.id)
+    }
+
+    private func refresh() {
+        if jobs != engine.jobs { jobs = engine.jobs }
+        notes = notes.filter { engine.job($0.key) != nil }
+        let merged = engine.problems.merging(notes) { saving, _ in saving }
+        if merged != problems { problems = merged }
+    }
+
+    /// Sample jobs for a throwaway review, taken as they are (`DevHooks.sampleJobs`): a waiting run
+    /// stays waiting, to be seen, where a launch would record it skipped.
+    func addSamples(_ samples: [Job]) {
+        engine = makeEngine(jobs: engine.jobs + samples.filter { job($0.id) == nil }, now: engine.now)
+        refresh()
+    }
+
+    private func makeEngine(jobs: [Job], now: @escaping () -> Date) -> JobEngine {
+        JobEngine(jobs: jobs, now: now, persist: { [weak self] job in try MainActor.assumeIsolated { try self?.write(job) } },
+                  erase: { [weak self] job in try MainActor.assumeIsolated { try self?.erase(job) } })
+    }
+
+    /// Clears what the owner was told about a job's last action.
+    func clearProblem(_ id: UUID) {
+        notes[id] = nil
+        refresh()
+    }
+}
+
+/// A run's transcript and activity as they stream in, observed apart from every other run's.
+@MainActor @Observable
+final class JobLive {
+    var messages: [ChatMessage] = []
+    var state: RunState?
+
+    func update(_ change: (inout [ChatMessage]) -> Void) {
+        change(&messages)
+    }
+}

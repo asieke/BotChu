@@ -84,10 +84,13 @@ struct ChatTarget: Hashable {
 }
 
 enum LibraryDestination: String, CaseIterable {
-    case projects, agents, providers, skills
+    case projects, agents, providers, skills, jobs
     var title: String { rawValue.capitalized }
     var symbol: String {
-        switch self { case .projects: "square.grid.2x2"; case .agents: "person.2"; case .providers: "terminal"; case .skills: "wand.and.stars" }
+        switch self {
+        case .projects: "square.grid.2x2"; case .agents: "person.2"; case .providers: "terminal"; case .skills: "wand.and.stars"
+        case .jobs: "clock.arrow.circlepath"
+        }
     }
 }
 
@@ -100,6 +103,8 @@ final class AppModel {
     var delegation: SubagentRuntime!
     /// Messages from Telegram, into bots' Homes, and their replies back (Settings ▸ Telegram).
     var telegram: TelegramBridge!
+    /// The bots' scheduled jobs, run while BotChu is open (Jobs).
+    var jobs: JobRuntime!
     /// Each bot's tasks, open and closed, oldest first.
     var tasks: [UUID: [BotTask]] = [:]
     /// Every conversation (each bot's Home, and each task), observed one by one: see
@@ -252,6 +257,7 @@ final class AppModel {
         delegation = SubagentRuntime(model: self, root: (store != nil || DevHooks.dataDir != nil)
             ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot)
         telegram = TelegramBridge(model: self, stateURL: self.store.root.appendingPathComponent("telegram.json"))
+        jobs = JobRuntime(model: self, runs: DevHooks.runsJobs)
         selection = bots.first?.id
         showSavedProjects()
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
@@ -292,6 +298,7 @@ final class AppModel {
         return known.contains { runStates[$0] != nil }
             || conversations.contains { $0.key.botID == botID && $0.value.run != nil }
             || delegation.usesBot(botID)
+            || jobs?.isRunning(botID: botID) == true
     }
 
     /// What a conversation runs on: its task's settings, or its bot's.
@@ -454,6 +461,7 @@ final class AppModel {
 
     func delete(_ id: UUID) {
         delegation.stopBot(id)
+        jobs.removeBot(id)
         for (target, run) in runs where target.botID == id { run.stop() }
         petRuns[id]?.stop()
         petTasks.removeValue(forKey: id)?.cancel()
@@ -667,6 +675,25 @@ final class AppModel {
             append(receipt, to: home)
         }
         saveThread(home)
+    }
+
+    /// A scheduled job's finding or failure, in the bot's Home with Open Run. It touches nothing
+    /// else of Home's (its session, queue or draft), and Home's next turn hears of it with its
+    /// task updates. Shown as news while Home isn't.
+    func postJobReceipt(_ text: String, job: UUID, run: UUID, to botID: UUID) {
+        guard bot(botID) != nil else { return }
+        let home = ChatTarget.home(botID)
+        var receipt = ChatMessage(role: .receipt, text: text)
+        receipt.jobRun = JobRunLink(job: job, run: run)
+        append(receipt, to: home)
+        saveThread(home)
+        if visibleBotID != botID || tab(of: botID) != home { unread.insert(home) }
+    }
+
+    /// Jobs, showing one agent's (or every agent's, for nil).
+    func showJobs(for botID: UUID?) {
+        jobs.agentFilter = botID
+        destination = .jobs
     }
 
     /// The task updates for a Home turn: a report on each task the thread has receipts about since
@@ -1435,6 +1462,7 @@ final class AppModel {
         }
         delegation.stopAll()
         evaluator.stopAll()
+        jobs?.stopAll()
         for target in Array(runStates.keys) { stop(target) }
         for run in petRuns.values { run.stop() }
         for task in petTasks.values { task.cancel() }

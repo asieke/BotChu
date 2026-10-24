@@ -25,10 +25,12 @@ extension AppModel {
         }
     }
 
-    /// Whether a conversation's turn or a sub-agent runs on the account, which reviews wait for.
+    /// Whether a conversation's turn, a sub-agent or a scheduled job's run is on the account, which
+    /// reviews wait for.
     func accountIsBusy(_ accountID: String) -> Bool {
         runStates.keys.contains { runSettings(of: $0)?.accountID == accountID }
             || (delegation?.all ?? []).contains { $0.phase.isActive && $0.accountID == accountID }
+            || (jobs?.jobs ?? []).contains { $0.activeRun?.outcome == .running && $0.activeRun?.accountID == accountID }
     }
 
     /// Hands a task's finished turn over for review, unless BotChu is quitting (which interrupts it).

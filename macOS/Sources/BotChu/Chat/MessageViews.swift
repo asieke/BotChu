@@ -92,8 +92,40 @@ struct ReceiptRow: View {
     let botID: UUID
 
     var body: some View {
+        if let link = message.jobRun {
+            jobReceipt(link)
+        } else {
+            taskReceipt
+        }
+    }
+
+    /// A scheduled job's finding or failure, with its run to open.
+    private func jobReceipt(_ link: JobRunLink) -> some View {
+        let job = model.jobs.job(link.job)
+        let failed = job?.runs.first { $0.id == link.run }.map { $0.outcome == .failed || $0.outcome == .interrupted } ?? false
+        return HStack(spacing: 6) {
+            Image(systemName: failed ? "exclamationmark.triangle" : "clock.arrow.circlepath")
+                .foregroundStyle(failed ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            Text(message.text)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            if job != nil {
+                Button("Open Run") { model.jobs.showHistory(link.job, run: link.run) }
+                    .buttonStyle(.link)
+                    .help("Show this run in the job's history")
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.primary.opacity(0.045)))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
+    }
+
+    private var taskReceipt: some View {
         let task = message.taskID.flatMap { model.task($0, of: botID) }
-        HStack(spacing: 6) {
+        return HStack(spacing: 6) {
             Image(systemName: task == nil ? "exclamationmark.triangle" : "checklist")
                 .foregroundStyle(task == nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
             Text(message.text)
