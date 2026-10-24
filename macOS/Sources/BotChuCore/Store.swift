@@ -214,14 +214,14 @@ public struct BotHome: Sendable {
         try handle.write(contentsOf: Data(text.utf8))
     }
 
-    /// Moves the bot and its editable Markdown together, rejecting collisions before moving anything.
+    /// Moves the bot, its editable Markdown and its own skills together, rejecting collisions before moving anything.
     public func move(toWorkspace workspace: String) throws {
         let destination = BotHome(workspace: workspace)
         let files = FileManager.default
         let sourceFolder = url.deletingLastPathComponent()
         let targetFolder = destination.url.deletingLastPathComponent()
         guard sourceFolder.standardizedFileURL != targetFolder.standardizedFileURL else { return }
-        let sources = ([url] + BotDocument.allCases.map { sourceFolder.appendingPathComponent($0.rawValue) })
+        let sources = ([url] + (BotDocument.allCases.map(\.rawValue) + [Skills.folderName]).map { sourceFolder.appendingPathComponent($0) })
             .filter { files.fileExists(atPath: $0.path) }
         for source in sources {
             let target = targetFolder.appendingPathComponent(source.lastPathComponent)

@@ -41,6 +41,8 @@ struct DocumentEditorRequest: Identifiable {
     let seed: String
     /// Shown over an empty draft, saying what the file is for.
     let placeholder: String
+    /// When the bots read the file, beside Save.
+    var footnote = "Read at the start of each new session. Use New Session to apply changes to an existing conversation."
 
     init(bot: Bot, document: BotDocument) {
         name = document.rawValue
@@ -82,9 +84,11 @@ struct ChatTarget: Hashable {
 }
 
 enum LibraryDestination: String, CaseIterable {
-    case projects, agents, providers
+    case projects, agents, providers, skills
     var title: String { rawValue.capitalized }
-    var symbol: String { switch self { case .projects: "square.grid.2x2"; case .agents: "person.2"; case .providers: "terminal" } }
+    var symbol: String {
+        switch self { case .projects: "square.grid.2x2"; case .agents: "person.2"; case .providers: "terminal"; case .skills: "wand.and.stars" }
+    }
 }
 
 @MainActor @Observable
@@ -1045,6 +1049,7 @@ final class AppModel {
         let instructions = Workspace.read(BotDocument.instructions.url(for: bot).path)
         let sharedMemory = Workspace.read(settings.sharedMemoryPath)
         let team = Workspace.read(settings.teamPath)
+        let skills = activeSkills(of: bot)
         let directory: String
         var machine = Machine.thisMac
         var preamble: String?
@@ -1063,14 +1068,14 @@ final class AppModel {
                 preamble = BotContext.taskPreamble(bot: bot, task: task, memory: memory, sharedMemory: sharedMemory, history: history,
                                                    machine: machineDescription(of: task),
                                                    home: machine.isRemote ? thread(.home(id)) : [], soul: soul,
-                                                   instructions: instructions, team: team)
+                                                   instructions: instructions, team: team, skills: skills)
             }
         } else {
             directory = bot.workspace
             if resume == nil {
                 preamble = BotContext.sessionPreamble(bot: bot, memory: memory, sharedMemory: sharedMemory, history: history,
                                                       tasks: openTasks(of: id).map { report(on: $0, of: id, replyLimit: 240) }, soul: soul,
-                                                      instructions: instructions, team: team)
+                                                      instructions: instructions, team: team, skills: skills)
             }
         }
         let ticket = UUID()

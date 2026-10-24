@@ -46,6 +46,8 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     /// How the bot looks, in the owner's words: what its pet is drawn from. Optional for
     /// compatibility with saved bots.
     public var appearance: String?
+    /// The slugs of shared skills turned off for this bot (`Skills`); nil keeps every one on.
+    public var disabledSkills: [String]?
     /// The CLI session the thread continues, and the account it belongs to. A session only
     /// resumes on the account that made it.
     public var sessionID: String?

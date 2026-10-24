@@ -9,7 +9,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
 
 ## Scope
 - Does:
-  - **Workspace:** the left sidebar has **Projects**, **Agents**, and **Providers**, followed by
+  - **Workspace:** the left sidebar has **Projects**, **Agents**, **Providers** and **Skills**, followed by
     the bots’ conversations, in sections (below). Opening a gallery keeps the selected conversation and unsent draft;
     turns that finish while a gallery is shown still get an unread badge. In dark mode the sidebar
     takes the status sidebar's darker shade, with a hairline along its edge, so it stands apart from
@@ -305,7 +305,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     was made from) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
     is told it can search them for earlier conversations. **History & Logs** in the status sidebar
     opens the folder. Each bot needs its own workspace, and not the bots folder itself; moving a
-    bot's workspace in its editor moves its `.botchu/`, `INSTRUCTIONS.md`, `MEMORY.md` and `SOUL.md` with it. Moving
+    bot's workspace in its editor moves its `.botchu/`, `INSTRUCTIONS.md`, `MEMORY.md`, `SOUL.md` and `skills/` with it. Moving
     waits until its turns finish and refuses to overwrite files at the destination. Deleting a bot
     puts only its `.botchu/` in the Trash.
   - **Memory and personality:** each bot's workspace has a `MEMORY.md` for facts and notes it keeps
@@ -320,7 +320,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     asks not to retain (sensitive details are omitted unless explicitly requested, and explicit
     requests never override exclusions); require evidence or confirmation for inferred notes while
     preserving relevant uncertainty; and update or remove outdated/conflicting bullets in place
-    (or through `Replace:` and `Forget:` in `<remember>`). Memory remains data, not instructions.
+    (or through `Replace:` and `Forget:` in `<remember>`); and keep multi-step workflows and tool
+    runbooks in skills (below) instead. Memory remains data, not instructions.
     The workspace's `AGENTS.md`, `CLAUDE.md` and `GEMINI.md` carry the bot's `INSTRUCTIONS.md` and
     direct the agent to read the others, so it keeps them across its own context compaction; they
     are rewritten before every turn.
@@ -333,6 +334,25 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `INSTRUCTIONS.md` or `TEAM.md` unless asked. A new
     session (new bot, account switch, or **New Session**) also gets the recent conversation, so
     switching accounts keeps the thread's continuity.
+  - **Skills:** reusable workflows and tool runbooks, each a `SKILL.md` in a `skills/<name>/` folder
+    (with any helper scripts or references beside it), in the format of Claude Code's skills: YAML
+    frontmatter with `name` and a one-line `description` of when to use it, then the
+    steps. Those in the bots folder's `skills/` (`~/BotChu/skills/` by default) are shared by every
+    bot; those in a bot's own workspace's `skills/` are only its own, and take the place of a shared
+    one of the same folder name. Only a catalog (each skill's name, `SKILL.md` path and description)
+    goes into the workspace's `AGENTS.md` and `GEMINI.md` and opens every Home, task and sub-agent
+    session; the agent reads a skill's file when it matches what it is doing. A task or sub-agent on
+    an SSH host can't open the files on this Mac, so it gets the active skills' `SKILL.md` in full
+    instead, up to 16,000 characters together (the rest by name and description); their helper files
+    stay on this Mac. Memory capture tells bots that multi-step workflows go in a skill of their
+    own, not in `MEMORY.md`; they change shared skills only when you ask. **Skills** in the sidebar lists them as cards (shared, or a bot's own, with a
+    search and a filter), with the number of files beside each `SKILL.md`; **New Skill** makes one,
+    shared or for one bot, from a template and opens it in the Markdown editor, as do a card's
+    **Edit…** and double-click; a shared skill's **Bots** menu turns it on or off for each bot (kept in
+    `bot.json` as `disabledSkills`; every shared skill is on until turned off), and its menu shows it
+    in Finder or puts its folder in the Trash. **Shared Folder** opens the bots folder's `skills/`.
+    BotChu creates no skill on its own; an example, `aside-web-browsing`, is in
+    [docs/skills](docs/skills/aside-web-browsing/SKILL.md), to copy into that folder.
   - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I). It opens at its widest,
     380 points; drag its edge to narrow it, down to 280. A card at the top shows
     a large character (its pet, playing, or its emoji) on the left, beside the bot name and current
@@ -344,8 +364,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     the bot list still shows activity across its tasks. Five icon tabs sit below the character,
     in a rounded bar with a raised selected segment: **Activity** (tasks and conversation stats), **Sub-agents** (delegated work),
     **Model & Usage** (account, agent, model, reasoning and allowance), **Session** (the CLI session
-    and workspace controls), and **Memory** (instructions, personality, memory and the team
-    playbook). Hover for tab names, or
+    and workspace controls), and **Memory** (instructions, personality, memory, the team
+    playbook and skills). Hover for tab names, or
     focus the bar and use Left/Right arrows. The selected area is remembered across conversations
     and launches; its data always belongs to the shown Home or task. The character, tabs and bottom
     actions stay visible while the selected area's content scrolls. Home keeps Edit and New Session;
@@ -359,7 +379,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     their expansion remembered. **Memory** has four cards matching
     Conversation: the bot's **INSTRUCTIONS.md**, **SOUL.md** and **MEMORY.md**, and **TEAM.md**, the
     playbook every bot shares (the same file as in Settings), followed by a summary of what bots
-    save in memory and what stays out. Each opens an in-app Markdown editor at half the
+    save in memory and what stays out. **Skills** below them lists the bot's own skills and the
+    shared ones, each with a switch that turns it on or off for this bot, and **Manage Skills**
+    opens the Skills gallery. Each card and skill opens an in-app Markdown editor at half the
     parent window's width and height, with Save (⌘S), Cancel (Escape), and Reload. Saving preserves exact
     Markdown and refuses to overwrite a file changed on disk since it was opened. Saved changes
     apply at the next new session; **New Session** applies them to an existing conversation. The
@@ -411,13 +433,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - `Sources/BotChuCore/` — Foundation only, unit-tested: accounts and the command line each CLI
     runs with (`Accounts.swift`), generation choices and public OpenRouter model metadata
     (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model (`Models.swift`), the
-    sections the sidebar groups bots into (`BotSections.swift`), one stream parser per
+    sections the sidebar groups bots into (`BotSections.swift`), skills: finding them, reading their
+    frontmatter, which a bot uses, and making one (`Skills.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
     (`ToolActivity.swift`, reading shell command lines with `ShellCommand.swift`), the chat's activity
     items, with exploration folded into groups and kept up to date at the tail
     (`ActivityTranscript.swift`), the identity, instructions,
-    team playbook, memory and recap that open a session (`BotContext.swift`), the editable Markdown
+    team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
     (`UsageCache.swift`), per-conversation pending-message delivery (`MessageQueue.swift`), what
@@ -447,8 +470,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     in standard system materials: `App/` (the app, window, model, each conversation's state, observed
     on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
-    computers, `TaskPlaces.swift`, and what a report says about the app, `IssueReports.swift`),
-    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects with its repository sidebar, Agents and Providers), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
+    computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, and the
+    skills the app lists and edits, `SkillLibrary.swift`),
+    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects with its repository sidebar, Agents, Providers and Skills), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
     the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -468,7 +492,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
     and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
     commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
-    streamed update regroups only the tail; and the sidebar's sections of bots.
+    streamed update regroups only the tail; the sidebar's sections of bots; and skills: their
+    frontmatter, finding and making them, which a bot uses, and the catalog, or (on a host) the
+    files in full, that sessions get.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
@@ -571,7 +597,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor`, `BOTCHU_OPEN=task` or `BOTCHU_OPEN=settings` opens the bot editor, New
   Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository).
-  `BOTCHU_OPEN=projects`, `agents` or `providers` opens the corresponding workspace gallery;
+  `BOTCHU_OPEN=projects`, `agents`, `providers` or `skills` opens the corresponding workspace gallery;
   with `projects`, `BOTCHU_PROJECT=<owner/name>` shows that repository's sidebar, and
   `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
   tab and an issue or pull request there, read with your `gh` login.
