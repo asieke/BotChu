@@ -5,8 +5,7 @@ struct SidebarView: View {
     @Environment(AppModel.self) private var model
     @State private var pendingDelete: Bot?
     @State private var expansion = SidebarExpansion()
-    @State private var sectionPrompt: SectionPrompt?
-    @State private var sectionName = ""
+    @State private var naming = SectionNaming()
     @AppStorage(CollapsedSections.storageKey) private var collapsed = CollapsedSections()
 
     var body: some View {
@@ -47,7 +46,7 @@ struct SidebarView: View {
                                     .disabled(model.isRunning(.home(bot.id)))
                                 Button("Show Workspace in Finder") { model.revealWorkspace(bot.id) }
                                 Divider()
-                                MoveToSectionMenu(botID: bot.id) { ask(.new(botID: bot.id)) }
+                                MoveToSectionMenu(botID: bot.id) { naming.ask(.new(botID: bot.id)) }
                                 Divider()
                                 Button("Delete…", role: .destructive) { pendingDelete = bot }
                             }
@@ -63,10 +62,7 @@ struct SidebarView: View {
                         }
                     }
                 } header: {
-                    SidebarSectionHeader(group: group, rename: { ask(.rename($0)) }, remove: { name in
-                        model.removeSection(name)
-                        collapsed.titles.remove(name)
-                    })
+                    SidebarSectionHeader(group: group, rename: { naming.ask(.rename($0)) })
                 }
             }
         }
@@ -104,14 +100,7 @@ struct SidebarView: View {
         } message: { bot in
             Text("Its conversation and tasks are deleted. Its workspace folder, \(bot.workspace), and its tasks' worktrees are kept.")
         }
-        .alert(sectionPrompt?.title ?? "", isPresented: Binding(
-            get: { sectionPrompt != nil }, set: { if !$0 { sectionPrompt = nil } }), presenting: sectionPrompt) { prompt in
-            TextField("Section name", text: $sectionName)
-            Button(prompt.confirm) { commit(prompt) }
-            Button("Cancel", role: .cancel) {}
-        } message: { prompt in
-            if let message = prompt.message { Text(message) }
-        }
+        .sectionNamingAlert($naming)
     }
 
     private func isExpanded(_ group: BotSections.Group) -> Binding<Bool> {
@@ -122,28 +111,6 @@ struct SidebarView: View {
 
     private func reveal(_ title: String) {
         if collapsed.titles.contains(title) { collapsed.titles.remove(title) }
-    }
-
-    private func ask(_ prompt: SectionPrompt) {
-        if case .rename(let name) = prompt { sectionName = name } else { sectionName = "" }
-        sectionPrompt = prompt
-    }
-
-    /// Makes or renames the section the prompt asked for; an empty name changes nothing.
-    private func commit(_ prompt: SectionPrompt) {
-        guard !sectionName.allSatisfy(\.isWhitespace) else { return }
-        switch prompt {
-        case .new(let botID):
-            model.moveBot(botID, toSection: sectionName)
-            reveal(model.sections[botID] ?? BotSections.unsectioned)
-        case .rename(let old):
-            let before = Set(model.botSections.names)
-            model.renameSection(old, to: sectionName)
-            // A renamed section stays as it was, open or collapsed; merged into another, it is as that one is.
-            if collapsed.titles.remove(old) != nil, let new = Set(model.botSections.names).subtracting(before).first {
-                collapsed.titles.insert(new)
-            }
-        }
     }
 }
 
