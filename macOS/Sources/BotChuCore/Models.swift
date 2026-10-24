@@ -12,10 +12,29 @@ public protocol RunSettings {
     /// The CLI session the conversation continues, and the account it belongs to.
     var sessionID: String? { get set }
     var sessionAccountID: String? { get set }
+    /// The model the CLI last said it ran, and for which account and choice.
+    var reportedModel: ReportedModel? { get set }
 }
 
 extension RunSettings {
     public var account: Account { accountProfile.flatMap { $0.id == accountID ? $0 : nil } ?? Accounts.account(id: accountID) }
+
+    /// The model ID the CLI reported for the current account and model choice, or nil when it
+    /// hasn't reported one since either changed.
+    public var resolvedModel: String? {
+        guard let reportedModel, reportedModel.accountID == accountID, reportedModel.requested == model else { return nil }
+        return reportedModel.id
+    }
+
+    /// Records the model a turn's CLI said it ran; `requested` is the model choice the turn ran with.
+    /// Returns whether anything changed. The choice itself (`model`) never changes here.
+    @discardableResult
+    public mutating func recordReportedModel(_ id: String, requested: String) -> Bool {
+        let reported = ReportedModel(id: id, accountID: accountID, requested: requested)
+        guard !id.isEmpty, reportedModel != reported else { return false }
+        reportedModel = reported
+        return true
+    }
 
     /// The session to resume for the next turn, or nil when the next turn starts a new one. A
     /// session only resumes on the account that made it.
@@ -52,6 +71,7 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     /// resumes on the account that made it.
     public var sessionID: String?
     public var sessionAccountID: String?
+    public var reportedModel: ReportedModel?
     public var createdAt: Date
 
     public init(
@@ -157,9 +177,26 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+/// The model ID a CLI said it ran (such as `claude-opus-5-5` for the alias `opus`), for the account
+/// and the model choice (`requested`, empty for the account's default) it ran with. A later change of
+/// either leaves it unresolved again rather than showing a version that may no longer apply.
+public struct ReportedModel: Codable, Hashable, Sendable {
+    public var id: String
+    public var accountID: String
+    public var requested: String
+
+    public init(id: String, accountID: String, requested: String) {
+        self.id = id
+        self.accountID = accountID
+        self.requested = requested
+    }
+}
+
 /// What a CLI's stream says happened, in the order it happened.
 public enum AgentEvent: Equatable, Sendable {
     case session(String)
+    /// The model the CLI says it ran, by its full ID, where its stream reports one.
+    case model(String)
     /// More text for the reply being written.
     case textDelta(String)
     /// A whole block of reply text, for CLIs (or blocks) that do not stream.
@@ -185,6 +222,8 @@ public struct ThreadAssembler {
 
     public mutating func apply(_ event: AgentEvent, to messages: inout [ChatMessage]) {
         switch event {
+        case .model:
+            break
         case .session, .finished:
             openTextID = nil
         case .inputTaken:

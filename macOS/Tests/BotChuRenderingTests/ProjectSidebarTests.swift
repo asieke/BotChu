@@ -83,6 +83,7 @@ extension RenderingTests {
         ]
         app.repositories = sample.map { GitHubLookup.Repo(nameWithOwner: "octocat/\($0.0)", description: "\($0.0)’s repository", openIssues: $0.3, openPullRequests: $0.4) }
         app.repositoriesReadAt = Date()
+        app.openItems = items
         for (name, kind, status, _, _) in sample {
             let repo = "octocat/\(name)"
             app.deployTargetCache[repo] = []

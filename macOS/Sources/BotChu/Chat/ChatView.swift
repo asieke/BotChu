@@ -114,6 +114,9 @@ struct ChatView: View {
                     }
                 }
                 VStack(spacing: 8) {
+                    if let unsaved = model.unsavedMemory[target.botID], unsaved > 0 {
+                        UnsavedMemory(count: unsaved) { model.retryMemory(for: target) }
+                    }
                     if let queue = model.messageQueues[target], !queue.messages.isEmpty {
                         QueuedMessages(queue: queue, running: running, preparing: model.runStates[target]?.preparing == true,
                             midTurn: model.takesFollowUpsMidTurn(target),
@@ -158,6 +161,8 @@ struct ChatView: View {
             .onAppear { composerFocused = true }
             // Opening the conversation again starts from its newest items.
             .onDisappear { transcript.windowStart = nil }
+            // Notes left waiting by an earlier launch.
+            .task(id: target.botID) { model.refreshUnsavedMemory(of: target.botID) }
         }
     }
 

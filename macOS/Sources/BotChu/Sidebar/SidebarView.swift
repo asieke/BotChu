@@ -76,6 +76,10 @@ struct SidebarView: View {
         .onChange(of: model.sidebarSelection) { _, selection in
             if let id = selection?.botID { reveal(model.sections[id] ?? BotSections.unsectioned) }
         }
+        // Above New Bot, while the sidebar's changes aren't saved.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let failure = model.indexFailure { IndexFailureBanner(failure: failure) }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack {
                 Button { model.newBot() } label: {
@@ -140,6 +144,36 @@ struct SidebarView: View {
                 collapsed.titles.insert(new)
             }
         }
+    }
+}
+
+/// Says the sidebar's bots, order and sections couldn't be saved in `index.json`, and why, while
+/// they aren't: it stays until a save works. Try Again saves them as they are now.
+struct IndexFailureBanner: View {
+    @Environment(AppModel.self) private var model
+    let failure: SaveFailure
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Sidebar changes not saved", systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.red)
+            Text(failure.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Button("Try Again") { model.saveIndex() }
+                .controlSize(.small)
+                .accessibilityIdentifier("sidebar-index-retry")
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.red.opacity(0.1)))
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sidebar-index-failure")
     }
 }
 

@@ -13,8 +13,8 @@ struct ModelMenu: View {
     @State private var showsEffort = false
 
     private var data: ModelPickerData {
-        ModelPickerData(kind: settings.account.kind, model: settings.model,
-                        openRouterDefault: app.settings.openRouterModel, catalog: app.modelCatalog.models)
+        ModelPickerData(kind: settings.account.kind, model: settings.model, openRouterDefault: app.settings.openRouterModel,
+                        catalog: app.modelCatalog.models, resolved: settings.resolvedModel)
     }
     private var efforts: [ReasoningEffort] {
         GenerationOptions.efforts(for: settings.account.kind, model: data.effectiveID)
@@ -109,9 +109,8 @@ struct ModelMenu: View {
     }
 
     private var modelHelp: String {
-        let source = settings.model.isEmpty ? (settings.account.kind == .pi ? "Default from Settings" : "Account default") : "Selected model"
         let argument = GenerationOptions.modelArgument(data.effectiveID, kind: settings.account.kind, effort: settings.reasoningEffort)
-        return "\(source) · \(argument.isEmpty ? settings.account.name : argument)"
+        return argument == data.effectiveID ? data.detail : "\(data.detail) · runs as \(argument)"
     }
 }
 

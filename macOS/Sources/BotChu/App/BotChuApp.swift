@@ -11,6 +11,8 @@ struct BotChuApp: App {
         WindowGroup("BotChu", id: "main") {
             ContentView()
                 .environment(model)
+                // The saved Projects catalog shows at once; this syncs it with GitHub behind it.
+                .task { await model.loadProjects() }
         }
         .defaultSize(width: 1240, height: 800)
         .commands {
