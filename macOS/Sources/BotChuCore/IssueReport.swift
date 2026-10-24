@@ -213,7 +213,7 @@ public struct IssueSnapshot: Equatable, Sendable {
 
     /// What the window shows.
     public enum Screen: Equatable, Sendable {
-        case projects, agents, providers, skills
+        case projects, agents, providers, skills, jobs
         /// A bot's Home or one of its tasks, with the status sidebar's area as its tab names it, or
         /// nil while the status sidebar is hidden.
         case conversation(statusArea: String?)
@@ -246,6 +246,7 @@ public struct IssueSnapshot: Equatable, Sendable {
         case .agents: lines.append("Screen: Agents")
         case .providers: lines.append("Screen: Providers")
         case .skills: lines.append("Screen: Skills")
+        case .jobs: lines.append("Screen: Jobs")
         case .conversation(let area): lines.append("Screen: conversation, " + (area.map { "status sidebar on \($0)" } ?? "status sidebar hidden"))
         case .noBot: lines.append("Screen: no bot selected")
         }

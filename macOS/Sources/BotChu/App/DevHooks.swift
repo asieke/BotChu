@@ -52,6 +52,9 @@ import BotChuCore
 ///   a Bug or Feature). A throwaway run without one files nothing, so a review never creates a real issue.
 /// - `BOTCHU_OPEN=report`: open Report a Bug or Feature; `BOTCHU_REPORT`, with `BOTCHU_DATA_DIR`: open it
 ///   with this report and file it, with the stand-in `gh`.
+/// - `BOTCHU_JOBS=sample`: with `BOTCHU_DATA_DIR`, give the bots sample scheduled jobs with a history
+///   of every kind of run (`sampleJobs`), and run no job, so nothing starts a CLI. `BOTCHU_OPEN=jobs`
+///   opens Jobs, `job-editor` the editor for a new job, and `job-history` the first job's history.
 @MainActor
 enum DevHooks {
     static let env = ProcessInfo.processInfo.environment
@@ -59,6 +62,9 @@ enum DevHooks {
     static var dataDir: URL? {
         env["BOTCHU_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
+
+    /// Whether scheduled jobs run: not in a throwaway run with sample jobs, which are only to look at.
+    static var runsJobs: Bool { !(dataDir != nil && env["BOTCHU_JOBS"] == "sample") }
 
     static var inspectorTab: InspectorTab? {
         guard dataDir != nil else { return nil }
@@ -177,14 +183,17 @@ enum DevHooks {
                 }
             }
         }
+        if dataDir != nil, env["BOTCHU_JOBS"] == "sample" { sampleJobs(model: model) }
         switch env["BOTCHU_OPEN"] {
-        case "projects", "agents", "providers", "skills":
+        case "projects", "agents", "providers", "skills", "jobs":
             model.destination = env["BOTCHU_OPEN"].flatMap(LibraryDestination.init(rawValue:))
             if let repo = env["BOTCHU_PROJECT"] {
                 model.selectProject(repo, tab: env["BOTCHU_PROJECT_TAB"].flatMap(ProjectSelection.Tab.init(rawValue:)) ?? .overview,
                                     item: env["BOTCHU_PROJECT_ITEM"].flatMap(Int.init))
             }
         case "editor": model.newBot()
+        case "job-editor": model.jobs.newJob(for: model.selection)
+        case "job-history": if let job = model.jobs.jobs.first { model.jobs.showHistory(job.id) }
         case "task": if let id = model.selection { model.newTask(for: id) }
         case "memory": if let id = model.selection { model.editDocument(.memory, for: id) }
         case "soul": if let id = model.selection { model.editDocument(.soul, for: id) }
@@ -268,6 +277,74 @@ enum DevHooks {
                 editor.insertText(String(character), replacementRange: editor.selectedRange())
                 rest = rest.dropFirst()
             }
+        }
+    }
+
+    /// Sample jobs for a review (`BOTCHU_JOBS=sample`): for the first bot a weekday triage with a
+    /// history of every kind of run, one with a transcript, and a paused job; for the second, a job
+    /// every 90 minutes that is waiting; and Home's receipt for the triage's last finding. Saved in
+    /// the throwaway bots' folders; none ever runs.
+    static func sampleJobs(model: AppModel) {
+        guard let first = model.bots.first else { return }
+        let now = Date()
+        let zone = TimeZone.current.identifier
+        func run(_ outcome: JobOutcome, hoursAgo: Double, trigger: JobTrigger = .scheduled, quiet: Bool = false, summary: String) -> JobRun {
+            let at = now.addingTimeInterval(-hoursAgo * 3600)
+            var run = JobRun(trigger: trigger, scheduledFor: trigger == .manual ? nil : at.addingTimeInterval(trigger == .catchUp ? -5 * 3600 : 0),
+                             timeZone: zone, reservedAt: at, outcome: outcome, summary: summary)
+            run.startedAt = outcome == .skipped ? nil : at
+            run.finishedAt = outcome.isActive ? nil : at.addingTimeInterval(140)
+            run.quiet = quiet
+            run.accountID = first.accountID
+            run.accountName = first.account.name
+            return run
+        }
+        var triage = Job(botID: first.id, title: "Morning issue triage",
+                         prompt: "Look at the issues opened since yesterday in my repositories, label them, and tell me which need me.",
+                         schedule: JobSchedule(kind: .weekdays, hour: 9, minute: 0, timeZone: zone), createdAt: now.addingTimeInterval(-9 * 86_400))
+        triage.handledThrough = now.addingTimeInterval(-3600)
+        triage.runs = [
+            run(.succeeded, hoursAgo: 120, summary: "Two new bugs need you: #12 (crash on launch) and #15 (login loop). Labelled four others."),
+            run(.skipped, hoursAgo: 96, summary: "Missed while BotChu was closed or the Mac asleep; this job skips missed runs."),
+            run(.succeeded, hoursAgo: 72, quiet: true, summary: "Checked 6 issues."),
+            run(.interrupted, hoursAgo: 50, summary: "BotChu quit or stopped during this run. It may have done part of its work, so it isn't run again."),
+            run(.failed, hoursAgo: 48, summary: "API Error: 429 rate limit exceeded — \(first.account.name) is out of allowance for now; it runs again at its next time, or Run Now once it resets."),
+            run(.succeeded, hoursAgo: 25, trigger: .catchUp, summary: "Caught up on the weekend: #18 needs a decision on the API shape."),
+            run(.succeeded, hoursAgo: 1, summary: "One new issue needs you: #21 asks for SSH hosts in Settings."),
+        ]
+        var weekly = Job(botID: first.id, title: "Friday release notes", prompt: "Draft release notes from this week's merged pull requests.",
+                         schedule: JobSchedule(kind: .days, hour: 16, minute: 30, days: [6], timeZone: zone), enabled: false,
+                         createdAt: now.addingTimeInterval(-30 * 86_400))
+        weekly.pauseReason = "Paused after 3 failed runs in a row. Fix what failed, then Resume."
+        weekly.runs = [run(.failed, hoursAgo: 170, summary: "Invalid API key · Please run /login — Sign in to \(first.account.name) in Terminal, then Run Now.")]
+        var jobs = [triage, weekly]
+        if model.bots.count > 1 {
+            let second = model.bots[1]
+            var check = Job(botID: second.id, title: "Check the deploy", prompt: "Check that the site responds and the last deploy succeeded.",
+                            schedule: JobSchedule(kind: .interval, every: 90, unit: .minutes, anchor: now.addingTimeInterval(-6 * 3600), timeZone: zone),
+                            createdAt: now.addingTimeInterval(-86_400))
+            check.handledThrough = now.addingTimeInterval(-600)
+            var waiting = JobRun(trigger: .scheduled, scheduledFor: now.addingTimeInterval(-600), timeZone: zone, reservedAt: now.addingTimeInterval(-600))
+            waiting.outcome = .waiting
+            check.runs = [run(.succeeded, hoursAgo: 2, quiet: true, summary: "Site up; last deploy succeeded."), waiting]
+            jobs.append(check)
+        }
+        for job in jobs {
+            guard let bot = model.bot(job.botID) else { continue }
+            let home = BotHome(workspace: bot.workspace)
+            try? home.save(job)
+            if let last = job.runs.last(where: { $0.outcome == .succeeded && !$0.quiet }) {
+                try? home.saveJobThread([
+                    ChatMessage(role: .note, text: "Started on \(bot.account.name)"),
+                    ChatMessage(role: .tool, toolID: "1", toolName: "Bash", toolInput: "gh issue list --state open --limit 20", toolState: .done),
+                    ChatMessage(role: .assistant, text: "**One new issue needs you:** #21 asks for SSH hosts in Settings.\n\n- #19 and #20 are labelled `bug` and assigned.\n- #22 is a duplicate of #14; I closed it with a link."),
+                ], job: job.id, run: last.id)
+            }
+        }
+        model.jobs.addSamples(jobs)
+        // Home's receipt for the triage's last finding, with Open Run.
+        if let last = triage.runs.last {
+            model.postJobReceipt(JobReceipt.text(job: triage, run: last), job: triage.id, run: last.id, to: first.id)
         }
     }
 
