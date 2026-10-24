@@ -348,7 +348,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `thread.jsonl`), the
     task requests it writes (`dispatch/`), a log of every turn (`logs/<date>.log`:
     the command, where it ran, how long it took, the exit status, any error and the CLI's error output), notes
-    it couldn't save to memory yet (`memory-unsaved.json`, `shared-memory-unsaved.json`) and its
+    it couldn't save to memory yet (`memory-unsaved.json`, `shared-memory-unsaved.json`,
+    `instructions-unsaved.json`), the reviews of its runs (`evaluations/`, below) and its
     pet (`pet/`: `video.json`, `stills/<pose>.png`, `clips/<activity>.mp4` and the appearance it
     was made from) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
     is told it can search them for earlier conversations. **History & Logs** in the status sidebar
@@ -402,6 +403,47 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     tries them at once. A bot edits a
     memory file itself only to reorganize it when asked. Whether a reply recognizes an established
     preference is up to the bot's model, which its instructions ask; saving it is BotChu's.
+  - **Run reviews:** a minute after a task's turn or a sub-agent's run ends, if it used tools or
+    failed, BotChu reviews it in the background: what went well, what didn't, and whether anything
+    should change in how the bot works. The turn's receipt, the handoff, queued messages and
+    switching conversations never wait for it, and a review's failure never changes how the run
+    is reported. One review runs at a time across all bots, as a new session on the account the run
+    used, in an empty temporary folder (removed afterwards), without the delegation helper and at
+    utility priority, and only while that account has no turn or sub-agent running: at most 12 a
+    day per account, each stopped after 5 minutes, with one automatic retry; an account out of
+    allowance waits an hour, and a review still waiting 48 hours after its run is skipped. A review
+    is neither a task turn nor a sub-agent, so it is never reviewed itself, and BotChu's turn log
+    records it as a "run review". It sees a snapshot of up to 24,000 characters: how the run ended
+    (a finished turn isn't proof the work succeeded; a stopped run is neither a failure nor finished
+    work, and isn't continued), the brief, the owner's messages and corrections, the bot's replies
+    and handoff, and each tool call with its exit code (and the end of a failed one's output), each
+    labelled so the review cites them as evidence, with lines that look like secrets left out; and
+    the bot's instructions and memory as they are now, the shared memory and `TEAM.md`, all as
+    evidence rather than instructions. The result is **No durable change**, **Memory updated**,
+    **Instructions updated**, **Change proposed**, or a failure, with sign-in, allowance, the review
+    itself and saving told apart. BotChu applies at most three changes a run, each citing evidence,
+    verified and general, through the same writer as **Saving memory** (above): notes, corrections
+    and removals in the bot's own `MEMORY.md`, and short lessons, added but never changed or removed,
+    under `## Lessons from run reviews` in its `INSTRUCTIONS.md` (at most 20, and only once the bot
+    has instructions). Anything else is kept as a proposal for you: the shared memory, `TEAM.md`, the
+    bot that delegated the run, the repository's own documents (which change through its pull
+    requests; a review never edits a repository), an unverified hypothesis, a change without
+    evidence, and any line that could loosen a safeguard or widen what the bot may do. One-off
+    details stay in the run's history; secrets, transcripts and command output are left out, as in
+    memory; and a note memory lost since the run (a correction or `Forget:`) isn't saved again. A
+    sub-agent's run is reviewed about the bot it ran as, on its account, and the caller's own turns
+    about the caller, so a lesson isn't saved to every bot that took part. Each review is saved at
+    every step in `.botchu/evaluations/<run>.json` in that bot's folder, so a relaunch neither
+    repeats one nor applies one twice (a review cut short by quitting runs again); the newest 50 a
+    bot are kept. **Activity ▸ Run reviews** in the status sidebar lists them (Home: those about the
+    bot; a task: those of its turns and of its sub-agents), each opening to its summary, what worked
+    and didn't, the evidence it cited, the lines it added and removed, its proposals (with Copy) and
+    what it left out, with **Revert**, which undoes only the review's own lines and keeps later edits
+    (the record also keeps the file as it was), and **Retry**. Home gets a note for a change made or
+    proposed, and for a failure once per kind until a review succeeds; reviews that change nothing
+    stay quiet. Saved lessons reach the bot's next new session, never a running one. Settings ▸
+    **Run reviews** turns them off; they are on by default, and spend the account's allowance
+    (OpenRouter credit for Pi). Only the installed app runs reviews, never tests or review copies.
   - **Team playbook:** `TEAM.md` in the bots folder, beside the shared `MEMORY.md`, is the process
     every bot follows: its stages, handoffs, who calls whom with `botchu-subagent`, and when work is
     done. Unlike memory, it is given as instructions: in every bot's Home `AGENTS.md`, and at the
@@ -439,7 +481,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     or error. The character and ring convey status
     without a dot or status pill. The card and pet animation reflect only the shown Home or task;
     the bot list still shows activity across its tasks. Five icon tabs sit below the character,
-    in a rounded bar with a raised selected segment: **Activity** (tasks and conversation stats), **Sub-agents** (delegated work),
+    in a rounded bar with a raised selected segment: **Activity** (tasks, run reviews and conversation stats), **Sub-agents** (delegated work),
     **Model & Usage** (account, agent, model, reasoning and allowance), **Session** (the CLI session
     and workspace controls), and **Memory** (instructions, personality, memory, the team
     playbook and skills). Hover for tab names, or
@@ -485,7 +527,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     guidance without displaying credentials. Settings also contains the bots folder, the repositories folder, the hosts and where you chose to work
     on repositories, each account's command, the Codex account that draws pets' stills, the
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
-    and default OpenRouter model, and the Telegram gateway (below).
+    and default OpenRouter model, whether finished work gets a run review, and the Telegram gateway (below).
   - **Telegram:** an opt-in gateway, in Settings ▸ **Telegram**, lets you message bots from
     Telegram through a Telegram bot of your own (made with BotFather) while BotChu runs on this
     Mac. There is no server or webhook: BotChu asks Telegram for new messages itself (long
@@ -575,7 +617,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
     What replies ask to remember (`MemoryNotes`, in `BotContext.swift`) is saved to memory files
     by `MemoryWriter.swift`: one save at a time, read back to check it held, with notes that wait
-    and are tried again.
+    and are tried again. Run reviews are in `RunEvaluation.swift`: what a review sees of a run, its
+    prompt, reading its reply, which changes are applied and which are proposals, the saved record,
+    the queue with its limits, retries and relaunch, applying through the writer and reverting, and
+    the review's own CLI run.
     Reports filed from the app (their title, description, app state and `gh issue create`) are in
     `IssueReport.swift`. The Telegram gateway is in `Telegram.swift` (the Bot API client: long
     polling, sending, and errors that never hold the token) and `TelegramGateway.swift` (which chats
@@ -587,9 +632,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, the
     skills the app lists and edits, `SkillLibrary.swift`, and the Telegram gateway in the app,
-    `TelegramBridge.swift`),
+    `TelegramBridge.swift`, and handing finished runs to run reviews, `Evaluations.swift`),
     `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers and Skills), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
-    status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
+    status sidebar, a bot's and a task's, with its run reviews), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
     the hosts and Telegram), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
@@ -627,7 +672,13 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     gateway against a stand-in Bot API: round trips, refused and revoked chats, each chat's own bot,
     busy conversations, repeated updates, cancelled batches, relaunches, forwarded input,
     pending-work limits, shared rate-limit waits, reconnecting, failed sends and checkpoints, and
-    long replies.
+    long replies; and run reviews, with stand-in reviewers (no test runs a real review): the bounded
+    snapshot of finished, failed and stopped runs, handing a run over without waiting, one review
+    despite repeated ends and relaunches, a review cut short by quitting, no-change outcomes, which
+    changes are applied or proposed (evidence, verification, scope, safeguards), edits made meanwhile
+    and revert, secrets and forgotten notes, a failed save and its retry, failures told apart, the
+    account and daily limits, reading replies, recall by a fresh session, and the review's own
+    session through a stand-in CLI.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
     across every column, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
@@ -651,8 +702,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     tab that folds finished runs and scrolls to one the chat opens, and switching without a flash:
     the toolbar kept, the message box focused in the same update, the chat at its very end, pets
     that never blink out while a clip loads, rich replies shown only once rendered and shown
-    again at once from those kept, within their budget, and typing dots that move, and a Telegram
-    message answered in its bot's Home, with stand-ins for the CLI and Telegram. Set
+    again at once from those kept, within their budget, and typing dots that move, a Telegram
+    message answered in its bot's Home, with stand-ins for the CLI and Telegram, and a sub-agent's
+    handoff and a task's receipt that don't wait for their run reviews. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,

@@ -23,6 +23,49 @@ extension RenderingTests {
         #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("HANDOFF-REAL-OK") == true)
     }
 
+    @Test func handoffsAndTaskReceiptsNeverWaitForRunReviews() async throws {
+        let fixture = try SubagentFixture()
+        let gate = ReviewGate()
+        defer {
+            Task { await gate.release() }
+            fixture.cleanUp()
+        }
+        let reviewed = ReviewedKeys()
+        fixture.app.evaluator.limits.delay = 0
+        fixture.app.evaluator.runner = { job in
+            reviewed.add(job.key)
+            await gate.wait()
+            return #"<evaluation>{"summary": "Fine", "changes": []}</evaluation>"#
+        }
+        fixture.app.send("REVIEWED_PARENT", to: fixture.target)
+        try await fixture.wait { !fixture.app.isRunning(fixture.target) }
+
+        // The handoff came back, the turn ended and its receipt reached Home while the sub-agent's
+        // review was still held.
+        #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("HANDOFF-REVIEWED") == true)
+        #expect(fixture.app.delegation.all.map(\.phase) == [.completed])
+        #expect(fixture.app.thread(.home(fixture.parent.id)).contains { $0.role == .receipt })
+        let records = fixture.app.evaluator.records.values
+        #expect(records.count == 2)
+        let subagent = try #require(records.first { $0.subject.kind == .subagent })
+        #expect(subagent.phase == .running)
+        #expect(subagent.botID == fixture.worker.id && subagent.accountID == "codex-work", "About the bot the sub-agent ran as, on its account")
+        #expect(subagent.subject.taskID == fixture.target.taskID)
+        let turn = try #require(records.first { $0.subject.kind == .taskTurn })
+        #expect(turn.phase == .pending, "One review at a time")
+        #expect(turn.botID == fixture.parent.id && turn.accountID == "codex-dev")
+
+        await gate.release()
+        try await fixture.wait { fixture.app.evaluator.records.values.allSatisfy { $0.phase == .done } }
+        // Nothing reviews a review, and a review that changed nothing says nothing in Home.
+        #expect(reviewed.keys.sorted() == [subagent.id, turn.id].sorted())
+        #expect(fixture.app.evaluator.records.count == 2)
+        #expect(!fixture.app.thread(.home(fixture.parent.id)).contains { $0.role == .note && $0.text.hasPrefix("Reviewed") })
+        #expect(!fixture.app.thread(.home(fixture.worker.id)).contains { $0.role == .note && $0.text.hasPrefix("Reviewed") })
+        #expect(fixture.app.evaluations(for: fixture.target).map(\.id).sorted() == [subagent.id, turn.id].sorted())
+        #expect(fixture.app.evaluations(for: .home(fixture.worker.id)).map(\.id) == [subagent.id])
+    }
+
     @Test func replayingARejectedRequestCannotAdmitWorkAfterTheRosterChanges() async throws {
         let fixture = try SubagentFixture()
         defer { fixture.cleanUp() }
@@ -658,6 +701,14 @@ private final class ArchiveWrites: @unchecked Sendable {
             time.sleep(.005)
         while not os.path.exists("stream-done"): time.sleep(.01)
         answer = "HANDOFF-STREAM"
+    elif brief == "REVIEWED_PARENT":
+        emit({"type":"item.completed", "item":{"id":"item_parent", "type":"command_execution", "command":"git status",
+              "aggregated_output":"clean", "exit_code":0, "status":"completed"}})
+        answer = helper("call", "--agent", "Worker", "--brief", "REVIEWED_CHILD").strip()
+    elif brief == "REVIEWED_CHILD":
+        emit({"type":"item.completed", "item":{"id":"item_child", "type":"command_execution", "command":"swift test",
+              "aggregated_output":"passed", "exit_code":0, "status":"completed"}})
+        answer = "HANDOFF-REVIEWED"
     elif brief == "DEPTH":
         answer = helper("call", "--agent", "Worker", "--brief", "DEPTH")
     elif brief == "UNKNOWN":
@@ -667,4 +718,27 @@ private final class ArchiveWrites: @unchecked Sendable {
     emit({"type":"item.completed", "item":{"type":"agent_message", "text":answer}})
     emit({"type":"turn.completed"})
     """#
+}
+
+/// Holds a stand-in run review until the test lets it go.
+private actor ReviewGate {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var open = false
+    func wait() async {
+        if open { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func release() {
+        open = true
+        for waiter in waiters { waiter.resume() }
+        waiters = []
+    }
+}
+
+/// The runs a stand-in run review was asked about.
+private final class ReviewedKeys: @unchecked Sendable {
+    private let lock = NSLock()
+    private var list: [String] = []
+    func add(_ key: String) { lock.withLock { list.append(key) } }
+    var keys: [String] { lock.withLock { list } }
 }
