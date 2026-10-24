@@ -61,12 +61,15 @@ public struct BotHome: Sendable {
 
     /// Rewrites a conversation's transcript, Home's or a task's, as `saveThread` does, and returns
     /// its size in bytes.
+    /// Its index (`TranscriptIndex`) is saved after it, from the same bytes.
     @discardableResult
     public func writeTranscript(_ messages: [ChatMessage], task id: UUID? = nil) throws -> Int {
         try prepare()
-        guard let id else { return try Self.writeThread(messages, to: threadURL) }
-        try FileManager.default.createDirectory(at: taskURL(id), withIntermediateDirectories: true)
-        return try Self.writeThread(messages, to: taskThreadURL(id))
+        if let id { try FileManager.default.createDirectory(at: taskURL(id), withIntermediateDirectories: true) }
+        let data = try Self.encodeThread(messages)
+        try Self.write(data, to: transcriptURL(task: id))
+        writeIndex(for: data, messages: messages, task: id)
+        return data.count
     }
 
     /// The bot's tasks, open and closed, oldest first. A task whose `task.json` can't be read is left out.
@@ -316,17 +319,26 @@ public struct BotHome: Sendable {
     /// returns the bytes written.
     @discardableResult
     static func writeThread(_ messages: [ChatMessage], to url: URL) throws -> Int {
+        let data = try encodeThread(messages)
+        try write(data, to: url)
+        return data.count
+    }
+
+    static func encodeThread(_ messages: [ChatMessage]) throws -> Data {
         var data = Data()
         for message in messages {
             data.append(try Store.lineEncoder.encode(message))
             data.append(0x0A)
         }
+        return data
+    }
+
+    static func write(_ data: Data, to url: URL) throws {
         try data.write(to: url, options: .atomic)
         HistoryCounters.shared.record(url) {
             $0.writes += 1
             $0.bytesWritten += data.count
         }
-        return data.count
     }
 
     /// Appends to the day's log, `logs/yyyy-MM-dd.log` in local time.
