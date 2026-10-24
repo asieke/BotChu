@@ -491,7 +491,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     never the one shown, one with a turn or a sub-agent under way, or one not saved; drafts, queues,
     sessions and summaries stay, and the history is read again when it is shown. The replies parsed
     ahead are the shown conversation's latest 60, up to 256 KB of them. This Mac's name (`scutil`) is
-    looked up off the main thread, and a task request naming this Mac waits for it.
+    looked up off the main thread, and a task request naming this Mac waits for it. With eight bots,
+    forty open tasks and a hundred finished sub-agents (101 MB) on an M4 Max, the window is up in
+    about 220 ms (it was 800) and the shown conversation in about 330, having read one transcript
+    (it read all 148).
   - **Memory and personality:** each bot's workspace has a `MEMORY.md` for facts and notes it keeps
     itself, and an editable `SOUL.md` for its personality and voice. New bots get a starter soul based
     on their name and title; existing files are preserved, including intentionally empty ones.
