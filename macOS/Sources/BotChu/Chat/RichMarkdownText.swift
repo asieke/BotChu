@@ -9,7 +9,9 @@ import WebKit
 /// was last drawn at. A new web view is invisible until its reply has rendered, so the bubble
 /// shows, not WebKit's white page or the reply's source, and the reply fades in at its final height.
 /// A rendered reply's web view outlives its conversation's view for a while (`RichReplyPool`), so
-/// showing the conversation again shows the reply at once.
+/// showing the conversation again shows the reply at once. A web view renders one revision of its
+/// reply at a time: one written meanwhile waits, only the newest, and the renderer keeps the blocks
+/// that haven't changed, with their math and diagrams.
 struct RichMarkdownText: View {
     let html: String
     @State private var height: CGFloat
@@ -25,16 +27,20 @@ struct RichMarkdownText: View {
     }
 }
 
-/// The height each rich reply was last drawn at, for the next time it is drawn.
+/// The height each rich reply was last drawn at, for the next time it is drawn. Kept by the hash
+/// of the reply's HTML, a few bytes each however long the reply.
 @MainActor enum RichMarkdownHeights {
-    private static var heights: [String: CGFloat] = [:]
+    private static var heights: [Int: CGFloat] = [:]
+    static let limit = 500
 
-    static func height(for html: String) -> CGFloat? { heights[html] }
+    static var count: Int { heights.count }
+
+    static func height(for html: String) -> CGFloat? { heights[html.hashValue] }
 
     static func remember(_ height: CGFloat, for html: String) {
         // Only a hint for the first frame: forgetting everything now and then keeps it small.
-        if heights.count >= 500 { heights.removeAll(keepingCapacity: true) }
-        heights[html] = height
+        if heights.count >= limit { heights.removeAll(keepingCapacity: true) }
+        heights[html.hashValue] = height
     }
 }
 
@@ -133,23 +139,45 @@ struct RichMarkdownWebView: NSViewRepresentable {
 
         func render(in view: WKWebView) {
             guard let view = view as? ChatWebView, view.loaded else { return }
-            view.rendered = RichReplyPool.Key(html: html, dark: dark)
-            let missing = RichMarkdownLibrary.needed(by: html).subtracting(view.libraries)
-            guard !missing.isEmpty else { return renderReply(in: view) }
-            // The reply gained math or a diagram: its library first, in the renderer's world. Later
-            // renders queue behind it, as WebKit runs one view's scripts in order.
+            // One render at a time: the newest revision written meanwhile follows it.
+            guard !view.busy else {
+                if view.waiting { view.skipped += 1 }
+                view.waiting = true
+                return
+            }
+            let key = RichReplyPool.Key(html: html, dark: dark)
+            view.busy = true
+            view.waiting = false
+            view.rendered = key
+            view.revision += 1
+            view.renders += 1
+            let missing = RichMarkdownLibrary.needed(by: key.html).subtracting(view.libraries)
+            guard !missing.isEmpty else { return Self.renderReply(key, in: view) }
+            // The reply gained math or a diagram: its library first, in the renderer's world.
             view.libraries.formUnion(missing)
             let source = missing.sorted().map { RichMarkdownWebView.script($0.rawValue) }.joined(separator: "\n;\n") + "\n;true"
-            view.evaluateJavaScript(source, in: nil, in: .defaultClient) { [weak self, weak view] _ in
-                guard let self, let view else { return }
-                self.renderReply(in: view)
+            view.evaluateJavaScript(source, in: nil, in: .defaultClient) { [weak view] _ in
+                guard let view else { return }
+                Self.renderReply(key, in: view)
             }
         }
 
-        private func renderReply(in view: WKWebView) {
+        private static func renderReply(_ key: RichReplyPool.Key, in view: ChatWebView) {
             // Pass content as an argument, never interpolate model text into executable JavaScript.
-            view.callAsyncJavaScript("await window.renderReply(html, dark);",
-                                     arguments: ["html": html, "dark": dark], in: nil, in: .defaultClient)
+            view.callAsyncJavaScript("await window.renderReply(html, dark, revision);",
+                                     arguments: ["html": key.html, "dark": key.dark, "revision": view.revision],
+                                     in: nil, in: .defaultClient) { [weak view] _ in
+                guard let view else { return }
+                view.busy = false
+                // What the view shows now, if it changed meanwhile, also when another reply's
+                // view has taken this web view from the pool.
+                guard let coordinator = view.messages.coordinator,
+                      view.rendered != RichReplyPool.Key(html: coordinator.html, dark: coordinator.dark) else {
+                    view.waiting = false
+                    return
+                }
+                coordinator.render(in: view)
+            }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -159,13 +187,18 @@ struct RichMarkdownWebView: NSViewRepresentable {
 
         func received(_ message: WKScriptMessage) {
             guard message.frameInfo.isMainFrame else { return }
-            if message.name == "layout", let value = message.body as? Double, value.isFinite, value > 0 {
+            // Only a height of the revision rendered last counts: the page reports again once a
+            // newer render finishes, and a web view taken from the pool numbers its renders on.
+            if message.name == "layout", let layout = message.body as? [String: Any],
+               let value = layout["height"] as? Double, value.isFinite, value > 0,
+               let view = message.webView as? ChatWebView, let rendered = view.rendered,
+               layout["revision"] as? Int == view.revision {
                 let measured = ceil(value)
                 if abs(height.wrappedValue - measured) > 0.5 { height.wrappedValue = measured }
-                RichMarkdownHeights.remember(measured, for: html)
+                RichMarkdownHeights.remember(measured, for: rendered.html)
                 // The first height comes once the reply has rendered: it fades in after the chat
                 // has taken that height.
-                if let view = message.webView, view.alphaValue == 0 {
+                if view.alphaValue == 0 {
                     DispatchQueue.main.async { [weak view] in
                         NSAnimationContext.runAnimationGroup { context in
                             context.duration = 0.15
@@ -275,6 +308,13 @@ final class ChatWebView: WKWebView {
     var libraries: Set<RichMarkdownLibrary> = []
     /// The reply and appearance it last rendered.
     var rendered: RichReplyPool.Key?
+    /// Its renders, numbered: a render under way, a revision waiting for it, and how many started
+    /// and how many revisions were replaced while waiting, never rendered.
+    var revision = 0
+    var busy = false
+    var waiting = false
+    var renders = 0
+    var skipped = 0
 
     init(frame: NSRect, configuration: WKWebViewConfiguration, messages: ReplyMessages) {
         self.messages = messages
