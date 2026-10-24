@@ -1692,7 +1692,7 @@ final class AppModel {
     /// shown, running, unsaved or being read); the least recently shown go first. Their digests
     /// stay, and they are read again when they are needed.
     nonisolated static let inactiveHistoryBytes = 48 << 20
-    @ObservationIgnored private var historyBudget = HistoryBudget<ChatTarget>(limit: AppModel.inactiveHistoryBytes)
+    @ObservationIgnored var historyBudget = HistoryBudget<ChatTarget>(limit: AppModel.inactiveHistoryBytes)
     /// Conversations whose index is made again, one at a time, off the main thread.
     @ObservationIgnored private var reindexing: [ChatTarget] = []
     @ObservationIgnored private var isReindexing = false
@@ -1790,11 +1790,13 @@ final class AppModel {
     /// it is now.
     private func read(_ target: ChatTarget, _ conversation: ConversationState, ticket: Int, lane: String, result: Result<HistoryLoad, Error>) {
         guard conversations[target] === conversation, let files = files(target) else { return }
-        guard files.lane == lane, case .success(let history) = result else {
+        guard files.lane == lane else {
             conversation.history.abandon(ticket)
             drain(target)
             return
         }
+        // Only a folder going away (its bot deleted) fails a read.
+        guard case .success(let history) = result else { return conversation.history.abandon(ticket) }
         guard conversation.history.finish(ticket, loaded: true, recovered: false) else { return }
         took(history, into: conversation, target)
         drain(target)

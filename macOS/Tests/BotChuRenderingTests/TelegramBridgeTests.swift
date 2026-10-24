@@ -121,7 +121,8 @@ extension RenderingTests {
         #expect(!reopened.telegramEnabled)
         let relaunched = AppModel(store: store, settings: reopened, usage: usage)
         defer { relaunched.stopAll() }
-        #expect(relaunched.thread(home).contains { $0.id == id })
+        // The shown Home is read off the main thread after the launch (#109).
+        #expect(await relaunched.loadedThread(home)?.contains { $0.id == id } == true)
         relaunched.telegram.readToken = { "123:AAFakeTokenForTestsOnly" }
         relaunched.telegram.transport = telegram
         let polled = await telegram.offsets.count
@@ -139,7 +140,7 @@ extension RenderingTests {
 
 /// Telegram's Bot API, played here: one batch of updates, then none (after a short wait, as a
 /// long poll would), and every message sent recorded.
-private actor BridgeTelegramStandIn: TelegramTransport {
+actor BridgeTelegramStandIn: TelegramTransport {
     struct Sent {
         let chat: Int64
         let text: String

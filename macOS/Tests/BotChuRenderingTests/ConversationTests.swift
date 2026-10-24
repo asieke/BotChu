@@ -113,6 +113,8 @@ extension RenderingTests {
         #expect((app.drafts[target] ?? "").isEmpty)
         #expect(scroll.frame.height == initialHeight)
         let recovered = AppModel(store: fixture.store, settings: fixture.settings)
+        // Each conversation's queue is recovered off the main thread after a launch (#109).
+        await recovered.storage.settle()
         let queued = try #require(recovered.messageQueues[target]?.messages.first)
         recovered.editQueuedMessage(queued.id, in: target)
         #expect(recovered.draftImages[target] == [attachment])
@@ -188,6 +190,7 @@ extension RenderingTests {
         #expect(try fixture.calls(target).count == 1)
         #expect(app.messageQueues[target]?.isPaused == true)
         let recovered = AppModel(store: fixture.store, settings: fixture.settings)
+        await recovered.storage.settle()
         #expect(recovered.messageQueues[target]?.messages.map(\.text) == ["keep this"])
         #expect(recovered.messageQueues[target]?.isPaused == true)
         #expect(!recovered.isRunning(target))
@@ -215,6 +218,7 @@ extension RenderingTests {
         #expect(try fixture.calls(target).count == 1)
         let relaunched = AppModel(store: fixture.store, settings: fixture.settings)
         defer { relaunched.stopAll() }
+        try await fixture.wait { relaunched.messageQueues[target] != nil }
         #expect(relaunched.messageQueues[target]?.isPaused == false)
         try await fixture.wait { relaunched.thread(target).last?.text == "reply:after relaunch" }
         #expect(relaunched.messageQueues[target]?.messages.isEmpty == true)
@@ -318,6 +322,8 @@ extension RenderingTests {
         try lock(false)
         let relaunched = AppModel(store: fixture.store, settings: fixture.settings)
         defer { relaunched.stopAll() }
+        // Recovery reads the task's transcript, off the main thread, to put the taken message back (#109).
+        await relaunched.storage.settle()
         #expect(relaunched.thread(target).filter { $0.role == .user }.map(\.text) == ["WAIT", "steer me"])
         #expect(relaunched.thread(target).last?.role == .note)
         #expect(relaunched.messageQueues[target]?.messages.isEmpty == true)

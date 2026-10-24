@@ -40,6 +40,8 @@ extension RenderingTests {
         #expect(app.messageQueues[target]?.isPaused == true)
         let relaunched = AppModel(store: fixture.store, settings: fixture.settings, storage: app.storage)
         defer { relaunched.stopAll() }
+        // Each conversation's queue is recovered off the main thread after a launch (#109).
+        await relaunched.storage.settle()
         #expect(relaunched.messageQueues[target]?.messages.map(\.text) == ["second"])
         #expect(relaunched.messageQueues[target]?.isPaused == true)
         try await Task.sleep(for: .milliseconds(300))
