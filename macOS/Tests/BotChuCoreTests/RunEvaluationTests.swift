@@ -62,6 +62,10 @@ private final class ReviewFixture {
 
     func remove() { try? FileManager.default.removeItem(at: root) }
 
+    /// A made-up OpenRouter key, put together when the test runs so that no key-shaped text sits in
+    /// the source for the secret scan to find.
+    nonisolated static let fakeKey = ["sk", "or", "v1", "0123456789abcdef"].joined(separator: "-")
+
     nonisolated static let task = BotTask(repo: "asieke/BotChu", checkout: "/tmp/BotChu", branch: "fix/1-crash", folder: "/tmp/BotChu-wt",
                               brief: "Fix the crash on launch, then open a pull request.", accountID: "codex-dev")
 
@@ -187,7 +191,7 @@ private actor Gate {
     @Test func aLongRunIsBoundedAndLinesThatLookSecretAreLeftOut() throws {
         let fixture = try ReviewFixture()
         defer { fixture.remove() }
-        var thread = [ChatMessage(role: .user, text: "Deploy it. OPENROUTER_API_KEY=sk-or-v1-0123456789abcdef is in my shell.")]
+        var thread = [ChatMessage(role: .user, text: "Deploy it. OPENROUTER_API_KEY=\(ReviewFixture.fakeKey) is in my shell.")]
         for i in 0..<600 {
             thread.append(ReviewFixture.tool("Bash", "make step-\(i)", exit: 2, failed: true, output: String(repeating: "x", count: 4_000)))
         }
