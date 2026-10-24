@@ -293,6 +293,36 @@ private actor Gate {
         #expect(third.records[running.id]?.failure?.message == "BotChu quit while reviewing this run")
     }
 
+    @Test func quittingStopsARunningReviewAndTheNextLaunchTriesItAgain() async throws {
+        let fixture = try ReviewFixture()
+        defer { fixture.remove() }
+        let calls = fixture.calls
+        fixture.evaluator.runner = { job in
+            calls.record(job)
+            try await Task.sleep(nanoseconds: 30_000_000_000)
+            return ReviewFixture.reply()
+        }
+        let request = fixture.request()
+        let started = Date()
+        fixture.evaluator.enqueue(request)
+        fixture.evaluator.stopAll()
+        await fixture.evaluator.settle()
+        #expect(Date().timeIntervalSince(started) < 10, "The review was stopped, not waited for")
+        #expect(fixture.evaluator.records[request.subject.key]?.phase == .running)
+        // A run that ends meanwhile is still handed over, and waits for the next launch.
+        let later = fixture.request(task: BotTask(repo: "asieke/BotChu", checkout: "/tmp/BotChu", folder: "/tmp/wt", brief: "later", accountID: "codex-dev"))
+        #expect(fixture.evaluator.enqueue(later))
+        #expect(fixture.evaluator.records[later.subject.key]?.phase == .pending, "Nothing starts while quitting")
+
+        fixture.evaluator = fixture.makeEvaluator()
+        fixture.answer(ReviewFixture.reply())
+        fixture.evaluator.load(bots: [(fixture.bot.id, fixture.bot.workspace)])
+        await fixture.evaluator.settle()
+        #expect(fixture.evaluator.records[request.subject.key]?.phase == .done)
+        #expect(fixture.evaluator.records[request.subject.key]?.attempts == 2)
+        #expect(fixture.evaluator.records[later.subject.key]?.phase == .done)
+    }
+
     @Test func aReviewCannotStartAnotherReviewOfItself() async throws {
         let fixture = try ReviewFixture()
         defer { fixture.remove() }
@@ -519,6 +549,9 @@ private actor Gate {
         #expect(record.failure?.kind == .storage)
         #expect(record.failure?.message.hasPrefix("Couldn't save to MEMORY.md: ") == true)
         #expect(record.applied.isEmpty, "Nothing is recorded as saved that wasn't")
+        // The review keeps its own changes: they don't wait in the writer for the bot's next turn
+        // to save behind the review's back.
+        #expect(fixture.writer.waiting(.bot(workspace: fixture.bot.workspace)).isEmpty)
         #expect(record.plan?.map(\.text) == [Self.lesson])
         #expect(record.canRetry)
         #expect(record.notice?.hasPrefix("Couldn't review “\(ReviewFixture.task.title)” turn (saving): Couldn't save to MEMORY.md") == true)

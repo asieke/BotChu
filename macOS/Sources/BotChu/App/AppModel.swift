@@ -1424,6 +1424,7 @@ final class AppModel {
             saveUnfinishedTurn(target)
         }
         delegation.stopAll()
+        evaluator.stopAll()
         for target in Array(runStates.keys) { stop(target) }
         for run in petRuns.values { run.stop() }
         for task in petTasks.values { task.cancel() }

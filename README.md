@@ -348,8 +348,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `thread.jsonl`), the
     task requests it writes (`dispatch/`), a log of every turn (`logs/<date>.log`:
     the command, where it ran, how long it took, the exit status, any error and the CLI's error output), notes
-    it couldn't save to memory yet (`memory-unsaved.json`, `shared-memory-unsaved.json`,
-    `instructions-unsaved.json`), the reviews of its runs (`evaluations/`, below) and its
+    it couldn't save to memory yet (`memory-unsaved.json`, `shared-memory-unsaved.json`), the reviews of its runs (`evaluations/`, below) and its
     pet (`pet/`: `video.json`, `stills/<pose>.png`, `clips/<activity>.mp4` and the appearance it
     was made from) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
     is told it can search them for earlier conversations. **History & Logs** in the status sidebar
@@ -434,8 +433,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     sub-agent's run is reviewed about the bot it ran as, on its account, and the caller's own turns
     about the caller, so a lesson isn't saved to every bot that took part. Each review is saved at
     every step in `.botchu/evaluations/<run>.json` in that bot's folder, so a relaunch neither
-    repeats one nor applies one twice (a review cut short by quitting runs again); the newest 50 a
-    bot are kept. **Activity ▸ Run reviews** in the status sidebar lists them (Home: those about the
+    repeats one nor applies one twice (quitting stops a running review, which runs again after the
+    next launch); the newest 50 a bot are kept. A change that couldn't be saved stays with its review,
+    whose **Retry** saves it, rather than waiting with the conversations' notes. **Activity ▸ Run reviews** in the status sidebar lists them (Home: those about the
     bot; a task: those of its turns and of its sub-agents), each opening to its summary, what worked
     and didn't, the evidence it cited, the lines it added and removed, its proposals (with Copy) and
     what it left out, with **Revert**, which undoes only the review's own lines and keeps later edits

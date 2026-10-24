@@ -179,9 +179,11 @@ public final class MemoryWriter: @unchecked Sendable {
 
     public init() {}
 
-    /// Saves the notes (lines of `<remember>` blocks) to the file, after any still waiting.
+    /// Saves the notes (lines of `<remember>` blocks) to the file, after any still waiting. When the
+    /// save fails, the notes wait to be tried again, unless `keepWaiting` is false: a run review
+    /// keeps its own changes and applies them again itself.
     @discardableResult
-    public func save(_ notes: [String], to file: MemoryFile) -> MemorySave {
+    public func save(_ notes: [String], to file: MemoryFile, keepWaiting keeps: Bool = true) -> MemorySave {
         lock.lock()
         defer { lock.unlock() }
         var result = MemorySave(file: file)
@@ -193,7 +195,8 @@ public final class MemoryWriter: @unchecked Sendable {
                 accepted.append(note)
             }
         }
-        let queue = waitingNotes(file) + accepted
+        let earlier = waitingNotes(file)
+        let queue = earlier + accepted
         guard !queue.isEmpty else { return result }
         do {
             let original = try Self.read(file.path)
@@ -210,8 +213,8 @@ public final class MemoryWriter: @unchecked Sendable {
         } catch {
             let reason = (error as? NotKept)?.description ?? error.localizedDescription
             result.failure = reason.trimmingCharacters(in: CharacterSet(charactersIn: ". ").union(.whitespacesAndNewlines))
-            result.waiting = MemoryNotes.distinct(queue)
-            keepWaiting(queue, for: file)
+            result.waiting = MemoryNotes.distinct(keeps ? queue : earlier)
+            if keeps { keepWaiting(queue, for: file) }
         }
         return result
     }

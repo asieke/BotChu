@@ -881,6 +881,8 @@ public final class RunEvaluator {
     public private(set) var records: [String: EvaluationRecord] = [:]
     private var running: [String: Task<Void, Never>] = [:]
     private var wakeTask: Task<Void, Never>?
+    /// BotChu is quitting (`stopAll`).
+    private var stopping = false
 
     public init(writer: MemoryWriter = .shared, workspace: @escaping (UUID) -> String?,
                 sharedMemoryPath: @escaping () -> String, teamPath: @escaping () -> String) {
@@ -933,6 +935,7 @@ public final class RunEvaluator {
     public func pump() {
         wakeTask?.cancel()
         wakeTask = nil
+        guard !stopping else { return }
         let date = now()
         for record in records.values where record.phase == .pending && date.timeIntervalSince(record.createdAt) > limits.expiry {
             skip(record.id, "Not reviewed within \(Int(limits.expiry / 3_600)) hours of the run: its account was busy or at its daily limit")
@@ -975,7 +978,7 @@ public final class RunEvaluator {
             let file = change.destination == .instructions ? MemoryFile.instructions(workspace: workspace) : .bot(workspace: workspace)
             let present = Set(MemoryNotes.bullets(in: Workspace.read(file.path)).map(MemoryNotes.normalized))
             let notes = change.added.filter { present.contains(MemoryNotes.normalized($0)) }.map { "Forget: \($0)" } + change.removed
-            let save = writer.save(notes, to: file)
+            let save = writer.save(notes, to: file, keepWaiting: false)
             if let failure = save.failure {
                 record.revertError = "Couldn't revert \(change.destination.place): \(failure)"
                 update(record)
@@ -997,6 +1000,16 @@ public final class RunEvaluator {
     /// The reviews of a task's turns and of the sub-agents it delegated, newest first.
     public func records(ofTask id: UUID) -> [EvaluationRecord] {
         records.values.filter { $0.subject.taskID == id }.sorted { ($0.createdAt, $0.id) > ($1.createdAt, $1.id) }
+    }
+
+    /// BotChu is quitting: stops the reviews running (their CLI is interrupted), which stay
+    /// "running" in their saved records, so the next launch tries them again, or fails them once
+    /// they are out of attempts. Nothing else starts.
+    public func stopAll() {
+        stopping = true
+        wakeTask?.cancel()
+        wakeTask = nil
+        for task in running.values { task.cancel() }
     }
 
     /// Waits until no review runs (for tests).
@@ -1077,7 +1090,7 @@ public final class RunEvaluator {
     private func finish(_ id: String, _ attempt: Attempt) {
         running[id] = nil
         defer { pump() }
-        guard var record = records[id], record.phase == .running else { return }
+        guard !stopping, var record = records[id], record.phase == .running else { return }
         if let reply = attempt.reply {
             guard let parsed = EvaluationResponse.parse(reply), let snapshot = record.snapshot,
                   let workspace = workspace(record.botID) else {
@@ -1144,7 +1157,7 @@ public final class RunEvaluator {
                 notes.append(change.text)
             }
             guard !notes.isEmpty else { continue }
-            let save = writer.save(notes, to: file)
+            let save = writer.save(notes, to: file, keepWaiting: false)
             for refusal in save.refused { note(&record, "A change left out: \(refusal.reason)") }
             if let failure = save.failure {
                 failures.append("Couldn't save to \(destination.place): \(failure). It is unchanged; Retry applies the review again")
