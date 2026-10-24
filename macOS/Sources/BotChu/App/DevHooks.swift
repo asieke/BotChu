@@ -41,6 +41,7 @@ import BotChuCore
 /// - `BOTCHU_CREATE`: create a bot at launch from `name|account id|instructions`, as the editor does.
 /// - `BOTCHU_SECTION`: with `BOTCHU_DATA_DIR`, move the selected bot into the sidebar section of this
 ///   name at launch, as Move to Section does.
+/// - `BOTCHU_SEARCH`: with `BOTCHU_DATA_DIR`, the search Agents opens with.
 /// - `BOTCHU_PET`: give the selected bot this pet folder at launch (`video.json`, `stills/`, `clips/`).
 /// - `BOTCHU_DRAW_PET`: give the selected bot this appearance and make its pet at launch (a real Codex
 ///   run, then real clips on OpenRouter, which cost OpenRouter credit).
@@ -60,6 +61,11 @@ enum DevHooks {
         guard dataDir != nil else { return nil }
         if ["inspector-model", "inspector-effort"].contains(env["BOTCHU_OPEN"] ?? "") { return .model }
         return env["BOTCHU_INSPECTOR"].flatMap(InspectorTab.init(rawValue:))
+    }
+
+    /// The search Agents opens with on throwaway data (`BOTCHU_SEARCH`).
+    static var agentsSearch: String {
+        dataDir == nil ? "" : env["BOTCHU_SEARCH"] ?? ""
     }
 
     /// The hosts a throwaway run starts with (`BOTCHU_HOST`).
@@ -132,7 +138,7 @@ enum DevHooks {
             }
         }
         switch env["BOTCHU_OPEN"] {
-        case "projects", "agents", "providers":
+        case "projects", "agents", "providers", "skills":
             model.destination = env["BOTCHU_OPEN"].flatMap(LibraryDestination.init(rawValue:))
             if let repo = env["BOTCHU_PROJECT"] {
                 model.selectProject(repo, tab: env["BOTCHU_PROJECT_TAB"].flatMap(ProjectSelection.Tab.init(rawValue:)) ?? .overview,

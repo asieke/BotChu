@@ -41,6 +41,8 @@ struct DocumentEditorRequest: Identifiable {
     let seed: String
     /// Shown over an empty draft, saying what the file is for.
     let placeholder: String
+    /// When the bots read the file, beside Save.
+    var footnote = "Read at the start of each new session. Use New Session to apply changes to an existing conversation."
 
     init(bot: Bot, document: BotDocument) {
         name = document.rawValue
@@ -82,9 +84,11 @@ struct ChatTarget: Hashable {
 }
 
 enum LibraryDestination: String, CaseIterable {
-    case projects, agents, providers
+    case projects, agents, providers, skills
     var title: String { rawValue.capitalized }
-    var symbol: String { switch self { case .projects: "square.grid.2x2"; case .agents: "person.2"; case .providers: "terminal" } }
+    var symbol: String {
+        switch self { case .projects: "square.grid.2x2"; case .agents: "person.2"; case .providers: "terminal"; case .skills: "wand.and.stars" }
+    }
 }
 
 @MainActor @Observable
@@ -94,6 +98,8 @@ final class AppModel {
     /// bots in no section first. See `SidebarSections.swift`.
     var sections: [UUID: String] = [:]
     var delegation: SubagentRuntime!
+    /// Messages from Telegram, into bots' Homes, and their replies back (Settings ▸ Telegram).
+    var telegram: TelegramBridge!
     /// Each bot's tasks, open and closed, oldest first.
     var tasks: [UUID: [BotTask]] = [:]
     /// Every conversation (each bot's Home, and each task), observed one by one: see
@@ -232,6 +238,7 @@ final class AppModel {
         warmMarkdown()
         delegation = SubagentRuntime(model: self, root: (store != nil || DevHooks.dataDir != nil)
             ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot)
+        telegram = TelegramBridge(model: self, stateURL: self.store.root.appendingPathComponent("telegram.json"))
         selection = bots.first?.id
         showSavedProjects()
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
@@ -859,8 +866,10 @@ final class AppModel {
 
     // MARK: Turns
 
+    /// `id` is the message's own: a message from Telegram has one made from it, so the same
+    /// message sent again is recognized.
     @discardableResult
-    func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [],
+    func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [], id: UUID = UUID(),
               references: [MessageReference] = []) -> Bool {
         let (text, references) = MessageReference.trimming(text, references: references)
         guard images.count <= ImageAttachment.maximumCount else {
@@ -872,7 +881,7 @@ final class AppModel {
             return beginTurn(text, for: target, message: nil)
         }
         var queue = messageQueues[target] ?? MessageQueue()
-        queue.enqueue(ChatMessage(role: .user, text: text, images: images, references: references))
+        queue.enqueue(ChatMessage(id: id, role: .user, text: text, images: images, references: references))
         // Save before clearing the composer; a failed write must leave the owner's draft intact.
         guard saveQueue(queue, for: target) else { return false }
         messageQueues[target] = queue
@@ -1070,6 +1079,7 @@ final class AppModel {
         let instructions = Workspace.read(BotDocument.instructions.url(for: bot).path)
         let sharedMemory = Workspace.read(settings.sharedMemoryPath)
         let team = Workspace.read(settings.teamPath)
+        let skills = activeSkills(of: bot)
         let directory: String
         var machine = Machine.thisMac
         var preamble: String?
@@ -1088,14 +1098,14 @@ final class AppModel {
                 preamble = BotContext.taskPreamble(bot: bot, task: task, memory: memory, sharedMemory: sharedMemory, history: history,
                                                    machine: machineDescription(of: task),
                                                    home: machine.isRemote ? thread(.home(id)) : [], soul: soul,
-                                                   instructions: instructions, team: team)
+                                                   instructions: instructions, team: team, skills: skills)
             }
         } else {
             directory = bot.workspace
             if resume == nil {
                 preamble = BotContext.sessionPreamble(bot: bot, memory: memory, sharedMemory: sharedMemory, history: history,
                                                       tasks: openTasks(of: id).map { report(on: $0, of: id, replyLimit: 240) }, soul: soul,
-                                                      instructions: instructions, team: team)
+                                                      instructions: instructions, team: team, skills: skills)
             }
         }
         let ticket = UUID()
@@ -1445,6 +1455,12 @@ final class AppModel {
 
     private func append(_ message: ChatMessage, to target: ChatTarget) {
         conversation(target).append(message)
+    }
+
+    /// Adds one of BotChu's own lines to a conversation, and saves it.
+    func note(_ text: String, in target: ChatTarget) {
+        append(ChatMessage(role: .note, text: text), to: target)
+        saveThread(target)
     }
 
     /// Parses the recent replies of every conversation in the background, so a conversation

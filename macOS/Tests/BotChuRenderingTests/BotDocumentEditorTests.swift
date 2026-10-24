@@ -90,9 +90,13 @@ extension RenderingTests {
         let model = AppModel(store: store, settings: AppSettings(defaults: defaults),
                              usage: UsageCache { _, _ in throw UsageFailure("No usage in tests") })
 
-        // The fourth card, at the bottom right of the tab's two columns, at the status sidebar's widest.
-        let section = NSHostingView(rootView: MemorySection(botID: bot.id).environment(model)
-            .padding().frame(width: 380).defaultAppStorage(defaults))
+        // The fourth card, at the bottom right of the tab's two columns, at the status sidebar's widest,
+        // stacked as the tab stacks it: above the Skills part, 22 points apart.
+        let section = NSHostingView(rootView: VStack(alignment: .leading, spacing: 22) {
+            MemorySection(botID: bot.id)
+        }.environment(model).padding().frame(width: 380).defaultAppStorage(defaults))
+        let skills = NSHostingView(rootView: SkillsSection(botID: bot.id).environment(model)
+            .frame(width: 380 - 16 * 2).defaultAppStorage(defaults))
         let cards = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 200),
                              styleMask: [.titled], backing: .buffered, defer: false)
         cards.isReleasedWhenClosed = false
@@ -103,7 +107,7 @@ extension RenderingTests {
         cards.setContentSize(section.fittingSize)
         cards.layoutIfNeeded()
         let cardWidth = (section.bounds.width - 16 * 2 - 8) / 2
-        let fromBottom = 16.0 + 58 / 2
+        let fromBottom = 16 + skills.fittingSize.height + 22 + 58 / 2
         let point = section.convert(NSPoint(x: section.bounds.width - 16 - cardWidth / 2,
                                             y: section.isFlipped ? section.bounds.height - fromBottom : fromBottom), to: nil)
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {

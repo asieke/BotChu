@@ -14,6 +14,7 @@
 #   BOTCHU_DRAFT='One\nTwo' macOS/ui-review.sh   # with this draft in the message box (\n: a new line)
 #   BOTCHU_TYPE='Ask @co{tab}to look' macOS/ui-review.sh  # type this into the message box, as keys
 #                                          # ({down}, {up}, {tab}, {return}, {escape} press those)
+#   BOTCHU_OPEN=agents BOTCHU_SEARCH=res macOS/ui-review.sh  # open Agents with that search
 #   BOTCHU_DEMO=activity BOTCHU_TAB=1 macOS/ui-review.sh  # that tab as a long agent run (in memory)
 #   BOTCHU_FAKE_HOST=1 BOTCHU_TASK="hello-world|<task>|Far Mac" macOS/ui-review.sh
 #                                          # a task on a host, "Far Mac", whose ssh is a stand-in that
@@ -160,6 +161,7 @@ fi
 [ -n "${BOTCHU_SECTION:-}" ] && args+=(--env "BOTCHU_SECTION=$BOTCHU_SECTION")
 [ -n "${BOTCHU_DRAFT:-}" ] && args+=(--env "BOTCHU_DRAFT=$BOTCHU_DRAFT")
 [ -n "${BOTCHU_TYPE:-}" ] && args+=(--env "BOTCHU_TYPE=$BOTCHU_TYPE")
+[ -n "${BOTCHU_SEARCH:-}" ] && args+=(--env "BOTCHU_SEARCH=$BOTCHU_SEARCH")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
 # Without restoring windows: after any copy of BotChu crashed, macOS would otherwise stop at a
 # dialog asking whether to reopen them.

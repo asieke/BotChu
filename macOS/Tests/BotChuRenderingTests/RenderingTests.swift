@@ -335,6 +335,88 @@ import BotChuCore
         #expect(webViews(in: host).isEmpty)
     }
 
+    /// #86: a table's rows are ruled straight across every column, also beside a cell that is empty
+    /// or holds inline code, which is shorter than the rest of its row, and the header's fill stays
+    /// inside the rounded border. Narrow, the table keeps its one-line cells and scrolls sideways.
+    @Test func tableRowsAreRuledStraightAcrossEveryColumn() throws {
+        _ = NSApplication.shared
+        let source = """
+        | # | Title | Label |
+        | --- | --- | --- |
+        | 85 | Show full model names and version numbers | |
+        | 84 | Autocomplete agents with `@` and projects with `#` | |
+        | 59 | ChatGPT access from BotChu via CLI and voice | `research` |
+        | 52 | One BotChu-owned MCP gateway for every bot | `research` |
+        """
+        /// The reply drawn with 10 points of padding on a plain background, and where it draws on that.
+        @MainActor struct Picture {
+            let host: NSHostingView<AnyView>
+            let rep: NSBitmapImageRep
+            let scale: CGFloat
+            let background: CGFloat
+
+            init(_ reply: some View, width: CGFloat, dark: Bool) throws {
+                host = NSHostingView(rootView: AnyView(reply.padding(10)
+                    .background(dark ? Color(white: 0.16) : Color.white).frame(width: width)
+                    .environment(\.colorScheme, dark ? .dark : .light)))
+                host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                host.setFrameSize(host.fittingSize)
+                host.layoutSubtreeIfNeeded()
+                let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: rep)
+                self.rep = rep
+                scale = CGFloat(rep.pixelsWide) / host.bounds.width
+                background = Picture.luminance(rep, 2, 2)
+            }
+
+            static func luminance(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int) -> CGFloat {
+                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return -1 }
+                return 0.2126 * color.redComponent + 0.7152 * color.greenComponent + 0.0722 * color.blueComponent
+            }
+
+            func drawnOn(_ x: Int, _ y: Int) -> Bool { abs(Picture.luminance(rep, x, y) - background) > 0.02 }
+
+            /// The runs of drawn pixels down the column of pixels at `x`.
+            func lines(atX x: Int) -> [ClosedRange<Int>] {
+                var runs: [ClosedRange<Int>] = []
+                var start: Int?
+                for y in 0..<rep.pixelsHigh {
+                    if drawnOn(x, y) { start = start ?? y } else if let first = start { runs.append(first...(y - 1)); start = nil }
+                }
+                if let first = start { runs.append(first...(rep.pixelsHigh - 1)) }
+                return runs
+            }
+        }
+        var height: CGFloat = 0
+        for dark in [false, true] {
+            let picture = try Picture(MarkdownText(text: source), width: 640, dark: dark)
+            height = picture.host.bounds.height
+            // The table's sides, along its header's fill 6 points below its top.
+            let probe = Int(16 * picture.scale)
+            let sides = (0..<picture.rep.pixelsWide).filter { picture.drawnOn($0, probe) }
+            let left = try #require(sides.first), right = try #require(sides.last)
+            // Down the first column's leading padding and the last column's trailing padding, where
+            // only the border, the header's fill and the rules are drawn: the same rows of pixels.
+            let first = picture.lines(atX: left + Int(6 * picture.scale))
+            let last = picture.lines(atX: right - Int(6 * picture.scale))
+            // The header (with the top border and its rule), three rules between four rows, and the
+            // bottom border, with no rule of the last row's above it.
+            #expect(first.count == 5, "dark: \(dark), \(first)")
+            #expect(first == last, "dark: \(dark), first column \(first), last column \(last)")
+            // The rounded corners show the reply's background, not the header's fill.
+            let top = try #require(first.first?.lowerBound)
+            #expect(!picture.drawnOn(left, top) && !picture.drawnOn(right, top), "dark: \(dark)")
+        }
+        // Narrow, the cells stay on one line, so the table is as tall, and its header runs on to the
+        // edge of the part shown (310 points in), with the rest scrolled out of view, not over the padding.
+        let narrow = try Picture(MarkdownText(text: source), width: 320, dark: false)
+        #expect(narrow.host.bounds.height == height)
+        #expect(scrollView(in: narrow.host) != nil)
+        let probe = Int(16 * narrow.scale)
+        #expect(narrow.drawnOn(Int(310 * narrow.scale) - 1, probe))
+        #expect(!narrow.drawnOn(Int(315 * narrow.scale), probe))
+    }
+
     private func webViews(in view: NSView) -> [WKWebView] {
         (view as? WKWebView).map { [$0] } ?? view.subviews.flatMap { webViews(in: $0) }
     }
