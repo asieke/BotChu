@@ -26,6 +26,9 @@ public struct MemoryChanges: Equatable, Sendable {
     public var forgotten: [String] = []
     /// Notes that were there already, and forgets of nothing.
     public var unchanged = 0
+    /// Only in a run review's save (`MemoryWriter.saveReviewed`): the `Replace:` and `Forget:` notes
+    /// left alone because no single bullet is exactly what they would change.
+    public var unresolved: [String] = []
 
     public var isEmpty: Bool { added.isEmpty && replaced.isEmpty && forgotten.isEmpty }
 }
@@ -68,6 +71,9 @@ public struct MemorySave: Equatable, Sendable {
     public var failure: String?
     /// How many notes wait to be tried again, after a failure.
     public var waiting = 0
+    /// The file before and after the save, when it changed it.
+    public var previous: String?
+    public var saved: String?
 
     public init(file: MemoryFile) {
         self.file = file
@@ -159,6 +165,52 @@ public final class MemoryWriter: @unchecked Sendable {
     public func save(_ notes: [String], to file: MemoryFile) -> MemorySave {
         lock.lock()
         defer { lock.unlock() }
+        return write(notes, to: file, keepsWaiting: true, strict: false)
+    }
+
+    /// Saves a run review's notes (`RunEvaluator`) on their own, so that `previous` and `saved` are
+    /// exactly what they changed: notes still waiting for the file are saved first, as a save of
+    /// their own, and these never wait, because the review keeps its changes and applies them again
+    /// itself. A `Replace:` or `Forget:` changes only the one bullet that is exactly its old note,
+    /// never one that merely contains it; with none or several, it is left alone as unresolved.
+    public func saveReviewed(_ notes: [String], to file: MemoryFile) -> MemorySave {
+        lock.lock()
+        defer { lock.unlock() }
+        if !waitingNotes(file).isEmpty {
+            let earlier = write([], to: file, keepsWaiting: true, strict: false)
+            if let failure = earlier.failure {
+                var result = MemorySave(file: file)
+                result.failure = failure
+                return result
+            }
+        }
+        return write(notes, to: file, keepsWaiting: false, strict: true)
+    }
+
+    /// Rewrites the file with `edit`, one change at a time with the saves: reads it just before,
+    /// writes what `edit` returns when that differs, and reads it back to check it held. A run
+    /// review's Revert undoes its exact edits this way. Nothing waits after a failure.
+    public func edit(_ file: MemoryFile, with edit: (String) -> String) -> MemorySave {
+        lock.lock()
+        defer { lock.unlock() }
+        var result = MemorySave(file: file)
+        do {
+            let original = try Self.read(file.path)
+            let text = edit(original)
+            guard text != original else { return result }
+            try text.write(toFile: file.path, atomically: true, encoding: .utf8)
+            guard try Self.read(file.path) == text else { throw NotKept() }
+            result.previous = original
+            result.saved = text
+        } catch {
+            result.failure = Self.reason(error)
+        }
+        return result
+    }
+
+    /// Saves the notes after any still waiting; `keeps` makes them wait when the save fails, and
+    /// `strict` applies `Replace:` and `Forget:` only to exact matches (`saveReviewed`).
+    private func write(_ notes: [String], to file: MemoryFile, keepsWaiting keeps: Bool, strict: Bool) -> MemorySave {
         var result = MemorySave(file: file)
         var accepted: [String] = []
         for note in notes {
@@ -168,25 +220,33 @@ public final class MemoryWriter: @unchecked Sendable {
                 accepted.append(note)
             }
         }
-        let queue = waitingNotes(file) + accepted
+        let earlier = waitingNotes(file)
+        let queue = earlier + accepted
         guard !queue.isEmpty else { return result }
         do {
             let original = try Self.read(file.path)
-            let (text, changes) = MemoryNotes.applying(queue, to: original)
+            let (text, changes) = MemoryNotes.applying(queue, to: original, strict: strict)
             if !changes.isEmpty {
                 try text.write(toFile: file.path, atomically: true, encoding: .utf8)
                 guard MemoryNotes.kept(text, over: original, in: try Self.read(file.path)) else { throw NotKept() }
+                result.previous = original
+                result.saved = text
             }
             result.changes = changes
             unwritten[file.waitingPath] = nil
             try? FileManager.default.removeItem(atPath: file.waitingPath)
         } catch {
-            let reason = (error as? NotKept)?.description ?? error.localizedDescription
-            result.failure = reason.trimmingCharacters(in: CharacterSet(charactersIn: ". ").union(.whitespacesAndNewlines))
-            result.waiting = MemoryNotes.distinct(queue)
-            keepWaiting(queue, for: file)
+            result.failure = Self.reason(error)
+            result.waiting = MemoryNotes.distinct(keeps ? queue : earlier)
+            if keeps { keepWaiting(queue, for: file) }
         }
         return result
+    }
+
+    /// Why a save failed, without a closing period.
+    private static func reason(_ error: Error) -> String {
+        let reason = (error as? NotKept)?.description ?? error.localizedDescription
+        return reason.trimmingCharacters(in: CharacterSet(charactersIn: ". ").union(.whitespacesAndNewlines))
     }
 
     /// Saves a conversation's requests (`MemoryNotes.requests`) to the files they are for, each

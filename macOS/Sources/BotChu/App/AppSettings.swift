@@ -28,6 +28,8 @@ final class AppSettings {
     var petAccountID: String { didSet { defaults.set(petAccountID, forKey: "petAccountID") } }
     /// The OpenRouter model that turns a pet's stills into clips.
     var petModelID: String { didSet { defaults.set(petModelID, forKey: "petModelID") } }
+    /// Whether finished task turns and sub-agent runs are reviewed in the background (`RunEvaluator`).
+    var evaluateRuns: Bool { didSet { defaults.set(evaluateRuns, forKey: "evaluateRuns") } }
     /// Whether the Telegram gateway runs (`TelegramBridge`), and the private chats it lets reach a
     /// bot's Home.
     var telegramEnabled: Bool { didSet { defaults.set(telegramEnabled, forKey: "telegramEnabled") } }
@@ -56,6 +58,7 @@ final class AppSettings {
         commands = defaults.dictionary(forKey: "commands") as? [String: String] ?? [:]
         petAccountID = defaults.string(forKey: "petAccountID") ?? "codex-personal"
         petModelID = defaults.string(forKey: "petModelID") ?? PetVideo.defaultModel.id
+        evaluateRuns = defaults.object(forKey: "evaluateRuns") as? Bool ?? true
         telegramEnabled = defaults.bool(forKey: "telegramEnabled")
         telegramChats = Self.load([TelegramChat].self, from: defaults, forKey: "telegramChats") ?? []
     }

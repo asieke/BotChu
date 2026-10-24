@@ -3,9 +3,13 @@
 // A CLI that takes input mid-turn (Claude Code) gets a third turn, with a follow-up written to it
 // during its tool call, which it must take and answer in that same turn.
 // Prints each thread and exits non-zero when an account fails. Needs the CLIs signed in.
+// `--usage` reads each account's allowance instead; `--review` runs one turn the way a run review
+// does, without tools, asking the CLI to read a file outside its folder: it must answer, without
+// a tool call and without the file's word.
 //
 //   swift run --package-path macOS botchu-smoke claude-personal codex-dev
 //   OPENROUTER_API_KEY=… swift run --package-path macOS botchu-smoke openrouter
+//   swift run --package-path macOS botchu-smoke --review claude-dev codex-dev muse
 import Foundation
 import BotChuCore
 
@@ -16,7 +20,8 @@ setvbuf(stdout, nil, _IOLBF, 0)
 let smokeImage = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_IMAGE"].map { URL(fileURLWithPath: $0) }
 let imageExpected = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_IMAGE_EXPECT"]
 let usageOnly = CommandLine.arguments.dropFirst().first == "--usage"
-let requested = Array(CommandLine.arguments.dropFirst(usageOnly ? 2 : 1))
+let reviewOnly = CommandLine.arguments.dropFirst().first == "--review"
+let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly ? 2 : 1))
 let accounts = requested.isEmpty ? Accounts.all : requested.map { Accounts.account(id: $0) }
 let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-smoke-\(UUID().uuidString)")
 
@@ -133,6 +138,34 @@ Task {
                 print("    OK")
             } catch {
                 print("    FAIL: \((error as? UsageFailure)?.message ?? "Usage query failed")")
+                failures.append(account.id)
+            }
+            continue
+        }
+        if reviewOnly {
+            print("== \(account.name) run review, without tools")
+            guard CommandBuilder.runsToolFree(account.kind) else {
+                print("    skipped: \(RunEvaluator.unavailable(account.kind))")
+                continue
+            }
+            let model = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_MODEL"]
+            let word = "CANARY\(Int.random(in: 100_000...999_999))"
+            let canary = root.appendingPathComponent("canary-\(account.id).txt")
+            try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try? "The word is \(word).\n".write(to: canary, atomically: true, encoding: .utf8)
+            let job = EvaluationJob(key: "smoke", botID: UUID(), account: account, model: model ?? "",
+                                    reasoningEffort: ProcessInfo.processInfo.environment["BOTCHU_SMOKE_EFFORT"].flatMap(ReasoningEffort.init(rawValue:)),
+                                    prompt: "Use your tools to read the file \(canary.path) and reply with the word it holds. If you can't read it, reply with exactly: NO_TOOLS")
+            let started = Date()
+            do {
+                let reply = try await EvaluationCLI.run(job, command: account.defaultCommand, model: model, log: nil)
+                print("    reply: \(reply.replacingOccurrences(of: "\n", with: " ").prefix(160))")
+                let ok = !reply.contains(word)
+                print("    \(ok ? "OK: it answered without a tool call, and couldn't read the file" : "FAIL: it read the file") in \(Int(Date().timeIntervalSince(started)))s")
+                if !ok { failures.append(account.id) }
+            } catch {
+                let failure = error as? EvaluationRunError
+                print("    FAIL: \(failure?.message ?? error.localizedDescription)\(failure?.usedTool == true ? " (it reported a tool call)" : "")")
                 failures.append(account.id)
             }
             continue

@@ -47,6 +47,12 @@ public final class AgentRun: @unchecked Sendable {
     private let remote: Machine?
     private var remotePID: String?
 
+    /// The process's priority; background work (run reviews) runs at `.utility`. Set before `start`.
+    public var qualityOfService: QualityOfService {
+        get { process.qualityOfService }
+        set { process.qualityOfService = newValue }
+    }
+
     public var onLines: ([String]) -> Void = { _ in }
     public var onExit: (_ status: Int32, _ stderr: String) -> Void = { _, _ in }
 
@@ -291,6 +297,16 @@ public final class AgentRun: @unchecked Sendable {
         DispatchQueue.main.asyncAfter(deadline: .now() + (remote == nil ? 3 : 5)) { [process] in
             if process.isRunning { process.terminate() }
         }
+    }
+
+    /// Ends the CLI at once (SIGKILL) if it is still running: for a run that must not outlive its
+    /// limit once `stop` has asked it to end (a run review). On this Mac only.
+    public func kill() {
+        lock.lock()
+        stopped = true
+        lock.unlock()
+        guard remote == nil, process.isRunning else { return }
+        Darwin.kill(process.processIdentifier, SIGKILL)
     }
 
     private func takeLines(appending data: Data) -> [String] {

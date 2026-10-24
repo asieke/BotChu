@@ -18,6 +18,7 @@ struct BotInspector: View {
                 switch tab {
                 case .activity:
                     TasksSection(botID: botID)
+                    RunReviewsSection(target: .home(botID))
                     JobsSection(botID: botID)
                     InspectorSection("Conversation") {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {

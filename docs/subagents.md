@@ -20,7 +20,10 @@ playbook when it has one. It never resumes or appends to that bot's Home.
 Explicit `<remember>` notes in a successful handoff (and `<remember scope="shared">` ones) are
 saved to the target bot's memory on this Mac, as from every conversation (README, **Saving
 memory**): the run's transcript says how it went, and the bot's Home hears it at its next turn. A
-save that fails waits to be tried again and doesn't fail the handoff.
+save that fails waits to be tried again and doesn't fail the handoff. Once the run's record is
+saved and its handoff queued, a finished, failed or stopped attempt that used tools (or failed) is
+handed to a background run review about the target bot (README, **Run reviews**); the handoff
+never waits for it, and runs closed while BotChu relaunches aren't reviewed.
 
 The default `shared` workspace is the caller's directory and machine, including for nested
 delegation on SSH hosts. `bot_home` uses the called bot's folder on this Mac. The prompt tells

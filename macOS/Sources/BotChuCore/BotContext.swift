@@ -653,7 +653,8 @@ public enum MemoryNotes {
     private static let bullets = ["- ", "* ", "+ ", "• "]
     private static let secretTokens = ["sk-or-", "sk-ant-", "sk-proj-", "ghp_", "gho_", "ghu_", "ghs_", "ghr_",
                                        "github_pat_", "xoxb-", "xoxp-", "akia", "aiza", "-----begin "]
-    private static let secretAssignmentPattern = #"(?i)\b(api[_ -]?key|secret[_ -]?key|access[_ -]?token|auth[_ -]?token|password|passwd|private[_ -]?key|openrouter_api_key|anthropic_api_key|openai_api_key)\b\s*[:=]\s*\S+|\bBearer\s+[A-Za-z0-9._\-]{16,}"#
+    /// An assignment of a secret, also as a quoted JSON key (`"password": "…"`), or a bearer token.
+    private static let secretAssignmentPattern = #"(?i)\b(api[_ -]?key|secret[_ -]?key|access[_ -]?token|auth[_ -]?token|password|passwd|private[_ -]?key|openrouter_api_key|anthropic_api_key|openai_api_key)\b["']?\s*[:=]\s*\S+|\bBearer\s+[A-Za-z0-9._\-]{16,}"#
     /// Lines of a conversation or a terminal, which are never a note.
     private static let transcriptPattern = #"^(owner|you|user|assistant|human|ai|system)\s*:\s|^[$%#>]\s"#
     /// A note longer than this isn't one concise fact.
@@ -712,8 +713,10 @@ public enum MemoryNotes {
     /// The memory file's text with the notes applied, in order, and what they changed: new list
     /// items (deduplicated against existing bullets), outdated bullets replaced in place
     /// (`Replace: old -> new`) and forgotten bullets removed (`Forget: old`). Applying the same notes
-    /// again changes nothing, so a retry never duplicates them.
-    static func applying(_ notes: [String], to text: String) -> (text: String, changes: MemoryChanges) {
+    /// again changes nothing, so a retry never duplicates them. `strict` (a run review's save)
+    /// replaces or forgets only the one bullet that is exactly the old note: a note matching no
+    /// bullet, or several, or only part of one, is left alone and listed as unresolved.
+    static func applying(_ notes: [String], to text: String, strict: Bool = false) -> (text: String, changes: MemoryChanges) {
         var changes = MemoryChanges()
         var lines = text.isEmpty ? [] : text.components(separatedBy: "\n")
         if lines.last == "" { lines.removeLast() }
@@ -736,8 +739,10 @@ public enum MemoryNotes {
             case .replace(let old, let new):
                 let normNew = normalized(new)
                 guard !normNew.isEmpty else { continue }
-                let matches = matchingBulletIndices(for: old, in: lines)
-                if let first = matches.first {
+                let matches = matchingBulletIndices(for: old, in: lines, exact: strict)
+                if strict, matches.count > 1 || (matches.isEmpty && !contains(normNew)) {
+                    changes.unresolved.append("Replace: \(old) -> \(new)")
+                } else if let first = matches.first {
                     let duplicateNew = lines.indices.filter { i in
                         i != first && (bulletBody(lines[i]).map { normalized($0) == normNew } ?? false)
                     }
@@ -754,7 +759,8 @@ public enum MemoryNotes {
                 }
 
             case .forget(let target):
-                let matches = matchingBulletIndices(for: target, in: lines)
+                let matches = matchingBulletIndices(for: target, in: lines, exact: strict)
+                if strict, matches.count > 1 { changes.unresolved.append("Forget: \(target)"); continue }
                 if matches.isEmpty { changes.unchanged += 1; continue }
                 for index in matches.reversed() {
                     lines.remove(at: index)
@@ -785,9 +791,26 @@ public enum MemoryNotes {
     }
 
     static func isSecret(_ text: String) -> Bool {
-        let lower = text.lowercased()
-        if secretTokens.contains(where: { lower.contains($0) }) { return true }
+        var lower = text.lowercased()
+        if holds(&lower, any: secretTokens) { return true }
+        // The assignment pattern can only match text with one of these in it, and most text has none.
+        guard holds(&lower, any: secretWords) else { return false }
         return text.range(of: secretAssignmentPattern, options: .regularExpression) != nil
+    }
+
+    /// A word every match of `secretAssignmentPattern` contains.
+    private static let secretWords = ["key", "token", "passw", "bearer"]
+
+    /// Whether the text holds any of the parts, compared byte by byte: quick on long text, such as
+    /// the tool output run reviews check line by line.
+    private static func holds(_ text: inout String, any parts: [String]) -> Bool {
+        text.withUTF8 { haystack in
+            parts.contains { part in
+                part.utf8.withContiguousStorageIfAvailable { needle in
+                    memmem(haystack.baseAddress, haystack.count, needle.baseAddress, needle.count) != nil
+                } ?? false
+            }
+        }
     }
 
     static func parseOperation(_ raw: String) -> Operation? {
@@ -834,7 +857,7 @@ public enum MemoryNotes {
         return cleanLine(cleaned)
     }
 
-    private static func bulletBody(_ line: String) -> String? {
+    static func bulletBody(_ line: String) -> String? {
         let trimmed = line.drop(while: { $0 == " " || $0 == "\t" })
         for bullet in bullets where trimmed.hasPrefix(bullet) {
             return String(trimmed.dropFirst(bullet.count)).trimmingCharacters(in: .whitespaces)
@@ -842,20 +865,21 @@ public enum MemoryNotes {
         return nil
     }
 
-    private static func normalized(_ text: String) -> String {
+    static func normalized(_ text: String) -> String {
         cleanTarget(text)
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
             .lowercased()
     }
 
-    private static func matchingBulletIndices(for target: String, in lines: [String]) -> [Int] {
+    /// The bullets that are the target, or else (unless `exact`) those that contain it.
+    private static func matchingBulletIndices(for target: String, in lines: [String], exact only: Bool = false) -> [Int] {
         let normTarget = normalized(target)
         guard !normTarget.isEmpty else { return [] }
         let exact = lines.indices.filter { i in
             bulletBody(lines[i]).map { normalized($0) == normTarget } ?? false
         }
-        if !exact.isEmpty { return exact }
+        if !exact.isEmpty || only { return exact }
         return lines.indices.filter { i in
             bulletBody(lines[i]).map { normalized($0).contains(normTarget) } ?? false
         }

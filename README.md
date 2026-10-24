@@ -420,7 +420,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     job, where its schedule is up to and its runs, and each run's transcript in `runs/<run>.jsonl`),
     a log of every turn and job run (`logs/<date>.log`:
     the command, where it ran, how long it took, the exit status, any error and the CLI's error output), notes
-    it couldn't save to memory yet (`memory-unsaved.json`, `shared-memory-unsaved.json`) and its
+    it couldn't save to memory yet (`memory-unsaved.json`, `shared-memory-unsaved.json`), the reviews of its runs (`evaluations/`, below) and its
     pet (`pet/`: `video.json`, `stills/<pose>.png`, `clips/<activity>.mp4` and the appearance it
     was made from) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
     is told it can search them for earlier conversations. **History & Logs** in the status sidebar
@@ -474,6 +474,68 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     tries them at once. A bot edits a
     memory file itself only to reorganize it when asked. Whether a reply recognizes an established
     preference is up to the bot's model, which its instructions ask; saving it is BotChu's.
+  - **Run reviews:** a minute after a task's turn or a sub-agent's run ends, if it used tools or
+    failed, BotChu reviews it in the background: what went well, what didn't, and whether anything
+    should change in how the bot works. The turn's receipt, the handoff, queued messages and
+    switching conversations never wait for it, and a review's failure never changes how the run
+    is reported. One review runs at a time across all bots, as a new session on the account the run
+    used, with no tools at all, which the CLI itself enforces: Claude Code without its built-in tools
+    (`--tools ""`), with every tool denied, no MCP servers, skills or commands, and nothing approved
+    (`dontAsk`); Codex in its read-only sandbox approving nothing, without your Codex configuration
+    (its MCP servers and plugins) or rules, with its shell, code mode, sub-agents, apps, browser and
+    web search turned off; Muse in its empty preset, with its shell, writes and web tools off.
+    Nothing bypasses permissions, and no review session is saved. A review that still reports a tool
+    call is stopped at once and fails (**tool use**), keeping nothing. Antigravity has no such mode,
+    and Pi's (`--no-tools`) hasn't been checked with a real run, so their runs are recorded as not
+    reviewed, spending nothing. A review runs in an empty temporary folder (removed afterwards),
+    without the delegation helper, at utility priority, and only while that account has no turn,
+    sub-agent or scheduled job running: at most 12 model calls a day per account, retries included, each review
+    stopped after 5 minutes (its CLI interrupted, then terminated, then killed), with one automatic
+    retry; an account out of allowance waits an hour, and a review still waiting 48 hours after its
+    run is skipped. A review is neither a task turn nor a sub-agent, so it is never reviewed itself,
+    and BotChu's turn log records it as a "run review", without lines that look like secrets. It sees
+    a snapshot of up to 24,000 characters: how the run ended (a finished turn isn't proof the work
+    succeeded; a stopped run is neither a failure nor finished work, and isn't continued), the brief,
+    the owner's messages and corrections, the bot's replies and handoff, and each tool call with its
+    exit code (and the end of a failed one's output), each labelled so the review cites them as
+    evidence. Lines that look like secrets are left out before anything is shortened; text from the
+    run is indented and BotChu's own tags in it are neutralized, so it can't pose as a label or end
+    the snapshot, and only the labels BotChu wrote count as evidence. With it come the bot's
+    instructions and memory as they are now, the shared memory and `TEAM.md`, all as evidence rather
+    than instructions. The result is **No durable change**, **Memory updated**, **Change proposed**,
+    or a failure, with sign-in, allowance, the review itself, tool use and saving told apart. BotChu
+    applies at most three changes a run, each citing evidence, verified, general and one line of
+    plain text, and only to the bot's own `MEMORY.md` (which sessions read as data, not
+    instructions), through the same writer as **Saving memory** (above): notes, and corrections and
+    removals of a note that is there exactly, once (never one that merely contains it). Every change
+    to `INSTRUCTIONS.md` is a proposal for you, as are the shared memory, `TEAM.md`, the bot that
+    delegated the run, the repository's own documents (which change through its pull requests; a
+    review never edits a repository), an unverified hypothesis, a change without evidence, a
+    correction of a note that has changed since, and any line that could loosen a safeguard, widen
+    what the bot may do, or name a web address or a command to run. A change of more than one line,
+    or with Markdown or HTML structure (a heading, list item, quote, table row, code fence or tag) or
+    control characters, is left out before anything is written, as are one-off details; secrets,
+    transcripts and command output are left out, as in memory, and a secret is never quoted; and a
+    note memory lost since the run (a correction or `Forget:`) isn't saved again. A sub-agent's run
+    is reviewed about the bot it ran as, on its account, and the caller's own turns about the caller,
+    so a lesson isn't saved to every bot that took part. Each review is saved at every step in
+    `.botchu/evaluations/<run>.json` in that bot's folder, without lines that look like secrets, so a
+    relaunch neither repeats one nor applies one twice (quitting stops a running review, which runs
+    again after the next launch); the newest 50 a bot are kept. A change that couldn't be saved stays
+    with its review, whose **Retry** saves it, rather than waiting with the conversations' notes, and
+    conversations' notes still waiting for the file are saved first, on their own. **Activity ▸ Run
+    reviews** in the status sidebar lists them (Home: those about the bot; a task: those of its turns
+    and of its sub-agents), each opening to its summary, what worked and didn't, the evidence it
+    cited, every line it added and removed (read from the file just before and just after the save,
+    so a review that wrote anything never shows as no change, and no copy of the file is kept), its
+    proposals (with Copy) and what it left out, with **Revert**, which undoes each of its changes only
+    where the file still holds exactly what it left, in the same section, and lists any you have
+    changed since as not reverted, keeping your edit; and **Retry**. Home gets a note for a change
+    made or proposed, and for a failure once per kind until a review succeeds; reviews that change
+    nothing stay quiet. Saved notes reach the bot's next new session, never a running one. Settings ▸
+    **Run reviews** turns them off; they are on by default, since the CLIs enforce the tool-free
+    sessions and only memory notes change by themselves, and they spend the account's allowance.
+    Only the installed app runs reviews, never tests or review copies.
   - **Team playbook:** `TEAM.md` in the bots folder, beside the shared `MEMORY.md`, is the process
     every bot follows: its stages, handoffs, who calls whom with `botchu-subagent`, and when work is
     done. Unlike memory, it is given as instructions: in every bot's Home `AGENTS.md`, and at the
@@ -511,7 +573,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     or error. The character and ring convey status
     without a dot or status pill. The card and pet animation reflect only the shown Home or task;
     the bot list still shows activity across its tasks. Five icon tabs sit below the character,
-    in a rounded bar with a raised selected segment: **Activity** (tasks and conversation stats), **Sub-agents** (delegated work),
+    in a rounded bar with a raised selected segment: **Activity** (tasks, run reviews and conversation stats), **Sub-agents** (delegated work),
     **Model & Usage** (account, agent, model, reasoning and allowance), **Session** (the CLI session
     and workspace controls), and **Memory** (instructions, personality, memory, the team
     playbook and skills). Hover for tab names, or
@@ -557,7 +619,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     guidance without displaying credentials. Settings also contains the bots folder, the repositories folder, the hosts and where you chose to work
     on repositories, each account's command, the Codex account that draws pets' stills, the
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
-    and default OpenRouter model, and the Telegram gateway (below).
+    and default OpenRouter model, whether finished work gets a run review, and the Telegram gateway (below).
   - **Telegram:** an opt-in gateway, in Settings ▸ **Telegram**, lets you message bots from
     Telegram through a Telegram bot of your own (made with BotFather) while BotChu runs on this
     Mac. There is no server or webhook: BotChu asks Telegram for new messages itself (long
@@ -650,7 +712,12 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
     What replies ask to remember (`MemoryNotes`, in `BotContext.swift`) is saved to memory files
     by `MemoryWriter.swift`: one save at a time, read back to check it held, with notes that wait
-    and are tried again.
+    and are tried again. Run reviews are in `RunEvaluation.swift`: what a review sees of a run, its
+    prompt, reading its reply, which changes are applied and which are proposals, the saved record,
+    the queue with its limits, retries and relaunch, applying through the writer
+    (`MemoryWriter.saveReviewed`), the exact diff it records and its revert (`AppliedChange`), and the
+    review's own CLI run, whose tool-free command lines are in `Accounts.swift`
+    (`CommandBuilder.toolFreeInvocation`).
     Reports filed from the app (their title, description, app state and `gh issue create`) are in
     `IssueReport.swift`. The Telegram gateway is in `Telegram.swift` (the Bot API client: long
     polling, sending, and errors that never hold the token) and `TelegramGateway.swift` (which chats
@@ -665,10 +732,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, the
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
-    `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, and the runs
-    of scheduled jobs, `JobRuntime.swift`),
+    `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
+    of scheduled jobs, `JobRuntime.swift`, and handing finished runs to run reviews, `Evaluations.swift`),
     `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
-    status sidebar, a bot's and a task's, with a bot's jobs), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
+    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
     the hosts and Telegram), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
@@ -709,7 +776,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     long replies; mentions: where a query starts (not in email addresses, URLs, headings or
     `#123`), agents with spaces and namesakes, ranking, what a choice inserts, trimming and taking a
     message back into the draft, links that no longer resolve, and the context a message carries,
-    kept through the queue and the saved thread; and scheduled jobs, with a fake clock and store and
+    kept through the queue and the saved thread; scheduled jobs, with a fake clock and store and
     no CLI: times across daylight-saving changes and in their own zones, chosen days, intervals that
     stay true durations, missed times run once or skipped within a window, a reservation saved before
     a run starts (and nothing started when it can't be), repeated ticks and relaunches that start
@@ -717,7 +784,18 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     itself, pausing, resuming and editing that never make up time, Run Now while paused, failures
     that pause a job, the history's bounds, crash recovery, jobs moving with their agent, a run's
     context (its agent, when it was meant for, how late, no Home), its fresh session, and quiet,
-    empty and failed results.
+    empty and failed results; and run reviews, with stand-in reviewers (no test
+    runs a real review): the bounded snapshot of finished, failed and stopped runs, and labels and
+    tags in a run's text that can't pass for its own, handing a run over without waiting, one review
+    despite repeated ends and relaunches, a review cut short by quitting, no-change outcomes, which
+    changes are applied or proposed (evidence, verification, scope, safeguards, addresses and
+    commands, instructions always proposed), changes of more than one plain line, every write
+    recorded in full, edits made meanwhile, exact corrections and a revert that keeps later edits,
+    secrets left out before shortening and from everything saved and logged, forgotten notes, a
+    failed save and its retry, failures told apart, the account limits counting every model call,
+    reading replies, recall by a fresh session, the tool-free command lines, runs on CLIs without
+    them, a review that reports a tool call, and the review's own session through a stand-in CLI,
+    killed at its timeout.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
     across every column, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
@@ -746,9 +824,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     completion: Return and Tab that insert and never send, Escape, an edited label unlinked and undo
     linking it again (and redo unlinking it), a draft taken back from the queue shown linked, pasted
     text that opens nothing, links kept through copy and paste, a message's
-    links and their context through sending, and the report and New Task boxes without it, and a job
+    links and their context through sending, and the report and New Task boxes without it, a job
     made for its agent, shown in Jobs, delivered to Home as a receipt that leaves Home's draft and
-    queue alone, and deleted with its agent. Set
+    queue alone, and deleted with its agent, and a sub-agent's handoff and a task's receipt that
+    don't wait for their run reviews. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
@@ -789,6 +868,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - Antigravity: `agy -p … --output-format stream-json --dangerously-skip-permissions`, then `--conversation <id>`.
   - Muse: `muse exec --json --session-id <uuid>` (the same id resumes it).
   - Pi: `pi -p --mode json --provider openrouter --model <id> --session-id <uuid>`, with `OPENROUTER_API_KEY` from the Keychain.
+- A run review runs one of those CLIs on this Mac in a new session without tools, which nothing
+  saves: `claude -p … --tools "" --disallowedTools "*" --strict-mcp-config --disable-slash-commands
+  --permission-mode dontAsk --no-session-persistence`; `codex exec --json --sandbox read-only -c
+  approval_policy="never" -c web_search="disabled" --ephemeral --ignore-user-config --ignore-rules`,
+  with `--disable` for its shell, unified exec, code mode, sub-agents, apps, plugins, browser,
+  computer use, images, goals, sleep, tool suggestions, skills and hooks; and `muse exec --json
+  --preset empty --disable-shell --disable-write --disable-web-tools --disable-request-user-input
+  --disable-reminders --no-session-log`. None runs on Antigravity or Pi.
 
 ## Run locally
 - Prerequisites: macOS 14 or later with full Xcode 16 or later (`xcode-select -p` must point into
@@ -817,7 +904,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   AppKit's window-animation callbacks can stop the Swift test runner's event loop during later
   tests; all its assertions still run. The script also runs the project-loading regression tests in Release. They check every
   repository result, the four-request limit, and that a sync finishes when the view that asked for
-  it goes away. Swift 6.4 has an [optimizer bug](https://github.com/swiftlang/swift/issues/93208)
+  it goes away. The run review tests run in Release too, for the review's timeout. Swift 6.4 has an [optimizer bug](https://github.com/swiftlang/swift/issues/93208)
   in task-group children returning String-first tuples from `do`/`catch`; the Projects sync and pet
   loading use named results with one return to avoid it. Debug tests alone cannot detect this regression.
 - Accounts end to end: `swift run --package-path macOS botchu-smoke [account id …]` runs, for each
@@ -906,6 +993,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   reads each account's usage through the same client as the inspector. It prints only the normalized
   usage fields, never raw CLI output or credentials. Muse makes its brief usage request; OpenRouter
   needs `OPENROUTER_API_KEY` in the environment. This is separate from the two-turn conversation smoke.
+- Run reviews without tools: `swift run --package-path macOS botchu-smoke --review [account id …]`
+  runs one turn on each account the way a run review does, asking the CLI to read a file outside its
+  folder, and passes when the CLI answers without a tool call and without the file's word. Accounts
+  whose CLI has no tool-free mode are skipped. It spends a little of each account's allowance and
+  isn't part of `check`; run it after changing how reviews run a CLI.
 - Telegram end to end: the gateway's tests use stand-ins for Telegram, so a real exchange is
   checked by hand, with your own Telegram bot: see
   [Checking it end to end](docs/telegram.md#checking-it-end-to-end).
