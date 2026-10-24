@@ -17,6 +17,9 @@ final class ConversationState {
     /// What a status reads from the thread. It changes when a message is added, not while a
     /// reply's text streams in, so a view that shows only the status isn't redrawn by every delta.
     private(set) var summary = ThreadSummary()
+    /// Counts the changes other than a turn writing into the thread (`load`, `replace`, `edit`), after
+    /// which the chat compares what it grouped with the thread again.
+    private(set) var epoch = 0
     var run: RunState?
     var reaction: BotActivity?
     var queue: MessageQueue?
@@ -30,6 +33,7 @@ final class ConversationState {
 
     func replace(_ messages: [ChatMessage]) {
         self.messages = messages
+        epoch += 1
         summarize(ThreadSummary(messages))
     }
 
@@ -54,6 +58,7 @@ final class ConversationState {
     /// Any other change to the thread.
     func edit(_ change: (inout [ChatMessage]) -> Void) {
         change(&messages)
+        epoch += 1
         summarize(ThreadSummary(messages))
     }
 

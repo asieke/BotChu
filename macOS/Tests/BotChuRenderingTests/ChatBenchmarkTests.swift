@@ -67,17 +67,23 @@ extension RenderingTests {
             }
             report.add("Switch to \(name)", samples)
         }
-        // The same, to a conversation whose grouped transcript isn't kept (never shown, or evicted).
+        // The same, to a conversation whose grouped transcript isn't kept (never shown, or evicted):
+        // until it shows, and until its earlier items, grouped off the main thread, are there too.
         for (name, target) in bench.conversations {
-            var samples: [Double] = []
+            var samples: [Double] = [], ready: [Double] = []
             for _ in 0..<5 {
                 app.show(bench.home)
                 try await idle(120)
                 TranscriptCache.forget(target)
+                let start = DispatchTime.now().uptimeNanoseconds
                 samples.append(time { app.show(target) })
+                while TranscriptCache.model(for: target).isLoadingEarlier { try await Task.sleep(for: .milliseconds(2)) }
+                draw()
+                ready.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
                 try await idle(400)
             }
             report.add("Cold switch to \(name)", samples)
+            report.add("  …earlier items ready", ready)
         }
 
         // A reply streaming into the long conversation, a delta at a time.

@@ -3,9 +3,10 @@ import BotChuCore
 
 /// One conversation: a bot's Home, or one of its tasks. Its messages show as activity items:
 /// replies, exploration folded into groups, and commands, edits and sub-agents as cards
-/// (`ActivityTranscript`), regrouped only at the tail as a turn streams in. The newest items show
-/// at first, earlier ones on request. A reader at the bottom follows new content; one reading
-/// earlier content keeps their place while it arrives.
+/// (`ActivityTranscript`), regrouped only where a turn writes as it streams in. The newest items
+/// show at first, earlier ones on request (and, in a long conversation opened anew, once they're
+/// grouped). A reader at the bottom follows new content; one reading earlier content keeps their
+/// place while it arrives.
 struct ChatView: View {
     @Environment(AppModel.self) private var model
     @AppStorage(ChatDensity.storageKey) private var density: ChatDensity = .detailed
@@ -27,10 +28,10 @@ struct ChatView: View {
             let running = model.isRunning(target)
             // Its own turn, not only sub-agents it started, keeps its newest group live.
             let turnRunning = model.runStates[target] != nil
-            let items = transcript.items(for: messages, root: task?.folder ?? bot.workspace)
+            let items = transcript.items(for: messages, root: task?.folder ?? bot.workspace, epoch: model.conversation(target).epoch)
             let start = transcript.start(of: items)
             let shown = Array(items[start...])
-            let cards = SubagentCards(items: items, runs: model.delegation.records[target] ?? [])
+            let cards = transcript.cards(runs: model.delegation.records[target] ?? [])
             let kind = current.account.kind
             VStack(spacing: 0) {
                 ScrollViewReader { proxy in
@@ -49,6 +50,11 @@ struct ChatView: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.bottom, 4)
                                 .help("\(start) earlier \(start == 1 ? "item" : "items") in this conversation")
+                            } else if transcript.isLoadingEarlier {
+                                ProgressView().controlSize(.small)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                                    .accessibilityLabel("Loading earlier messages")
                             } else if let task {
                                 TaskIntro(bot: bot, task: task, machine: task.isRemote ? model.machineName(task.hostID, fallback: task.hostName) : nil)
                             } else {
@@ -252,7 +258,7 @@ struct ActivityRow: View, Equatable {
             BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
                 if density == .raw {
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(group.calls) { call in ToolCard(message: call.message, kind: kind) }
+                        ForEach(group.calls) { call in ToolCard(message: call, kind: kind) }
                     }
                 } else {
                     ExplorationCard(group: group, live: live && group.isOpen, density: density, open: open, kind: kind).equatable()
@@ -294,50 +300,6 @@ struct ActivityRow: View, Equatable {
         default:
             CompactToolCard(item: tool, open: open, kind: kind).equatable()
         }
-    }
-}
-
-/// Which delegated runs show where: each with the `botchu-subagent` call that started it, and any
-/// the calls don't account for after the item that came before them.
-struct SubagentCards {
-    private var placed: [UUID: [SubagentRun]] = [:]
-    private var leftover: [UUID: [SubagentRun]] = [:]
-    private var all: [UUID: SubagentRun] = [:]
-
-    init(items: [ActivityItem], runs: [SubagentRun], now: Date = Date()) {
-        let top = runs.filter { $0.parentSubagentID == nil }
-        guard !top.isEmpty else { return }
-        all = Dictionary(top.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        var launches: [SubagentPlacement.Launch] = []
-        for item in items {
-            guard case .tool(let tool) = item, let delegation = tool.activity.delegation, delegation.isLaunch else { continue }
-            let finished = tool.state == .running ? nil : tool.message.date.addingTimeInterval(tool.message.toolDuration ?? 1)
-            launches.append(.init(messageID: tool.id, started: tool.message.date, finished: finished,
-                                  printedIDs: tool.activity.runIDs, launches: delegation.launches))
-        }
-        let assigned = SubagentPlacement.assign(launches: launches, runs: top.map {
-            .init(id: $0.id, createdAt: $0.createdAt, title: $0.title, agent: $0.targetBotName)
-        }, now: now)
-        for (message, ids) in assigned { placed[message] = ids.compactMap { all[$0] } }
-        let claimed = Set(assigned.values.flatMap { $0 })
-        let unclaimed = top.filter { !claimed.contains($0.id) }
-        if !unclaimed.isEmpty {
-            let anchors = SubagentPlacement.anchors(for: unclaimed.map { .init(id: $0.id, createdAt: $0.createdAt, title: $0.title, agent: $0.targetBotName) },
-                                                    items: items.map { ($0.id, $0.date) })
-            for (item, ids) in anchors { leftover[item] = ids.compactMap { all[$0] } }
-        }
-    }
-
-    func unplaced(after item: UUID) -> [SubagentRun] { leftover[item] ?? [] }
-
-    /// The runs a call started; for a `wait`, those it names in its output, or while it waits,
-    /// those still running.
-    func runs(for item: ActivityItem) -> [SubagentRun] {
-        guard case .tool(let tool) = item, let delegation = tool.activity.delegation else { return [] }
-        if delegation.isLaunch { return placed[tool.id] ?? [] }
-        let named = tool.activity.runIDs.compactMap { all[$0] }
-        if !named.isEmpty || tool.state != .running { return named }
-        return all.values.filter { $0.phase.isActive }.sorted { $0.createdAt < $1.createdAt }
     }
 }
 
