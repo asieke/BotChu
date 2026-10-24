@@ -1,17 +1,19 @@
 import Foundation
 
 /// What reading a conversation's JSON Lines file found (a Home's or task's `thread.jsonl`, a
-/// sub-agent's, or `queued.jsonl`), so nothing in it is lost when it is next saved. A missing or
-/// empty file is an empty conversation. A line that isn't JSON, or is JSON but not a message this
-/// version knows (such as one with a role it doesn't have), is left out, and a file that can't be
-/// read at all reads as empty; either way the original is kept first, byte for byte, beside it as
-/// `<name>.unreadable-<time>.<extension>`, before anything rewrites the file, and `note(for:)`
-/// tells the conversation what was left out and where the original is.
+/// sub-agent's, `queued.jsonl` or `taken.jsonl`), so nothing in it is lost when it is next saved.
+/// A missing or empty file is an empty conversation. A line that isn't JSON, or is JSON but not a
+/// message this version knows (such as one with a role it doesn't have), is left out, and a file
+/// that can't be read at all reads as empty; either way the original is kept first, byte for
+/// byte, beside it as `<name>.unreadable-<time>.<extension>`, before anything rewrites the file,
+/// and `note(for:)` tells the conversation what was left out and where the original is.
 public struct TranscriptRead: Equatable, Sendable {
     public enum Kind: Sendable {
         case conversation
         /// Unsent follow-ups (`queued.jsonl`).
         case queue
+        /// Follow-ups the CLI took before a saved transcript held them (`taken.jsonl`).
+        case taken
     }
 
     /// The messages that could be read, in order.
@@ -64,19 +66,22 @@ public struct TranscriptRead: Equatable, Sendable {
         guard isDamaged else { return nil }
         var text: String
         if let failure {
-            text = kind == .conversation
-                ? "This conversation's file couldn't be read (\(failure)), so it starts again here."
-                : "The file of pending messages couldn't be read (\(failure)), so none of them will be sent."
+            text = switch kind {
+            case .conversation: "This conversation's file couldn't be read (\(failure)), so it starts again here."
+            case .queue: "The file of pending messages couldn't be read (\(failure)), so none of them will be sent."
+            case .taken: "The file of messages the bot took before BotChu could save the conversation couldn't be read (\(failure)), so they aren't shown."
+            }
         } else {
             let count = malformed + unsupported
             let what = switch kind {
             case .conversation: count == 1 ? "1 entry in this conversation" : "\(count) entries in this conversation"
             case .queue: count == 1 ? "1 pending message" : "\(count) pending messages"
+            case .taken: count == 1 ? "1 message the bot took" : "\(count) messages the bot took"
             }
             let why = [malformed > 0 ? "\(malformed) not valid JSON" : nil,
                        unsupported > 0 ? "\(unsupported) of a kind this version of BotChu doesn't know" : nil]
             text = "\(what) couldn't be read (\(why.compactMap { $0 }.joined(separator: ", "))), so "
-                + (count == 1 ? "it isn't" : "they aren't") + (kind == .conversation ? " shown." : " sent.")
+                + (count == 1 ? "it isn't" : "they aren't") + (kind == .queue ? " sent." : " shown.")
         }
         if let kept {
             text += " The original file is kept, unchanged, at \((kept.path as NSString).abbreviatingWithTildeInPath)."

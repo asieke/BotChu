@@ -182,4 +182,51 @@ import Testing
         #expect(!home.readQueuedMessages().isDamaged)
         #expect(kept(beside: file).count == 1)
     }
+
+    /// A relaunch (`recoverQueue`) with a line it can't read in each of the queue's files (#77's
+    /// `taken.jsonl` too): both originals are kept, the readable pending message is recovered, the
+    /// message the CLI took goes back into the transcript without being sent again, and the
+    /// conversation notes what was left out. Home and a task.
+    @Test(arguments: [false, true]) func recoveryKeepsUnreadableQueueEntries(inTask: Bool) throws {
+        let (root, home) = tempHome()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let task: UUID? = inTask ? UUID() : nil
+        func savedTranscript() -> [ChatMessage] { task.map { home.loadThread(task: $0) } ?? home.loadThread() }
+        let start = ChatMessage(role: .user, text: "Fix the build", date: date)
+        let steer = ChatMessage(role: .user, text: "Also run the tests", date: date)
+        let later = ChatMessage(role: .user, text: "Then update the README", date: date)
+        if let task { try home.saveThread([start], task: task) } else { try home.saveThread([start]) }
+        // BotChu stopped after writing the taken message and before the pending ones: it is in both.
+        try home.saveQueue(MessageQueue(saved: [steer, later]), task: task)
+        let queued = home.queueURL(task: task), taken = queued.deletingLastPathComponent().appendingPathComponent("taken.jsonl")
+        let originalQueue = Data((try line(steer) + "\nnot json\n" + line(later) + "\n").utf8)
+        let originalTaken = Data((try line(steer) + "\n{\"id\": 1}\n").utf8)
+        try originalQueue.write(to: queued)
+        try originalTaken.write(to: taken)
+
+        var transcript = savedTranscript()
+        let recovered = home.recoverQueue(transcript: &transcript, task: task)
+        #expect(recovered.failures.isEmpty)
+        #expect(recovered.queue.messages.map(\.id) == [later.id])
+        #expect(recovered.queue.next == later)
+        #expect(recovered.queue.taken.isEmpty)
+        #expect(transcript.map(\.role) == [.user, .user, .note, .note, .note])
+        #expect(transcript.prefix(2).map(\.id) == [start.id, steer.id])
+        #expect(transcript[3].text.hasPrefix("1 message the bot took couldn't be read (1 of a kind this version of BotChu doesn't know), so it isn't shown. The original file is kept, unchanged, at "))
+        #expect(transcript[4].text.hasPrefix("1 pending message couldn't be read (1 not valid JSON), so it isn't sent. The original file is kept, unchanged, at "))
+        #expect(savedTranscript().map(\.id) == transcript.map(\.id))
+        for (file, original) in [(queued, originalQueue), (taken, originalTaken)] {
+            #expect(try kept(beside: file).map { try Data(contentsOf: $0) } == [original])
+        }
+        #expect(!FileManager.default.fileExists(atPath: taken.path))
+        #expect(home.loadQueuedMessages(task: task).map(\.id) == [later.id])
+
+        // The next launch finds nothing new to keep or note, and still sends only the pending message.
+        transcript = savedTranscript()
+        let again = home.recoverQueue(transcript: &transcript, task: task)
+        #expect(again.queue.messages.map(\.id) == [later.id])
+        #expect(transcript.map(\.id) == savedTranscript().map(\.id))
+        #expect(transcript.count == 5)
+        #expect(kept(beside: queued).count == 1 && kept(beside: taken).count == 1)
+    }
 }

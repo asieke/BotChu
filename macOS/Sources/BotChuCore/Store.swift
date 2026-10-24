@@ -26,6 +26,8 @@ public struct BotHome: Sendable {
 
     public func taskURL(_ id: UUID) -> URL { tasksURL.appendingPathComponent(id.uuidString.lowercased(), isDirectory: true) }
     public func taskThreadURL(_ id: UUID) -> URL { taskURL(id).appendingPathComponent("thread.jsonl") }
+    /// A conversation's pending messages: Home's, or a task's.
+    public func queueURL(task id: UUID? = nil) -> URL { (id.map(taskURL) ?? url).appendingPathComponent("queued.jsonl") }
 
 
     public var exists: Bool { FileManager.default.fileExists(atPath: botURL.path) }
@@ -84,10 +86,13 @@ public struct BotHome: Sendable {
     /// The unsent follow-ups and what couldn't be read of them, which their conversation notes
     /// (`note(for: .queue)`). Once the original is kept, the file is saved with what could be read.
     public func readQueuedMessages(task id: UUID? = nil) -> TranscriptRead {
-        let file = (id.map(taskURL) ?? url).appendingPathComponent("queued.jsonl")
-        let read = TranscriptRead.read(file)
-        if read.kept != nil { try? Self.writeThread(read.messages, to: file) }
-        return read
+        Self.readKeeping(queueURL(task: id))
+    }
+
+    /// The messages the CLI took that no saved transcript held yet (`MessageQueue.taken`), and what
+    /// couldn't be read of them (`note(for: .taken)`), kept as `readQueuedMessages` keeps them.
+    public func readTakenMessages(task id: UUID? = nil) -> TranscriptRead {
+        Self.readKeeping((id.map(taskURL) ?? url).appendingPathComponent(Self.takenFile))
     }
 
     /// Whether the owner's Stop or a failed turn paused the queue, which then waits for the owner
@@ -110,6 +115,70 @@ public struct BotHome: Sendable {
     }
 
     static let queuePausedFile = "queued.paused"
+    static let takenFile = "taken.jsonl"
+
+    /// A conversation's queue as it was saved, reconciled with its saved transcript.
+    public func loadQueue(delivered: [ChatMessage], task id: UUID? = nil) -> MessageQueue {
+        MessageQueue(saved: loadQueuedMessages(task: id), taken: readTakenMessages(task: id).messages,
+                     delivered: delivered, paused: loadQueuePaused(task: id))
+    }
+
+    /// Saves a conversation's queue: the messages the CLI took (`taken.jsonl`) first, so a message
+    /// leaving the pending ones is never in neither file, then the pending messages.
+    public func saveQueue(_ queue: MessageQueue, task id: UUID? = nil) throws {
+        try prepare()
+        let folder = id.map(taskURL) ?? url
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let taken = folder.appendingPathComponent(Self.takenFile)
+        if !queue.taken.isEmpty {
+            try Self.writeThread(queue.taken, to: taken)
+        } else if FileManager.default.fileExists(atPath: taken.path) {
+            try FileManager.default.removeItem(at: taken)
+        }
+        try saveQueuedMessages(queue.messages, paused: queue.isPaused, task: id)
+    }
+
+    /// Saves a conversation's transcript, and its queue while it holds messages the CLI took. A
+    /// taken message leaves the saved queue only once a saved transcript holds it. When the
+    /// transcript can't be saved, the message stays in the saved queue as taken (never sent
+    /// again), the pending messages pause, so the CLI takes no more that couldn't be saved either,
+    /// and the failure is returned for the conversation to show. `saved` says whether the
+    /// transcript was saved.
+    public func checkpoint(_ transcript: [ChatMessage], queue: inout MessageQueue, task id: UUID? = nil) -> (saved: Bool, failures: [SaveFailure]) {
+        let holdsTaken = !queue.taken.isEmpty
+        var failures: [SaveFailure] = []
+        var saved = true
+        do {
+            if let id { try saveThread(transcript, task: id) } else { try saveThread(transcript) }
+            queue.saved(transcript)
+        } catch {
+            saved = false
+            if holdsTaken {
+                if !queue.messages.isEmpty { queue.pause() }
+                failures.append(SaveFailure(.conversation(paused: queue.isPaused), file: id.map(taskThreadURL) ?? threadURL, error: error))
+            }
+        }
+        guard holdsTaken else { return (saved, failures) }
+        do {
+            try saveQueue(queue, task: id)
+        } catch {
+            failures.append(SaveFailure(.pendingMessages, file: queueURL(task: id), error: error))
+        }
+        return (saved, failures)
+    }
+
+    /// A conversation's queue after a launch. Messages the CLI took that the saved transcript lacks
+    /// go back into it (`MessageQueue.restoringTaken`) rather than out again, and are saved there,
+    /// followed by a note on anything in the queue's files that couldn't be read (`TranscriptRead`).
+    public func recoverQueue(transcript: inout [ChatMessage], task id: UUID? = nil) -> (queue: MessageQueue, failures: [SaveFailure]) {
+        let queued = readQueuedMessages(task: id), taken = readTakenMessages(task: id)
+        var queue = MessageQueue(saved: queued.messages, taken: taken.messages, delivered: transcript, paused: loadQueuePaused(task: id))
+        let notes = [taken.note(for: .taken), queued.note(for: .queue)].compactMap { $0 }
+        guard !queue.taken.isEmpty || !notes.isEmpty else { return (queue, []) }
+        transcript = queue.restoringTaken(into: transcript) + notes
+        let failures = checkpoint(transcript, queue: &queue, task: id).failures
+        return (queue, failures)
+    }
 
     public func subagentsURL(taskID: UUID? = nil) -> URL {
         (taskID.map(taskURL) ?? url).appendingPathComponent("subagents", isDirectory: true)
@@ -209,6 +278,14 @@ public struct BotHome: Sendable {
         return messages
     }
 
+    /// Reads a queue's file (`TranscriptRead`); once the original is kept, saves it with what could
+    /// be read, so the next read finds nothing new to keep. Its note is for its conversation.
+    static func readKeeping(_ url: URL) -> TranscriptRead {
+        let read = TranscriptRead.read(url)
+        if read.kept != nil { try? writeThread(read.messages, to: url) }
+        return read
+    }
+
     static func writeThread(_ messages: [ChatMessage], to url: URL) throws {
         let lines = try messages.map { String(decoding: try Store.lineEncoder.encode($0), as: UTF8.self) }
         try Data((lines.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")).utf8).write(to: url, options: .atomic)
@@ -276,6 +353,45 @@ public struct BotHome: Sendable {
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
+}
+
+/// A file BotChu couldn't save, said so the owner can act on it: what it holds, where it is, why
+/// saving failed, and what BotChu keeps meanwhile.
+public struct SaveFailure: Error, Equatable, Sendable {
+    public enum Item: Equatable, Sendable {
+        /// A conversation's transcript, while messages the CLI took wait in its saved queue for
+        /// it; `paused` when its pending messages were paused for it.
+        case conversation(paused: Bool)
+        /// A conversation's pending messages.
+        case pendingMessages
+    }
+
+    public var item: Item
+    public var file: URL
+    /// Why saving failed, without a closing period.
+    public var reason: String
+
+    public init(_ item: Item, file: URL, error: Error) {
+        self.item = item
+        self.file = file
+        var reason = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        while reason.hasSuffix(".") { reason.removeLast() }
+        self.reason = reason
+    }
+
+    /// What the conversation shows, in the same words while the same failure repeats.
+    public var message: String {
+        let place = "(\((file.path as NSString).abbreviatingWithTildeInPath))"
+        let fix = "Check that its folder is writable and its disk has space."
+        switch item {
+        case .conversation(let paused):
+            return "Couldn't save this conversation \(place): \(reason). Messages the bot already took are kept with the "
+                + "pending messages until it saves, and aren't sent again." + (paused ? " Pending messages wait for Send next." : "")
+                + " " + fix
+        case .pendingMessages:
+            return "Couldn't save pending messages \(place): \(reason). \(fix)"
+        }
+    }
 }
 
 /// Where BotChu finds its bots: `index.json`, the bots' ids, workspaces and sidebar sections in

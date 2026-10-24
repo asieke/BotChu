@@ -267,7 +267,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     you're ready**), and a paused queue stays paused across relaunches; messages left queued when
     BotChu quit go out on their own after it starts again. **Send next** resumes a paused queue.
     Each Home and task has its own queue, saved beside its thread in `queued.jsonl` (with
-    `queued.paused` while paused). A worktree being prepared finishes setup before follow-ups can run.
+    `queued.paused` while paused). A follow-up the CLI has taken stays saved beside them, in
+    `taken.jsonl`, until the conversation is saved with it: when the conversation can't be saved (a
+    full disk, a folder without write access), the chat says which file and why, the pending
+    messages pause, and the next launch puts that follow-up back into the conversation rather than
+    sending it again. A worktree being prepared finishes setup before follow-ups can run.
   - **Images:** use the **+** button, paste an image (⌘V, such as a copied screenshot) or image
     files, or drop them into the message box. Copied text still pastes as text when its app adds a
     picture of it after the text (as spreadsheets do), and other files paste as text too.
@@ -309,8 +313,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     conversation is next saved, nor is a file it can't read at all: BotChu first keeps the original,
     unchanged, beside it as `<name>.unreadable-<time>.jsonl` (moving a file it can't read there),
     and the conversation says, in a note, how many entries it left out and where the original is.
-    This holds for Home's, tasks' and sub-agents' threads and for pending messages, whose note goes
-    in their conversation; a missing or empty file is just an empty conversation. Each bot needs
+    This holds for Home's, tasks' and sub-agents' threads and for pending messages, including those
+    the bot took before the conversation could be saved, whose note goes in their conversation; a
+    missing or empty file is just an empty conversation. Each bot needs
     its own workspace, and not the bots folder itself; moving a bot's workspace in its editor moves its `.botchu/`, `INSTRUCTIONS.md`, `MEMORY.md` and `SOUL.md` with it. Moving
     waits until its turns finish and refuses to overwrite files at the destination. Deleting a bot
     puts only its `.botchu/` in the Trash.
@@ -426,7 +431,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     team playbook, memory and recap that open a session (`BotContext.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
-    (`UsageCache.swift`), per-conversation pending-message delivery (`MessageQueue.swift`), what
+    (`UsageCache.swift`), per-conversation pending-message delivery, keeping a follow-up the CLI
+    took until a saved transcript holds it (`MessageQueue.swift`, saved in that order by
+    `Store.swift`), what
     the status sidebar shows about a bot, from a summary of its thread kept as the thread grows, and
     its `MEMORY.md` (`BotStatus.swift`), replies' parsed Markdown, cached by their text
     (`MarkdownCache.swift`), pets: the activity a tool call means
@@ -474,12 +481,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
     and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
     commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
-    streamed update regroups only the tail; the sidebar's sections of bots; and conversations'
-    files with a line that isn't JSON, an unknown role, or no readable text, kept before the next save.
+    streamed update regroups only the tail; the sidebar's sections of bots; follow-ups the CLI
+    took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks; and
+    conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
+    before the next save, also in a queue going through a relaunch.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
-    saves, model-picker keyboard interaction and persisted choices,
+    saves, a follow-up taken while the transcript can't be saved (back in it after a relaunch), model-picker keyboard interaction and persisted choices,
     Markdown editor sizing and Save/Cancel, collapsing status sections, the sidebar's sections of
     bots (their menus, the alert that names them, collapsing and revealing), inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
