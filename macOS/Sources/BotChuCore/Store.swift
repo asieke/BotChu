@@ -80,7 +80,19 @@ public struct BotHome: Sendable {
 
     /// Unsent follow-ups live beside their conversation, including while a task is closed.
     public func loadQueuedMessages(task id: UUID? = nil) -> [ChatMessage] {
-        Self.readThread((id.map(taskURL) ?? url).appendingPathComponent("queued.jsonl"))
+        readQueuedMessages(task: id).messages
+    }
+
+    /// The unsent follow-ups and what couldn't be read of them, which their conversation notes
+    /// (`note(for: .queue)`). Once the original is kept, the file is saved with what could be read.
+    public func readQueuedMessages(task id: UUID? = nil) -> TranscriptRead {
+        Self.readKeeping(queueURL(task: id))
+    }
+
+    /// The messages the CLI took that no saved transcript held yet (`MessageQueue.taken`), and what
+    /// couldn't be read of them (`note(for: .taken)`), kept as `readQueuedMessages` keeps them.
+    public func readTakenMessages(task id: UUID? = nil) -> TranscriptRead {
+        Self.readKeeping((id.map(taskURL) ?? url).appendingPathComponent(Self.takenFile))
     }
 
     /// Whether the owner's Stop or a failed turn paused the queue, which then waits for the owner
@@ -107,7 +119,7 @@ public struct BotHome: Sendable {
 
     /// A conversation's queue as it was saved, reconciled with its saved transcript.
     public func loadQueue(delivered: [ChatMessage], task id: UUID? = nil) -> MessageQueue {
-        MessageQueue(saved: loadQueuedMessages(task: id), taken: Self.readThread((id.map(taskURL) ?? url).appendingPathComponent(Self.takenFile)),
+        MessageQueue(saved: loadQueuedMessages(task: id), taken: readTakenMessages(task: id).messages,
                      delivered: delivered, paused: loadQueuePaused(task: id))
     }
 
@@ -156,11 +168,14 @@ public struct BotHome: Sendable {
     }
 
     /// A conversation's queue after a launch. Messages the CLI took that the saved transcript lacks
-    /// go back into it (`MessageQueue.restoringTaken`) rather than out again, and are saved there.
+    /// go back into it (`MessageQueue.restoringTaken`) rather than out again, and are saved there,
+    /// followed by a note on anything in the queue's files that couldn't be read (`TranscriptRead`).
     public func recoverQueue(transcript: inout [ChatMessage], task id: UUID? = nil) -> (queue: MessageQueue, failures: [SaveFailure]) {
-        var queue = loadQueue(delivered: transcript, task: id)
-        guard !queue.taken.isEmpty else { return (queue, []) }
-        transcript = queue.restoringTaken(into: transcript)
+        let queued = readQueuedMessages(task: id), taken = readTakenMessages(task: id)
+        var queue = MessageQueue(saved: queued.messages, taken: taken.messages, delivered: transcript, paused: loadQueuePaused(task: id))
+        let notes = [taken.note(for: .taken), queued.note(for: .queue)].compactMap { $0 }
+        guard !queue.taken.isEmpty || !notes.isEmpty else { return (queue, []) }
+        transcript = queue.restoringTaken(into: transcript) + notes
         let failures = checkpoint(transcript, queue: &queue, task: id).failures
         return (queue, failures)
     }
@@ -253,9 +268,22 @@ public struct BotHome: Sendable {
         try FileManager.default.createDirectory(at: dispatchURL, withIntermediateDirectories: true)
     }
 
+    /// The messages that could be read, followed by a note on any that couldn't (`TranscriptRead`).
+    /// Once the original is kept, the note is saved with them, so it stays in the conversation.
     static func readThread(_ url: URL) -> [ChatMessage] {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
-        return text.split(separator: "\n").compactMap { try? Store.decoder.decode(ChatMessage.self, from: Data($0.utf8)) }
+        let read = TranscriptRead.read(url)
+        guard let note = read.note(for: .conversation) else { return read.messages }
+        let messages = read.messages + [note]
+        if read.kept != nil { try? writeThread(messages, to: url) }
+        return messages
+    }
+
+    /// Reads a queue's file (`TranscriptRead`); once the original is kept, saves it with what could
+    /// be read, so the next read finds nothing new to keep. Its note is for its conversation.
+    static func readKeeping(_ url: URL) -> TranscriptRead {
+        let read = TranscriptRead.read(url)
+        if read.kept != nil { try? writeThread(read.messages, to: url) }
+        return read
     }
 
     static func writeThread(_ messages: [ChatMessage], to url: URL) throws {
