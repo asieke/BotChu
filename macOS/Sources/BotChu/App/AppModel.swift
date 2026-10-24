@@ -1085,12 +1085,12 @@ final class AppModel {
             let ticket = UUID()
             waiting[target] = ticket
             runStates[target] = RunState(preparing: true)
-            hydrate(target) { [weak self] in
+            hydrate(target, then: { [weak self] in
                 guard let self, self.waiting[target] == ticket else { return }
                 self.waiting[target] = nil
                 self.runStates[target] = nil
                 self.sendNextQueued(to: target)
-            }
+            })
             return
         }
         // It leaves the queue once the saved transcript holds it (`beginTurn`).

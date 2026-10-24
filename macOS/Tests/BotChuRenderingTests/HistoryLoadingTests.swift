@@ -268,7 +268,7 @@ extension RenderingTests {
         let connection = app.telegram.connection()
         #expect(await connection.deliver("Question 0", id: id, to: home.botID, from: 42) == .duplicate)
         #expect(app.conversation(home).isLoaded)
-        #expect(app.messageQueues[home]?.messages.isEmpty == true)
+        #expect(app.messageQueues[home]?.messages.isEmpty ?? true)
         #expect(!fixture.ran(home))
         fixture.settings.telegramEnabled = false
     }

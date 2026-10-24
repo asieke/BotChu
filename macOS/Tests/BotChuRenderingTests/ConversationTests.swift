@@ -112,7 +112,12 @@ extension RenderingTests {
         #expect(app.draftImages[target] == nil)
         #expect((app.drafts[target] ?? "").isEmpty)
         #expect(scroll.frame.height == initialHeight)
+        // Paused, so the relaunch below keeps it queued rather than sending it as soon as its
+        // queue is recovered, off the main thread (#109).
+        app.stop(target)
+        await app.storage.settle()
         let recovered = AppModel(store: fixture.store, settings: fixture.settings)
+        defer { recovered.stopAll() }
         // Each conversation's queue is recovered off the main thread after a launch (#109).
         await recovered.storage.settle()
         let queued = try #require(recovered.messageQueues[target]?.messages.first)
