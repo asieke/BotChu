@@ -143,6 +143,10 @@ final class AppModel {
     private let store: Store
     /// Index entries whose folders don't hold their bot right now; kept so the bot returns with it.
     @ObservationIgnored var missing: [Store.Entry] = []
+    /// Why `index.json` couldn't be saved; nil while it is saved. Until a save works (Try Again in
+    /// the sidebar, the next change, or quitting), the sidebar's bots, order and sections since are
+    /// only here.
+    private(set) var indexFailure: SaveFailure?
     @ObservationIgnored private var delegationSessions: [ChatTarget: Set<String>] = [:]
     @ObservationIgnored private var runs: [ChatTarget: AgentRun] = [:]
     /// What each running CLI that takes input mid-turn has been given and has taken back.
@@ -357,7 +361,9 @@ final class AppModel {
         bot.workspace = (bot.workspace as NSString).expandingTildeInPath
         if bot.emoji.isEmpty { bot.emoji = "🤖" }
         // In no section: last among the bots in none, above the sections.
-        bots.insert(bot, at: bots.firstIndex { sections[$0.id] != nil } ?? bots.endIndex)
+        var layout = botSections
+        layout.add(bot.id)
+        bots.insert(bot, at: layout.order.firstIndex(of: bot.id) ?? bots.endIndex)
         conversation(.home(bot.id)).load([])
         tasks[bot.id] = []
         save(bot)
@@ -1339,6 +1345,8 @@ final class AppModel {
         for target in Array(runStates.keys) { stop(target) }
         for run in petRuns.values { run.stop() }
         for task in petTasks.values { task.cancel() }
+        // Sidebar changes that couldn't be saved get one more try.
+        if indexFailure != nil { saveIndex() }
     }
 
     /// Saves a turn still running as it stands, with its running tool calls marked interrupted;
@@ -1439,9 +1447,10 @@ final class AppModel {
     }
 
     /// Writes `index.json`: the bots in sidebar order, with their sections, then the entries whose
-    /// folders are missing.
+    /// folders are missing. A failure shows in the sidebar until a save works.
     func saveIndex() {
-        try? store.saveIndex(bots.map { Store.Entry(id: $0.id, workspace: $0.workspace, section: sections[$0.id]) } + missing)
+        let failure = store.commitIndex(Store.entries(for: bots, sections: sections, missing: missing))
+        if failure != indexFailure { indexFailure = failure }
     }
 
     /// Saves the conversation, and its queue while it holds messages the CLI took
