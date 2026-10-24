@@ -51,7 +51,7 @@ struct BotDocumentEditor: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(alignment: .center, spacing: 12) {
-                    Text("Read at the start of each new session. Use New Session to apply changes to an existing conversation.")
+                    Text(request.footnote)
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)

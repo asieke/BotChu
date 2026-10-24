@@ -135,7 +135,7 @@ enum DevHooks {
             }
         }
         switch env["BOTCHU_OPEN"] {
-        case "projects", "agents", "providers":
+        case "projects", "agents", "providers", "skills":
             model.destination = env["BOTCHU_OPEN"].flatMap(LibraryDestination.init(rawValue:))
             if let repo = env["BOTCHU_PROJECT"] {
                 model.selectProject(repo, tab: env["BOTCHU_PROJECT_TAB"].flatMap(ProjectSelection.Tab.init(rawValue:)) ?? .overview,
