@@ -102,11 +102,10 @@ extension RenderingTests {
         try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
         let model = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No usage in tests") })
         defer { model.stopAll() }
-        // Your repositories as gh would list them, read just now, and no PROJECT.md to place them.
+        // Your repositories as gh would list them, read just now.
         model.repositories = [GitHubLookup.Repo(nameWithOwner: "fixture/project", description: "The fixture"),
                               GitHubLookup.Repo(nameWithOwner: "fixture/other")]
         model.repositoriesReadAt = Date()
-        model.deployTargetCache["fixture/project"] = []
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 720), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

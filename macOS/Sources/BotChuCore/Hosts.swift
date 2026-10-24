@@ -95,32 +95,10 @@ public struct RepoLocation: Codable, Hashable, Sendable {
 
 /// Which computer and folder each repository is worked on.
 public enum Locations {
-    /// The `local:<machine>:<path>` targets of a PROJECT.md's `deploy` field, in its frontmatter.
-    public static func deployTargets(projectFile: String) -> [(machine: String, path: String)] {
-        let lines = projectFile.split(separator: "\n", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
-        guard lines.first == "---", let end = lines.dropFirst().firstIndex(of: "---") else { return [] }
-        guard let deploy = lines[1..<end].first(where: { $0.hasPrefix("deploy:") }) else { return [] }
-        guard let value = try? ProjectRecord.scalar(String(deploy.dropFirst("deploy:".count))) else { return [] }
-        return value.split(separator: ",").compactMap { target in
-            let parts = target.trimmingCharacters(in: .whitespaces).split(separator: ":", maxSplits: 2).map(String.init)
-            guard parts.count == 3, parts[0] == "local", !parts[1].isEmpty, !parts[2].isEmpty else { return nil }
-            return (parts[1], parts[2])
-        }
-    }
-
-    /// Where a repository is worked on: where its owner chose (on a host still in Settings), else
-    /// where PROJECT.md's `deploy` runs it, on this Mac or on a host of that machine name, else in
-    /// the repositories folder on this Mac.
-    public static func resolve(repo: String, chosen: RepoLocation?, deployTargets: [(machine: String, path: String)],
-                               thisMac: String, hosts: [SSHHost], reposRoot: String) -> RepoLocation {
+    /// Where a repository is worked on: where its owner chose (on a host still in Settings), else in
+    /// the repositories folder on this Mac, wherever PROJECT.md's `deploy` runs it.
+    public static func resolve(repo: String, chosen: RepoLocation?, hosts: [SSHHost], reposRoot: String) -> RepoLocation {
         if let chosen, chosen.hostID == nil || hosts.contains(where: { $0.id == chosen.hostID }) { return chosen }
-        let same = { (a: String, b: String) in !a.isEmpty && a.caseInsensitiveCompare(b) == .orderedSame }
-        if let here = deployTargets.first(where: { same($0.machine, thisMac) }) {
-            return RepoLocation(path: (here.path as NSString).expandingTildeInPath)
-        }
-        for target in deployTargets {
-            if let host = hosts.first(where: { same($0.machine, target.machine) }) { return RepoLocation(hostID: host.id, path: target.path) }
-        }
         return RepoLocation(path: (reposRoot as NSString).appendingPathComponent(TaskNaming.repoName(repo)))
     }
 

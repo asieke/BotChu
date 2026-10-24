@@ -451,13 +451,6 @@ public enum GitHubLookup {
         public var owner: String { String(nameWithOwner.prefix { $0 != "/" }) }
     }
 
-    /// The repository's PROJECT.md on its default branch, when it has one.
-    public static func projectFile(repo: String) async -> String? {
-        let run = await Shell.run(["gh", "api", "repos/\(repo)/contents/PROJECT.md", "-H", "Accept: application/vnd.github.raw"],
-                                  in: NSHomeDirectory())
-        return run.ok ? run.output : nil
-    }
-
     public static func work(number: Int, pullRequest: Bool, repo: String) async -> Result<Found, TaskWorktree.Failure> {
         let fields = pullRequest ? "number,title,url,state,headRefName,isCrossRepository" : "number,title,url,state"
         let args = ["gh", pullRequest ? "pr" : "issue", "view", String(number), "--repo", repo, "--json", fields]
