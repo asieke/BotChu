@@ -209,10 +209,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     arguments and output (the first 20 KB, with Copy for all of it). For this, each tool call keeps its
     arguments (long text shortened, an edit's text as the lines it adds and removes), exit code and
     duration; older threads show what they recorded. The chat opens at its newest items, as many as
-    lay out quickly, with **Show earlier** above them. Only the messages after the last settled item
-    are regrouped as a turn streams in, and a conversation shown again keeps its grouping and opened
-    cards. A reader at the bottom follows new content; one reading earlier content keeps their place
-    while a turn goes on, and **Follow Live** takes them back.
+    lay out quickly, with **Show earlier** above them. As a turn streams in, only what it changed is
+    grouped again: a new call joins a live group, and one that finishes is taken out of the group's
+    summary and put back, so a call costs the same in an exploration of 5,000 calls as in one of 5,
+    and so do its sub-agents' card placement and tool counts. A conversation shown again keeps its
+    grouping and opened cards; a long one opened anew shows its newest items at once, with a spinner
+    where earlier ones go while they are grouped off the main thread. A reader at the bottom follows
+    new content; one reading earlier content keeps their place while a turn goes on, and **Follow
+    Live** takes them back.
   - **Tasks:** besides its Home, a bot can work on tasks, several at once: each in one of your
     GitHub repositories, with its own conversation and CLI session, in its own git worktree, so
     tasks never share files. BotChu does all of this itself, with no other app. **New Task** (⌘T)
@@ -672,8 +676,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
     (`ToolActivity.swift`, reading shell command lines with `ShellCommand.swift`), the chat's activity
-    items, with exploration folded into groups and kept up to date at the tail
-    (`ActivityTranscript.swift`), the identity, instructions,
+    items, with exploration folded into groups whose summaries are kept as calls join and leave them,
+    updated only for new messages, running calls and the last message (an edit of the thread is
+    verified), where delegated runs' cards go, worked out again only when their calls or records
+    change, and sub-agents' tool counts kept as they stream (`ActivityTranscript.swift`, in chunked
+    storage that copies a chunk, not every element, when shared: `ChunkedArray.swift`), the identity, instructions,
     team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
@@ -760,8 +767,12 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and are tried again; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
     and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
-    commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
-    streamed update regroups only the tail; the sidebar's sections of bots, and searching them; follow-ups the CLI
+    commands) are described and grouped, failures, repeated reads, sub-agent cards, and that an
+    update does work only for what changed (counted for live groups of 400, 1,000 and 5,000 calls),
+    shows what grouping the thread afresh shows through random turns (calls finishing out of order,
+    failing, their kind arriving late, stopped turns, edits of the thread), sees changes of the same
+    length, lets go of a settled group's running state, and leaves sub-agent placement and counts
+    alone while a reply streams; the sidebar's sections of bots, and searching them; follow-ups the CLI
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
     before the next save, also in a queue going through a relaunch; a section change or a new
@@ -815,7 +826,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and New Task (through a stand-in for the general pasteboard, so no test touches the clipboard)
     and what pastes as text instead, New Task starting a task from a project and a brief with an
     image, the activity chat at every density, light and dark and at its
-    narrowest, a chat that follows new content only for a reader at the bottom, a Sub-agents
+    narrowest, a chat that follows new content only for a reader at the bottom, a long
+    conversation opened anew that shows its newest items at once and groups its history off the
+    main thread, then regroups only a streaming reply, a Sub-agents
     tab that folds finished runs and scrolls to one the chat opens, and switching without a flash:
     the toolbar kept, the message box focused in the same update, the chat at its very end, pets
     that never blink out while a clip loads, rich replies shown only once rendered and shown
@@ -978,9 +991,13 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   `detailed`, `raw`) chooses the chat density for the run.
 - Chat latency: `BOTCHU_BENCHMARK=<file> swift test --configuration release --package-path macOS
   --filter chatBenchmark` times, from the change until the window has drawn it, switching to long
-  conversations (1,500 messages; outputs of 200 KB to 1 MB; a 400-call exploration; seventeen running
-  sub-agents), a streamed delta, a new call in a live exploration, a sub-agent's update, and opening
-  a large group or output, and writes the table to the file. `BOTCHU_BENCHMARK_SCOPE=chat` times the
+  conversations (1,500 messages; outputs of 200 KB to 1 MB; explorations of 400 and 5,000 calls;
+  seventeen running sub-agents; the 1,500 messages with twenty finished and seventeen running
+  sub-agents), again with their grouping forgotten (and until their earlier items are grouped), a
+  streamed delta, a new call in a live exploration, a sub-agent's update, and opening a large group
+  or output; and, in Core alone, a call joining and finishing in a live group of 400, 1,000 and
+  5,000 calls, apart from comparing the group before and after, grouping each afresh, and the memory
+  a 5,000-call projection keeps; and writes the table to the file. `BOTCHU_BENCHMARK_SCOPE=chat` times the
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.
