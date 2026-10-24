@@ -7,19 +7,27 @@ import Foundation
 /// or, for a CLI that takes input mid-turn (`CommandBuilder.takesInputMidTurn`), written to the
 /// running CLI, which takes it at its next tool call. A message written to the CLI stays queued
 /// (`inFlight`) until the CLI says it took it; if the run ends first, it waits for the next turn.
+/// A message the CLI took is kept (`taken`) until a saved transcript holds it.
 public struct MessageQueue: Equatable, Sendable {
     public private(set) var messages: [ChatMessage]
     public private(set) var isPaused: Bool
     /// Messages written to the running CLI and not yet taken by it, oldest first. They can't be
     /// edited or removed any more. Not saved: after a relaunch they are queued like any other.
     public private(set) var inFlight: [UUID] = []
+    /// Messages the CLI took that no saved transcript holds yet, oldest first. They are saved with
+    /// the queue until one does (`BotHome.checkpoint`), so a transcript that can't be saved never
+    /// loses them, and they are never sent again: after a relaunch they go back into the
+    /// transcript (`restoringTaken`).
+    public private(set) var taken: [ChatMessage] = []
 
     /// Recovered messages are sent again automatically, unless the owner's Stop or a failed turn
     /// had paused the queue (`paused`, saved beside it). A crash between saving the transcript and
-    /// saving the queue may leave an already-delivered message in both files.
-    public init(saved: [ChatMessage] = [], delivered: [ChatMessage] = [], paused: Bool = false) {
-        let sent = Set(delivered.map(\.id))
-        messages = saved.filter { $0.role == .user && !sent.contains($0.id) }
+    /// saving the queue may leave an already-delivered message in both files. A message the CLI
+    /// took (`taken`) is never sent again, even when the saved queue still has it.
+    public init(saved: [ChatMessage] = [], taken: [ChatMessage] = [], delivered: [ChatMessage] = [], paused: Bool = false) {
+        var held = Set(delivered.map(\.id))
+        self.taken = taken.filter { held.insert($0.id).inserted }
+        messages = saved.filter { $0.role == .user && !held.contains($0.id) }
         isPaused = paused && !messages.isEmpty
     }
 
@@ -54,12 +62,34 @@ public struct MessageQueue: Equatable, Sendable {
         inFlight.append(id)
     }
 
-    /// The CLI took the oldest message written to it: it leaves the queue for the transcript.
+    /// The CLI took the oldest message written to it: it leaves the queue for the transcript, and
+    /// is kept as taken until a saved transcript holds it.
     public mutating func acknowledge() -> ChatMessage? {
         guard !inFlight.isEmpty else { return nil }
         let id = inFlight.removeFirst()
         guard let index = messages.firstIndex(where: { $0.id == id }) else { return nil }
-        return messages.remove(at: index)
+        let message = messages.remove(at: index)
+        taken.append(message)
+        return message
+    }
+
+    /// A transcript was saved: the taken messages it holds leave the queue for good.
+    public mutating func saved(_ transcript: [ChatMessage]) {
+        guard !taken.isEmpty else { return }
+        let held = Set(transcript.map(\.id))
+        taken.removeAll { held.contains($0.id) }
+    }
+
+    /// After a relaunch, the saved transcript with the taken messages it lacks put back where they
+    /// belong: after everything in it, since it was last saved before the CLI took them. A note
+    /// after them says that what followed them is missing.
+    public func restoringTaken(into transcript: [ChatMessage]) -> [ChatMessage] {
+        let held = Set(transcript.map(\.id))
+        let missing = taken.filter { !held.contains($0.id) }
+        guard !missing.isEmpty else { return transcript }
+        let note = (missing.count == 1 ? "The bot took this message" : "The bot took these \(missing.count) messages")
+            + " before BotChu could save the conversation, so what came after is missing here."
+        return transcript + missing + [ChatMessage(role: .note, text: note)]
     }
 
     /// Called only after the old process and both output pipes have finished. Messages the CLI
