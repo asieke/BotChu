@@ -65,7 +65,8 @@ public enum OpenRouterCatalog {
     public enum CatalogError: Error { case unavailable }
 }
 
-/// The picker and composer share this resolution, including inherited and unlisted model IDs.
+/// The picker and composer share this resolution, including inherited and unlisted model IDs. A
+/// moving alias or default shows a version only once its CLI has reported it (`resolved`).
 public struct ModelPickerData: Sendable {
     public struct Choice: Identifiable, Equatable, Sendable {
         /// Empty means inherit the account's default, not a literal model ID.
@@ -78,32 +79,39 @@ public struct ModelPickerData: Sendable {
     public let selectedID: String
     public let effectiveID: String
     public let title: String
+    /// What the title stands for: the ID and, for an alias or default, what it resolved to.
+    public let detail: String
     public let choices: [Choice]
 
-    public init(kind: AgentKind, model: String, openRouterDefault: String, catalog: [CatalogModel] = []) {
+    /// `resolved` is the model the CLI reported for this selection (`RunSettings.resolvedModel`).
+    public init(kind: AgentKind, model: String, openRouterDefault: String, catalog: [CatalogModel] = [], resolved: String? = nil) {
         self.kind = kind
-        self.selectedID = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedID = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.selectedID = selectedID
         self.effectiveID = GenerationOptions.effectiveModel(model, kind: kind, openRouterDefault: openRouterDefault)
         let available = kind == .pi ? catalog : []
-        func name(_ id: String) -> String {
-            if id.isEmpty { return "\(kind.displayName) default" }
-            return available.first(where: { $0.id == id })?.title ?? GenerationOptions.name(for: id, kind: kind)
+        func label(_ id: String) -> ModelLabel {
+            if let found = available.first(where: { $0.id == id }) { return ModelLabel(title: found.title, detail: found.detail) }
+            return GenerationOptions.label(for: id, kind: kind, resolved: id == selectedID ? resolved : nil)
         }
-        self.title = name(effectiveID)
+        let current = label(effectiveID)
+        self.title = current.title
+        self.detail = kind == .pi && selectedID.isEmpty ? "Default from Settings · \(current.detail)" : current.detail
         let defaultID = GenerationOptions.effectiveModel("", kind: kind, openRouterDefault: openRouterDefault)
         var choices = [Choice(id: "", title: kind == .pi ? "Use default from Settings" : "Use account default",
-                              detail: kind == .pi ? name(defaultID) : "Chosen by \(kind.displayName)")]
+                              detail: kind == .pi ? label(defaultID).title : label("").detail)]
         var seen: Set<String> = [""]
         // Keep the current model reachable even if it is custom, retired, or the catalog is offline.
         for id in [selectedID, defaultID] where !id.isEmpty && seen.insert(id).inserted {
-            let found = available.first { $0.id == id }
-            choices.append(Choice(id: id, title: name(id), detail: found?.detail ?? id))
+            let found = label(id)
+            choices.append(Choice(id: id, title: found.title, detail: found.detail))
         }
         for entry in available where seen.insert(entry.id).inserted {
             choices.append(Choice(id: entry.id, title: entry.title, detail: entry.detail))
         }
         for option in GenerationOptions.models(for: kind) where seen.insert(option.id).inserted {
-            choices.append(Choice(id: option.id, title: option.name, detail: option.id))
+            let found = label(option.id)
+            choices.append(Choice(id: option.id, title: found.title, detail: found.detail))
         }
         self.choices = choices
     }
