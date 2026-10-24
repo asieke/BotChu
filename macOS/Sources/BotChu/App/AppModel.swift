@@ -258,6 +258,7 @@ final class AppModel {
         // Requests left while BotChu wasn't running.
         for bot in bots { takeDispatches(for: bot.id) }
         evaluator.load(bots: bots.map { ($0.id, $0.workspace) })
+        evaluationRecords = evaluator.records
         // Follow-ups left queued when BotChu quit go out on their own, unless Stop or a failure
         // paused them; once the window is up, so a turn's first output has somewhere to go.
         DispatchQueue.main.async { [weak self] in

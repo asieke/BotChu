@@ -64,6 +64,12 @@ extension RenderingTests {
         #expect(!fixture.app.thread(.home(fixture.worker.id)).contains { $0.role == .note && $0.text.hasPrefix("Reviewed") })
         #expect(fixture.app.evaluations(for: fixture.target).map(\.id).sorted() == [subagent.id, turn.id].sorted())
         #expect(fixture.app.evaluations(for: .home(fixture.worker.id)).map(\.id) == [subagent.id])
+
+        // After a relaunch, the status sidebar lists them again, from the bots' folders.
+        let relaunched = AppModel(store: fixture.store, settings: fixture.settings)
+        defer { relaunched.stopAll() }
+        #expect(relaunched.evaluations(for: fixture.target).map(\.id).sorted() == [subagent.id, turn.id].sorted())
+        #expect(relaunched.evaluations(for: fixture.target).allSatisfy { $0.phase == .done && $0.outcome == .noChange })
     }
 
     @Test func replayingARejectedRequestCannotAdmitWorkAfterTheRosterChanges() async throws {
