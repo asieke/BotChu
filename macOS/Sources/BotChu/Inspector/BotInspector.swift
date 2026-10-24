@@ -18,6 +18,7 @@ struct BotInspector: View {
                 switch tab {
                 case .activity:
                     TasksSection(botID: botID)
+                    RunReviewsSection(target: .home(botID))
                     InspectorSection("Conversation") {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                             StatTile(value: "\(status.messageCount)", label: "Messages", tabular: true)

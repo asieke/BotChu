@@ -1,8 +1,10 @@
 import Foundation
 
-/// Which memory a note is for: the bot's own `MEMORY.md`, or the one every bot shares.
+/// Which memory a note is for: the bot's own `MEMORY.md`, or the one every bot shares. Run
+/// reviews (`RunEvaluator`) also add lessons to the bot's `INSTRUCTIONS.md` (`instructions`), which
+/// no `<remember>` block can ask for.
 public enum MemoryScope: String, Codable, Sendable, CaseIterable {
-    case bot, shared
+    case bot, shared, instructions
 }
 
 /// Why a note wasn't saved. A secret's text is never repeated.
@@ -36,11 +38,14 @@ public struct MemoryFile: Hashable, Sendable {
     public var scope: MemoryScope
     public var path: String
     public var waitingPath: String
+    /// The heading new notes go under (made at the end when missing); nil adds them at the end.
+    public var section: String?
 
-    public init(scope: MemoryScope, path: String, waitingPath: String) {
+    public init(scope: MemoryScope, path: String, waitingPath: String, section: String? = nil) {
         self.scope = scope
         self.path = path
         self.waitingPath = waitingPath
+        self.section = section
     }
 
     /// The bot's own `MEMORY.md`, in its workspace.
@@ -53,6 +58,15 @@ public struct MemoryFile: Hashable, Sendable {
     public static func shared(_ path: String, botWorkspace workspace: String) -> MemoryFile {
         MemoryFile(scope: .shared, path: path, waitingPath: waiting("shared-memory-unsaved.json", in: workspace))
     }
+
+    /// The lessons section of the bot's `INSTRUCTIONS.md`, where run reviews add what they learn.
+    public static func instructions(workspace: String) -> MemoryFile {
+        MemoryFile(scope: .instructions, path: (workspace as NSString).appendingPathComponent(BotContext.instructionsFile),
+                   waitingPath: waiting("instructions-unsaved.json", in: workspace), section: lessonsHeading)
+    }
+
+    /// The heading of the lessons run reviews add to a bot's instructions.
+    public static let lessonsHeading = "## Lessons from run reviews"
 
     private static func waiting(_ name: String, in workspace: String) -> String {
         ((workspace as NSString).appendingPathComponent(BotHome.folderName) as NSString).appendingPathComponent(name)
@@ -68,6 +82,9 @@ public struct MemorySave: Equatable, Sendable {
     public var failure: String?
     /// How many notes wait to be tried again, after a failure.
     public var waiting = 0
+    /// The file before and after the save, when it changed it.
+    public var previous: String?
+    public var saved: String?
 
     public init(file: MemoryFile) {
         self.file = file
@@ -80,9 +97,13 @@ public struct MemorySave: Equatable, Sendable {
     /// was nothing to save. `botName` names the bot whose memory it is.
     public func summary(botName: String) -> (text: String, failed: Bool)? {
         guard !isEmpty else { return nil }
-        let place = file.scope == .bot ? "\(botName)'s memory" : "the shared memory"
+        let place = switch file.scope {
+        case .bot: "\(botName)'s memory"
+        case .shared: "the shared memory"
+        case .instructions: "\(botName)'s instructions"
+        }
         if let failure {
-            return ("Couldn't save \(Self.count(waiting, "note")) to \(place) (\(BotContext.memoryFile)): \(failure). "
+            return ("Couldn't save \(Self.count(waiting, "note")) to \(place) (\(file.scope == .instructions ? BotContext.instructionsFile : BotContext.memoryFile)): \(failure). "
                 + "It is unchanged. BotChu keeps \(waiting == 1 ? "the note" : "them") and tries again after the next turn, "
                 + "or choose Retry.", true)
         }
@@ -112,7 +133,11 @@ public struct MemorySave: Equatable, Sendable {
     /// when there was nothing to save.
     public var report: String? {
         guard !isEmpty else { return nil }
-        let place = file.scope == .bot ? "your \(BotContext.memoryFile)" : "the shared \(BotContext.memoryFile)"
+        let place = switch file.scope {
+        case .bot: "your \(BotContext.memoryFile)"
+        case .shared: "the shared \(BotContext.memoryFile)"
+        case .instructions: "your \(BotContext.instructionsFile)"
+        }
         var lines: [String] = []
         if let failure {
             lines.append("Couldn't save \(Self.count(waiting, "note")) to \(place) (\(failure)). BotChu keeps "
@@ -172,10 +197,12 @@ public final class MemoryWriter: @unchecked Sendable {
         guard !queue.isEmpty else { return result }
         do {
             let original = try Self.read(file.path)
-            let (text, changes) = MemoryNotes.applying(queue, to: original)
+            let (text, changes) = MemoryNotes.applying(queue, to: original, section: file.section)
             if !changes.isEmpty {
                 try text.write(toFile: file.path, atomically: true, encoding: .utf8)
                 guard MemoryNotes.kept(text, over: original, in: try Self.read(file.path)) else { throw NotKept() }
+                result.previous = original
+                result.saved = text
             }
             result.changes = changes
             unwritten[file.waitingPath] = nil

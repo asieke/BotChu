@@ -81,6 +81,16 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Review finished work in the background", isOn: $settings.evaluateRuns)
+                    .onChange(of: settings.evaluateRuns) { model.evaluator.pump() }
+            } header: {
+                Text("Run reviews")
+            } footer: {
+                Text("After a task turn or a sub-agent run that used tools or failed, BotChu reviews it in a fresh session on the same account: one review at a time, only while that account is idle, at most \(model.evaluator.limits.perAccountPerDay) a day per account, each stopped after \(Int(model.evaluator.limits.timeout / 60)) minutes. Concise, evidence-backed lessons go to the bot's MEMORY.md or to the lessons section of its INSTRUCTIONS.md, where you can revert them in the status sidebar's Activity; anything else is kept as a proposal for you. Reviews use the account's allowance (OpenRouter credit for Pi).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
                 Picker("Draw stills with", selection: $settings.petAccountID) {
                     ForEach(model.settings.accounts.filter { $0.kind == .codex }) { account in
                         ProviderMenuLabel(account).tag(account.id)

@@ -47,6 +47,12 @@ public final class AgentRun: @unchecked Sendable {
     private let remote: Machine?
     private var remotePID: String?
 
+    /// The process's priority; background work (run reviews) runs at `.utility`. Set before `start`.
+    public var qualityOfService: QualityOfService {
+        get { process.qualityOfService }
+        set { process.qualityOfService = newValue }
+    }
+
     public var onLines: ([String]) -> Void = { _ in }
     public var onExit: (_ status: Int32, _ stderr: String) -> Void = { _, _ in }
 

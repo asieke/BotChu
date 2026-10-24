@@ -123,6 +123,12 @@ final class AppModel {
     var unsavedMemory: [UUID: Int] = [:]
     /// What became of the notes each conversation asked to remember, for its next turn.
     @ObservationIgnored private var memoryReports: [ChatTarget: [String]] = [:]
+    /// Reviews of finished task turns and sub-agent runs (`Evaluations.swift`), and the records
+    /// the status sidebar shows, by id.
+    @ObservationIgnored var evaluator: RunEvaluator!
+    var evaluationRecords: [String: EvaluationRecord] = [:]
+    /// The kind of review failure each bot's Home was last told about, so a repeat isn't.
+    @ObservationIgnored var noticedEvaluationFailures: [UUID: EvaluationFailure.Kind] = [:]
     /// Unsent follow-ups and short pet reactions belong to one conversation, not the whole bot.
     var messageQueues: ConversationField<MessageQueue> { ConversationField(model: self, field: \.queue) }
     var reactions: ConversationField<BotActivity> { ConversationField(model: self, field: \.reaction) }
@@ -152,7 +158,7 @@ final class AppModel {
     /// What each running CLI that takes input mid-turn has been given and has taken back.
     @ObservationIgnored private var inputs: [ChatTarget: (kind: AgentKind, ledger: InputLedger)] = [:]
     /// BotChu is quitting: the turns it stops weren't stopped by the owner, so queues stay unpaused.
-    @ObservationIgnored private var terminating = false
+    @ObservationIgnored private(set) var terminating = false
     /// While a bot's Home turn runs, BotChu looks for the tasks it asks for (`.botchu/dispatch/`).
     @ObservationIgnored private var dispatchTimers: [UUID: Timer] = [:]
     /// Bots whose dispatch requests are being started.
@@ -193,7 +199,7 @@ final class AppModel {
          openWorkLookup: @escaping @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure> = { await GitHubLookup.openWork(repos: $0) },
          workDetailLookup: @escaping @Sendable (String, Int, Bool) async -> Result<GitHubLookup.WorkDetail, TaskWorktree.Failure> = {
              await GitHubLookup.detail(number: $1, pullRequest: $2, repo: $0)
-         }) {
+         }, evaluationRunner: RunEvaluator.Runner? = nil) {
         self.projectGitHub = projectGitHub
         self.openWorkLookup = openWorkLookup
         self.workDetailLookup = workDetailLookup
@@ -220,6 +226,8 @@ final class AppModel {
             reloadPet(bot.id)
         }
         warmMarkdown()
+        // Reviews spend the accounts' allowance: only the real app runs them by itself.
+        evaluator = makeEvaluator(runner: store == nil && DevHooks.dataDir == nil ? evaluationRunner ?? liveEvaluationRunner() : evaluationRunner)
         delegation = SubagentRuntime(model: self, root: (store != nil || DevHooks.dataDir != nil)
             ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot)
         selection = bots.first?.id
@@ -228,6 +236,7 @@ final class AppModel {
         }
         // Requests left while BotChu wasn't running.
         for bot in bots { takeDispatches(for: bot.id) }
+        evaluator.load(bots: bots.map { ($0.id, $0.workspace) })
         // Follow-ups left queued when BotChu quit go out on their own, unless Stop or a failure
         // paused them; once the window is up, so a turn's first output has somewhere to go.
         DispatchQueue.main.async { [weak self] in
@@ -1247,7 +1256,10 @@ final class AppModel {
                     if self.visibleBotID != id || self.tab(of: id) != target { self.unread.insert(target) }
                     let turn = messages.suffix(from: min(turnStart, messages.count))
                     self.saveMemory(from: Array(turn), for: target)
-                    if target.taskID != nil { self.finishTaskTurn(target, stopped: stopped, failure: failure) }
+                    if target.taskID != nil {
+                        self.finishTaskTurn(target, stopped: stopped, failure: failure)
+                        self.evaluateTaskTurn(target, thread: messages, turnStart: turnStart, stopped: stopped, failure: failure)
+                    }
                     try? home.appendLog(TurnLog.ended(
                         at: Date(), startedAt: startedAt, status: status, stopped: stopped,
                         toolCalls: turn.filter { $0.role == .tool }.count,
@@ -1258,6 +1270,8 @@ final class AppModel {
                                                            failed: !self.terminating && (!saved || failure != nil))
                     if let queue = self.messageQueues[target] { _ = self.saveQueue(queue, for: target) }
                     self.sendNextQueued(to: target)
+                    // The account may be idle now, for a review waiting for it.
+                    self.evaluator.pump()
                 }
 
                 do {
@@ -1421,7 +1435,7 @@ final class AppModel {
 
     // MARK: Storage
 
-    private func append(_ message: ChatMessage, to target: ChatTarget) {
+    func append(_ message: ChatMessage, to target: ChatTarget) {
         conversation(target).append(message)
     }
 
@@ -1502,7 +1516,7 @@ final class AppModel {
     /// Saves the conversation, and its queue while it holds messages the CLI took
     /// (`BotHome.checkpoint`); true when the transcript was saved.
     @discardableResult
-    private func saveThread(_ target: ChatTarget) -> Bool {
+    func saveThread(_ target: ChatTarget) -> Bool {
         guard let bot = bot(target.botID) else { return false }
         if let taskID = target.taskID, task(taskID, of: bot.id) == nil { return false }
         var queue = messageQueues[target] ?? MessageQueue()

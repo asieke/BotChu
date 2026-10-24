@@ -643,14 +643,27 @@ public enum MemoryNotes {
     /// The memory file's text with the notes applied, in order, and what they changed: new list
     /// items (deduplicated against existing bullets), outdated bullets replaced in place
     /// (`Replace: old -> new`) and forgotten bullets removed (`Forget: old`). Applying the same notes
-    /// again changes nothing, so a retry never duplicates them.
-    static func applying(_ notes: [String], to text: String) -> (text: String, changes: MemoryChanges) {
+    /// again changes nothing, so a retry never duplicates them. With a `section` heading, new items
+    /// go at the end of that section, which is made at the end of the file when it is missing.
+    static func applying(_ notes: [String], to text: String, section: String? = nil) -> (text: String, changes: MemoryChanges) {
         var changes = MemoryChanges()
         var lines = text.isEmpty ? [] : text.components(separatedBy: "\n")
         if lines.last == "" { lines.removeLast() }
 
         func contains(_ norm: String) -> Bool { lines.contains { bulletBody($0).map { normalized($0) == norm } ?? false } }
         func appendBullet(_ note: String) {
+            if let section {
+                if let heading = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == section }) {
+                    var end = heading + 1
+                    while end < lines.count, !lines[end].hasPrefix("#") { end += 1 }
+                    while end > heading + 1, lines[end - 1].trimmingCharacters(in: .whitespaces).isEmpty { end -= 1 }
+                    lines.insert("- \(note)", at: end)
+                    return
+                }
+                if let last = lines.last, !last.isEmpty { lines.append("") }
+                lines += [section, "", "- \(note)"]
+                return
+            }
             if let last = lines.last, !last.isEmpty, bulletBody(last) == nil { lines.append("") }
             lines.append("- \(note)")
         }
@@ -765,7 +778,7 @@ public enum MemoryNotes {
         return cleanLine(cleaned)
     }
 
-    private static func bulletBody(_ line: String) -> String? {
+    static func bulletBody(_ line: String) -> String? {
         let trimmed = line.drop(while: { $0 == " " || $0 == "\t" })
         for bullet in bullets where trimmed.hasPrefix(bullet) {
             return String(trimmed.dropFirst(bullet.count)).trimmingCharacters(in: .whitespaces)
@@ -773,7 +786,7 @@ public enum MemoryNotes {
         return nil
     }
 
-    private static func normalized(_ text: String) -> String {
+    static func normalized(_ text: String) -> String {
         cleanTarget(text)
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")

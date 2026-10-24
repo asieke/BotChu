@@ -32,6 +32,8 @@ final class SubagentRuntime {
     @ObservationIgnored private var rejections: [UUID: [UUID: SubagentResult]] = [:]
     @ObservationIgnored private var pendingFinishes: [UUID: (SubagentPhase, String?)] = [:]
     @ObservationIgnored private var requestCounts: [ChatTarget: Int] = [:]
+    /// Runs found unfinished after a relaunch are being closed, which aren't reviewed.
+    @ObservationIgnored private var restoring = false
 
     /// How often a caller's mailbox is looked at, on this Mac and on a host.
     nonisolated static let localPoll: Duration = .milliseconds(250)
@@ -493,6 +495,8 @@ final class SubagentRuntime {
         }
         replace(record)
         queueDelivery(record)
+        // A review of the attempt, in the background; the handoff doesn't wait for it.
+        if !restoring { model?.evaluateSubagentRun(record, messages: messages) }
         for (parent, outcome) in pendingFinishes where !children(of: parent).contains(where: { $0.phase.isActive }) {
             finish(parent, phase: outcome.0, error: outcome.1)
         }
@@ -554,6 +558,8 @@ final class SubagentRuntime {
 
     private func restore() {
         guard let model else { return }
+        restoring = true
+        defer { restoring = false }
         for bot in model.bots {
             let home = BotHome(workspace: bot.workspace)
             for taskID in [nil] + (model.tasks[bot.id] ?? []).map({ Optional($0.id) }) {
