@@ -1,0 +1,79 @@
+import AppKit
+import BotChuCore
+
+/// A skill and the bot it belongs to: nil for a shared one, in the bots folder.
+struct SkillEntry: Identifiable, Hashable {
+    let skill: Skill
+    let bot: Bot?
+    var id: String { skill.id }
+}
+
+/// Skills (`Skills` in BotChuCore): the shared ones in the bots folder's `skills/`, and each bot's own
+/// in its workspace's.
+extension AppModel {
+    var sharedSkillsFolder: URL { Skills.sharedFolder(besideSharedMemory: settings.sharedMemoryPath) }
+
+    /// The shared skills, then each bot's own in sidebar order, or only `botID`'s.
+    func skillEntries(of botID: UUID? = nil) -> [SkillEntry] {
+        Skills.discover(in: sharedSkillsFolder, scope: .shared).map { SkillEntry(skill: $0, bot: nil) }
+            + bots.filter { botID == nil || $0.id == botID }.flatMap { bot in
+                Skills.discover(in: Skills.folder(of: bot), scope: .bot).map { SkillEntry(skill: $0, bot: bot) }
+            }
+    }
+
+    /// The skills a session of `bot` is told about.
+    func activeSkills(of bot: Bot) -> [Skill] {
+        Skills.active(for: bot, sharedFolder: sharedSkillsFolder)
+    }
+
+    func setSharedSkill(_ slug: String, enabled: Bool, for botID: UUID) {
+        guard let i = bots.firstIndex(where: { $0.id == botID }), bots[i].usesSharedSkill(slug) != enabled else { return }
+        bots[i].setSharedSkill(slug, enabled: enabled)
+        save(bots[i])
+    }
+
+    func editSkill(_ entry: SkillEntry) {
+        documentEditor = DocumentEditorRequest(skill: entry.skill, bot: entry.bot)
+    }
+
+    /// Makes a skill from the template, shared or `bot`'s own.
+    func createSkill(name: String, description: String, for bot: Bot?) throws -> SkillEntry {
+        let folder = bot.map(Skills.folder(of:)) ?? sharedSkillsFolder
+        let url = try Skills.create(name: name, description: description, in: folder)
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        let skill = Skill(slug: url.deletingLastPathComponent().lastPathComponent, text: text, scope: bot == nil ? .shared : .bot, url: url)
+        return SkillEntry(skill: skill, bot: bot)
+    }
+
+    /// Puts the skill's folder in the Trash. A shared skill's slug no longer stays turned off for
+    /// any bot, so another skill of that name starts on.
+    func deleteSkill(_ entry: SkillEntry) throws {
+        try entry.skill.trash()
+        guard entry.bot == nil else { return }
+        for bot in bots where !bot.usesSharedSkill(entry.skill.slug) {
+            setSharedSkill(entry.skill.slug, enabled: true, for: bot.id)
+        }
+    }
+
+    /// Shows a skill in Finder, or the folder skills go in when there is none.
+    func revealSkill(_ entry: SkillEntry?, folder: URL? = nil) {
+        if let entry {
+            NSWorkspace.shared.activateFileViewerSelecting([entry.skill.url])
+        } else {
+            let folder = folder ?? sharedSkillsFolder
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            NSWorkspace.shared.open(folder)
+        }
+    }
+}
+
+extension DocumentEditorRequest {
+    init(skill: Skill, bot: Bot?) {
+        name = skill.name
+        subtitle = "\(bot?.name ?? "Every bot") · Skill · \((skill.url.path as NSString).abbreviatingWithTildeInPath)"
+        url = skill.url
+        seed = skill.text
+        placeholder = "A runbook in Markdown, after YAML frontmatter with name and a one-line description of when to use it."
+        footnote = "Bots see the name and description at the start of each session, and read the rest when the skill matches their work."
+    }
+}
