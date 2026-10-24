@@ -12,6 +12,11 @@ extension RenderingTests {
     @Test func aLaunchReadsTheShownConversationAndRecoveryAloneAndNoArchivedHistory() async throws {
         let fixture = try HistoryFixture(closedTasks: 2, children: true)
         defer { fixture.cleanUp() }
+        // A closed task's queue stays as it is: it is recovered, and sent, only once the task opens again.
+        let closed = try #require(fixture.closed.first)
+        let queued = ChatMessage(role: .user, text: "for when it opens again")
+        try fixture.botHome(0).saveQueue(MessageQueue(saved: [queued]), task: closed.taskID)
+        let closedQueue = try Data(contentsOf: fixture.botHome(0).queueURL(task: closed.taskID))
         // Nothing is read while the model is made: the shown Home is read after, off the main thread.
         let shown = try #require(fixture.lane(fixture.home(0)))
         fixture.gate.close(shown)
@@ -34,6 +39,8 @@ extension RenderingTests {
             #expect(!app.conversation(target).isLoaded)
             #expect(app.status(of: target)?.messageCount == (fixture.messages[target] ?? 0) / 3 * 2)
         }
+        #expect(app.messageQueues[closed] == nil)
+        #expect(try Data(contentsOf: fixture.botHome(0).queueURL(task: closed.taskID)) == closedQueue)
         let launched = fixture.counts.bytesRead
         app.stopAll()
 
@@ -136,6 +143,35 @@ extension RenderingTests {
         #expect(disk.filter { $0.role == .user }.suffix(2).map(\.text) == ["keep me", "sent before recovery"])
         #expect(try fixture.calls(target).count == 2)
         #expect(disk.count >= (fixture.messages[target] ?? 0) + 4)
+    }
+
+    @Test func stopWithdrawsATurnWaitingForItsConversationToBeRead() async throws {
+        let fixture = try HistoryFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.launch()
+        defer { app.stopAll() }
+        await app.storage.settle()
+        let target = fixture.task(0, 0)
+        let lane = try #require(fixture.lane(target))
+        fixture.gate.close(lane)
+        #expect(app.send("hold on", to: target))
+        #expect(app.isRunning(target))
+        // Queued and saved, its turn waits for the conversation to be read.
+        try await fixture.wait { app.messageQueues[target]?.next?.text == "hold on" && app.runStates[target]?.preparing == true }
+        app.stop(target)
+        #expect(!app.isRunning(target))
+        fixture.gate.open(lane)
+        await app.storage.settle()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!fixture.ran(target))
+        #expect(!app.isRunning(target))
+        #expect(app.messageQueues[target]?.messages.map(\.text) == ["hold on"])
+        #expect(app.messageQueues[target]?.isPaused == true)
+        // Sent next, it goes once, after the whole history.
+        app.resumeQueuedMessages(to: target)
+        try await fixture.wait { app.thread(target).last?.text == "reply:hold on" }
+        #expect(try fixture.calls(target).count == 1)
+        #expect(app.thread(target).prefix(fixture.messages[target] ?? 0).map(\.id) == fixture.initial[target]?.map(\.id))
     }
 
     @Test func queuedMessagesOfAnUnopenedTaskGoOutAfterItsOwnRecovery() async throws {
@@ -311,6 +347,7 @@ final class LaneGate: @unchecked Sendable {
     let turns = 12
     private(set) var bots: [Bot] = []
     private(set) var openTasks: [[BotTask]] = []
+    private(set) var closed: [ChatTarget] = []
     private(set) var initial: [ChatTarget: [ChatMessage]] = [:]
     var messages: [ChatTarget: Int] { initial.mapValues(\.count) }
     var open: [ChatTarget] { bots.indices.flatMap { b in [home(b)] + openTasks[b].indices.map { task(b, $0) } } }
@@ -383,6 +420,7 @@ final class LaneGate: @unchecked Sendable {
                                brief: "Closed \(c)")
             task.archivedAt = .now
             try home.save(task)
+            closed.append(.task(task.id, of: bots[b].id))
             try home.writeTranscript(Self.thread(turns * 2, title: task.title), task: task.id)
         }
     }

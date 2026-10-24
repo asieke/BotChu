@@ -46,7 +46,8 @@ final class ConversationState {
     var isSaved: Bool { savedRevision == revision }
 
     struct Waiting {
-        enum Need { case recovery, history }
+        /// Its queue recovered; no read or recovery under way; its history in memory too.
+        enum Need { case recovery, idle, history }
         var need: Need
         var run: () -> Void
         /// Runs instead when the conversation goes (its bot or task deleted).

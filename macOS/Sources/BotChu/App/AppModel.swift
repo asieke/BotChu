@@ -1079,7 +1079,7 @@ final class AppModel {
             return
         }
         // A queue not recovered yet has nothing to send; its recovery sends what waits in it.
-        guard conversation(target).history.isBusy == false, let message = messageQueues[target]?.next else { return }
+        guard conversation(target).history.recovery != .recovering, let message = messageQueues[target]?.next else { return }
         // The turn starts from the conversation's history: once it is read, unless Stop withdraws it.
         guard conversation(target).isLoaded else {
             let ticket = UUID()
@@ -1714,16 +1714,17 @@ final class AppModel {
     /// The conversation shown, or remembered behind a gallery.
     private var shownTarget: ChatTarget? { selection.map(tab(of:)) }
 
-    /// Runs `action` now or, while the conversation's history is being read or its queue recovered
-    /// (or, for `.history`, while its history isn't in memory), once that is done, after what waits
-    /// already; returns whether it waits. What `action` asks for in turn while it runs goes first.
-    /// A conversation whose bot or task is gone runs it now.
+    /// Runs `action` now or, while the conversation's queue is being recovered (or, for `.history`,
+    /// while its history isn't in memory, or is being read or recovered), once that is done, after
+    /// what waits already for the same; returns whether it waits. What `action` asks for in turn while
+    /// it runs goes first. A queue being read doesn't hold up changes to its queue. A conversation
+    /// whose bot or task is gone runs it now.
     @discardableResult
     func later(_ target: ChatTarget, needs: ConversationState.Waiting.Need, _ action: @escaping () -> Void,
                cancel: (() -> Void)? = nil) -> Bool {
         guard files(target) != nil else { return false }
         let conversation = conversation(target)
-        if meets(conversation, needs), conversation.waiting.isEmpty || conversation.draining { return false }
+        if meets(conversation, needs), conversation.draining || !conversation.waiting.contains(where: { $0.need == needs }) { return false }
         let waiting = ConversationState.Waiting(need: needs, run: action, cancel: cancel)
         if conversation.draining {
             conversation.waiting.insert(waiting, at: min(conversation.insertion, conversation.waiting.count))
@@ -1736,18 +1737,28 @@ final class AppModel {
     }
 
     private func meets(_ conversation: ConversationState, _ need: ConversationState.Waiting.Need) -> Bool {
-        !conversation.history.isBusy && (need == .recovery || conversation.isLoaded)
+        switch need {
+        case .recovery: conversation.history.recovery != .recovering
+        case .idle: !conversation.history.isBusy
+        case .history: !conversation.history.isBusy && conversation.isLoaded
+        }
     }
 
-    /// Runs what waits for the conversation, in order, as far as it can; reads its history when
-    /// the next one needs it.
+    /// Runs what waits for the conversation, each kind in the order asked, as far as it can; reads
+    /// its history when something waits for it.
     private func drain(_ target: ChatTarget) {
         guard let conversation = conversations[target], !conversation.draining else { return }
         conversation.draining = true
-        while let first = conversation.waiting.first, meets(conversation, first.need) {
-            conversation.waiting.removeFirst()
-            conversation.insertion = 0
-            first.run()
+        var index = 0
+        while index < conversation.waiting.count {
+            let next = conversation.waiting[index]
+            guard meets(conversation, next.need) else {
+                index += 1
+                continue
+            }
+            conversation.waiting.remove(at: index)
+            conversation.insertion = index
+            next.run()
         }
         conversation.draining = false
         startWaitingRead(target)
@@ -1755,7 +1766,7 @@ final class AppModel {
 
     private func startWaitingRead(_ target: ChatTarget) {
         guard let conversation = conversations[target], !conversation.history.isBusy, !conversation.isLoaded,
-              conversation.waiting.first?.need == .history else { return }
+              conversation.waiting.contains(where: { $0.need == .history }) else { return }
         startRead(target)
     }
 
@@ -1783,7 +1794,7 @@ final class AppModel {
     /// Waits until no read or recovery of the conversation is under way.
     private func settled(_ target: ChatTarget) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            if !later(target, needs: .recovery, { continuation.resume() }, cancel: { continuation.resume() }) { continuation.resume() }
+            if !later(target, needs: .idle, { continuation.resume() }, cancel: { continuation.resume() }) { continuation.resume() }
         }
     }
 
@@ -1832,7 +1843,7 @@ final class AppModel {
         let conversation = conversation(target)
         let given = conversation.isLoaded ? conversation.messages : nil
         guard let ticket = conversation.history.begin(load: load, recover: true) else {
-            later(target, needs: .recovery, { [weak self] in self?.recover(target, load: load) })
+            later(target, needs: .idle, { [weak self] in self?.recover(target, load: load) })
             return
         }
         let home = files.home, task = target.taskID, lane = files.lane
