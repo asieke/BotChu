@@ -42,6 +42,38 @@ extension RenderingTests {
         #expect(MarkdownParses.main == parsedOnMain)
     }
 
+    /// The window asks its content for its ideal size whenever a reply changes. A long reply
+    /// answers at the width it is shown at, so its chunks, which a revision doesn't change, aren't
+    /// laid out again at the width of the line being written, as a `VStack` would have them.
+    @Test func aLongReplysChunksAreLaidOutOnlyAtTheWidthItIsShownAt() async throws {
+        _ = NSApplication.shared
+        let paragraph = "A **measured** answer has `code`, a [link](https://example.test), and explanation.\n\n"
+        var text = "Reply \(UUID().uuidString)\n\n" + String(repeating: paragraph, count: 400)
+        MarkdownCache.shared.warm([text])
+        func row(_ text: String) -> some View {
+            HStack(alignment: .top, spacing: 10) {
+                Color.clear.frame(width: 28, height: 1)
+                MarkdownText(text: text).padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        let host = NSHostingView(rootView: AnyView(row(text)))
+        host.frame = NSRect(x: 0, y: 0, width: 700, height: 800)
+        host.layoutSubtreeIfNeeded()
+        _ = host.fittingSize
+        let layouts = MarkdownText.chunkLayouts
+        #expect(layouts >= 3)
+        for index in 0..<5 {
+            text += " delta \(index) with **bold** words"
+            host.rootView = AnyView(row(text))
+            host.layoutSubtreeIfNeeded()
+            for _ in 0..<250 where MarkdownCache.shared.cached(text) == nil { try await Task.sleep(for: .milliseconds(10)) }
+            try await Task.sleep(for: .milliseconds(20))
+            host.layoutSubtreeIfNeeded()
+            _ = host.fittingSize
+        }
+        #expect(MarkdownText.chunkLayouts == layouts)
+    }
+
     /// A rich reply's web view renders one revision at a time: the revisions written meanwhile
     /// wait, only the newest, and the page ends with the last one. A height reported for another
     /// revision changes nothing.

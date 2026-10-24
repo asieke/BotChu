@@ -134,23 +134,39 @@ extension RenderingTests {
         report.add("Last delta to its rendering drawn", [settled])
         report.note("128 KB reply, 100 deltas: parses started \(worker.started - workerBefore.started), completed \(worker.completed - workerBefore.completed), replaced while waiting \(worker.superseded - workerBefore.superseded), most at once \(worker.peak) (limit \(MarkdownWorker.shared.limit)), on the main thread \(MarkdownParses.main - parsedOnMain)")
         // As the app delivers output, a few times a second: 30 deltas 200 ms apart, with a key
-        // press in the message box between each two.
+        // press in the message box between each two. Meanwhile a typist, on its own schedule,
+        // presses a key every 40 ms: from the press until the message box has drawn it is how
+        // long typing waits; and from when each delta is due until its text is drawn, how fresh
+        // the reply's text is.
         try await idle(300)
         // The same probe with nothing happening: what the Mac's load alone costs.
         let quiet = MainThreadProbe()
         try await Task.sleep(for: .seconds(3))
         report.add("Main-thread wait, nothing streaming", quiet.stop())
         let probe = MainThreadProbe()
-        var paced: [Double] = [], keys: [Double] = []
-        for i in 0..<30 {
-            paced.append(time { long.stream { $0[$0.count - 1].text += " paced \(i) with **bold** words" } })
-            try await Task.sleep(for: .milliseconds(100))
-            keys.append(time { editor.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0)) })
-            try await Task.sleep(for: .milliseconds(100))
+        let typist = MainThreadProbe(every: 40_000) {
+            editor.insertText("b", replacementRange: NSRange(location: NSNotFound, length: 0))
+            draw()
         }
+        var paced: [Double] = [], keys: [Double] = [], fresh: [Double] = []
+        let clock = ContinuousClock()
+        let begin = clock.now
+        for i in 0..<30 {
+            let due = begin.advanced(by: .milliseconds(200 * i))
+            try await Task.sleep(until: due, clock: clock)
+            paced.append(time { long.stream { $0[$0.count - 1].text += " paced \(i) with **bold** words" } })
+            let late = (clock.now - due).components
+            fresh.append(Double(late.seconds) * 1_000 + Double(late.attoseconds) / 1e15)
+            try await Task.sleep(until: due.advanced(by: .milliseconds(100)), clock: clock)
+            keys.append(time { editor.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0)) })
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        let typed = typist.stop()
         let waits = probe.stop()
         report.add("Stream delta, 128 KB reply, 5 a second", paced)
+        report.add("  …from when it was due until drawn", fresh)
         report.add("Key press in the composer, meanwhile", keys)
+        report.add("Key press every 40 ms, from it until drawn", typed)
         report.add("Main-thread wait, meanwhile", waits)
         editor.string = ""
         app.drafts[bench.long] = nil
@@ -368,14 +384,18 @@ final class MainThreadProbe: @unchecked Sendable {
     private var waits: [Double] = []
     private var running = true
 
-    init() {
+    /// Posts to the main thread every `interval` microseconds, from a thread of its own, and
+    /// records how long until the main thread has run it, and `work` with it.
+    init(every interval: useconds_t = 5_000, _ work: (@MainActor () -> Void)? = nil) {
+        nonisolated(unsafe) let work = work
         Thread.detachNewThread { [self] in
             while isRunning {
                 let posted = DispatchTime.now().uptimeNanoseconds
                 DispatchQueue.main.async { [self] in
+                    if let work { MainActor.assumeIsolated { work() } }
                     record(Double(DispatchTime.now().uptimeNanoseconds - posted) / 1_000_000)
                 }
-                usleep(5_000)
+                usleep(interval)
             }
         }
     }

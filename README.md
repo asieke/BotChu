@@ -169,7 +169,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     across every conversation and only the newest revision of each, so a long reply never holds up typing, switching or
     Stop: its last rendering shows meanwhile, and once the reply is over 16 KB the text written since shows as it is until
     the rendering catches up. A reply of 256 blocks or more is laid out in chunks of 128, each apart from the rest of
-    the chat, so typing, another row or the next delta doesn't lay out the chunks already written again. Headings, nested lists, quotes,
+    the chat and only at the width it is shown at, so typing, another row or the next delta doesn't lay out the chunks
+    already written again. Headings, nested lists, quotes,
     tables and fenced code use native block layouts; code has a Copy button. A table's cells stay on
     one line, each row ruled straight across whatever its cells hold (empty, or inline code), and a
     table wider than the chat scrolls sideways. Replies have soft rounded
@@ -849,7 +850,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     killed at its timeout.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
     across every column, streaming updates (a long reply being written never parsed on the main
-    thread, and a rich reply's web view rendering one revision at a time, ignoring late heights), source
+    thread, its chunks laid out only at the width it is shown at, also when the window asks for its
+    ideal size, and a rich reply's web view rendering one revision at a time, ignoring late heights), source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
     saves, a follow-up taken while the transcript can't be saved (back in it after a relaunch), model-picker keyboard interaction and persisted choices,
@@ -1044,10 +1046,12 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   streamed delta, a new call in a live exploration, a sub-agent's update, and opening a large group
   or output; and, in Core alone, a call joining and finishing in a live group of 400, 1,000 and
   5,000 calls, apart from comparing the group before and after, grouping each afresh, and the memory
-  a 5,000-call projection keeps; and writes the table to the file. It also streams 100 deltas into a 128 KB
-  reply while typing in the message box, with how long the main thread keeps a key press waiting
-  and how long until the last delta's rendering is drawn, then 60 into a 32 KB reply with 282
-  equations, until WebKit has drawn the last, with the worker's and WebKit's counts. `BOTCHU_BENCHMARK_SCOPE=chat` times the
+  a 5,000-call projection keeps; and writes the table to the file. It also streams 100 rapid deltas into a 128 KB
+  reply, until the last delta's rendering is drawn, with the worker's counts; then 30 more at 5 a second
+  while a key is pressed in the message box every 40 ms, with how long from each delta's time and each
+  key press until it is drawn, and how long the main thread keeps other work waiting meanwhile (and with
+  nothing streaming); then 60 deltas into a 32 KB reply with 282 equations, until WebKit has drawn the
+  last, with WebKit's counts. `BOTCHU_BENCHMARK_SCOPE=chat` times the
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.

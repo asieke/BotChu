@@ -9,11 +9,13 @@ import BotChuCore
 struct MarkdownText: View {
     let text: String
     @State private var preparation = PreparedMarkdown()
+    /// How many times a long reply's chunk was laid out, for tests.
+    @MainActor static var chunkLayouts = 0
 
     var body: some View {
         let _ = preparation.revision
         let display = preparation.core.display(for: text)
-        VStack(alignment: .leading, spacing: 10) {
+        ReplyStack(spacing: 10) {
             switch display.rendering {
             case .rich(let html):
                 RichMarkdownText(html: html)
@@ -39,6 +41,47 @@ struct MarkdownText: View {
             }
         }
         .onChange(of: text, initial: true) { preparation.core.update(text) }
+    }
+}
+
+/// A reply's parts, one under another, as a leading-aligned `VStack` lays them out, but asked for
+/// its ideal size (as the window asks its content, whenever a reply changes), it answers with the
+/// width it was last laid out at. A `VStack` measures its parts at the width of its widest line
+/// instead, which grows with the line being written, so every revision of a long reply laid each
+/// of its chunks out again at a width it is never shown at (about 80 ms for 128 KB).
+private struct ReplyStack: Layout {
+    var spacing: CGFloat
+
+    struct Cache {
+        var width: CGFloat?
+    }
+
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    // The width it was laid out at holds while its parts change.
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {}
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? cache.width
+        var height: CGFloat = 0
+        var widest: CGFloat = 0
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+            height += size.height + (index > 0 ? spacing : 0)
+            widest = max(widest, size.width)
+        }
+        return CGSize(width: width ?? widest, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        cache.width = bounds.width
+        var y = bounds.minY
+        for subview in subviews {
+            let size = subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+            subview.place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading,
+                          proposal: ProposedViewSize(width: bounds.width, height: size.height))
+            y += size.height + spacing
+        }
     }
 }
 
@@ -97,7 +140,10 @@ private struct SeparateBlocks: NSViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
         guard let width = proposal.width, width.isFinite, let controller = context.coordinator.controller else { return nil }
         if let height = context.coordinator.heights[width] { return CGSize(width: width, height: height) }
+        MarkdownText.chunkLayouts += 1
         let height = ceil(controller.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height)
+        // A few widths, as a window being resized goes through many.
+        if context.coordinator.heights.count >= 8 { context.coordinator.heights.removeAll() }
         context.coordinator.heights[width] = height
         return CGSize(width: width, height: height)
     }
