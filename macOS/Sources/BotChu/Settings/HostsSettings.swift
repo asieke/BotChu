@@ -32,7 +32,7 @@ struct HostsSection: View {
         } header: {
             Text("Hosts")
         } footer: {
-            Text("Other computers tasks can work on, over SSH with your keys (never a password). A repository whose PROJECT.md deploys it to a host's machine name works there by default.")
+            Text("Other computers tasks can work on, over SSH with your keys (never a password).")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .sheet(item: $editing) { host in
@@ -42,7 +42,7 @@ struct HostsSection: View {
     }
 }
 
-/// Where the owner chose to work on repositories, in New Task.
+/// Where the owner chose to work on repositories.
 struct RepoLocationsSection: View {
     @Environment(AppModel.self) private var model
 
@@ -65,15 +65,12 @@ struct RepoLocationsSection: View {
                                 Image(systemName: "minus.circle")
                             }
                             .buttonStyle(.borderless)
-                            .help("Work on \(repo) where it lives by default again")
+                            .help("Work on \(repo) on this Mac again")
                         }
                     }
                 }
             } header: {
                 Text("Repository locations")
-            } footer: {
-                Text("Chosen in New Task. Any other repository works where its PROJECT.md deploys it, else in the repositories folder on this Mac.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }

@@ -110,7 +110,7 @@ struct ProjectOverviewTab: View {
     @Environment(AppModel.self) private var model
     let repo: GitHubLookup.Repo
     @State private var editor: ProjectEditRequest?
-    @State private var location: RepoLocation?
+    private var location: RepoLocation { model.location(of: repo.nameWithOwner) }
     private var record: ProjectRecord? { model.projectRecords[repo.id] }
     private var metadata: ProjectMetadata? { record.flatMap { try? $0.metadata(repoName: repo.name) } }
     private var parseError: String? {
@@ -159,17 +159,11 @@ struct ProjectOverviewTab: View {
             }
             InspectorSection("Workspace", preferenceKey: "project.workspace") {
                 InspectorCard {
-                    InspectorRow("Works on", value: location.map { model.machineName($0.hostID) } ?? "—")
+                    InspectorRow("Works on", value: model.machineName(location.hostID))
                     InspectorRow("Checkout", last: true) {
-                        let path = location.map { $0.hostID == nil ? ($0.path as NSString).abbreviatingWithTildeInPath : $0.path } ?? "—"
+                        let path = location.hostID == nil ? (location.path as NSString).abbreviatingWithTildeInPath : location.path
                         Text(path).truncationMode(.head).textSelection(.enabled).help(path)
                     }
-                }
-                if let warning = model.projectPlacementProblem(repo.id) {
-                    Label(warning, systemImage: "network.badge.shield.half.filled")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             let tasks = model.openTasks.filter { $0.task.repo.caseInsensitiveCompare(repo.id) == .orderedSame }
@@ -199,7 +193,6 @@ struct ProjectOverviewTab: View {
                 }
             }
         }
-        .task(id: "\(repo.id)|\(record?.sha ?? "")") { location = await model.location(of: repo.nameWithOwner) }
         .sheet(item: $editor) { request in
             ProjectMetadataEditor(repo: repo, original: request.record, metadata: request.metadata).environment(model)
         }

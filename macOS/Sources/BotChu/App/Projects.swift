@@ -18,19 +18,10 @@ extension AppModel {
         if projectsLoading != (state.syncing != nil) { projectsLoading = state.syncing != nil }
         if repositoriesError != state.error { repositoriesError = state.error }
         guard state.login != nil else { return }
-        if projectsLogin != state.login {
-            // Another account's PROJECT.md mustn't place this one's tasks.
-            if projectsLogin != nil { deployTargetCache = [:] }
-            projectsLogin = state.login
-        }
+        if projectsLogin != state.login { projectsLogin = state.login }
         if repositoriesReadAt != state.syncedAt { repositoriesReadAt = state.syncedAt }
         if repositories != state.repositories { repositories = state.repositories }
-        if projectRecords != state.records {
-            for (repo, record) in state.records where projectRecords[repo] != record {
-                deployTargetCache[repo] = Locations.deployTargets(projectFile: record.text)
-            }
-            projectRecords = state.records
-        }
+        if projectRecords != state.records { projectRecords = state.records }
         if projectErrors != state.recordErrors { projectErrors = state.recordErrors }
         if openItems != state.openItems { openItems = state.openItems }
         if openIssueStatus != state.issueStatus { openIssueStatus = state.issueStatus }
@@ -55,7 +46,7 @@ extension AppModel {
     /// The projects as saved, for readers that mustn't wait on GitHub (such as `#project` completion).
     var projectCatalog: [ProjectCatalogEntry] {
         ProjectRow.rows(repos: repositories ?? [], records: projectRecords, errors: projectErrors, chosen: settings.repoLocations,
-                        thisMac: settings.thisMacName, hosts: settings.hosts, reposRoot: settings.expandedReposRoot, taskRepos: [])
+                        hosts: settings.hosts, reposRoot: settings.expandedReposRoot, taskRepos: [])
             .map(\.catalogEntry)
     }
 
@@ -147,17 +138,5 @@ extension AppModel {
         githubChecking = true
         defer { githubChecking = false }
         githubConnection = await projectGitHub.connection()
-    }
-}
-
-extension AppModel {
-    /// A project that names only machines not configured here must not silently become a local task.
-    func projectPlacementProblem(_ repo: String) -> String? {
-        if let chosen = settings.repoLocations[repo], chosen.hostID == nil || settings.host(chosen.hostID) != nil { return nil }
-        let targets = deployTargetCache[repo] ?? []
-        guard !targets.isEmpty else { return nil }
-        let known = [settings.thisMacName] + settings.hosts.map(\.machine)
-        guard !targets.contains(where: { target in known.contains { $0.caseInsensitiveCompare(target.machine) == .orderedSame } }) else { return nil }
-        return "This project deploys on \(targets.map(\.machine).joined(separator: ", ")), which isn’t connected in Settings ▸ Hosts. Connect it there, or work on it on This Mac."
     }
 }

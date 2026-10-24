@@ -51,43 +51,18 @@ private func tempDir(_ name: String) -> URL {
         #expect(host.command(for: Accounts.account(id: "muse")) == nil)
     }
 
-    @Test func deployTargets() {
-        let file = """
-            ---
-            name: x-digest
-            deploy: vercel:x-digest, local:omarchy-1:~/apps/x-digest, local:Alexs-MacBook-Pro-92440:~/Desktop/WORKSPACE/x-digest   # where it runs
-            merge: agent
-            ---
-
-            # x-digest
-            deploy: local:not-frontmatter:/x
-            """
-        let targets = Locations.deployTargets(projectFile: file)
-        #expect(targets.map(\.machine) == ["omarchy-1", "Alexs-MacBook-Pro-92440"])
-        #expect(targets.map(\.path) == ["~/apps/x-digest", "~/Desktop/WORKSPACE/x-digest"])
-        #expect(Locations.deployTargets(projectFile: "# no frontmatter").isEmpty)
-        #expect(Locations.deployTargets(projectFile: "---\ndeploy: none\n---\n").isEmpty)
-    }
-
     @Test func whereARepositoryLives() {
         let omarchy = SSHHost(nickname: "Omarchy", destination: "asieke@omarchy", machine: "omarchy-1")
-        let deploy = [(machine: "omarchy-1", path: "~/apps/x-digest")]
         let root = "/Users/a/WORKSPACE"
-        // PROJECT.md's deploy names a host's machine: it works there.
-        #expect(Locations.resolve(repo: "asieke/x-digest", chosen: nil, deployTargets: deploy, thisMac: "mac", hosts: [omarchy], reposRoot: root)
-                == RepoLocation(hostID: omarchy.id, path: "~/apps/x-digest"))
-        // Without that host, in the repositories folder here.
-        #expect(Locations.resolve(repo: "asieke/x-digest", chosen: nil, deployTargets: deploy, thisMac: "mac", hosts: [], reposRoot: root)
+        // Without the owner's choice, in the repositories folder here, whatever PROJECT.md deploys.
+        #expect(Locations.resolve(repo: "asieke/x-digest", chosen: nil, hosts: [omarchy], reposRoot: root)
                 == RepoLocation(path: "/Users/a/WORKSPACE/x-digest"))
-        // This Mac's own deploy target comes first.
-        let both = deploy + [(machine: "Mac", path: "/Users/a/live/x-digest")]
-        #expect(Locations.resolve(repo: "asieke/x-digest", chosen: nil, deployTargets: both, thisMac: "mac", hosts: [omarchy], reposRoot: root)
-                == RepoLocation(path: "/Users/a/live/x-digest"))
-        // The owner's choice wins, unless its host left Settings.
+        // The owner's choice wins, on this Mac or on a host, unless its host left Settings.
         let chosen = RepoLocation(path: "/tmp/x")
-        #expect(Locations.resolve(repo: "asieke/x-digest", chosen: chosen, deployTargets: deploy, thisMac: "mac", hosts: [omarchy], reposRoot: root) == chosen)
-        let gone = RepoLocation(hostID: UUID(), path: "~/x")
-        #expect(Locations.resolve(repo: "asieke/x-digest", chosen: gone, deployTargets: [], thisMac: "mac", hosts: [omarchy], reposRoot: root)
+        #expect(Locations.resolve(repo: "asieke/x-digest", chosen: chosen, hosts: [omarchy], reposRoot: root) == chosen)
+        let there = RepoLocation(hostID: omarchy.id, path: "~/apps/x-digest")
+        #expect(Locations.resolve(repo: "asieke/x-digest", chosen: there, hosts: [omarchy], reposRoot: root) == there)
+        #expect(Locations.resolve(repo: "asieke/x-digest", chosen: there, hosts: [], reposRoot: root)
                 == RepoLocation(path: "/Users/a/WORKSPACE/x-digest"))
     }
 }

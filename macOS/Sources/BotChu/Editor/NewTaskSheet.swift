@@ -27,12 +27,8 @@ struct NewTaskSheet: View {
     @AppStorage("newTaskRepo") private var lastRepo = ""
     @State private var query = ""
     @State private var repo: String?
-    /// Where the repository is worked on, once read.
-    @State private var location: RepoLocation?
-    /// Why it isn't worked on where it deploys: that computer isn't in Settings ▸ Hosts.
-    @State private var placementProblem: String?
-    /// The owner chose to work on this Mac all the same, which is remembered for the repository.
-    @State private var worksHere = false
+    /// Where the repository is worked on.
+    private var location: RepoLocation? { repo.map(model.location(of:)) }
     /// The issue or pull request the task works on, if any.
     @State private var work: BotTask.Work?
     @State private var purpose: Purpose
@@ -175,32 +171,15 @@ struct NewTaskSheet: View {
             work = nil
             purpose = .work
         }
-        location = nil
-        placementProblem = nil
-        worksHere = false
-        Task {
-            let found = await model.location(of: nameWithOwner)
-            guard repo == nameWithOwner else { return }
-            location = found
-            placementProblem = model.projectPlacementProblem(nameWithOwner)
-        }
     }
 
     @ViewBuilder private var placeFooter: some View {
         Group {
             if let error = model.repositoriesError, model.repositories == nil {
                 Text(error).foregroundStyle(.red)
-            } else if let placementProblem, !worksHere {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(placementProblem).foregroundStyle(.orange)
-                    Button("Work on This Mac") { worksHere = true }
-                        .help("Work on it in \(location.map(displayed) ?? "the repositories folder") on this Mac, from now on")
-                }
             } else if let location {
                 Text("Works on \(model.machineName(location.hostID))\(location.hostID == nil ? "" : " over SSH"), in \(displayed(location)). BotChu clones it there if it isn't yet.")
                     .textSelection(.enabled)
-            } else if repo != nil {
-                Text("Finding where it’s worked on…")
             } else {
                 Text("Your GitHub repositories, and your organizations', as gh lists them.")
             }
@@ -264,9 +243,7 @@ struct NewTaskSheet: View {
 
     /// Why the task can't start yet, or nil when it can.
     private var problem: String? {
-        guard let repo else { return "Choose a project" }
-        if let placementProblem, !worksHere { return placementProblem }
-        guard let location else { return "Finding where \(repo) is worked on…" }
+        guard let location else { return "Choose a project" }
         if work == nil, brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Say what \(botName) should do" }
         if location.hostID != nil, let folder = SSHHost.folderProblem(location.path) { return folder }
         return conflict
@@ -291,7 +268,6 @@ struct NewTaskSheet: View {
             images.problem = "Couldn't keep the images in \(bot.name)'s folder: \(error.localizedDescription)"
             return
         }
-        if worksHere { model.settings.repoLocations[repo] = location }
         let task = BotTask(for: bot, repo: repo, checkout: location.path, work: work,
                            brief: brief.trimmingCharacters(in: .whitespacesAndNewlines),
                            host: model.settings.host(location.hostID), review: purpose.review)

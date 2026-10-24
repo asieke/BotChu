@@ -83,8 +83,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     reviewing yet with parallel sub-agents, each in a detached worktree of its own. Every start
     opens New Task with the agent, the repository and the issue, pull request or fan-out brief
     chosen, so the account and workspace can be checked (and the brief edited) first. Its tasks work
-    where the project deploys; when that computer isn't connected in Settings ▸ Hosts, New Task says
-    so and offers **Work on This Mac**, which is remembered for the project.
+    on this Mac, wherever the project deploys.
   - **Project metadata:** **Edit Metadata…** edits the name, type, status, deployment, and merge
     policy in `PROJECT.md`. **Create Metadata PR** uses `gh api` to create a documentation branch,
     commit only that file, and open a PR; it never clones the repo or runs its test suite. Repository
@@ -209,10 +208,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     arguments and output (the first 20 KB, with Copy for all of it). For this, each tool call keeps its
     arguments (long text shortened, an edit's text as the lines it adds and removes), exit code and
     duration; older threads show what they recorded. The chat opens at its newest items, as many as
-    lay out quickly, with **Show earlier** above them. Only the messages after the last settled item
-    are regrouped as a turn streams in, and a conversation shown again keeps its grouping and opened
-    cards. A reader at the bottom follows new content; one reading earlier content keeps their place
-    while a turn goes on, and **Follow Live** takes them back.
+    lay out quickly, with **Show earlier** above them. As a turn streams in, only what it changed is
+    grouped again: a new call joins a live group, and one that finishes is taken out of the group's
+    summary and put back, so a call costs the same in an exploration of 5,000 calls as in one of 5,
+    and so do its sub-agents' card placement and tool counts. A conversation shown again keeps its
+    grouping and opened cards; a long one opened anew shows its newest items at once, with a spinner
+    where earlier ones go while they are grouped off the main thread. A reader at the bottom follows
+    new content; one reading earlier content keeps their place while a turn goes on, and **Follow
+    Live** takes them back.
   - **Tasks:** besides its Home, a bot can work on tasks, several at once: each in one of your
     GitHub repositories, with its own conversation and CLI session, in its own git worktree, so
     tasks never share files. BotChu does all of this itself, with no other app. **New Task** (⌘T)
@@ -221,11 +224,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     go with the task's first message, and ⌘↩ starts it. Opened from Projects for an issue or pull
     request, it works on that, and the box adds to it. The task runs on its bot's account (change
     it in the status sidebar), and BotChu names and manages branches automatically. A repository
-    is worked on where you chose for it
-    (Settings lists those choices), else where its `PROJECT.md` deploys it (`local:<machine>:<path>`,
-    on this Mac or a host of that machine name), else in the repositories folder on this Mac
-    (`~/Desktop/WORKSPACE` by default); BotChu clones it there if it isn't yet (`gh repo clone`, or
-    `git clone` over HTTPS). BotChu makes the worktree before the first
+    is worked on where you chose for it (Settings lists those choices), else in the repositories
+    folder on this Mac (`~/Desktop/WORKSPACE` by default), whatever its `PROJECT.md` deploys: a
+    host's live checkout is for running the app, not for work. BotChu clones it there if it isn't
+    yet (`gh repo clone`, or `git clone` over HTTPS). BotChu makes the worktree before the first
     turn, in `.claude/worktrees/<type>-<slug>` of the checkout: with the repository's own
     `scripts/worktree.sh` when it follows the workspace standard (which also links a new
     `<type>/<number>-<slug>` branch to its issue on GitHub), else with git; a pull request's task
@@ -350,7 +352,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `taken.jsonl`, until the conversation is saved with it: when the conversation can't be saved (a
     full disk, a folder without write access), the chat says which file and why, the pending
     messages pause, and the next launch puts that follow-up back into the conversation rather than
-    sending it again. A worktree being prepared finishes setup before follow-ups can run.
+    sending it again. A worktree being prepared finishes setup before follow-ups can run. A message
+    shows in the queue as soon as it is sent and goes to the bot once its queue is saved; when that
+    can't be saved, it goes back into the message box, before anything typed since, and the chat says
+    why. Its turn starts only once the saved conversation holds it; when that can't be saved, it stays
+    queued, paused, and the chat says so. Until then the conversation is busy, and Stop withdraws it.
   - **Mentions:** in a Home or task message box, `@` lists your other agents and `#` your projects,
     in a short list just above the line being typed, over the chat, so the box neither moves nor
     grows. Agents match by name or title, in the sidebar's order, with their avatar and title (and
@@ -435,6 +441,22 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     its own workspace, and not the bots folder itself; moving a bot's workspace in its editor moves its `.botchu/`, `INSTRUCTIONS.md`, `MEMORY.md`, `SOUL.md` and `skills/` with it. Moving
     waits until its turns finish and refuses to overwrite files at the destination. Deleting a bot
     puts only its `.botchu/` in the Trash.
+  - **Saving:** conversations and their queues, bots' and tasks' settings, the turn log, memory
+    notes, sub-agents' and jobs' transcripts and run reviews' records are written off the main
+    thread, so typing, switching conversations and Stop never wait for the disk, however long a
+    conversation is. Each file's writes keep the order they were asked in, and different
+    conversations' go side by side. A file is written whole, and a newer state of it takes the place
+    of one not written yet (one already written isn't written again), so a late save never overwrites
+    a newer one and at most two states of a file are held at once, one being written and one waiting.
+    A conversation's change is on disk once the write under way and its own are done (about 10 ms for
+    1,500 messages, 35 to 40 ms for 5,000 or for 12 MB of tool output, on an M4 Max); a streaming
+    sub-agent's within a second, a job run's within five. A turn's end, what it asked to remember and
+    its review's hand-over happen off the main thread too; the conversation stays busy until its end
+    is saved. Quitting waits up to five seconds for what is being written and lists any file it
+    couldn't finish in the system log, leaving it as it was last saved, never taken as saved.
+    Deleting a bot drops what waits to be written in its folder and waits for what is being written;
+    moving one waits for its writes, so neither leaves the old folder behind. A job's run is still
+    reserved in its `job.json` before it starts, at once, and never twice.
   - **Memory and personality:** each bot's workspace has a `MEMORY.md` for facts and notes it keeps
     itself, and an editable `SOUL.md` for its personality and voice. New bots get a starter soul based
     on their name and title; existing files are preserved, including intentionally empty ones.
@@ -681,8 +703,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
     (`ToolActivity.swift`, reading shell command lines with `ShellCommand.swift`), the chat's activity
-    items, with exploration folded into groups and kept up to date at the tail
-    (`ActivityTranscript.swift`), the identity, instructions,
+    items, with exploration folded into groups whose summaries are kept as calls join and leave them,
+    updated only for new messages, running calls and the last message (an edit of the thread is
+    verified), where delegated runs' cards go, worked out again only when their calls or records
+    change, and sub-agents' tool counts kept as they stream (`ActivityTranscript.swift`, in chunked
+    storage that copies a chunk, not every element, when shared: `ChunkedArray.swift`), the identity, instructions,
     team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
@@ -701,7 +726,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     a quit (`JobEngine.swift`), tasks: the task, its title
     and branch names, its pull request, receipts, dispatch requests and the briefs of tasks that fan
     out to sub-agents (`Tasks.swift`), hosts and
-    where a repository is worked on, from a `PROJECT.md`'s deploy targets (`Hosts.swift`), running
+    where a repository is worked on (`Hosts.swift`), running
     a command on this Mac or a host, the checkouts in the repositories folder, cloning, task and
     review worktrees, and what `gh` says about your repositories, issues and pull requests
     (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
@@ -714,17 +739,22 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     Activity shows them, from that catalog (`IssuePreview.swift`),
     an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store, with
     the index saved whole or a failure to show (`Store.swift`), with conversations' files read without losing
-    what can't be read (`Transcript.swift`), and the `Process` runner that launches
+    what can't be read (`Transcript.swift`), the writer that saves files off the main thread, each
+    target's in its own lane and in order, newer states of a file taking the place of waiting ones
+    (`StorageQueue.swift`), and a conversation's transcript and queue saved through it, with the
+    messages a written transcript holds taken out of the queue as it is then (`ConversationStorage.swift`),
+    and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
-    `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (transcripts saved off the main thread
-    while they stream), `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
+    `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (each run's transcript and record saved in
+    a lane of its own, off the main thread, while they stream and at their start and end), `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
     handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
     What replies ask to remember (`MemoryNotes`, in `BotContext.swift`) is saved to memory files
     by `MemoryWriter.swift`: one save at a time, read back to check it held, with notes that wait
     and are tried again. Run reviews are in `RunEvaluation.swift`: what a review sees of a run, its
     prompt, reading its reply, which changes are applied and which are proposals, the saved record,
-    the queue with its limits, retries and relaunch, applying through the writer
+    handing a run over (claimed once, with what it sees built off the main actor, and only while
+    reviews are on), the queue with its limits, retries and relaunch, applying through the writer
     (`MemoryWriter.saveReviewed`), the exact diff it records and its revert (`AppliedChange`), and the
     review's own CLI run, whose tool-free command lines are in `Accounts.swift`
     (`CommandBuilder.toolFreeInvocation`).
@@ -762,7 +792,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     full from `gh`'s output, and fan-out briefs; the Projects catalog and its sync through a stand-in
     `gh` (the saved catalog shown before any request completes, checks for changes that read only
     what changed, failures, removals, coalesced refreshes, another account, a missing or unreadable
-    file, and the four-request limit); and hosts: their `ssh` command lines, deploy targets, clones,
+    file, and the four-request limit); and hosts: their `ssh` command lines, where a repository is worked on, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
     from a remote task; memory: #88's Home sequence (a routing preference saved in the turn that
     agrees, and recalled by a fresh session), what is left out, bot or shared scope, repeats,
@@ -770,11 +800,20 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and are tried again; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
     and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
-    commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
-    streamed update regroups only the tail; the sidebar's sections of bots, and searching them; follow-ups the CLI
+    commands) are described and grouped, failures, repeated reads, sub-agent cards, and that an
+    update does work only for what changed (counted for live groups of 400, 1,000 and 5,000 calls),
+    shows what grouping the thread afresh shows through random turns (calls finishing out of order,
+    failing, their kind arriving late, stopped turns, edits of the thread), sees changes of the same
+    length, lets go of a settled group's running state, and leaves sub-agent placement and counts
+    alone while a reply streams; the sidebar's sections of bots, and searching them; follow-ups the CLI
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
-    before the next save, also in a queue going through a relaunch; a section change or a new
+    before the next save, also in a queue going through a relaunch; saving off the main thread: each
+    file's writes in order and different files' side by side, newer states taking the place of waiting
+    ones, repeats skipped, quitting's wait, a deleted bot's folder never made again, a sub-agent's end
+    never written behind another's, and the conversation's guarantees above with writes and the CLI's
+    messages interleaved and each write failing in turn; run reviews handed over without building
+    anything while reviews are off, claimed once, and built off the main actor; a section change or a new
     bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
     grows and how far its text scrolls; each account's allowance, with Muse's check through a
     stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
@@ -828,7 +867,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and New Task (through a stand-in for the general pasteboard, so no test touches the clipboard)
     and what pastes as text instead, New Task starting a task from a project and a brief with an
     image, the activity chat at every density, light and dark and at its
-    narrowest, a chat that follows new content only for a reader at the bottom, a Sub-agents
+    narrowest, a chat that follows new content only for a reader at the bottom, a long
+    conversation opened anew that shows its newest items at once and groups its history off the
+    main thread, then regroups only a streaming reply, a Sub-agents
     tab that folds finished runs and scrolls to one the chat opens, and switching without a flash:
     the toolbar kept, the message box focused in the same update, the chat at its very end, pets
     that never blink out while a clip loads, rich replies shown only once rendered and shown
@@ -842,7 +883,12 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     queue alone, and deleted with its agent, a sub-agent's handoff and a task's receipt that
     don't wait for their run reviews, and a task's Activity listing its repository's open issues:
     one or all opened in Projects and back to the task with its draft, switching tasks, a failed
-    refresh keeping what was read, and no GitHub request from showing or updating it. Set
+    refresh keeping what was read, and no GitHub request from showing or updating it; and, with
+    writes slowed to 250 ms each or failing: a turn that starts only once its message is saved,
+    sending and Stop that never wait for a write, a message that can't be queued coming back to
+    the composer, typing and switching while four conversations save, quitting through the real
+    notification waiting for writes and saying which it couldn't, deleting and moving a bot with
+    writes under way, and a handoff that goes back only once saved. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
@@ -911,7 +957,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
 ## Test
 - `scripts/check.sh` runs the standard gate (`scripts/gate.sh`), shell syntax for every script, then
   `macOS/test.sh` (the unit tests) and `macOS/build.sh` into a temporary folder. `scripts/check.sh
-  --report` posts the `check` status a PR needs before merging. `scripts/verify-pr.sh`, given a PR
+  --secrets` runs only the hygiene checks and the secret scan, before every push; `scripts/check.sh
+  --report` runs the full check once on the pushed head and posts the `check` status a PR needs
+  before merging. `scripts/verify-pr.sh`, given a PR
   number, tests someone else's PR on this machine and posts its `check` status; with `--no-report`
   first, it posts nothing (for reviews). There is no CI: the checks need a Mac with full Xcode.
 - `macOS/test.sh` requires every test bundle to finish and rejects explicit failure summaries,
@@ -993,12 +1041,24 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   `detailed`, `raw`) chooses the chat density for the run.
 - Chat latency: `BOTCHU_BENCHMARK=<file> swift test --configuration release --package-path macOS
   --filter chatBenchmark` times, from the change until the window has drawn it, switching to long
-  conversations (1,500 messages; outputs of 200 KB to 1 MB; a 400-call exploration; seventeen running
-  sub-agents), a streamed delta, a new call in a live exploration, a sub-agent's update, and opening
-  a large group or output, and writes the table to the file. `BOTCHU_BENCHMARK_SCOPE=chat` times the
+  conversations (1,500 messages; outputs of 200 KB to 1 MB; explorations of 400 and 5,000 calls;
+  seventeen running sub-agents; the 1,500 messages with twenty finished and seventeen running
+  sub-agents), again with their grouping forgotten (and until their earlier items are grouped), a
+  streamed delta, a new call in a live exploration, a sub-agent's update, and opening a large group
+  or output; and, in Core alone, a call joining and finishing in a live group of 400, 1,000 and
+  5,000 calls, apart from comparing the group before and after, grouping each afresh, and the memory
+  a 5,000-call projection keeps; and writes the table to the file. `BOTCHU_BENCHMARK_SCOPE=chat` times the
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.
+- Saving: `BOTCHU_PERSISTENCE_BENCHMARK=<file> swift test --configuration release --package-path macOS
+  --filter persistenceBenchmark` times, for 1,500- and 5,000-message conversations and 12 MB of tool
+  output, what a save costs the main thread (now, and as it was when it wrote there), how long it takes
+  to be written, the bytes, writes and states a burst of 30 saves leaves, and what handing a 300-call
+  turn to run reviews costs the main thread, and writes the table to the file. Run with the same
+  variable, the rendering test `typingAndSwitchingStayResponsiveWhileFourConversationsSave` writes
+  typing and switching times while four conversations save beside it, as `<file>.responsiveness`.
+  The benchmark asserts nothing about time and isn't part of `check`.
 - Projects loading: `BOTCHU_PROJECTS_BENCHMARK=<file> swift test --package-path macOS --filter
   projectsBenchmark` times, with your `gh` login (read-only) and a temporary catalog, a first sync
   (until the list shows, and until everything is read), a relaunch (until the saved catalog shows),
@@ -1021,10 +1081,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   quit again unless it was already open).
 
 ## Deploy
-- **Host machine:** `Alexs-MacBook-Pro-92440`. The live checkout is `~/Desktop/WORKSPACE/BotChu`, which always stays on `main`; the app is installed to `~/Applications/BotChu.app`.
+- **Live checkout:** `Alexs-MacBook-Pro-92440` runs the app from `~/Desktop/WORKSPACE/BotChu`, which stays on `main` and is never edited; the app is installed to `~/Applications/BotChu.app`.
 - **Secrets:** None in the repository or `.env`. The OpenRouter key and the Telegram bot token live in the Keychain, entered in Settings.
-- **Deploy only on request:** `scripts/deploy.sh` sets `DEPLOY_ON_REQUEST=1`, because installing restarts BotChu and stops any bot mid-turn. A full `scripts/sync.sh` fetches and reports how far `origin/main` is ahead of what is live, and changes nothing; run `scripts/deploy.sh` in the live checkout to test and install `main` (`--force` reinstalls anyway). Every attempt is a line in `.git/deploys`.
-- **Sync first:** run `scripts/sync.sh` before running or restarting the app or using its live data, and after merging a pull request. It refuses if `~/Desktop/WORKSPACE/BotChu` has local edits or commits not on `origin/main`; fix those through a pull request. Unless it refuses, it then removes worktrees whose pull request merged. Run from a worktree, it removes them too, but does not deploy.
-- **Session start:** Claude Code runs `scripts/sync.sh --inspect`, and every other agent runs it first. It fetches and reports the live checkout's state and what a full sync would do, but deploys nothing, so a session that only reviews or inspects never touches the app. A full sync that refuses blocks live-app operations, not reviews.
+- **Deploy:** `scripts/deploy.sh`, run in `~/Desktop/WORKSPACE/BotChu`, moves it to `origin/main`, runs `macOS/test.sh`, installs the app with `macOS/install.sh` (which restarts BotChu if it was open and smoke-tests that it starts), and records the attempt in `.git/deploys`. Nothing else deploys. Restarting BotChu stops every turn under way, its bots' tasks and sub-agents included, so deploy only when the owner asks and no turns are running. It refuses if `~/Desktop/WORKSPACE/BotChu` has local edits or commits; fix those through a pull request.
+- **Recovery:** A failed deploy says so and names the last good release; `DEPLOY_REV=<commit> scripts/deploy.sh` deploys that release again, and `scripts/deploy.sh --force` retries (or reinstalls what is live).
 - **Scheduled jobs:** none.
-- **Branch work:** Every task runs in its own worktree: for example, `scripts/worktree.sh feat/12-add-login` creates `~/Desktop/WORKSPACE/BotChu/.claude/worktrees/feat-12-add-login` from `origin/main`, with `.env` linked. Never edit `~/Desktop/WORKSPACE/BotChu` directly; changes only reach the live app by merging a pull request to `main` and deploying.
+- **Development:** On this Mac, in task worktrees of `~/Desktop/WORKSPACE/BotChu` (`scripts/worktree.sh feat/12-add-login` creates `.claude/worktrees/feat-12-add-login` from `origin/main`, with `.env` linked). Changes reach the live app only by merging a pull request to `main` and deploying it.

@@ -389,14 +389,14 @@ import Testing
         let host = SSHHost(nickname: "Far Mac", destination: "alex@far", machine: "far-mac", reposFolder: "~/apps")
         let rows = ProjectRow.rows(repos: [GitHubLookup.Repo(nameWithOwner: "asieke/BotChu"), GitHubLookup.Repo(nameWithOwner: "asieke/Bare")],
                                    records: ["asieke/BotChu": ProjectRecord(text: text, sha: "1"), "asieke/Bare": ProjectRecord(text: "", sha: nil)],
-                                   chosen: [:], thisMac: "this-mac", hosts: [host], reposRoot: "/tmp/repos", taskRepos: [])
+                                   chosen: [:], hosts: [host], reposRoot: "/tmp/repos", taskRepos: [])
         let entries = rows.map(\.catalogEntry)
         #expect(entries[0].name == "Bot Chu")
         #expect(entries[0].repo == "asieke/BotChu")
         #expect(entries[0].url.absoluteString == "https://github.com/asieke/BotChu")
         #expect(entries[0].status == .active)
-        #expect(entries[0].workplace == "Far Mac")
-        #expect(entries[0].location == RepoLocation(hostID: host.id, path: "~/apps/BotChu"))
+        #expect(entries[0].workplace == "This Mac")
+        #expect(entries[0].location == RepoLocation(path: "/tmp/repos/BotChu"))
         #expect(entries[1].name == "Bare")
         #expect(entries[1].status == nil)
         #expect(entries[1].location.path == "/tmp/repos/Bare")

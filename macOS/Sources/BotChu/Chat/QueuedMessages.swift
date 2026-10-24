@@ -22,7 +22,7 @@ struct QueuedMessages: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Label("\(queue.messages.count) queued", systemImage: "text.bubble")
+                Label("\(queue.pending.count) queued", systemImage: "text.bubble")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer(minLength: 0)
                 if queue.isPaused || !running {
@@ -36,7 +36,7 @@ struct QueuedMessages: View {
             Text(explanation).font(.system(size: 11)).foregroundStyle(.secondary)
             ScrollView {
                 VStack(spacing: 6) {
-                    ForEach(queue.messages) { message in
+                    ForEach(queue.pending) { message in
                         HStack(alignment: .top, spacing: 8) {
                             Text(message.text + (message.images.isEmpty ? "" : "\n📎 \(message.images.count) image(s)"))
                                 .font(.system(size: 12))
@@ -62,7 +62,7 @@ struct QueuedMessages: View {
                     }
                 }
             }
-            .frame(height: CGFloat(min(queue.messages.count, 3)) * 48)
+            .frame(height: CGFloat(min(queue.pending.count, 3)) * 48)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))

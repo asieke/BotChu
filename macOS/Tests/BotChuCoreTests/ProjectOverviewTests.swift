@@ -159,12 +159,14 @@ import Testing
             "asieke/new": ProjectRecord(text: "", sha: nil),
             "asieke/broken": ProjectRecord(text: "---\ntype: spaceship\n---\n", sha: "c"),
         ]
-        let rows = ProjectRow.rows(repos: repos, records: records, errors: ["asieke/loading": "Could not read PROJECT.md."], chosen: [:], thisMac: "my-mac", hosts: [host], reposRoot: "/repos",
-                                   taskRepos: ["asieke/BotChu", "ASIEKE/botchu", "asieke/talent"])
-        #expect(rows.map(\.workplace) == ["This Mac", "Omarchy", "This Mac", "This Mac", "This Mac", "This Mac"])
-        #expect(rows[0].location.path == NSHomeDirectory() + "/apps/BotChu")
-        #expect(rows[1].location == RepoLocation(hostID: host.id, path: "~/apps/talent"))
-        #expect(rows[2].location.path == "/repos/new")
+        // Tasks work on this Mac, wherever PROJECT.md deploys, unless the owner chose a host.
+        let chosen = RepoLocation(hostID: host.id, path: "~/work/new")
+        let rows = ProjectRow.rows(repos: repos, records: records, errors: ["asieke/loading": "Could not read PROJECT.md."], chosen: ["asieke/new": chosen],
+                                   hosts: [host], reposRoot: "/repos", taskRepos: ["asieke/BotChu", "ASIEKE/botchu", "asieke/talent"])
+        #expect(rows.map(\.workplace) == ["This Mac", "This Mac", "Omarchy", "This Mac", "This Mac", "This Mac"])
+        #expect(rows[0].location == RepoLocation(path: "/repos/BotChu"))
+        #expect(rows[1].location == RepoLocation(path: "/repos/talent"))
+        #expect(rows[2].location == chosen)
         #expect(rows.map(\.openTasks) == [2, 1, 0, 0, 0, 0])
         #expect(rows[5].record == .loading)
         #expect(rows[0].metadata == local)
