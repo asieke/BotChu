@@ -241,6 +241,13 @@ extension BotHome {
         return digest
     }
 
+    /// Whether anything waits in the conversation's queue files for recovery (`recover`): a launch
+    /// looks, without reading them, and recovers only the conversations that have some.
+    public func hasQueueFiles(task id: UUID? = nil) -> Bool {
+        let folder = id.map(taskURL) ?? url
+        return [queueURL(task: id), folder.appendingPathComponent(Self.takenFile)].contains { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
     /// A conversation's queue after a launch, or when a closed task opens again, as `recoverQueue`
     /// recovers it. The transcript is read only when recovery needs it (messages waiting or taken,
     /// or a queue file that couldn't be read) or `load` asks for it; `transcript` is the one in
@@ -283,6 +290,9 @@ public struct HistoryState: Equatable, Sendable {
     /// Counts reads, recoveries and evictions; a result is taken only for the latest.
     public private(set) var ticket = 0
 
+    /// After a launch that found nothing in its queue files: not in memory, and nothing to recover.
+    public static let clean = HistoryState(phase: .unloaded, recovery: .recovered)
+
     public init(phase: Phase = .unloaded, recovery: Recovery = .none) {
         self.phase = phase
         self.recovery = recovery
@@ -322,6 +332,13 @@ public struct HistoryState: Equatable, Sendable {
         self.ticket += 1
         if phase == .loading { phase = .unloaded }
         if recovery == .recovering { recovery = .none }
+    }
+
+    /// A read or recovery done here and now (quitting), in the place of any under way, which isn't taken.
+    public mutating func took(loaded: Bool, recovered: Bool) {
+        ticket += 1
+        phase = loaded ? .loaded : phase == .loading ? .unloaded : phase
+        if recovered { recovery = .recovered } else if recovery == .recovering { recovery = .none }
     }
 
     /// The history leaves memory; a read under way isn't taken. False when it can't (being read or recovered).

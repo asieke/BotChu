@@ -70,11 +70,6 @@ final class ConversationState {
         load([])
     }
 
-    /// The thread given whole, in memory only (a demo): no read or recovery under way is taken.
-    func adopt(_ messages: [ChatMessage]) {
-        history.adopt()
-        load(messages)
-    }
 
     /// Drops the thread from memory, keeping its digest for the sidebar and task reports.
     func unload() {
@@ -98,7 +93,14 @@ final class ConversationState {
         savedRevision = max(savedRevision, revision)
     }
 
+    /// The whole thread given anew. Given to a conversation not in memory, it is the thread now:
+    /// no read under way is taken, and it is saved as any change is.
     func replace(_ messages: [ChatMessage]) {
+        if !isLoaded {
+            history.adopt()
+            isLoaded = true
+            digest = nil
+        }
         revision += 1
         self.messages = messages
         epoch += 1

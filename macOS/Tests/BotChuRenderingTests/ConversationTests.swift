@@ -389,7 +389,8 @@ extension RenderingTests {
         #expect(!accepted)
         #expect(app.messageQueues[target]?.messages.isEmpty == true)
         #expect(app.drafts[target] == "Keep my draft")
-        #expect(app.thread(target).last?.role == .error)
+        // Said in the conversation once its history is read (#109).
+        #expect(await app.loadedThread(target)?.last?.role == .error)
         app.runStates.removeAll()
         // Idle, the send is refused the same way, and nothing starts.
         #expect(!(await app.sendAccepted("Still not saved", to: target)))

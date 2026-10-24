@@ -12,10 +12,13 @@ extension RenderingTests {
     @Test func aLaunchReadsTheShownConversationAndRecoveryAloneAndNoArchivedHistory() async throws {
         let fixture = try HistoryFixture(closedTasks: 2, children: true)
         defer { fixture.cleanUp() }
+        // Nothing is read while the model is made: the shown Home is read after, off the main thread.
+        let shown = try #require(fixture.lane(fixture.home(0)))
+        fixture.gate.close(shown)
         let app = fixture.launch()
-        // Nothing is read on the main thread while the model is made.
-        #expect(fixture.counts.decoded == 0)
+        #expect(fixture.decodedFiles.keys.allSatisfy { $0 == fixture.interruptedThread.path })
         #expect(!app.conversation(fixture.home(0)).isLoaded)
+        fixture.gate.open(shown)
         await app.storage.settle()
         let read = Set(fixture.decodedFiles.keys)
         // The shown Home, and the run a relaunch interrupted, which is closed, once.
@@ -260,6 +263,8 @@ extension RenderingTests {
         fixture.settings.telegramChats = [TelegramChat(id: 42, botID: home.botID)]
         fixture.settings.telegramEnabled = true
         app.telegram.restart()
+        // The settings' own restart, as the gateway observes them.
+        try await Task.sleep(for: .milliseconds(100))
         let connection = app.telegram.connection()
         #expect(await connection.deliver("Question 0", id: id, to: home.botID, from: 42) == .duplicate)
         #expect(app.conversation(home).isLoaded)
