@@ -1,0 +1,187 @@
+import Foundation
+import Observation
+import BotChuCore
+
+/// The Telegram gateway (`TelegramGateway`) as it runs in the app, from Settings ▸ Telegram. It
+/// runs while it is on and the Keychain has a token, and starts again when either, or the allowed
+/// chats, change. A chat's text goes into its bot's Home through that conversation's queue, as the
+/// owner's own messages do, so it resumes the Home's CLI session and waits behind a turn under
+/// way; the gateway sends back what the turn said.
+@MainActor @Observable
+final class TelegramBridge {
+    enum State: Equatable {
+        case off
+        /// On, but no token is saved.
+        case needsToken
+        case running(TelegramGateway.Status)
+    }
+
+    private(set) var state = State.off
+    /// Chats refused since BotChu started, newest first, for Settings to offer to allow. Never saved.
+    private(set) var refused: [TelegramRefusal] = []
+    /// Where the token comes from and what carries requests: the Keychain and URLSession, or
+    /// stand-ins in tests.
+    @ObservationIgnored var readToken: @MainActor () -> String? = { Keychain.get(Keychain.telegramAccount) }
+    @ObservationIgnored var transport: any TelegramTransport = URLSessionTelegramTransport()
+    @ObservationIgnored private weak var model: AppModel?
+    @ObservationIgnored private let stateURL: URL
+    @ObservationIgnored private var run: Task<Void, Never>?
+    /// Which gateway is the current one: one already replaced doesn't change the status.
+    @ObservationIgnored private var generation = 0
+
+    init(model: AppModel, stateURL: URL) {
+        self.model = model
+        self.stateURL = stateURL
+        observeSettings()
+        restart()
+    }
+
+    /// Starts the gateway for the settings and token as they are now, once the one running has
+    /// stopped and saved where it was.
+    func restart() {
+        let previous = run
+        previous?.cancel()
+        // Keep the cancelled run as a barrier even while disabled or missing a token: a quick
+        // off/on must still wait for its final checkpoint before loading the replacement state.
+        generation += 1
+        guard let settings = model?.settings, settings.telegramEnabled else {
+            state = .off
+            return
+        }
+        let token = (readToken() ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            state = .needsToken
+            return
+        }
+        state = .running(.connecting)
+        let chats = settings.telegramChats
+        let link = connection()
+        let stateURL = stateURL
+        let transport = transport
+        run = Task {
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            let gateway = TelegramGateway(token: token, chats: chats, app: link,
+                                          stateURL: stateURL, transport: transport)
+            await gateway.run()
+        }
+    }
+
+    /// Captures this run's generation; callbacks from it are invalid once restart() is called.
+    func connection() -> TelegramLink { TelegramLink(bridge: self, generation: generation) }
+
+    /// What Settings says about it.
+    var summary: String {
+        switch state {
+        case .off: "Off."
+        case .needsToken: "Save a bot token from BotFather to connect."
+        case .running(.connecting): "Connecting…"
+        case .running(.connected(let name)):
+            model?.settings.telegramChats.isEmpty == false
+                ? "Connected as \(name)."
+                : "Connected as \(name). Message it from Telegram, then allow your chat below."
+        case .running(.retrying(let reason, let seconds)): "\(reason) Trying again in \(seconds) s."
+        case .running(.stopped(let reason)): reason
+        }
+    }
+
+    /// Lets a refused private chat reach a bot: the one selected, else the first.
+    func allow(_ refusal: TelegramRefusal) {
+        guard let model, refusal.isPrivate else { return }
+        refused.removeAll { $0.id == refusal.id }
+        guard !model.settings.telegramChats.contains(where: { $0.id == refusal.id }) else { return }
+        model.settings.telegramChats.append(TelegramChat(id: refusal.id, botID: model.selection ?? model.bots.first?.id, label: refusal.name))
+    }
+
+    private func observeSettings() {
+        withObservationTracking {
+            _ = model?.settings.telegramEnabled
+            _ = model?.settings.telegramChats
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.restart()
+                self?.observeSettings()
+            }
+        }
+    }
+
+    // MARK: What the gateway asks
+
+    fileprivate func name(of botID: UUID) -> String? { model?.bot(botID)?.name }
+
+    fileprivate func authorization(for chat: Int64, botID: UUID?, generation: Int) -> TelegramAuthorization {
+        guard !Task.isCancelled, generation == self.generation, let model, model.settings.telegramEnabled else { return .stopped }
+        if case .running(.stopped) = state { return .stopped }
+        guard let allowed = model.settings.telegramChats.first(where: { $0.id == chat }), allowed.botID == botID else { return .revoked }
+        return .allowed
+    }
+
+    /// Into the bot's Home (never a task), through its queue, under the message's own ID.
+    fileprivate func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64, generation: Int) -> TelegramDelivery {
+        // No suspension between the final authorization check and AppModel.send. Settings may
+        // have changed before observation has had a chance to cancel/restart this gateway.
+        guard case .allowed = authorization(for: chat, botID: botID, generation: generation) else { return .discarded }
+        guard let model, let bot = model.bot(botID) else { return .unavailable }
+        let target = ChatTarget.home(botID)
+        let queued = { model.messageQueues[target]?.messages.contains { $0.id == id } == true }
+        if queued() || model.thread(target).contains(where: { $0.id == id }) { return .duplicate }
+        guard model.send(text, to: target, id: id) else { return .failed("it couldn't be saved in \(bot.name)'s queue.") }
+        return .queued(busy: queued() && model.isRunning(target))
+    }
+
+    fileprivate func progress(of id: UUID, for botID: UUID) -> TelegramProgress {
+        guard let model, let bot = model.bot(botID) else { return .gone(TelegramReply.unavailable) }
+        let target = ChatTarget.home(botID)
+        return .of(id, thread: model.thread(target), queue: model.messageQueues[target], running: model.isRunning(target), botName: bot.name)
+    }
+
+    fileprivate func replyFailed(_ id: UUID, for botID: UUID, reason: String, generation: Int) {
+        guard !Task.isCancelled, generation == self.generation, let model, model.settings.telegramEnabled,
+              model.bot(botID) != nil else { return }
+        model.note("Couldn't send the reply to Telegram. \(reason)", in: .home(botID))
+    }
+
+    fileprivate func changed(_ status: TelegramGateway.Status, generation: Int) {
+        guard !Task.isCancelled, generation == self.generation, run != nil, model?.settings.telegramEnabled == true else { return }
+        if case .running(.stopped) = state { return }
+        state = .running(status)
+    }
+
+    fileprivate func refuse(_ chat: TelegramRefusal, generation: Int) {
+        guard !Task.isCancelled, generation == self.generation, model?.settings.telegramEnabled == true else { return }
+        refused.removeAll { $0.id == chat.id }
+        refused.insert(chat, at: 0)
+        if refused.count > 5 { refused.removeLast(refused.count - 5) }
+    }
+}
+
+/// What one gateway reaches the app through, without keeping it alive.
+@MainActor final class TelegramLink: TelegramApp {
+    private weak var bridge: TelegramBridge?
+    private let generation: Int
+
+    init(bridge: TelegramBridge, generation: Int) {
+        self.bridge = bridge
+        self.generation = generation
+    }
+
+    func name(of botID: UUID) -> String? { bridge?.name(of: botID) }
+
+    func authorization(for chat: Int64, botID: UUID?) -> TelegramAuthorization {
+        bridge?.authorization(for: chat, botID: botID, generation: generation) ?? .stopped
+    }
+
+    func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64) -> TelegramDelivery {
+        bridge?.deliver(text, id: id, to: botID, from: chat, generation: generation) ?? .discarded
+    }
+
+    func progress(of id: UUID, for botID: UUID) -> TelegramProgress {
+        bridge?.progress(of: id, for: botID) ?? .queued(paused: false)
+    }
+
+    func replyFailed(_ id: UUID, for botID: UUID, reason: String) {
+        bridge?.replyFailed(id, for: botID, reason: reason, generation: generation)
+    }
+    func gatewayChanged(_ status: TelegramGateway.Status) { bridge?.changed(status, generation: generation) }
+    func refused(_ chat: TelegramRefusal) { bridge?.refuse(chat, generation: generation) }
+}
