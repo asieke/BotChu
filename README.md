@@ -104,8 +104,12 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     bots by name, title or provider, within their sections, and a section, Conversations among
     them, by its name, with all its bots. A bot’s own conversation continues to work without a
     project.
-  - **Providers:** gallery/list views of CLI profiles with their logo, command, availability and usage,
-    sharing the same allowance cache and refresh limits as the conversation inspector. **Add CLI**
+  - **Providers:** one compact table of CLI profiles, a row each, under 100 points high whatever
+    its state: the logo, name and CLI family; the command, and whether the login shell finds it;
+    a line per allowance window, with its use and reset (the reset when the column has room, and
+    at most four lines, the rest in the tooltip); when it was read, marked stale or failed (with
+    the error in a tooltip and a popover); and Refresh. It shares the conversation inspector's
+    allowance cache and refresh limits, and searches by name or family. **Add CLI**
     adds a named profile of Claude Code, Codex, Antigravity, Muse or Pi, with an installed command or
     wrapper and **Test Command**. Sign in through that CLI in Terminal; BotChu does not create its
     login. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
@@ -491,7 +495,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     once every 30 seconds).
     Muse needs one brief `Reply with OK.` request to learn its allowance: it uses isolated,
     temporary host state, checks hourly automatically, and at most once every five minutes after
-    a turn or with Refresh. This spends a small amount of its allowance. OpenRouter shows the
+    a turn or with Refresh. This spends a small amount of its allowance. Muse reports the
+    reading from its answer on, often only when that turn winds down after it, so the check keeps
+    asking until then (within 90 seconds). OpenRouter shows the
     saved key's spending allowance and any reported shared budgets, with resets at midnight UTC;
     an uncapped key says so, without claiming unlimited account credits. Saving a different key
     clears its previous readout. Failed checks retain the last successful reading marked stale;
@@ -640,7 +646,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
     before the next save, also in a queue going through a relaunch; a section change or a new
     bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
-    grows and how far its text scrolls; skills: their frontmatter, finding and making them, which a
+    grows and how far its text scrolls; each account's allowance, with Muse's check through a
+    stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
+    answered empty, and none at all; skills: their frontmatter, finding and making them, which a
     bot uses, and the catalog, or (on a host) the files in full, that sessions get; the Telegram
     gateway against a stand-in Bot API: round trips, refused and revoked chats, each chat's own bot,
     busy conversations, repeated updates, cancelled batches, relaunches, forwarded input,
@@ -661,7 +669,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     them with the same menus and alert, inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
     main window's layout at its narrowest, galleries that preserve conversation state, the project
-    sidebar's tabs, details and fan-out tasks, custom profile persistence, provider logos in both
+    sidebar's tabs, details and fan-out tasks, custom profile persistence, the Providers table's
+    rows under 100 points in every state and at its narrowest, provider logos in both
     appearances and in account menus, the report
     sheet, filing with a stand-in, images pasted with Edit ▸ Paste into the composer, the report
     and New Task (through a stand-in for the general pasteboard, so no test touches the clipboard)
@@ -678,11 +687,13 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     links and their context through sending, and the report and New Task boxes without it. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
-    (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `activityChatRendersGroupsCardsAndLiveWork`,
-    or `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`) to render isolated gallery/table
-    (sidebar, chat, or Agents' sections, wide and narrow) screenshots with sample data. These
+    (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
+    `activityChatRendersGroupsCardsAndLiveWork`, or `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`)
+    to render isolated gallery/table (sidebar, chat, or Agents' sections, wide and narrow) screenshots
+    with sample data. These
     share a serialized suite because AppKit
-    window focus is global; all use isolated windows and no real bot data.
+    window focus is global; all use isolated windows and no real bot data. Providers and OpenRouter
+    inspector fixtures inject both the usage cache and the key lookup, so tests never read Keychain.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
     `macOS/build/`), signed with the local "Apple Development" certificate when there is one, ad hoc
     otherwise. It records the SDK the app was linked against in the binary (`vtool`), because
@@ -763,7 +774,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor`, `BOTCHU_OPEN=task` or `BOTCHU_OPEN=settings` opens the bot editor, New
   Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository).
-  `BOTCHU_OPEN=projects`, `agents`, `providers` or `skills` opens the corresponding workspace gallery;
+  `BOTCHU_OPEN=projects`, `agents`, `providers` or `skills` opens that workspace screen;
   with `projects`, `BOTCHU_PROJECT=<owner/name>` shows that repository's sidebar, and
   `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
   tab and an issue or pull request there, read with your `gh` login.
@@ -787,7 +798,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   `pets.txt` lists each pet player's clip, state and time.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
-  querying any account. Usage fixtures are ignored outside throwaway data runs.
+  querying any account; `mixed` gives Providers a row in each state (more windows than a row
+  shows, stale, failed, stale after a failed check, and a key without a limit). Usage fixtures
+  are ignored outside throwaway data runs. `BOTCHU_PROFILE="<name>|<family>|<command>"` (several
+  separated by `;`, `family` one of `claude`, `codex`, `antigravity`, `muse`, `pi`) adds CLI
+  profiles to the run, such as one with a long name or a command that isn't installed.
   `BOTCHU_ACCOUNT`, `BOTCHU_MODEL` and `BOTCHU_EFFORT` set the first demo bot's generation choices;
   `BOTCHU_DEFAULT_MODEL` supplies an isolated OpenRouter default. `BOTCHU_OPEN=model` or `effort`
   opens the composer's picker, and `inspector-model` or `inspector-effort` opens the sidebar's.

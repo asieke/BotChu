@@ -22,12 +22,17 @@ extension RenderingTests {
         try BotHome(workspace: second.workspace).save(second)
         try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace), Store.Entry(id: second.id, workspace: second.workspace)])
         let settings = AppSettings(defaults: defaults)
+        settings.botsRoot = root.appendingPathComponent("bots").path
+        settings.reposRoot = root.appendingPathComponent("repos").path
         let account = Account(id: "custom-research", name: "Research Codex", kind: .codex, defaultCommand: "codex-research", symbol: "terminal")
         settings.customAccounts = [account]
         #expect(AppSettings(defaults: defaults).accounts.last == account)
-        let app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in
-            ProviderUsage(windows: [UsageWindow(id: "session", title: "5-hour", usedPercent: 24, resetsAt: .now.addingTimeInterval(7200)), UsageWindow(id: "week", title: "Weekly", usedPercent: 68, resetsAt: .now.addingTimeInterval(259200))])
-        }, projectGitHub: ProjectGitHub { _, _ in
+        var keyReads = 0
+        let app = AppModel(store: store, settings: settings, usage: UsageCache { _, key in
+            let hasKey = key != nil
+            #expect(!hasKey)
+            return ProviderUsage(windows: [UsageWindow(id: "session", title: "5-hour", usedPercent: 24, resetsAt: .now.addingTimeInterval(7200)), UsageWindow(id: "week", title: "Weekly", usedPercent: 68, resetsAt: .now.addingTimeInterval(259200))])
+        }, openRouterKey: { keyReads += 1; return nil }, projectGitHub: ProjectGitHub { _, _ in
             Issue.record("Library fixtures must not request GitHub")
             return await ProjectGitHub.command(["/usr/bin/false"], body: nil)
         }, openWorkLookup: { _ in
@@ -103,9 +108,9 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(200))
         try captureLibrary(window, name: "projects-dark")
         app.destination = .providers
-        defaults.set("table", forKey: "providersLayout")
         try await Task.sleep(for: .milliseconds(200))
-        try captureLibrary(window, name: "providers-list")
+        try captureLibrary(window, name: "providers-dark")
+        #expect(keyReads > 0) // A missing test key must never fall back to Keychain.
         NSApp.appearance = nil
         app.show(target)
         #expect(app.destination == nil)

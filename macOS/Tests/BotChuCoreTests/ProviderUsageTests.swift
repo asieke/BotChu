@@ -23,7 +23,7 @@ import Testing
         #expect(abs(google.windows[0].usedPercent! - 5.43961524963379) < 0.00001)
         #expect(google.windows[2].usedPercent == 0)
 
-        let muse = try UsageParser.muse(UsageSamples.muse, now: now)
+        let muse = try UsageParser.muse(UsageSamples.muse, now: now.addingTimeInterval(3_600))
         #expect(muse.windows.map(\.usedPercent) == [3, 20])
         #expect(muse.windows[0].resetsAt == Date(timeIntervalSince1970: 1_792_687_416))
         #expect(muse.readAt == Date(timeIntervalSince1970: 1_792_681_252.222))
@@ -84,6 +84,21 @@ import Testing
         #expect(budget.windows[0].title == "Member allowance")
         #expect(budget.windows[0].usedPercent == 65)
         #expect(budget.windows[0].resetsAt != nil)
+    }
+
+    @Test func museReadAnswerAndAClockAhead() throws {
+        let later = Date(timeIntervalSince1970: 1_792_850_000)
+        let reading = try UsageParser.muse(UsageSamples.museRead, now: later)
+        #expect(reading.windows.map(\.title) == ["5-hour", "Weekly"])
+        #expect(reading.windows.map(\.usedPercent) == [5, 34])
+        #expect(reading.windows[0].resetsAt == Date(timeIntervalSince1970: 1_792_854_028))
+        #expect(reading.windows[1].resetsAt == Date(timeIntervalSince1970: 1_792_972_800))
+        #expect(reading.readAt == Date(timeIntervalSince1970: 1_792_844_187.798))
+        // Observed by Muse's clock a moment after this Mac's "now": read now, never "in 0 sec".
+        let earlier = Date(timeIntervalSince1970: 1_792_844_187)
+        #expect(try UsageParser.muse(UsageSamples.museRead, now: earlier).readAt == earlier)
+        #expect(throws: UsageFailure.self) { try UsageParser.muse(Data(#"{"usage":null}"#.utf8)) }
+        #expect(throws: UsageFailure.self) { try UsageParser.muse(Data(#"{"usage":{"tier":"0","window":{}}}"#.utf8)) }
     }
 
     @Test func museLegacyTimestampUnits() throws {
@@ -221,6 +236,110 @@ private actor UsageFetchProbe {
         try withProcess("exec /bin/sleep 20\n", timeout: 0.3) { process in
             #expect(throws: UsageFailure.self) { try process.call("initialize") }
         }
+        #expect(Date().timeIntervalSince(started) < 3)
+    }
+}
+
+/// The Muse probe against a stand-in `muse serve` that speaks its JSON-RPC: what it does with
+/// `usage/read` (after the answer, `answered` is 1 and `reads` counts those reads) is each test's.
+@Suite struct MuseProbeTests {
+    static let usage = #"{"window":{"usedPercent":5,"windowDurationMins":300,"resetsAtMs":1792854028000},"weekly":{"usedPercent":34,"resetsAtMs":1792972800000},"tier":"0","observedAtMs":1792844187798}"#
+
+    private func probe(reads: String, turn: String = #"printf '%s\n' '{"method":"turn/started"}' '{"method":"turn/foregroundCompleted"}'"#,
+                       timeout: TimeInterval = 5) throws -> (Result<ProviderUsage, UsageFailure>, log: String) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = """
+        usage='\(Self.usage)'
+        answered=0
+        reads=0
+        reply() { printf '{"id":%s,"result":%s}\\n' "$id" "$1"; }
+        while IFS= read -r line; do
+          id=$(printf '%s\\n' "$line" | sed -nE 's/.*"id":([0-9]+).*/\\1/p')
+          method=$(printf '%s\\n' "$line" | sed -nE 's/.*"method":"([^"]*)".*/\\1/p' | tr -d '\\\\')
+          echo "$method" >> log
+          case $method in
+            session/start) reply '{"session":{"sessionId":"s1"}}' ;;
+            turn/start) reply '{}'; \(turn); answered=1 ;;
+            usage/read)
+              [ $answered = 1 ] && reads=$((reads + 1))
+              \(reads) ;;
+          esac
+        done
+        """
+        let file = directory.appendingPathComponent("muse.sh")
+        try script.write(to: file, atomically: true, encoding: .utf8)
+        let process = try UsageProcess(command: "/bin/sh", arguments: [file.path], directory: directory, timeout: timeout)
+        let result: Result<ProviderUsage, UsageFailure>
+        do { result = .success(try ProviderUsageClient.museUsage(process, workspace: directory.path, poll: 0.01)) }
+        catch { result = .failure(error as? UsageFailure ?? UsageFailure("unexpected")) }
+        process.stop()
+        let log = (try? String(contentsOf: directory.appendingPathComponent("log"), encoding: .utf8)) ?? ""
+        return (result, log)
+    }
+
+    private func reading(_ result: Result<ProviderUsage, UsageFailure>) -> ProviderUsage? {
+        if case .success(let reading) = result { return reading }
+        return nil
+    }
+
+    @Test func aReadingAlreadyKnownNeedsNoTurn() throws {
+        let (result, log) = try probe(reads: #"reply "{\"usage\":$usage}""#)
+        #expect(reading(result)?.windows.map(\.usedPercent) == [5, 34])
+        #expect(!log.contains("turn/start"))
+    }
+
+    /// The reproduced failure: Muse 1.4.12 has the reading only once its turn winds down, and that
+    /// can come long after the answer. The probe asked ten times, a second apart, then gave up.
+    @Test func aTurnThatWindsDownLongAfterTheAnswerStillReports() throws {
+        let (result, log) = try probe(reads: #"""
+        if [ $reads -lt 15 ]; then reply '{}'
+        else printf '%s\n' '{"method":"turn/completed"}'; reply "{\"usage\":$usage}"; fi
+        """#)
+        #expect(reading(result)?.windows.map(\.usedPercent) == [5, 34])
+        #expect(log.components(separatedBy: "usage/read").count - 1 == 16)
+    }
+
+    /// `usage/changed` arrives while a `usage/read` is answered empty: the announced reading stays.
+    @Test func aUsageNotificationDuringAnEmptyReadIsKept() throws {
+        let (result, _) = try probe(reads: #"""
+        if [ $reads = 3 ]; then printf '%s\n' "{\"method\":\"usage/changed\",\"params\":$usage}"; fi
+        reply '{}'
+        """#)
+        #expect(reading(result)?.windows.map(\.usedPercent) == [5, 34])
+    }
+
+    /// Announced before the answer, during the turn: no asking needed.
+    @Test func aUsageNotificationBeforeTheAnswerEndsTheProbe() throws {
+        let (result, log) = try probe(reads: "reply '{}'",
+            turn: #"printf '%s\n' '{"method":"turn/started"}' "{\"method\":\"usage/changed\",\"params\":$usage}""#)
+        #expect(reading(result)?.windows.map(\.usedPercent) == [5, 34])
+        #expect(log.components(separatedBy: "usage/read").count - 1 == 1)
+    }
+
+    @Test func missingUsageFailsSoonAfterTheTurnEnds() throws {
+        let started = Date()
+        let (result, log) = try probe(reads: #"""
+        [ $reads = 2 ] && printf '%s\n' '{"method":"turn/completed"}'
+        reply '{"usage":null}'
+        """#)
+        guard case .failure(let failure) = result else { Issue.record("Expected no reading"); return }
+        #expect(failure.message == "Muse did not return account usage. Try refreshing later.")
+        #expect(log.components(separatedBy: "usage/read").count - 1 == 8) // the first, two, then five after the end
+        #expect(Date().timeIntervalSince(started) < 3)
+
+        let (failed, _) = try probe(reads: "reply '{}'", turn: #"printf '%s\n' '{"method":"turn/failed","params":{"error":{"message":"private"}}}'"#)
+        guard case .failure(let turnFailure) = failed else { Issue.record("Expected no reading"); return }
+        #expect(turnFailure.message.contains("sign-in"))
+        #expect(!turnFailure.message.contains("private"))
+    }
+
+    @Test func aTurnThatNeverEndsIsBoundedByTheDeadline() throws {
+        let started = Date()
+        let (result, _) = try probe(reads: "reply '{}'", timeout: 0.5)
+        guard case .failure(let failure) = result else { Issue.record("Expected no reading"); return }
+        #expect(failure.message == "Usage check timed out. Try refreshing later.")
         #expect(Date().timeIntervalSince(started) < 3)
     }
 }

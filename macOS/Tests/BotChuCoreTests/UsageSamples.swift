@@ -120,4 +120,23 @@ enum UsageSamples {
   "observedAtMs": 1792681252222
 }
 """#.utf8)
+    /// `usage/read`'s answer from Muse 1.4.12 on 2026-10-24, after the probe's turn; its numeric
+    /// tier ID replaced.
+    static let museRead = Data(#"""
+{
+  "usage": {
+    "observedAtMs": 1792844187798,
+    "tier": "0",
+    "weekly": {
+      "resetsAtMs": 1792972800000,
+      "usedPercent": 34
+    },
+    "window": {
+      "resetsAtMs": 1792854028000,
+      "usedPercent": 5,
+      "windowDurationMins": 300
+    }
+  }
+}
+"""#.utf8)
 }

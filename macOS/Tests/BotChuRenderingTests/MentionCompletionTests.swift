@@ -195,7 +195,8 @@ extension RenderingTests {
         settings.commands["codex-dev"] = "/usr/bin/python3 \(Shell.quote(cli.path))"
         let store = Store(root: root.appendingPathComponent("index"))
         try store.saveIndex([Store.Entry(id: scout.id, workspace: scout.workspace), Store.Entry(id: duck.id, workspace: duck.workspace)])
-        let model = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No usage in tests") })
+        let model = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No usage in tests") },
+                             openRouterKey: { nil })
         defer { model.stopAll() }
         let target = ChatTarget.home(scout.id)
         #expect(model.mentionAgents(for: target).map(\.name) == ["QA Duck"])

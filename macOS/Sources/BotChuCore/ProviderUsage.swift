@@ -200,8 +200,9 @@ public enum UsageParser {
             windows.append(UsageWindow(id: key, title: key == "weekly" ? "Weekly" : duration(number(w["windowDurationMins"] ?? w["window_duration_mins"]) ?? 300),
                 usedPercent: used, resetsAt: reset))
         }
+        // Muse's clock can run a little ahead of this Mac's, and a reading is never from the future.
         let observed = number(usage["observedAtMs"]).flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0 / 1000) : nil }
-        return try requireWindows(windows, at: observed ?? now)
+        return try requireWindows(windows, at: min(observed ?? now, now))
     }
 
     /// OpenRouter's key allowance (not a claim about the account's prepaid credit balance).

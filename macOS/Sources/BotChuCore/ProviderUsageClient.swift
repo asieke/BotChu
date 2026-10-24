@@ -55,27 +55,53 @@ public enum ProviderUsageClient {
             if kind == .codex {
                 return try UsageParser.codex(JSONSerialization.data(withJSONObject: process.call("account/rateLimits/read")))
             }
-            // Muse keeps usage in its host's memory and learns it from a model response. First
-            // ask passively; if empty, use one tiny turn in throwaway state, never a bot session.
-            let existing = try process.call("usage/read")
-            if let data = try? JSONSerialization.data(withJSONObject: existing), let reading = try? UsageParser.muse(data) { return reading }
-            let session = try process.call("session/start", ["commandId": uuidV7(), "workspaceRoot": dir.path])
-            guard let id = (session["session"] as? [String: Any])?["sessionId"] as? String else { throw UsageFailure.unrecognized }
-            _ = try process.call("turn/start", ["commandId": uuidV7(), "sessionId": id, "reasoningEffort": "none",
-                "input": [["type": "text", "text": "Reply with OK."]]])
-            while process.museReading == nil && !process.museFinished {
-                let frame = try process.next()
-                if ["turn/foregroundCompleted", "turn/completed", "turn/failed"].contains(frame["method"] as? String ?? "") { break }
-            }
-            for _ in 0..<10 where process.museReading == nil {
-                let data = try JSONSerialization.data(withJSONObject: process.call("usage/read"))
-                process.museReading = try? UsageParser.muse(data)
-                if process.museReading == nil { Thread.sleep(forTimeInterval: 1) }
-            }
-            guard let reading = process.museReading else { throw UsageFailure("Muse did not return account usage. Try refreshing later.") }
-            return reading
+            return try museUsage(process, workspace: dir.path)
         case .pi: throw UsageFailure.unrecognized
         }
+    }
+
+    /// Muse keeps usage in its host's memory and learns it from a model response. First ask
+    /// passively; if empty, use one tiny turn in throwaway state, never a bot session. The reading
+    /// comes as `usage/changed`, or in `usage/read`, from the answer onwards, but often only when
+    /// the turn winds down after it, seconds or much later. So keep listening, ask every `poll`
+    /// seconds from the answer on, and a few times more once the turn has ended; the process's
+    /// deadline bounds it all.
+    static func museUsage(_ process: UsageProcess, workspace: String, poll: TimeInterval = 1) throws -> ProviderUsage {
+        if let reading = try museRead(process) { return reading }
+        let session = try process.call("session/start", ["commandId": uuidV7(), "workspaceRoot": workspace])
+        guard let id = (session["session"] as? [String: Any])?["sessionId"] as? String else { throw UsageFailure.unrecognized }
+        _ = try process.call("turn/start", ["commandId": uuidV7(), "sessionId": id, "reasoningEffort": "none",
+            "input": [["type": "text", "text": "Reply with OK."]]])
+        var nextAsk = Date.distantFuture
+        var endSeen = false
+        var asksAfterEnd = 0
+        while process.museReading == nil {
+            if process.museAnswered, nextAsk == .distantFuture { nextAsk = Date() }
+            if process.museEnded != nil, !endSeen {
+                endSeen = true
+                nextAsk = Date()
+            }
+            if Date() >= nextAsk {
+                if let reading = try museRead(process) { return reading }
+                if endSeen { asksAfterEnd += 1 }
+                if asksAfterEnd >= 5 { break }
+                nextAsk = Date().addingTimeInterval(poll)
+            }
+            _ = try process.next(until: nextAsk)
+        }
+        if let reading = process.museReading { return reading }
+        throw UsageFailure(process.museEnded == "turn/failed" ? "Muse could not answer its usage check. Check its sign-in and allowance, then refresh."
+            : "Muse did not return account usage. Try refreshing later.")
+    }
+
+    /// One `usage/read`. A reading `usage/changed` brought while waiting for the answer stays,
+    /// even when the answer itself is still empty.
+    private static func museRead(_ process: UsageProcess) throws -> ProviderUsage? {
+        let result = try process.call("usage/read")
+        if let data = try? JSONSerialization.data(withJSONObject: result), let reading = try? UsageParser.muse(data) {
+            process.museReading = reading
+        }
+        return process.museReading
     }
 
     /// Muse's command IDs are time-ordered UUIDs (v7).
@@ -103,8 +129,10 @@ final class UsageProcess: @unchecked Sendable {
     private var buffer = Data()
     private var requestID = 0
     private let deadline: Date
+    /// What Muse announces, also while a call waits for its answer: usage, and how its turn went.
     var museReading: ProviderUsage?
-    var museFinished = false
+    var museAnswered = false
+    var museEnded: String?
 
     init(command: String, arguments: [String], directory: URL, environment: [String: String] = [:], timeout: TimeInterval) throws {
         deadline = Date().addingTimeInterval(timeout)
@@ -150,7 +178,7 @@ final class UsageProcess: @unchecked Sendable {
         try input.fileHandleForWriting.close()
         var data = Data()
         while true {
-            let chunk = try chunk()
+            guard let chunk = try chunk() else { continue }
             if chunk.isEmpty { break }
             data.append(chunk)
             guard data.count <= 2 << 20 else { throw UsageFailure.unrecognized }
@@ -161,11 +189,13 @@ final class UsageProcess: @unchecked Sendable {
     }
 
     /// poll also bounds a read when a broken wrapper leaves a child holding stdout open after
-    /// its parent exits. Killing the parent alone cannot close that inherited pipe.
-    private func chunk() throws -> Data {
+    /// its parent exits. Killing the parent alone cannot close that inherited pipe. Nil once
+    /// `until` passes with nothing to read; only the deadline is a failure.
+    private func chunk(until soft: Date = .distantFuture) throws -> Data? {
         var descriptor = pollfd(fd: stdout.fileHandleForReading.fileDescriptor, events: Int16(POLLIN), revents: 0)
         while Date() < deadline {
-            let result = poll(&descriptor, 1, 200)
+            if Date() >= soft { return nil }
+            let result = poll(&descriptor, 1, Int32(max(1, min(200, soft.timeIntervalSinceNow * 1_000))))
             if result > 0 {
                 // read(upToCount:) can wait to fill its requested size on macOS. RPC hosts
                 // keep stdout open between frames, so consume just the bytes available now.
@@ -185,30 +215,33 @@ final class UsageProcess: @unchecked Sendable {
         requestID += 1
         try send(["jsonrpc": "2.0", "id": requestID, "method": method, "params": params])
         while true {
-            let frame = try next()
-            guard frame["id"] as? Int == requestID else { continue }
+            guard let frame = try next(), frame["id"] as? Int == requestID else { continue }
             if let error = frame["error"], !(error is NSNull) { throw failure() }
             guard let result = frame["result"] as? [String: Any] else { throw UsageFailure.unrecognized }
             return result
         }
     }
 
-    func next() throws -> [String: Any] {
+    /// The next frame, remembering what Muse announces; nil once `until` passes first.
+    func next(until soft: Date = .distantFuture) throws -> [String: Any]? {
         while true {
             if let end = buffer.firstIndex(of: 10) {
                 let line = Data(buffer[..<end])
                 buffer.removeSubrange(...end)
                 guard let frame = try? UsageParser.object(line) else { continue }
-                if frame["method"] as? String == "usage/changed", let params = frame["params"] as? [String: Any],
-                   let data = try? JSONSerialization.data(withJSONObject: params) {
-                    museReading = try? UsageParser.muse(data)
-                }
-                if ["turn/foregroundCompleted", "turn/completed", "turn/failed"].contains(frame["method"] as? String ?? "") {
-                    museFinished = true
+                switch frame["method"] as? String {
+                case "usage/changed":
+                    if let params = frame["params"] as? [String: Any], let data = try? JSONSerialization.data(withJSONObject: params),
+                       let reading = try? UsageParser.muse(data) { museReading = reading }
+                case "turn/foregroundCompleted": museAnswered = true
+                case let method? where method == "turn/completed" || method == "turn/failed":
+                    museAnswered = true
+                    museEnded = museEnded ?? method
+                default: break
                 }
                 return frame
             }
-            let chunk = try chunk()
+            guard let chunk = try chunk(until: soft) else { return nil }
             guard !chunk.isEmpty else { throw failure() }
             buffer.append(chunk)
             guard buffer.count <= 2 << 20 else { throw UsageFailure.unrecognized }
