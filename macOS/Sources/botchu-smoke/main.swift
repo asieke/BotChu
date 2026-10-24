@@ -27,6 +27,8 @@ struct Turn {
     var stderr = ""
     /// Follow-ups the CLI took during the turn.
     var followUpsTaken = 0
+    /// The model the CLI said it ran, where it says.
+    var model: String?
 }
 
 /// `followUp` is written to a CLI that takes input mid-turn at its first tool call.
@@ -57,6 +59,8 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
                 switch event {
                 case .session(let reported):
                     turn.session = CommandBuilder.resumeID(kind: kind, invocation: invocation, reported: reported)
+                case .model(let id):
+                    turn.model = id
                 case .inputTaken:
                     if ledger.taken(), let followUp {
                         turn.followUpsTaken += 1
@@ -89,6 +93,12 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
             continuation.resume(returning: turn)
         }
     }
+}
+
+/// The model as the chat names it, from what the CLI reported.
+func showModel(_ turn: Turn, of bot: Bot) {
+    let label = GenerationOptions.label(for: bot.model, kind: bot.account.kind, resolved: turn.model)
+    print("    model: \(label.title) (\(label.detail))")
 }
 
 func show(_ messages: [ChatMessage]) {
@@ -144,6 +154,7 @@ Task {
         let imageRequest = smokeImage == nil ? "" : " Also read the large word in the attached image and include it in your reply."
         let first = await runTurn(bot, prompt: "The code word is \(word). Use your shell tool to run `ls`, then reply with: stored." + imageRequest, history: [])
         show(first.messages)
+        showModel(first, of: bot)
         guard let session = first.session, !first.messages.contains(where: { $0.role == .error }),
               first.messages.contains(where: { $0.role == .assistant }),
               imageExpected.map({ expected in first.messages.filter { $0.role == .assistant }.map(\.text).joined().localizedCaseInsensitiveContains(expected) }) ?? true else {
@@ -156,6 +167,7 @@ Task {
         precondition(bot.resumableSessionID == session, "The second smoke turn must resume its profile’s session")
         let second = await runTurn(bot, prompt: "What is the code word? Reply with the word." + imageRequest, history: first.messages)
         show(second.messages)
+        showModel(second, of: bot)
         let reply = second.messages.filter { $0.role == .assistant }.map(\.text).joined()
         let ok = reply.contains(word) && !second.messages.contains(where: { $0.role == .error }) && (imageExpected.map { reply.localizedCaseInsensitiveContains($0) } ?? true)
         print("    \(ok ? "OK" : "FAIL: resumed turn did not recall \(word) (exit \(second.status)) \(second.stderr.suffix(300))") in \(Int(Date().timeIntervalSince(started)))s")

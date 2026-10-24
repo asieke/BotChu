@@ -353,11 +353,13 @@ final class SubagentRuntime {
                     return
                 }
                 var sessions: [String] = []
+                var reported: String?
                 live.update { messages in
                     for event in events {
                         switch event {
                         case .session(let session):
                             sessions.append(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: session))
+                        case .model(let id): reported = id
                         case .finished: finished = true
                         case .failed(let reason): failure = reason
                         default: break
@@ -369,6 +371,9 @@ final class SubagentRuntime {
                 }
                 if state != live.state { live.state = state }
                 for session in sessions { self.modify(id) { $0.sessionID = session } }
+                if let reported, self.run(id)?.resolvedModel != reported {
+                    self.modify(id) { $0.recordReportedModel(reported, requested: $0.model) }
+                }
                 guard let record = self.run(id) else { return }
                 let failed: @MainActor (Error) -> Void = { [weak self] error in
                     guard let self, persistenceFailure == nil, self.run(id)?.phase.isActive == true else { return }

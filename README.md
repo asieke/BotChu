@@ -292,8 +292,19 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and searches its public catalog of text models with tool support, with context sizes. Catalog
     requests contain no key or conversation data, are cached in memory for an hour, and preserve
     current/custom choices when unavailable. Other providers offer starter choices and label an
-    unspecified model as the account's default. **Auto** effort leaves the choice to the account;
-    explicit levels include short explanations, and unsupported effort controls are disabled.
+    unspecified model as the account's default.
+    Models are shown by their full name and version (Claude Opus 5.5, GPT-6.1 Sol, Muse Spark 1.3) in
+    the picker, the composer, the **Runs on** card, Edit Bot and sub-agent cards. A version shows only
+    when the ID pins one or the CLI has reported the model it ran: Claude Code offers each moving
+    alias (**Claude Opus · latest**, `opus`) beside the version it resolved to when checked
+    (**Claude Opus 5.5**, `claude-opus-5-5`), and once a turn has run, the alias or account default
+    reads as what ran (**Claude Opus 5.5 · latest**, **Claude Opus 5.5 · default**). Claude Code
+    reports the model that wrote its replies and Muse the one its usage counted; until a turn
+    reports one, and always for Codex and Antigravity, the version shows as unresolved. The report
+    is kept with the conversation for the account and choice it was made for, so changing either
+    shows it unresolved again; a label never changes which model a turn asks for. **Auto** effort
+    leaves the choice to the account; explicit levels include short explanations, and unsupported
+    effort controls are disabled.
     Search supports arrow keys and Return; Escape dismisses a picker. Controls wait until the shown
     conversation's turn ends. The card's **Account** selector changes the account for Home or a task,
     including custom CLI profiles; the next message starts a session on that account. Other tasks
@@ -420,8 +431,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
 ## Architecture
 - `macOS/` is a Swift package (Swift 6 toolchain, macOS 14+):
   - `Sources/BotChuCore/` — Foundation only, unit-tested: accounts and the command line each CLI
-    runs with (`Accounts.swift`), generation choices and public OpenRouter model metadata
-    (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model (`Models.swift`), the
+    runs with (`Accounts.swift`), generation choices, how a model is named (its full name and
+    version, an alias's or default's once reported) and public OpenRouter model metadata
+    (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model, with the model a
+    conversation's CLI last reported running (`Models.swift`), the
     sections the sidebar groups bots into (`BotSections.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
@@ -472,7 +485,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and model-supplied scripts, uses Mermaid's strict mode and disables trusted TeX commands.
   - `Sources/botchu-smoke/` — a command-line check, not shipped in the app, that runs two real
     turns on each account named the way the app does (see **Test**).
-  - `Tests/BotChuCoreTests/` — parser tests against captured output of every CLI, command lines,
+  - `Tests/BotChuCoreTests/` — parser tests against captured output of every CLI (with the model
+    Claude Code and Muse report running), how models are named, command lines,
     context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
     made in throwaway repositories, the project status filter, issues and pull requests read in
     full from `gh`'s output, and fan-out briefs; and hosts: their `ssh` command lines, deploy targets, clones,
@@ -571,8 +585,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
 - Accounts end to end: `swift run --package-path macOS botchu-smoke [account id …]` runs, for each
   account (all of them when none is named), a new session that opens with the bot's context and
   runs a shell command, then a resumed session that must recall a code word from the first, and
-  prints both threads. It spends the accounts' own allowance, so it is not part of `check`;
-  OpenRouter needs `OPENROUTER_API_KEY` in its environment. To exercise explicit generation
+  prints both threads, each with the model it ran as the chat names it. It spends the accounts' own
+  allowance, so it is not part of `check`; OpenRouter needs `OPENROUTER_API_KEY` in its environment. To exercise explicit generation
   settings, prefix the command with `BOTCHU_SMOKE_EFFORT=low` and optionally
   `BOTCHU_SMOKE_MODEL=<model id>`; both settings apply to the new and resumed turns.
   To test image delivery, set `BOTCHU_SMOKE_IMAGE=/absolute/path/to/fixture.png` and optionally
