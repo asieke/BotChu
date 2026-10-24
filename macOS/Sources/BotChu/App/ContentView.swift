@@ -78,6 +78,7 @@ private struct DetailColumn: View {
             case .projects: ProjectsView()
             case .agents: AgentsView()
             case .providers: ProvidersView()
+            case .skills: SkillsView()
             }
         } else if let id = model.selection, model.bot(id) != nil {
             let tab = model.tab(of: id)
