@@ -39,7 +39,8 @@ public enum RunEnding: String, Codable, Sendable {
     /// The CLI ended its turn without an error.
     case finished
     case failed
-    /// The owner stopped it. Runs that BotChu's quitting or relaunch interrupted aren't reviewed.
+    /// Stopped before it finished: by the owner, or, for a sub-agent, because its caller's turn
+    /// ended. Runs that BotChu's quitting or relaunch interrupted aren't reviewed.
     case stopped
 }
 
@@ -121,7 +122,7 @@ public struct EvaluationSnapshot: Codable, Equatable, Sendable {
         case .failed:
             header.append("How it ended, as BotChu saw it: it failed: \(Self.clip(Self.oneLine(error ?? "no reason given"), 500))")
         case .stopped:
-            header.append("How it ended, as BotChu saw it: the owner stopped it before it finished. That is neither a failure nor finished work; don't continue it.")
+            header.append("How it ended, as BotChu saw it: it was stopped before it finished. That is neither a failure nor finished work; don't continue it.")
         }
         header.append("Tool calls: \(tools)" + (failed > 0 ? " (\(failed) failed)" : ""))
         if !brief.isEmpty { header.append("Brief:\n\(Self.clip(brief, Self.maxBriefCharacters))") }
@@ -324,9 +325,12 @@ public enum EvaluationResponse {
         public var changes: [EvaluationChange]
         /// Changes for a place BotChu doesn't know, which are dropped.
         public var unknown: Int
+        /// Changes beyond `maxChanges`, which are dropped.
+        public var extra = 0
     }
 
     static let maxItems = 6
+    static let maxChanges = 8
     static let maxItemCharacters = 400
 
     /// The JSON object between `<evaluation>` tags, in a ```json fence, or between the reply's
@@ -359,7 +363,7 @@ public enum EvaluationResponse {
         let summary = ((object["summary"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return Parsed(summary: EvaluationSnapshot.clip(summary, 600), worked: strings(object["worked"]),
                       didNotWork: strings(object["didNotWork"] ?? object["did_not_work"] ?? object["failed"]),
-                      changes: Array(changes.prefix(maxItems)), unknown: unknown + max(0, changes.count - maxItems))
+                      changes: Array(changes.prefix(maxChanges)), unknown: unknown, extra: max(0, changes.count - maxChanges))
     }
 
     static func jsonText(in reply: String) -> String? {
@@ -405,7 +409,7 @@ public struct EvaluationPlan: Equatable, Sendable {
     public static let maxLessons = 20
 
     /// Lines that would rewrite who the bot is, give it more authority, or loosen a safeguard.
-    static let safeguardPattern = #"(?i)^\s*you are\b|\b(without (asking|approval|permission|review|reviews|tests?|checks?|confirmation)|skip(ping)? (the )?(tests?|checks?|review|reviews|approval|sync|ci|gate)|bypass|disable|force[- ]push|--force|--no-verify|never ask|no need to (ask|wait|test|check|review)|don't (ask|wait for|need) (the )?(owner|approval|review)|ignore (the )?(rules?|instructions|agents\.md|team\.md|owner|safeguards?)|(you|bots?) (may|can) now|allowed to|authori[sz]ed to|permission to)\b"#
+    static let safeguardPattern = #"(?i)^\s*you are\b|\b(without (running |doing |waiting for |getting )?(the )?(asking|approval|permission|review|reviews|tests?|checks?|confirmation|owner)|skip(ping)? (the )?(tests?|checks?|review|reviews|approval|sync|ci|gate)|bypass|disable|force[- ]push|never ask|no need to (ask|wait|test|check|review)|don't (ask|wait for|need) (the )?(owner|approval|review)|ignore (the )?(rules?|instructions|agents\.md|team\.md|owner|safeguards?)|(you|bots?) (may|can) now|allowed to|authori[sz]ed to|permission to)\b|--force\b|--no-verify\b"#
 
     /// `instructions` is the bot's `INSTRUCTIONS.md` as it is now.
     public init(_ changes: [EvaluationChange], snapshot: EvaluationSnapshot, instructions: String) {
@@ -835,6 +839,9 @@ public final class RunEvaluator {
     public struct Limits: Sendable {
         /// Reviews running at once, across every bot and account.
         public var concurrent = 1
+        /// How long a review waits after its run ends before it may start, in seconds, so the
+        /// owner's next message or the next queued turn gets the account first.
+        public var delay: TimeInterval = 60
         /// Reviews started per account in any 24 hours; more wait.
         public var perAccountPerDay = 12
         /// How long one review may run before it is stopped, in seconds.
@@ -914,6 +921,7 @@ public final class RunEvaluator {
         guard records[key] == nil, !FileManager.default.fileExists(atPath: BotHome(workspace: request.workspace).evaluationURL(key).path)
         else { return false }
         var record = EvaluationRecord(request, at: now())
+        if limits.delay > 0 { record.notBefore = record.createdAt.addingTimeInterval(limits.delay) }
         record.memoryAtRun = MemoryNotes.bullets(in: Workspace.read(MemoryFile.bot(workspace: request.workspace).path))
         update(record)
         pump()
@@ -1082,7 +1090,9 @@ public final class RunEvaluator {
                                                  evidence: cited.compactMap(snapshot.line(for:)))
             record.plan = plan.apply
             record.proposals = plan.proposals
-            record.leftOut = plan.leftOut + (parsed.unknown > 0 ? ["\(parsed.unknown) change\(parsed.unknown == 1 ? "" : "s") for a place BotChu doesn't know"] : [])
+            record.leftOut = plan.leftOut
+                + (parsed.unknown > 0 ? ["\(parsed.unknown) change\(parsed.unknown == 1 ? "" : "s") for a place BotChu doesn't know"] : [])
+                + (parsed.extra > 0 ? ["\(parsed.extra) change\(parsed.extra == 1 ? "" : "s") beyond the \(EvaluationResponse.maxChanges) a review may suggest"] : [])
             record.phase = .applying
             update(record)
             apply(id)

@@ -86,7 +86,7 @@ extension AppModel {
     }
 
     private func evaluationLaunch(for job: EvaluationJob) -> EvaluationLaunch {
-        let key = job.account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil
+        let key = job.account.kind == .pi ? openRouterKey() : nil
         return EvaluationLaunch(
             command: settings.command(for: job.account),
             model: GenerationOptions.effectiveModel(job.model, kind: job.account.kind, openRouterDefault: settings.openRouterModel),

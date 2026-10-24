@@ -31,6 +31,7 @@ private final class ReviewFixture {
         let evaluator = RunEvaluator(writer: writer, workspace: { $0 == botID ? workspace : nil },
                                      sharedMemoryPath: { shared }, teamPath: { BotContext.teamPath(besideSharedMemory: shared) })
         evaluator.limits.wake = 3_600
+        evaluator.limits.delay = 0
         evaluator.now = { [unowned self] in clock }
         return evaluator
     }
@@ -154,7 +155,7 @@ private actor Gate {
         #expect(failed?.snapshot.text.contains("it failed: codex exited with status 1") == true)
         let stopped = fixture.request(ending: .stopped)
         #expect(stopped.ending == .stopped)
-        #expect(stopped.snapshot.text.contains("the owner stopped it before it finished. That is neither a failure nor finished work; don't continue it."))
+        #expect(stopped.snapshot.text.contains("it was stopped before it finished. That is neither a failure nor finished work; don't continue it."))
         #expect(EvaluationRequest.taskTurn(ReviewFixture.task, of: fixture.bot, thread: chat, turnStart: 1, ending: .stopped, error: nil, machine: "This Mac") == nil)
     }
 
@@ -628,13 +629,19 @@ private actor Gate {
             fixture.request(task: BotTask(repo: "asieke/BotChu", checkout: "/tmp/BotChu", folder: "/tmp/wt", brief: brief, accountID: account))
         }
         let first = request("first")
+        fixture.evaluator.limits.delay = 60
         fixture.evaluator.enqueue(first)
         #expect(fixture.evaluator.records[first.subject.key]?.phase == .pending, "Its account is running a turn")
+        #expect(fixture.evaluator.records[first.subject.key]?.notBefore == fixture.clock.addingTimeInterval(60))
         #expect(fixture.calls.count == 0)
         busy = false
         fixture.evaluator.pump()
+        #expect(fixture.evaluator.records[first.subject.key]?.phase == .pending, "The owner's next message gets the account first")
+        fixture.clock = fixture.clock.addingTimeInterval(60)
+        fixture.evaluator.pump()
         await fixture.evaluator.settle()
         #expect(fixture.evaluator.records[first.subject.key]?.phase == .done)
+        fixture.evaluator.limits.delay = 0
 
         // One at a time, across accounts.
         let gate = Gate()
