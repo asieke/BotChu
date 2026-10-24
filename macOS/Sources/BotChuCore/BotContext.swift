@@ -791,9 +791,26 @@ public enum MemoryNotes {
     }
 
     static func isSecret(_ text: String) -> Bool {
-        let lower = text.lowercased()
-        if secretTokens.contains(where: { lower.contains($0) }) { return true }
+        var lower = text.lowercased()
+        if holds(&lower, any: secretTokens) { return true }
+        // The assignment pattern can only match text with one of these in it, and most text has none.
+        guard holds(&lower, any: secretWords) else { return false }
         return text.range(of: secretAssignmentPattern, options: .regularExpression) != nil
+    }
+
+    /// A word every match of `secretAssignmentPattern` contains.
+    private static let secretWords = ["key", "token", "passw", "bearer"]
+
+    /// Whether the text holds any of the parts, compared byte by byte: quick on long text, such as
+    /// the tool output run reviews check line by line.
+    private static func holds(_ text: inout String, any parts: [String]) -> Bool {
+        text.withUTF8 { haystack in
+            parts.contains { part in
+                part.utf8.withContiguousStorageIfAvailable { needle in
+                    memmem(haystack.baseAddress, haystack.count, needle.baseAddress, needle.count) != nil
+                } ?? false
+            }
+        }
     }
 
     static func parseOperation(_ raw: String) -> Operation? {

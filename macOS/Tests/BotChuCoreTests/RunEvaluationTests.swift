@@ -1014,12 +1014,16 @@ private actor Gate {
         let fixture = try ReviewFixture()
         defer { fixture.remove() }
         let value = "Sup3rSecretValue" + "XYZ"
-        // A secret at the start of a long line of which only the end is shown, and one in a JSON object.
-        let output = "password=" + value + String(repeating: "y", count: EvaluationSnapshot.maxToolOutputCharacters)
+        // A secret at the start of a long line of which only the end is shown, cut inside its value
+        // (shortened first, "…ValueXYZ…" would show without what made it a secret), and one in a JSON object.
+        let output = "earlier output\npassword=" + value + String(repeating: "y", count: EvaluationSnapshot.maxToolOutputCharacters - 10)
+        #expect(EvaluationSnapshot.tail(output, EvaluationSnapshot.maxToolOutputCharacters).hasPrefix("[…] etValueXYZ"))
         let thread = ReviewFixture.thread + [ReviewFixture.tool("Bash", "deploy", exit: 1, failed: true, output: output),
                                              ChatMessage(role: .user, text: "Config: {\"password\":\"json-\(value)\"}")]
         let snapshot = fixture.request(thread: thread).snapshot
-        #expect(!snapshot.text.contains(value))
+        #expect(!snapshot.text.contains("ValueXYZ"))
+        #expect(snapshot.text.contains("[T5] Bash: deploy → failed (exit 1)\n    […] [a line that looks like a secret, left out]\n"))
+        #expect(EvaluationSnapshot.window("Keep this line\napi_key=" + value, 20) == "Keep this line\n[a line that looks like a secret, left out] […]")
         #expect(MemoryNotes.isSecret("{\"password\":\"hunter2-json\"}") && MemoryNotes.isSecret("{'api_key': 'abc'}"))
         #expect(EvaluationSnapshot.redacted("password:\nhunter2") == EvaluationSnapshot.secretLine, "Split across lines, it goes whole")
 

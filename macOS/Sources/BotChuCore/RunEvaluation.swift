@@ -93,8 +93,8 @@ public struct EvaluationSnapshot: Codable, Equatable, Sendable {
             case .tool:
                 tools += 1
                 var line = Self.quoted(Self.oneLine(message.toolName ?? "tool"), 80)
-                let input = Self.oneLine(Self.redacted(message.toolInput ?? ""))
-                if !input.isEmpty { line += ": " + Self.quoted(input, Self.maxToolInputCharacters) }
+                let input = Self.oneLine(Self.window(message.toolInput ?? "", Self.maxToolInputCharacters))
+                if !input.isEmpty { line += ": " + Self.neutralized(input) }
                 let exit = message.toolExitCode
                 let showsOutput: Bool
                 switch message.toolState ?? .done {
@@ -172,13 +172,28 @@ public struct EvaluationSnapshot: Codable, Equatable, Sendable {
         return (head.map { items[$0] } + [marker] + tail.map { items[$0] }, head.map(Optional.some) + [nil] + tail.map(Optional.some))
     }
 
-    /// Text from the run as the snapshot gives it: lines that look like secrets left out first (so
-    /// shortening can't hide one), within `limit` (or its end, `fromEnd`), with BotChu's own tags
-    /// neutralized and every line after the first indented, so it can't start a line as a label does.
+    /// Text from the run as the snapshot gives it (`window`), with BotChu's own tags neutralized and
+    /// every line after the first indented, so it can't start a line as a label does.
     static func quoted(_ text: String, _ limit: Int, fromEnd: Bool = false) -> String {
-        let redacted = redacted(text)
-        return neutralized(fromEnd ? tail(redacted, limit) : clip(redacted, limit))
-            .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).joined(separator: "\n    ")
+        neutralized(window(text, limit, fromEnd: fromEnd)).replacingOccurrences(of: #"\R"#, with: "\n    ", options: .regularExpression)
+    }
+
+    /// The text within `limit` (or its end, `fromEnd`), without lines that look like secrets. Each
+    /// line is judged whole, before anything is shortened, so a cut can't hide a secret: the line the
+    /// cut falls in is left out when that line, whole, looks like one. Only what is shown, and that
+    /// one line, are read, however long the text.
+    static func window(_ text: String, _ limit: Int, fromEnd: Bool = false) -> String {
+        guard text.count > limit else { return redacted(text) }
+        let cut = fromEnd ? text.index(text.endIndex, offsetBy: -limit) : text.index(text.startIndex, offsetBy: limit)
+        let start = text.rangeOfCharacter(from: .newlines, options: .backwards, range: text.startIndex..<cut)?.upperBound ?? text.startIndex
+        let end = text.rangeOfCharacter(from: .newlines, range: cut..<text.endIndex)?.lowerBound ?? text.endIndex
+        var lines = redacted(String(fromEnd ? text[cut...] : text[..<cut]))
+            .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
+        if MemoryNotes.isSecret(String(text[start..<end])), !lines.isEmpty {
+            lines[fromEnd ? 0 : lines.count - 1] = secretLine
+        }
+        let shown = lines.joined(separator: "\n")
+        return fromEnd ? "[…] " + shown : shown + " […]"
     }
 
     /// The tags that frame a review's prompt and reply, and the memory requests of a turn.
