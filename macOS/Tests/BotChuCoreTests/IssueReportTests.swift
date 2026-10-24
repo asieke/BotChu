@@ -168,6 +168,17 @@ private struct FakeGH {
         #expect(IssueReport.body(report: "Add a dark icon.", images: 2, snapshot: snapshot)
             .hasPrefix("Add a dark icon.\n\n![Image 1](./image-1.png)\n\n![Image 2](./image-2.png)\n\n### App state\n\n- Version: 0.1\n"))
     }
+
+    /// A window's screenshot keeps every pixel it shows up to 2,048 on its longest edge, and is
+    /// scaled down, keeping its shape, past that; never up.
+    @Test func screenshotsKeepTheWindowsPixelsUpToTheEdgeLimit() {
+        #expect(IssueReport.screenshotSize(width: 820, height: 600, scale: 2) == (1640, 1200))
+        #expect(IssueReport.screenshotSize(width: 1240, height: 800, scale: 2) == (2048, 1321))
+        #expect(IssueReport.screenshotSize(width: 800, height: 1728, scale: 2) == (948, 2048))
+        #expect(IssueReport.screenshotSize(width: 1240, height: 800, scale: 1) == (1240, 800))
+        #expect(IssueReport.screenshotSize(width: 3000, height: 3000, scale: 1) == (2048, 2048))
+        #expect(IssueReport.screenshotSize(width: 0, height: 0, scale: 0) == (1, 1))
+    }
 }
 
 @Suite struct IssueSnapshotTests {

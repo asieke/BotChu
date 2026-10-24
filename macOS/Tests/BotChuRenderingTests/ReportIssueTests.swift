@@ -10,11 +10,45 @@ private actor Filings {
     func add(_ title: String, _ body: String, _ images: [Data]) { all.append((title, body, images)) }
 }
 
+/// A stand-in for the window's screenshot, so no test captures the screen for a report: the windows
+/// it was asked for, whether a sheet covered each then, and a picture of its own each time (or, when
+/// it `fails`, why there is none).
+@MainActor private final class Captures {
+    private(set) var windows: [NSWindow] = []
+    private(set) var covered: [Bool] = []
+    private(set) var pictures: [Data] = []
+    var fails = false
+
+    func capture(_ window: NSWindow) throws -> Data {
+        windows.append(window)
+        covered.append(window.attachedSheet != nil)
+        if fails { throw ImageDelivery.Failure("The window isn't on screen.") }
+        let colors: [NSColor] = [.systemTeal, .systemPurple, .systemYellow]
+        let picture = try png(colors[pictures.count % colors.count])
+        pictures.append(picture)
+        return picture
+    }
+
+    private func png(_ color: NSColor) throws -> Data {
+        let rep = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 40, pixelsHigh: 26, bitsPerSample: 8, samplesPerPixel: 4,
+                                                hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        color.setFill()
+        NSRect(x: 0, y: 0, width: 40, height: 26).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        return try #require(rep.representation(using: .png, properties: [:]))
+    }
+}
+
 extension RenderingTests {
-    /// Report a Bug or Feature, from the toolbar: its app state leaves the bot's name, folder and
-    /// conversation out; a pasted screenshot goes with the report; ⌘Return files it; one that isn't
-    /// filed stays, with why; once filed, the sheet gives the issue's link (and says when an image
-    /// didn't make it), and Done closes it.
+    /// Report a Bug or Feature, from the toolbar: it opens with a screenshot of its window, taken
+    /// before the sheet covers it; its app state leaves the bot's name, folder and conversation out;
+    /// a pasted screenshot goes with the report; ⌘Return files it; one that isn't filed stays, with
+    /// its images and why, and is tried again without another screenshot, or without the window's
+    /// once it is removed; once filed, the sheet gives the issue's link (and says when an image didn't
+    /// make it), and Done closes it. The next report takes a new screenshot, and one that can't be
+    /// taken leaves the report to go without it, saying so.
     @Test func reportSheetFilesTheReportOrKeepsItWithWhy() async throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-report-\(UUID().uuidString)")
@@ -38,9 +72,13 @@ extension RenderingTests {
             await filings.add(title, body, images)
             return .failed("gh couldn't create the issue:\nHTTP 401: Bad credentials")
         }
+        let captures = Captures()
+        model.windowCapture = { window in try captures.capture(window) }
         let host = NSHostingView(rootView: ContentView().environment(model).defaultAppStorage(defaults))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 800),
                               styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        // As SwiftUI names the app's main windows, which reports are made from.
+        window.identifier = NSUserInterfaceItemIdentifier("main-report-test")
         window.isReleasedWhenClosed = false
         window.contentView = host
         defer { window.contentView = nil; window.close() }
@@ -61,6 +99,15 @@ extension RenderingTests {
         let sheet = try #require(window.attachedSheet)
         let request = try #require(model.issueReport)
         #expect(!model.canReportIssue)
+        // The window's screenshot was taken once, of this window, before the sheet covered it, and
+        // is the report's first image, which can be removed.
+        #expect(captures.windows.count == 1)
+        #expect(captures.windows.first === window)
+        #expect(captures.covered == [false])
+        #expect(request.hasScreenshot && request.screenshotProblem == nil)
+        #expect(request.images.images.map(\.name) == [IssueReportRequest.screenshotName])
+        #expect(request.images.images.first?.png == captures.pictures.first)
+        #expect(request.images.images.first?.preview != nil)
         let state = request.snapshot.lines.joined(separator: "\n")
         #expect(state.contains("Conversation: Home; 2 messages, 0 tool calls"))
         #expect(state.contains("Bots: 1, no turns running"))
@@ -83,7 +130,7 @@ extension RenderingTests {
         pasteboard.board.setData(try #require(picture.tiffRepresentation), forType: .tiff)
         #expect(editor.validateMenuItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")))
         editor.paste(nil)
-        #expect(request.images.images.count == 1)
+        #expect(request.images.images.count == 2)
         #expect(editor.string == report)
         try await Task.sleep(for: .milliseconds(200))
         if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
@@ -97,18 +144,33 @@ extension RenderingTests {
         let filed = await filings.all
         #expect(filed.count == 1)
         #expect(filed.first?.title == "The sidebar flickers")
-        #expect(filed.first?.body == IssueReport.body(report: report, images: 1, snapshot: request.snapshot))
-        #expect(filed.first?.images.count == 1)
-        #expect(filed.first?.images.first.flatMap(NSImage.init(data:)) != nil)
-        #expect(request.images.images.count == 1)
+        #expect(filed.first?.body == IssueReport.body(report: report, images: 2, snapshot: request.snapshot))
+        #expect(filed.first?.images.count == 2)
+        #expect(filed.first?.images.first == captures.pictures.first)
+        #expect(filed.first?.images.last.flatMap(NSImage.init(data:)) != nil)
+        #expect(request.images.images.count == 2)
+        #expect(captures.windows.count == 1)
 
-        // Tried again, it is filed, though gh couldn't upload the image: the sheet links the issue
-        // and says so, and Done closes it.
+        // The window's screenshot removed, it is tried again without it, and isn't taken again:
+        // it is filed, though gh couldn't upload the other image; the sheet links the issue and
+        // says so, and Done closes it.
+        request.images.remove(try #require(request.images.images.first?.id))
+        #expect(!request.hasScreenshot)
+        let retried = Filings()
         let partly = IssueFiler.Outcome.filed(URL(string: "https://github.com/asieke/BotChu/issues/52"),
                                               problem: "Not every image was attached:\nfailed to upload ./image-1.png: unexpected EOF")
-        model.issueFiler = IssueFiler { _, _, _ in partly }
+        model.issueFiler = IssueFiler { title, body, images in
+            await retried.add(title, body, images)
+            return partly
+        }
         Self.sendKey("\r", code: 36, modifiers: .command, to: sheet)
         try await Task.sleep(for: .milliseconds(300))
+        let again = await retried.all
+        #expect(again.count == 1)
+        #expect(again.first?.images.count == 1)
+        #expect(again.first?.images.first != captures.pictures.first)
+        #expect(again.first?.body == IssueReport.body(report: report, images: 1, snapshot: request.snapshot))
+        #expect(captures.windows.count == 1)
         #expect(request.state == .filed(URL(string: "https://github.com/asieke/BotChu/issues/52"),
                                         problem: "Not every image was attached:\nfailed to upload ./image-1.png: unexpected EOF"))
         if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
@@ -120,17 +182,86 @@ extension RenderingTests {
         #expect(window.attachedSheet == nil)
         #expect(model.canReportIssue)
 
-        // A gallery's report says which; Escape closes the sheet without filing.
+        // A gallery's report says which, with a screenshot of its own; Escape closes the sheet
+        // without filing.
         model.destination = .projects
         model.reportIssue()
         try await Task.sleep(for: .milliseconds(400))
         let gallery = try #require(window.attachedSheet)
         #expect(model.issueReport?.snapshot.lines.contains("Screen: Projects") == true)
         #expect(model.issueReport?.snapshot.lines.contains { $0.hasPrefix("Conversation:") } == false)
+        #expect(captures.windows.count == 2 && captures.covered == [false, false])
+        #expect(captures.pictures.count == 2 && captures.pictures[0] != captures.pictures[1])
+        #expect(model.issueReport?.images.images.map(\.png) == [captures.pictures[1]])
         Self.sendKey("\u{1B}", code: 53, to: gallery)
         try await Task.sleep(for: .milliseconds(400))
         #expect(model.issueReport == nil)
         #expect(await filings.all.count == 1)
+        #expect(await retried.all.count == 1)
+
+        // When the screenshot can't be taken, the sheet opens without one and says so, and the
+        // report goes as text.
+        captures.fails = true
+        let textOnly = Filings()
+        model.issueFiler = IssueFiler { title, body, images in
+            await textOnly.add(title, body, images)
+            return .filed(URL(string: "https://github.com/asieke/BotChu/issues/53"))
+        }
+        model.reportIssue(text: "Add a dark icon.")
+        try await Task.sleep(for: .milliseconds(400))
+        let plain = try #require(window.attachedSheet)
+        let failed = try #require(model.issueReport)
+        #expect(captures.windows.count == 3)
+        #expect(failed.images.images.isEmpty && !failed.hasScreenshot)
+        #expect(failed.screenshotProblem == "The window isn't on screen.")
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("report-no-screenshot"))
+        }
+        Self.sendKey("\r", code: 36, modifiers: .command, to: plain)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(failed.state == .filed(URL(string: "https://github.com/asieke/BotChu/issues/53")))
+        #expect(await textOnly.all.map(\.images.count) == [0])
+        Self.sendKey("\r", code: 36, to: plain)
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(model.issueReport == nil)
+    }
+
+    /// A window's screenshot is the window as the window server shows it, through ScreenCaptureKit,
+    /// at its pixels up to the edge limit, without asking for Screen Recording; a window that isn't
+    /// shown has none; and one that never comes is given up on.
+    @Test func aWindowsScreenshotIsTheWindowAsItShows() async throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 300),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor(srgbRed: 1, green: 0.5, blue: 0, alpha: 1).cgColor
+        window.contentView = view
+        defer { window.contentView = nil; window.close() }
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(300))
+
+        let png = try await WindowCapture.screen(window)
+        let rep = try #require(NSBitmapImageRep(data: png))
+        let size = IssueReport.screenshotSize(width: window.frame.width, height: window.frame.height, scale: window.backingScaleFactor)
+        #expect(abs(rep.pixelsWide - size.width) <= 2 && abs(rep.pixelsHigh - size.height) <= 2, "\(rep.pixelsWide) × \(rep.pixelsHigh)")
+        let center = try #require(rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+        // Orange, through the display's color profile: not blank, white, black or grey.
+        #expect(center.redComponent > 0.85 && (0.35...0.75).contains(center.greenComponent) && center.blueComponent < 0.4, "\(center)")
+
+        window.orderOut(nil)
+        await #expect(throws: (any Error).self) { try await WindowCapture.screen(window) }
+        let started = ContinuousClock.now
+        let never = await WindowCapture.take(window, with: { _ in
+            try await Task.sleep(for: .seconds(30))
+            return Data()
+        }, timeout: .milliseconds(200))
+        #expect(ContinuousClock.now - started < .seconds(5))
+        #expect((try? never.get()) == nil)
+        if case .failure(let error) = never { #expect(error.localizedDescription == "Taking it took too long.") }
+        let none = await WindowCapture.take(nil, with: { _ in Data() })
+        #expect((try? none.get()) == nil)
     }
 
     private static func sendKey(_ text: String, code: UInt16, modifiers: NSEvent.ModifierFlags = [], to window: NSWindow) {

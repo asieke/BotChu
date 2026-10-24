@@ -638,20 +638,28 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     a day. See [Telegram gateway](docs/telegram.md) for setup and troubleshooting.
   - **Reporting bugs and features:** the ladybug button at the toolbar's trailing end, on every
     screen, or **Help ▸ Report a Bug or Feature…** opens a sheet with one field, which takes up to
-    eight images as the message box does. **Submit** (⌘↩)
+    eight images as the message box does. Just before the sheet opens, BotChu takes a screenshot of
+    the window it was opened from, as it shows then (its sidebar, conversation or gallery, and
+    status sidebar, scrolled as they were), and puts it first among the report's images, one of the
+    eight, where its preview's × removes it. It is taken once a report, never again on Submit or a
+    retry, and only of that window: not other apps, BotChu's other windows or the desktop. macOS
+    doesn't ask for Screen Recording to take it (it needs macOS 14.4 or later); when it can't be
+    taken, the sheet says that no screenshot is attached, and the report goes without it. It is
+    kept in memory, not in a file, and nothing is uploaded before **Submit**. **Submit** (⌘↩)
     files it as an issue in `asieke/BotChu` with `gh issue create`, titled from its first line or
     sentence (cut at a word, 72 characters at most), with its images after the text, and links the
     new issue; when gh fails, the report stays, with gh's reason. gh attaches the images itself
     (`--attach`, gh 2.99 or later, which needs write access to the repository), each as
     `image-<n>.png` from a private folder that goes afterwards; if one doesn't upload, the issue is
-    made without it, and the sheet says so. The repository is public, so besides the images you add,
-    the issue adds only the app state
+    made without it, and the sheet says so. The repository is public: anyone can see the issue's
+    images, as the sheet says beneath them, and the screenshot shows whatever the window showed,
+    conversations and names included. Besides the images, the issue adds only the app state
     the sheet shows before it goes, as categories and counts: the version and commit, macOS, the
     screen and status sidebar area, the conversation's kind (Home, or a task on this Mac or a host
     and its kind of work), CLI family, starter model and effort, its turn's state (an error by kind
     only), message and queue counts, the window's size and appearance, and how many bots and turns
     there are. Conversations, instructions, memory, prompts, tool calls, error text, paths and the
-    names of bots, tasks, accounts, hosts and repositories never go into it.
+    names of bots, tasks, accounts, hosts and repositories never go into the app state.
 - Does not: run a bot's Home anywhere but this Mac, or tasks anywhere but this Mac and SSH hosts
   (no containers or cloud), run scheduled jobs while BotChu is quit or the Mac asleep, ask for approval of tool calls (every CLI runs with
   its permission prompts bypassed, inside the bot's folder or the task's worktree), or keep any
@@ -716,8 +724,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     (`MemoryWriter.saveReviewed`), the exact diff it records and its revert (`AppliedChange`), and the
     review's own CLI run, whose tool-free command lines are in `Accounts.swift`
     (`CommandBuilder.toolFreeInvocation`).
-    Reports filed from the app (their title, description, app state and `gh issue create`) are in
-    `IssueReport.swift`. The Telegram gateway is in `Telegram.swift` (the Bot API client: long
+    Reports filed from the app (their title, description, app state, the size their window's
+    screenshot is taken at, and `gh issue create`) are in `IssueReport.swift`. The Telegram gateway is in `Telegram.swift` (the Bot API client: long
     polling, sending, and errors that never hold the token) and `TelegramGateway.swift` (which chats
     may reach which bot, message IDs that recognize a repeated update, replies cut to Telegram's
     limit, the saved offset and replies owed, and retries). `@` and `#` mentions are in
@@ -728,7 +736,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     in standard system materials: `App/` (the app, window, model, each conversation's state, observed
     on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
-    computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, the
+    computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, and the
+    screenshot of its window, through ScreenCaptureKit, `WindowCapture.swift`, the
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished runs to run reviews, `Evaluations.swift`),
@@ -755,7 +764,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     from a remote task; memory: #88's Home sequence (a routing preference saved in the turn that
     agrees, and recalled by a fresh session), what is left out, bot or shared scope, repeats,
     corrections and forgets, concurrent saves, and saves that fail, wait (also across a relaunch)
-    and are tried again; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
+    and are tried again; reports: their titles, app state, the size of their window's screenshot, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
     and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
     commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
@@ -809,7 +818,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     sidebar's tabs, details and fan-out tasks, custom profile persistence, the Providers table's
     rows under 100 points in every state and at its narrowest, provider logos in both
     appearances and in account menus, the report
-    sheet, filing with a stand-in, images pasted with Edit ▸ Paste into the composer, the report
+    sheet, with a stand-in screenshot (taken of its window before the sheet opens, removed, not
+    taken again on a retry, new for the next report, and a report without one when it can't be
+    taken) and a real one of a test window through ScreenCaptureKit, filing with a stand-in, images pasted with Edit ▸ Paste into the composer, the report
     and New Task (through a stand-in for the general pasteboard, so no test touches the clipboard)
     and what pastes as text instead, New Task starting a task from a project and a brief with an
     image, the activity chat at every density, light and dark and at its
@@ -965,8 +976,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
   `BOTCHU_WINDOW=compact` checks the minimum window width. `BOTCHU_DRAFT=<text>` puts that draft in
   the message box (`\n` for a new line), to check how it grows and scrolls.
-  `BOTCHU_OPEN=report` opens Report a Bug or Feature, and `BOTCHU_REPORT="<report>"` files one at
-  launch. A review copy files reports only with a stand-in `gh`, which keeps them (and the images it
+  `BOTCHU_OPEN=report` opens Report a Bug or Feature, and `BOTCHU_REPORT="<report>"` files one,
+  two seconds after launch, each with the window's screenshot (`BOTCHU_SCREENSHOT_FAIL=1` shows a
+  report whose screenshot couldn't be taken). A review copy files reports only with a stand-in `gh`, which keeps them (and the images it
   attaches) in `reports/` in
   its data folder and prints a made-up issue's link (with `BOTCHU_REPORT_FAIL=1`, it fails as a
   signed-out gh does), so no review creates a real issue.
