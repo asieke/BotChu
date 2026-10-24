@@ -25,7 +25,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     across launches, but what is selected from elsewhere (Agents, a new bot or task, ⌃Tab) shows
     in its section.
     Sections are kept in `index.json` with the sidebar's order, so a bot whose folder is missing
-    comes back in its section.
+    comes back in its section. When `index.json` can't be saved (a full disk, a folder without
+    write access), the change still shows, and a banner above **New Bot** says it isn't saved,
+    which file and why; this goes for new, moved and deleted bots too. **Try Again**, the next
+    change, or quitting BotChu saves the whole sidebar as it is then, each bot once, with the
+    missing bots' entries; the banner goes once it saves.
   - **Projects:** one project per non-archived GitHub repository returned by `gh` for your account
     and organizations, in a sortable table modeled on GitChu's (or a gallery of cards). Columns show
     where it deploys (local machines by their BotChu name, Vercel, registry), the owner, open issues
@@ -45,8 +49,24 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     it in the repository's sidebar, and double-click on GitHub; its menu reviews a pull request
     (**Review with**, **Review and Comment with**), continues it (unless it comes from a fork) or
     starts a task on an issue with a bot, opening New Task with it chosen, or opens the task already
-    on it. These are read with one GraphQL query per page of repositories and one per ten busy
-    repositories, at most every ten minutes unless refreshed.
+    on it. They are read with one GraphQL query per ten repositories whose open work changed (below).
+  - **Saved and synced:** the repositories, their `PROJECT.md`, and the open pull requests and
+    issues with GitHub's counts are kept on this Mac (`projects.json`) for the account `gh` is signed
+    in to, with when they were last synced, so Projects, New Task and Home's task requests have them
+    at once after a relaunch, and a sync goes on behind them, after GitChu's: at launch and when
+    Projects opens, if what was saved is over two minutes old; every two minutes while Projects
+    shows; and with **Refresh**. A sync asks who is signed in and for GitHub's repository list with
+    the ETags from last time, and probes each repository with anything open (its most recently
+    updated issue or pull request), which cost nothing when nothing changed; it then reads only the
+    `PROJECT.md` of a repository pushed to since, and the open work of one whose list entry or probe
+    moved or whose pull request's checks are running, four and two requests at a time, and shows
+    each answer as it arrives. Refresh, and a sync over half an hour after the last such one, also
+    read the list afresh, so a repository that is gone goes (once GitHub confirms it), and try again
+    what failed. Refresh is never disabled: asked for during a sync, it runs once that ends, however
+    often. The header says when it was last synced. A sync that fails (offline, signed out, a GitHub
+    error) or reads only part keeps what it has and says why; it never empties the list. When `gh` is
+    signed in to another account, the saved catalog goes and that account's is read; a missing or
+    unreadable file starts empty.
   - **Project sidebar:** selecting a repository, in the table or the gallery, shows it on the right
     with three tabs; closing the sidebar deselects it, and an issue or pull request count in the
     table opens that tab. **Overview** has its open work, its type, status, merge policy and
@@ -71,7 +91,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     checks and merge requirements still apply. Other frontmatter and the Markdown body are preserved;
     ambiguous YAML and a file changed since editing began are refused. Interrupted saves can retry
     the same branch without duplicate commits or PRs. The project and task placement update only
-    after the metadata PR merges and **Refresh** reads the default branch again. BotChu needs write
+    after the metadata PR merges and a sync reads the default branch again. BotChu needs write
     access for this flow; forks can be used through GitHub. The editor creates no commits directly
     on the default branch and never merges metadata PRs.
   - **Agents:** a searchable gallery of the existing bots, showing their personality summary,
@@ -225,9 +245,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     worktree there and runs its CLI there, in that user's login shell; its output streams back, and
     Stop interrupts the CLI there. The bot's folder stays on this Mac: the task's first message
     brings the bot's identity, instructions and memory and a recap of its Home conversation, and
-    notes the bot writes in `<remember>…</remember>` in a reply are applied to its `MEMORY.md` here
-    (deduplicating existing bullets, updating entries in place with `Replace: old -> new`, removing
-    entries with `Forget: old`, and dropping credentials/secrets).
+    notes the bot writes in `<remember>…</remember>` in a reply are saved to its `MEMORY.md` here,
+    as from every conversation (see **Saving memory**).
     The status sidebar names the computer, and **Terminal** opens a shell in the
     worktree there. The OpenRouter key never leaves this Mac, so Pi on a host needs that host's own
     `OPENROUTER_API_KEY`.
@@ -256,7 +275,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     each execution machine; SSH mailboxes are polled independently of CLI output. See
     [delegation protocol](docs/subagents.md) for lifecycle and persistence details.
   - **Message box:** a multiline writing area with account, model/effort and send/stop controls in
-    its bottom row. Return sends; Shift-Return (or Option-Return) inserts a new line. The box grows with your draft, then scrolls at its maximum height. Send stays available during a
+    its bottom row. Return sends; Shift-Return (or Option-Return) inserts a new line. The box grows with your draft, its first line staying in place as lines are added or removed, then scrolls at its maximum height with the line being typed in view; the report and New Task boxes do the same. Send stays available during a
     run: follow-ups appear in a queue above the composer and reach the bot on their own, in order,
     in the same CLI session. Where the CLI takes input mid-turn (Claude Code on This Mac, through
     `--input-format stream-json`), a follow-up reaches it at its next tool call, like steering in
@@ -315,7 +334,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     the repository, computer, branch, worktree, session and pull request, and the task's
     `thread.jsonl`), the
     task requests it writes (`dispatch/`), a log of every turn (`logs/<date>.log`:
-    the command, where it ran, how long it took, the exit status, any error and the CLI's error output) and its
+    the command, where it ran, how long it took, the exit status, any error and the CLI's error output), notes
+    it couldn't save to memory yet (`memory-unsaved.json`, `shared-memory-unsaved.json`) and its
     pet (`pet/`: `video.json`, `stills/<pose>.png`, `clips/<activity>.mp4` and the appearance it
     was made from) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
     is told it can search them for earlier conversations. **History & Logs** in the status sidebar
@@ -346,6 +366,28 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     The workspace's `AGENTS.md`, `CLAUDE.md` and `GEMINI.md` carry the bot's `INSTRUCTIONS.md` and
     direct the agent to read the others, so it keeps them across its own context compaction; they
     are rewritten before every turn.
+  - **Saving memory:** a bot saves a note as soon as it is established: a clear statement from the
+    owner of how it should work from now on needs no "remember this", and the bot saves it in the
+    reply in which it agrees, keeping its scope; when it's unclear whether something is lasting, or
+    how far it reaches, the bot asks first. Every conversation saves the same way (Home, tasks on
+    this Mac or a host, and sub-agents): the bot writes each note, correction or removal in its reply
+    between `<remember>` and `</remember>`, or `<remember scope="shared">` for the shared memory, and
+    BotChu writes it when the turn ends. It re-reads the file just before writing, so what other
+    conversations or the owner changed meanwhile is kept, skips duplicates of existing bullets,
+    updates a bullet in place for `Replace: old -> new`, removes one for `Forget: old`, and leaves out
+    what looks like a secret, a question, a transcript or command output, or a note over 1,000
+    characters, saying how many and why (never repeating a secret). Tags in code are examples, and
+    only the turn's own replies count, so an old request in the conversation never brings back
+    something forgotten. BotChu reads the file back to check the change held, then confirms it under
+    the reply ("Saved to QA Duck's memory: …"), and the conversation's next turn (for a sub-agent,
+    its bot's Home) hears what was saved, left out or couldn't be saved, so a bot never takes asking
+    for a save as a save. When the file can't be written, or exists but can't be read (it is never
+    overwritten then), memory stays as it was, the conversation says why, and the notes wait in the
+    bot's `.botchu/` (in memory if that fails too): BotChu tries them again, first and in order, after
+    each of the bot's turns (saying so only once they are saved), and **Retry** above the message box
+    tries them at once. A bot edits a
+    memory file itself only to reorganize it when asked. Whether a reply recognizes an established
+    preference is up to the bot's model, which its instructions ask; saving it is BotChu's.
   - **Team playbook:** `TEAM.md` in the bots folder, beside the shared `MEMORY.md`, is the process
     every bot follows: its stages, handoffs, who calls whom with `botchu-subagent`, and when work is
     done. Unlike memory, it is given as instructions: in every bot's Home `AGENTS.md`, and at the
@@ -453,7 +495,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     version, an alias's or default's once reported) and public OpenRouter model metadata
     (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model, with the model a
     conversation's CLI last reported running (`Models.swift`), the
-    sections the sidebar groups bots into (`BotSections.swift`), one stream parser per
+    sections the sidebar groups bots into and where a new bot goes (`BotSections.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
     (`ToolActivity.swift`, reading shell command lines with `ShellCommand.swift`), the chat's activity
@@ -464,7 +506,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
     (`UsageCache.swift`), per-conversation pending-message delivery, keeping a follow-up the CLI
     took until a saved transcript holds it (`MessageQueue.swift`, saved in that order by
-    `Store.swift`), what
+    `Store.swift`), how tall the message box is for its draft and how far its text may scroll
+    (`ComposerLayout.swift`), what
     the status sidebar shows about a bot, from a summary of its thread kept as the thread grows, and
     its `MEMORY.md` (`BotStatus.swift`), replies' parsed Markdown, cached by their text
     (`MarkdownCache.swift`), pets: the activity a tool call means
@@ -479,12 +522,21 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
     or proposing it through GitHub with retryable, metadata-only PRs (`ProjectGitHub.swift`), the Projects
     tables' rows, their status filter and the open pull requests and issues across repositories (`ProjectOverview.swift`),
-    an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store (`Store.swift`), with conversations' files read without losing what can't be read (`Transcript.swift`), and the `Process` runner that launches
+    the saved Projects catalog, what a sync reads again and how it takes the answers, GitHub's REST
+    answers, and the projects offline readers such as completion see (`ProjectCatalog.swift`), and the
+    sync that keeps it on disk and in step with GitHub, with its ETags, probes, bounded requests and
+    coalesced refreshes (`ProjectSync.swift`),
+    an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store, with
+    the index saved whole or a failure to show (`Store.swift`), with conversations' files read without losing
+    what can't be read (`Transcript.swift`), and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
     `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (transcripts saved off the main thread
     while they stream), `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
     handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
+    What replies ask to remember (`MemoryNotes`, in `BotContext.swift`) is saved to memory files
+    by `MemoryWriter.swift`: one save at a time, read back to check it held, with notes that wait
+    and are tried again.
     Reports filed from the app (their title, description, app state and `gh issue create`) are in
     `IssueReport.swift`. The Telegram gateway is in `Telegram.swift` (the Bot API client: long
     polling, sending, and errors that never hold the token) and `TelegramGateway.swift` (which chats
@@ -511,24 +563,34 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     Claude Code and Muse report running), how models are named, command lines,
     context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
     made in throwaway repositories, the project status filter, issues and pull requests read in
-    full from `gh`'s output, and fan-out briefs; and hosts: their `ssh` command lines, deploy targets, clones,
+    full from `gh`'s output, and fan-out briefs; the Projects catalog and its sync through a stand-in
+    `gh` (the saved catalog shown before any request completes, checks for changes that read only
+    what changed, failures, removals, coalesced refreshes, another account, a missing or unreadable
+    file, and the four-request limit); and hosts: their `ssh` command lines, deploy targets, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
-    from a remote task; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
+    from a remote task; memory: #88's Home sequence (a routing preference saved in the turn that
+    agrees, and recalled by a fresh session), what is left out, bot or shared scope, repeats,
+    corrections and forgets, concurrent saves, and saves that fail, wait (also across a relaunch)
+    and are tried again; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
     and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
     commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
     streamed update regroups only the tail; the sidebar's sections of bots; follow-ups the CLI
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
-    before the next save, also in a queue going through a relaunch; and the Telegram gateway
-    against a stand-in Bot API: round trips, refused chats, each chat's own bot, busy
-    conversations, repeated updates, relaunches, reconnecting, failed sends and long replies.
+    before the next save, also in a queue going through a relaunch; a section change or a new
+    bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
+    grows and how far its text scrolls; and the Telegram gateway against a stand-in Bot API: round
+    trips, refused chats, each chat's own bot, busy conversations, repeated updates, relaunches,
+    reconnecting, failed sends and long replies.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
     saves, a follow-up taken while the transcript can't be saved (back in it after a relaunch), model-picker keyboard interaction and persisted choices,
+    the message box's text staying put while it is typed (narrow and wide, past its maximum and back),
     Markdown editor sizing and Save/Cancel, collapsing status sections, the sidebar's sections of
-    bots (their menus, the alert that names them, collapsing and revealing), inspector tab navigation and
+    bots (their menus, the alert that names them, collapsing and revealing, and changes that can't
+    be saved, shown until Try Again or quitting saves them), inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
     main window's layout at its narrowest, galleries that preserve conversation state, the project
     sidebar's tabs, details and fan-out tasks, custom profile persistence, provider logos in both
@@ -564,10 +626,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   up to and the replies it owes (IDs only, no text).
   Versions before bot folders kept everything in `bots.json` and `threads/` there; the first launch
   moves them into the bots' folders and keeps the old files in `backup-before-bot-folders/`.
-  Project metadata stays in each repository’s `PROJECT.md` on GitHub; its fetched catalog is cached
-  in memory. Settings, with added CLI profiles, the hosts, where you chose to work on repositories
-  and the Telegram chats, are in the `defaults` domain `local.BotChu`; the OpenRouter key and the
-  Telegram bot token are in the Keychain (service `local.BotChu`). Bot workspaces are
+  Project metadata stays in each repository’s `PROJECT.md` on GitHub; what Projects read from GitHub
+  for the signed-in account is saved in `projects.json` there, written off the main thread. Settings,
+  with added CLI profiles, the hosts, where you chose to work on repositories and the Telegram
+  chats, are in the `defaults` domain `local.BotChu`; the OpenRouter key and the Telegram bot token
+  are in the Keychain (service `local.BotChu`). Bot workspaces are
   under `~/BotChu/` by default; tasks run in worktrees of checkouts on this Mac or on a host. No
   database and no port.
 - Each turn runs one headless CLI process in the bot's folder, or a task's worktree. On a host,
@@ -605,10 +668,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   even if SwiftPM returns success. The native-click sidebar test runs in its own process because
   AppKit's window-animation callbacks can stop the Swift test runner's event loop during later
   tests; all its assertions still run. The script also runs the project-loading regression tests in Release. They check every
-  repository result, the four-request limit, and completion of children when navigating away or
-  cancelling a load. Swift 6.4 has an [optimizer bug](https://github.com/swiftlang/swift/issues/93208)
-  in task-group children returning String-first tuples from `do`/`catch`; project and pet loading
-  use named results with one return to avoid it. Debug tests alone cannot detect this regression.
+  repository result, the four-request limit, and that a sync finishes when the view that asked for
+  it goes away. Swift 6.4 has an [optimizer bug](https://github.com/swiftlang/swift/issues/93208)
+  in task-group children returning String-first tuples from `do`/`catch`; the Projects sync and pet
+  loading use named results with one return to avoid it. Debug tests alone cannot detect this regression.
 - Accounts end to end: `swift run --package-path macOS botchu-smoke [account id …]` runs, for each
   account (all of them when none is named), a new session that opens with the bot's context and
   runs a shell command, then a resumed session that must recall a code word from the first, and
@@ -657,7 +720,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   opens the composer's picker, and `inspector-model` or `inspector-effort` opens the sidebar's.
   `BOTCHU_INSPECTOR=activity`, `subagents`, `model`, `session` or `memory` selects a status sidebar tab;
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
-  `BOTCHU_WINDOW=compact` checks the minimum window width.
+  `BOTCHU_WINDOW=compact` checks the minimum window width. `BOTCHU_DRAFT=<text>` puts that draft in
+  the message box (`\n` for a new line), to check how it grows and scrolls.
   `BOTCHU_OPEN=report` opens Report a Bug or Feature, and `BOTCHU_REPORT="<report>"` files one at
   launch. A review copy files reports only with a stand-in `gh`, which keeps them (and the images it
   attaches) in `reports/` in
@@ -674,6 +738,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.
+- Projects loading: `BOTCHU_PROJECTS_BENCHMARK=<file> swift test --package-path macOS --filter
+  projectsBenchmark` times, with your `gh` login (read-only) and a temporary catalog, a first sync
+  (until the list shows, and until everything is read), a relaunch (until the saved catalog shows),
+  a check for changes and a full sync, three times, and writes the table to the file. It asserts
+  nothing about time and isn't part of `check`.
 - Account allowance end to end: `swift run --package-path macOS botchu-smoke --usage [account id …]`
   reads each account's usage through the same client as the inspector. It prints only the normalized
   usage fields, never raw CLI output or credentials. Muse makes its brief usage request; OpenRouter

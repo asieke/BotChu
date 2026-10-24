@@ -1,83 +1,61 @@
 import Foundation
 import BotChuCore
 
-// Swift 6.4 can miscompile String-first tuple returns from task-group do/catch branches
-// in optimized builds, losing results or completing children into a destroyed group.
-// Keep a named result and one return: https://github.com/swiftlang/swift/issues/93208
-private struct ProjectLoadResult: Sendable {
-    let repo: String
-    let result: Result<ProjectRecord, Error>
-}
-
 extension AppModel {
-    func loadProjects(force: Bool = false) async {
-        guard !projectsLoading else { return }
-        await loadRepositories(force: force)
-        await loadProjectRecords(force: force)
+    /// Shows the Projects catalog saved on disk as soon as it is read (off the main thread), and
+    /// every change a sync makes to it from then on.
+    func showSavedProjects() {
+        let sync = projectSync, updates = projectSync.updates
+        Task { [weak self] in
+            for await state in updates { self?.showProjects(state) }
+        }
+        Task { await sync.load() }
     }
 
-    /// Reads the repositories again, then their PROJECT.md records and open work side by side.
-    func refreshProjects() async {
-        guard !projectsLoading else { return }
-        await loadRepositories(force: true)
-        let work = Task { await loadOpenWork(force: true) }
-        await loadProjectRecords(force: true)
-        await work.value
-    }
-
-    /// Reads the PROJECT.md of each repository not read yet (of every one, when `force`).
-    func loadProjectRecords(force: Bool = false) async {
-        guard !projectsLoading else { return }
-        projectsLoading = true
-        defer { projectsLoading = false }
-        guard let repositories else { return }
-        let pending = repositories.filter { force || projectRecords[$0.id] == nil && projectErrors[$0.id] == nil }
-        // A small bounded batch prevents a large catalog from launching hundreds of gh processes.
-        for start in stride(from: 0, to: pending.count, by: 4) {
-            guard !Task.isCancelled else { return }
-            let batch = Array(pending[start..<min(start + 4, pending.count)])
-            await withTaskGroup(of: ProjectLoadResult.self) { group in
-                let client = projectGitHub
-                for repo in batch {
-                    group.addTask {
-                        let result: Result<ProjectRecord, Error>
-                        do { result = .success(try await client.record(repo: repo.id)) }
-                        catch { result = .failure(error) }
-                        return ProjectLoadResult(repo: repo.id, result: result)
-                    }
-                }
-                for await loaded in group {
-                    let repo = loaded.repo
-                    switch loaded.result {
-                    case .success(let record):
-                        projectRecords[repo] = record
-                        projectErrors[repo] = nil
-                        deployTargetCache[repo] = Locations.deployTargets(projectFile: record.text)
-                    case .failure(let error): projectErrors[repo] = error.localizedDescription
-                    }
-                }
+    /// Takes what the catalog holds now. Until something was saved or read for an account, what is
+    /// shown stays as it is.
+    func showProjects(_ state: ProjectSync.State) {
+        if projectsLoading != (state.syncing != nil) { projectsLoading = state.syncing != nil }
+        if repositoriesError != state.error { repositoriesError = state.error }
+        guard state.login != nil else { return }
+        if projectsLogin != state.login {
+            // Another account's PROJECT.md mustn't place this one's tasks.
+            if projectsLogin != nil { deployTargetCache = [:] }
+            projectsLogin = state.login
+        }
+        if repositoriesReadAt != state.syncedAt { repositoriesReadAt = state.syncedAt }
+        if repositories != state.repositories { repositories = state.repositories }
+        if projectRecords != state.records {
+            for (repo, record) in state.records where projectRecords[repo] != record {
+                deployTargetCache[repo] = Locations.deployTargets(projectFile: record.text)
             }
+            projectRecords = state.records
         }
+        if projectErrors != state.recordErrors { projectErrors = state.recordErrors }
+        if openItems != state.openItems { openItems = state.openItems }
+        let error = state.unreadableWork.isEmpty ? nil
+            : "Couldn't read the open pull requests and issues of \(state.unreadableWork.map(TaskNaming.repoName).joined(separator: ", ")). Refresh to try again."
+        if openItemsError != error { openItemsError = error }
     }
 
-    /// Reads the open pull requests and issues of the repositories GitHub counts any in, unless they
-    /// were read in the last ten minutes.
-    func loadOpenWork(force: Bool = false) async {
-        guard !openItemsLoading else { return }
-        if !force, openItems != nil, let read = openItemsReadAt, Date().timeIntervalSince(read) < 600 { return }
-        guard let repositories else { return }
-        openItemsLoading = true
-        defer { openItemsLoading = false }
-        let busy = repositories.filter { $0.openIssues + $0.openPullRequests > 0 }.map(\.id)
-        switch busy.isEmpty ? .success(GitHubLookup.OpenWork(items: [])) : await openWorkLookup(busy) {
-        case .success(let work):
-            openItems = work.items
-            openItemsError = work.unreadable.isEmpty ? nil
-                : "Couldn't read the open pull requests and issues of \(work.unreadable.map(TaskNaming.repoName).joined(separator: ", ")). Refresh to try again."
-            openItemsReadAt = Date()
-        case .failure(let failure):
-            openItemsError = "\(failure.step). Is gh installed and signed in?"
-        }
+    /// Syncs the Projects catalog with GitHub unless it is current (synced in the last two minutes):
+    /// a check for changes, or a full sync every half hour; `force` syncs in full now.
+    func loadProjects(force: Bool = false) async {
+        if force { return await refreshProjects() }
+        if repositories != nil, let read = repositoriesReadAt, Date().timeIntervalSince(read) < ProjectSync.staleAfter { return }
+        await projectSync.syncIfStale()
+    }
+
+    /// A full sync now, or right after the one under way, however often it is asked for.
+    func refreshProjects() async {
+        await projectSync.sync(.full)
+    }
+
+    /// The projects as saved, for readers that mustn't wait on GitHub (such as `#project` completion).
+    var projectCatalog: [ProjectCatalogEntry] {
+        ProjectRow.rows(repos: repositories ?? [], records: projectRecords, errors: projectErrors, chosen: settings.repoLocations,
+                        thisMac: settings.thisMacName, hosts: settings.hosts, reposRoot: settings.expandedReposRoot, taskRepos: [])
+            .map(\.catalogEntry)
     }
 
     /// The open tasks, of every bot, as (bot, task) pairs.

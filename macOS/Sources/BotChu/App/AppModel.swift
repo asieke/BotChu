@@ -121,6 +121,10 @@ final class AppModel {
     var drafts: [ChatTarget: String] = [:]
     var draftImages: [ChatTarget: [ImageAttachment]] = [:]
     var attachmentErrors: [ChatTarget: String] = [:]
+    /// How many notes each bot asked to remember that BotChu couldn't save yet (`MemoryWriter`).
+    var unsavedMemory: [UUID: Int] = [:]
+    /// What became of the notes each conversation asked to remember, for its next turn.
+    @ObservationIgnored private var memoryReports: [ChatTarget: [String]] = [:]
     /// Unsent follow-ups and short pet reactions belong to one conversation, not the whole bot.
     var messageQueues: ConversationField<MessageQueue> { ConversationField(model: self, field: \.queue) }
     var reactions: ConversationField<BotActivity> { ConversationField(model: self, field: \.reaction) }
@@ -145,6 +149,10 @@ final class AppModel {
     private let store: Store
     /// Index entries whose folders don't hold their bot right now; kept so the bot returns with it.
     @ObservationIgnored var missing: [Store.Entry] = []
+    /// Why `index.json` couldn't be saved; nil while it is saved. Until a save works (Try Again in
+    /// the sidebar, the next change, or quitting), the sidebar's bots, order and sections since are
+    /// only here.
+    private(set) var indexFailure: SaveFailure?
     @ObservationIgnored private var delegationSessions: [ChatTarget: Set<String>] = [:]
     @ObservationIgnored private var runs: [ChatTarget: AgentRun] = [:]
     /// What each running CLI that takes input mid-turn has been given and has taken back.
@@ -162,19 +170,22 @@ final class AppModel {
     /// The last git work queued in each checkout: worktrees are made one at a time per repository,
     /// since git locks its refs and config.
     @ObservationIgnored private var checkoutWork: [String: Task<Void, Never>] = [:]
-    /// The owner's GitHub repositories, which tasks start from, once read (`loadRepositories`).
+    /// The owner's GitHub repositories, which tasks start from, as saved or synced (`Projects.swift`).
     var repositories: [GitHubLookup.Repo]?
+    /// Why the last sync of the Projects catalog failed.
     var repositoriesError: String?
-    var repositoriesLoading = false
-    @ObservationIgnored var repositoriesTask: Task<Void, Never>?
     var projectRecords: [String: ProjectRecord] = [:]
     var projectErrors: [String: String] = [:]
+    /// A sync of the Projects catalog is under way.
     var projectsLoading = false
-    /// The open pull requests and issues across the repositories, once read (`loadOpenWork`).
+    /// The open pull requests and issues across the repositories, as saved or synced.
     var openItems: [GitHubLookup.OpenItem]?
     var openItemsError: String?
-    var openItemsLoading = false
-    @ObservationIgnored var openItemsReadAt: Date?
+    /// The GitHub account the Projects catalog belongs to, and when it was last synced.
+    var projectsLogin: String?
+    var repositoriesReadAt: Date?
+    /// Keeps the Projects catalog on disk and in step with GitHub.
+    let projectSync: ProjectSync
     let openWorkLookup: @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure>
     /// An issue or pull request (repository, number, whether a pull request) as the Projects sidebar
     /// shows it, and the ones read so far, by `owner/name#number`.
@@ -183,7 +194,6 @@ final class AppModel {
     var githubConnection: ProjectGitHub.Connection?
     var githubChecking = false
     let projectGitHub: ProjectGitHub
-    @ObservationIgnored var repositoriesReadAt: Date?
     /// PROJECT.md's `local:` deploy targets, by repository, once read.
     @ObservationIgnored var deployTargetCache: [String: [(machine: String, path: String)]] = [:]
 
@@ -197,6 +207,8 @@ final class AppModel {
         self.workDetailLookup = workDetailLookup
         DevHooks.configure()
         self.store = store ?? DevHooks.dataDir.map { Store(root: $0) } ?? .applicationSupport
+        projectSync = ProjectSync(file: self.store.root.appendingPathComponent("projects.json"), client: ProjectSync.Client(
+            gh: { await projectGitHub.gh($0) }, record: { try await projectGitHub.record(repo: $0) }, openWork: openWorkLookup))
         self.settings = settings ?? AppSettings()
         self.usage = usage ?? DevHooks.usageFetch.map { UsageCache(fetch: $0) } ?? UsageCache()
         self.store.migrateIfNeeded()
@@ -222,6 +234,7 @@ final class AppModel {
             ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot)
         telegram = TelegramBridge(model: self, stateURL: self.store.root.appendingPathComponent("telegram.json"))
         selection = bots.first?.id
+        showSavedProjects()
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stopAll() }
         }
@@ -360,7 +373,9 @@ final class AppModel {
         bot.workspace = (bot.workspace as NSString).expandingTildeInPath
         if bot.emoji.isEmpty { bot.emoji = "🤖" }
         // In no section: last among the bots in none, above the sections.
-        bots.insert(bot, at: bots.firstIndex { sections[$0.id] != nil } ?? bots.endIndex)
+        var layout = botSections
+        layout.add(bot.id)
+        bots.insert(bot, at: layout.order.firstIndex(of: bot.id) ?? bots.endIndex)
         conversation(.home(bot.id)).load([])
         tasks[bot.id] = []
         save(bot)
@@ -955,8 +970,11 @@ final class AppModel {
     private func beginTurn(_ text: String, for target: ChatTarget, message: ChatMessage?) -> Bool {
         guard !isRunning(target), let bot = bot(target.botID), let current = runSettings(of: target) else { return false }
         let history = thread(target)
-        // Home hears what its tasks did since the owner's last message there.
-        let updates = target.taskID == nil ? taskUpdates(for: bot.id, in: history) : nil
+        // Home hears what its tasks did since the owner's last message there, and every conversation
+        // what became of the notes it asked to remember.
+        let sections = [target.taskID == nil ? taskUpdates(for: bot.id, in: history) : nil,
+                        BotContext.memoryUpdates(memoryReports.removeValue(forKey: target) ?? [])].compactMap { $0 }
+        let updates = sections.isEmpty ? nil : sections.joined(separator: "\n\n")
 
         if let message {
             if current.resumableSessionID == nil, history.contains(where: { $0.role == .assistant }) {
@@ -1244,7 +1262,8 @@ final class AppModel {
                     if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
                     if self.visibleBotID != id || self.tab(of: id) != target { self.unread.insert(target) }
                     let turn = messages.suffix(from: min(turnStart, messages.count))
-                    if target.taskID != nil { self.finishTaskTurn(target, stopped: stopped, failure: failure, turn: Array(turn)) }
+                    self.saveMemory(from: Array(turn), for: target)
+                    if target.taskID != nil { self.finishTaskTurn(target, stopped: stopped, failure: failure) }
                     try? home.appendLog(TurnLog.ended(
                         at: Date(), startedAt: startedAt, status: status, stopped: stopped,
                         toolCalls: turn.filter { $0.role == .tool }.count,
@@ -1296,30 +1315,64 @@ final class AppModel {
         }
     }
 
-    /// After a task's turn: notes the pull request its conversation linked to, saves what a task on a
-    /// host asked to remember (it can't write the bot's MEMORY.md itself), and tells its bot's Home
-    /// how the turn went (not when the owner stopped it).
-    private func finishTaskTurn(_ target: ChatTarget, stopped: Bool, failure: String?, turn: [ChatMessage]) {
-        guard let i = taskIndex(target), var task = tasks[target.botID]?[i], let bot = bot(target.botID) else { return }
+    /// After a task's turn: notes the pull request its conversation linked to, and tells its bot's
+    /// Home how the turn went (not when the owner stopped it).
+    private func finishTaskTurn(_ target: ChatTarget, stopped: Bool, failure: String?) {
+        guard let i = taskIndex(target), var task = tasks[target.botID]?[i] else { return }
         let pullRequest = TaskNaming.pullRequest(in: thread(target), task: task)
         if pullRequest != task.pullRequest {
             task.pullRequest = pullRequest
             tasks[target.botID]?[i] = task
             saveTask(task, of: target.botID)
         }
-        let notes = task.isRemote ? MemoryNotes.remembered(in: turn) : []
-        if !notes.isEmpty {
-            do {
-                try MemoryNotes.append(notes, toMemoryAt: (bot.workspace as NSString).appendingPathComponent(BotContext.memoryFile))
-                append(ChatMessage(role: .note, text: notes.count == 1 ? "Saved 1 note to \(bot.name)'s memory" : "Saved \(notes.count) notes to \(bot.name)'s memory"), to: target)
-            } catch {
-                append(ChatMessage(role: .error, text: "Couldn't save to \(bot.name)'s MEMORY.md: \(error.localizedDescription)"), to: target)
-            }
-            saveThread(target)
-        }
         guard !stopped else { return }
         postReceipt(failure.map { TaskReceipt.failed(task, error: $0) } ?? TaskReceipt.finished(task),
                     task: task.id, for: target.botID)
+    }
+
+    // MARK: Memory
+
+    /// After a turn of Home or a task, on this Mac or a host (or on Retry): saves what its replies
+    /// asked to remember, and any notes still waiting, and says how it went in the conversation.
+    private func saveMemory(from turn: [ChatMessage], for target: ChatTarget, retrying: Bool = false) {
+        guard let bot = bot(target.botID) else { return }
+        let lines = saveMemory(from: turn, of: bot, reportTo: target, retrying: retrying)
+        guard !lines.isEmpty else { return }
+        for line in lines { append(line, to: target) }
+        saveThread(target)
+    }
+
+    /// Saves what the replies asked to remember (`<remember>` for the bot's own memory, `<remember
+    /// scope="shared">` for the shared one) after any notes still waiting for those files, keeps
+    /// what became of them for the next turn of `target`, and returns the lines that say so. Waiting
+    /// notes that fail again on their own are left to the banner, unless the owner chose Retry.
+    func saveMemory(from replies: [ChatMessage], of bot: Bot, reportTo target: ChatTarget, retrying: Bool = false) -> [ChatMessage] {
+        let requests = MemoryNotes.requests(in: replies)
+        var lines: [ChatMessage] = []
+        for save in MemoryWriter.shared.save(requests, to: memoryFiles(of: bot)) {
+            if save.failure != nil, !retrying, requests[save.file.scope]?.isEmpty ?? true { continue }
+            if let summary = save.summary(botName: bot.name) {
+                lines.append(ChatMessage(role: summary.failed ? .error : .note, text: summary.text))
+            }
+            if let report = save.report { memoryReports[target, default: []].append(report) }
+        }
+        refreshUnsavedMemory(of: bot.id)
+        return lines
+    }
+
+    /// Tries the notes waiting for the bot's memory again, saying how it went in `target` (Retry).
+    func retryMemory(for target: ChatTarget) {
+        saveMemory(from: [], for: target, retrying: true)
+    }
+
+    func refreshUnsavedMemory(of botID: UUID) {
+        guard let bot = bot(botID) else { return }
+        let count = memoryFiles(of: bot).reduce(0) { $0 + MemoryWriter.shared.waitingCount($1) }
+        if unsavedMemory[botID, default: 0] != count { unsavedMemory[botID] = count }
+    }
+
+    private func memoryFiles(of bot: Bot) -> [MemoryFile] {
+        [.bot(workspace: bot.workspace), .shared(settings.sharedMemoryPath, botWorkspace: bot.workspace)]
     }
 
     func stop(_ target: ChatTarget) {
@@ -1350,6 +1403,8 @@ final class AppModel {
         for target in Array(runStates.keys) { stop(target) }
         for run in petRuns.values { run.stop() }
         for task in petTasks.values { task.cancel() }
+        // Sidebar changes that couldn't be saved get one more try.
+        if indexFailure != nil { saveIndex() }
     }
 
     /// Saves a turn still running as it stands, with its running tool calls marked interrupted;
@@ -1463,9 +1518,10 @@ final class AppModel {
     }
 
     /// Writes `index.json`: the bots in sidebar order, with their sections, then the entries whose
-    /// folders are missing.
+    /// folders are missing. A failure shows in the sidebar until a save works.
     func saveIndex() {
-        try? store.saveIndex(bots.map { Store.Entry(id: $0.id, workspace: $0.workspace, section: sections[$0.id]) } + missing)
+        let failure = store.commitIndex(Store.entries(for: bots, sections: sections, missing: missing))
+        if failure != indexFailure { indexFailure = failure }
     }
 
     /// Saves the conversation, and its queue while it holds messages the CLI took

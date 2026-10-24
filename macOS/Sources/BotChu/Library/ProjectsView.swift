@@ -42,15 +42,28 @@ struct ProjectsView: View {
         }
     }
 
-    private var loading: Bool { model.repositoriesLoading || model.projectsLoading || model.openItemsLoading }
+    private var loading: Bool { model.projectsLoading }
+
+    /// When what is shown was last synced with GitHub, or that a sync is under way.
+    private func freshness(now: Date) -> String? {
+        if loading { return model.repositories == nil ? nil : "Syncing…" }
+        guard let synced = model.repositoriesReadAt else { return nil }
+        return "Synced " + (now.timeIntervalSince(synced) < 60 ? "just now" : synced.formatted(.relative(presentation: .named)))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             LibraryHeading(title: "Projects", subtitle: "Your repositories, their open pull requests and issues, and where they work.",
                            count: scope == .repositories && model.repositories != nil ? rows.count : model.repositories?.count) {
                 if loading { ProgressView().controlSize(.small) }
+                TimelineView(.everyMinute) { context in
+                    if let freshness = freshness(now: context.date) {
+                        Text(freshness).font(.callout).foregroundStyle(.secondary)
+                            .help(model.projectsLogin.map { "Saved on this Mac for \($0), and synced with GitHub in the background" } ?? "")
+                    }
+                }
+                // Never disabled: asked for during a sync, it runs once that one ends.
                 Button { Task { await model.refreshProjects() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                    .disabled(loading)
             }
             // One row when it fits; in a narrow window, the search goes on a row of its own.
             ViewThatFits(in: .horizontal) {
@@ -75,8 +88,14 @@ struct ProjectsView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .frame(minWidth: 580, maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Projects")
-        .task { await model.loadProjects() }
-        .task { await model.loadRepositories(); await model.loadOpenWork() }
+        // What was saved shows at once; it is synced when over two minutes old, and every two
+        // minutes while Projects shows.
+        .task {
+            while !Task.isCancelled {
+                await model.loadProjects()
+                do { try await Task.sleep(for: .seconds(ProjectSync.staleAfter)) } catch { break }
+            }
+        }
         // The selected repository; closing the sidebar deselects it.
         .inspector(isPresented: Binding(get: { model.projectSelection != nil }, set: { if !$0 { model.selectProject(nil) } })) {
             Group {
@@ -135,7 +154,7 @@ struct ProjectsView: View {
 
     @ViewBuilder private var repositories: some View {
         let rows = rows
-        if model.repositories == nil && (model.repositoriesLoading || model.projectsLoading) {
+        if model.repositories == nil && model.projectsLoading {
             LibraryEmpty(title: "Loading projects", subtitle: "Reading repositories with your GitHub CLI login.", symbol: "arrow.triangle.2.circlepath")
         } else if rows.isEmpty, status != .all, model.projectsLoading {
             // Statuses come from PROJECT.md, read after the repositories: none is known to match yet.
@@ -170,7 +189,7 @@ struct ProjectsView: View {
         let items = items(pulls: pulls)
         let kind = pulls ? "pull requests" : "issues"
         if items.isEmpty {
-            if model.openItems == nil && (model.openItemsLoading || model.repositoriesLoading) {
+            if model.openItems == nil && model.projectsLoading {
                 LibraryEmpty(title: "Loading open \(kind)", subtitle: "Reading them with your GitHub CLI login.", symbol: "arrow.triangle.2.circlepath")
             } else if !query.isEmpty || repoFilter != nil {
                 ContentUnavailableView {
