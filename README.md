@@ -772,9 +772,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   AppKit's window-animation callbacks can stop the Swift test runner's event loop during later
   tests; all its assertions still run. The script also runs the project-loading regression tests in Release. They check every
   repository result, the four-request limit, and that a sync finishes when the view that asked for
-  it goes away. Swift 6.4 has an [optimizer bug](https://github.com/swiftlang/swift/issues/93208)
-  in task-group children returning String-first tuples from `do`/`catch`; the Projects sync and pet
-  loading use named results with one return to avoid it. Debug tests alone cannot detect this regression.
+  it goes away. The run review tests run in Release too, for the review's timeout. Swift 6.4 has an [optimizer bug](https://github.com/swiftlang/swift/issues/93208)
+  in task-group children returning String-first tuples from `do`/`catch`; the Projects sync, pet
+  loading and run reviews use named results with one return to avoid it. Debug tests alone cannot detect this regression.
 - Accounts end to end: `swift run --package-path macOS botchu-smoke [account id …]` runs, for each
   account (all of them when none is named), a new session that opens with the bot's context and
   runs a shell command, then a resumed session that must recall a code word from the first, and

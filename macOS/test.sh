@@ -27,4 +27,4 @@ run_tests --filter BotChuRenderingTests --skip "$sidebar_test"
 run_tests --filter "$sidebar_test"
 # The Swift 6.4 task-group regression only appears under optimization; a release build alone
 # cannot detect lost results or children completing after their group has been destroyed.
-run_tests --configuration release --filter projectLoading
+run_tests --configuration release --filter "projectLoading|RunEvaluationTests"
