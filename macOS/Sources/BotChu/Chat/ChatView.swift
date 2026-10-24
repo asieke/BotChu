@@ -132,6 +132,9 @@ struct ChatView: View {
                          onAddImages: { model.addImages($0, to: target) },
                          onPasteImages: { model.pasteImages($0, to: target) },
                          attachmentError: model.attachmentErrors[target],
+                         references: Binding(get: { model.draftReferences[target] ?? [] },
+                                             set: { model.draftReferences[target] = $0.isEmpty ? nil : $0 }),
+                         mentions: model.mentionSources(for: target),
                          placeholder: task.map { "Message \(bot.name) about \($0.title)" } ?? "Message \(bot.name)",
                          running: running, midTurn: model.takesFollowUpsMidTurn(target), onSend: send, onStop: { model.stop(target) }) {
                         ModelMenu(settings: current, disabled: running,
@@ -167,11 +170,12 @@ struct ChatView: View {
     }
 
     private func send() {
-        let text = (model.drafts[target] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let draft = model.drafts[target] ?? ""
         let images = model.draftImages[target] ?? []
-        guard !text.isEmpty || !images.isEmpty else { return }
-        if model.send(text, to: target, images: images) {
+        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
+        if model.send(draft, to: target, images: images, references: model.draftReferences[target] ?? []) {
             model.drafts[target] = nil
+            model.draftReferences[target] = nil
             model.draftImages[target] = nil
             model.attachmentErrors[target] = nil
             // Sending takes the reader to their message and what follows it.

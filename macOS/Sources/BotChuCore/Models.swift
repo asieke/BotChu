@@ -145,11 +145,16 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     public var toolDuration: Double?
     public var attachments: [ImageAttachment]?
     public var images: [ImageAttachment] { attachments ?? [] }
+    /// On the owner's message, the agents and projects chosen in it from `@` and `#` completion
+    /// (`MessageReference`). Nil in messages without any, and in threads saved before.
+    public var references: [MessageReference]?
+    public var mentions: [MessageReference] { references ?? [] }
 
     public init(
         id: UUID = UUID(), role: Role, text: String = "", date: Date = Date(), toolID: String? = nil,
         toolName: String? = nil, toolInput: String? = nil, toolOutput: String? = nil, toolState: ToolState? = nil,
-        taskID: UUID? = nil, images: [ImageAttachment] = [], toolArguments: String? = nil, toolExitCode: Int? = nil
+        taskID: UUID? = nil, images: [ImageAttachment] = [], toolArguments: String? = nil, toolExitCode: Int? = nil,
+        references: [MessageReference] = []
     ) {
         self.id = id
         self.role = role
@@ -164,6 +169,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.attachments = images.isEmpty ? nil : images
         self.toolArguments = toolArguments
         self.toolExitCode = toolExitCode
+        self.references = references.isEmpty ? nil : references
     }
     /// Older versions missed AGY's subagent terminal events and saved them as failures.
     /// No result was recorded, so show an unknown completion instead of inventing success or failure.

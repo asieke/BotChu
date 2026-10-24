@@ -117,6 +117,8 @@ final class AppModel {
     var unread: Set<ChatTarget> = []
     /// What is typed in each conversation's message box and not sent yet.
     var drafts: [ChatTarget: String] = [:]
+    /// The agents and projects chosen in each draft from `@` and `#` completion (`Mentions.swift`).
+    var draftReferences: [ChatTarget: [MessageReference]] = [:]
     var draftImages: [ChatTarget: [ImageAttachment]] = [:]
     var attachmentErrors: [ChatTarget: String] = [:]
     /// How many notes each bot asked to remember that BotChu couldn't save yet (`MemoryWriter`).
@@ -444,6 +446,7 @@ final class AppModel {
         waiting = waiting.filter { $0.key.botID != id }
         unread = unread.filter { $0.botID != id }
         drafts = drafts.filter { $0.key.botID != id }
+        draftReferences = draftReferences.filter { $0.key.botID != id }
         draftImages = draftImages.filter { $0.key.botID != id }
         attachmentErrors = attachmentErrors.filter { $0.key.botID != id }
         openTask[id] = nil
@@ -857,8 +860,9 @@ final class AppModel {
     // MARK: Turns
 
     @discardableResult
-    func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = []) -> Bool {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [],
+              references: [MessageReference] = []) -> Bool {
+        let (text, references) = MessageReference.trimming(text, references: references)
         guard images.count <= ImageAttachment.maximumCount else {
             attachmentErrors[target] = "Attach up to 8 images per message. Remove an image before sending."
             return false
@@ -868,7 +872,7 @@ final class AppModel {
             return beginTurn(text, for: target, message: nil)
         }
         var queue = messageQueues[target] ?? MessageQueue()
-        queue.enqueue(ChatMessage(role: .user, text: text, images: images))
+        queue.enqueue(ChatMessage(role: .user, text: text, images: images, references: references))
         // Save before clearing the composer; a failed write must leave the owner's draft intact.
         guard saveQueue(queue, for: target) else { return false }
         messageQueues[target] = queue
@@ -895,8 +899,9 @@ final class AppModel {
               messageQueues[target]?.isInFlight(id) == false else { return }
         removeQueuedMessage(id, from: target)
         guard messageQueues[target]?.messages.contains(where: { $0.id == id }) == false else { return }
-        let draft = drafts[target] ?? ""
-        drafts[target] = message.text + (draft.isEmpty ? "" : "\n\n" + draft)
+        let draft = MessageReference.joining((message.text, message.mentions), (drafts[target] ?? "", draftReferences[target] ?? []))
+        drafts[target] = draft.text
+        draftReferences[target] = draft.references.isEmpty ? nil : draft.references
         draftImages[target] = message.images + (draftImages[target] ?? [])
     }
 
@@ -930,14 +935,16 @@ final class AppModel {
     /// never takes go out as the next turn.
     private func sendFollowUps(to target: ChatTarget) {
         guard let run = runs[target], run.acceptsInput, var input = inputs[target], input.ledger.acceptsFollowUps else { return }
-        while let message = messageQueues[target]?.next, let textLine = CommandBuilder.inputLine(kind: input.kind, text: message.text) {
+        while let message = messageQueues[target]?.next,
+              case let text = deliveredText(of: message, for: target),
+              let textLine = CommandBuilder.inputLine(kind: input.kind, text: text) {
             var line = textLine
             if !message.images.isEmpty {
                 guard let bot = bot(target.botID) else { break }
                 do {
                     let urls = message.images.map { BotHome(workspace: bot.workspace).imageURL($0) }
                     let invocation = try ImageDelivery.attaching(urls, to: Invocation(arguments: [], input: [textLine]),
-                                                                kind: input.kind, prompt: message.text.isEmpty ? "Please describe the attached images." : message.text)
+                                                                kind: input.kind, prompt: text.isEmpty ? "Please describe the attached images." : text)
                     guard let imageLine = invocation.input?.first else { break }
                     line = imageLine
                 } catch {
@@ -970,6 +977,8 @@ final class AppModel {
         let sections = [target.taskID == nil ? taskUpdates(for: bot.id, in: history) : nil,
                         BotContext.memoryUpdates(memoryReports.removeValue(forKey: target) ?? [])].compactMap { $0 }
         let updates = sections.isEmpty ? nil : sections.joined(separator: "\n\n")
+        // What the message's mentions point at goes with it, in a new session or a resumed one.
+        let text = message.map { deliveredText(of: $0, for: target) } ?? text
 
         if let message {
             if current.resumableSessionID == nil, history.contains(where: { $0.role == .assistant }) {

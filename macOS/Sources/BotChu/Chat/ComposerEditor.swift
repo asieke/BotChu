@@ -4,7 +4,9 @@ import BotChuCore
 
 /// A plain-text editor with predictable Return handling, IME support, and a bounded growing height.
 /// It takes pasted and dropped images (`pasteImages`). With `send`, Return sends and Shift-Return
-/// starts a new line, as in the composer; without it, Return starts a new line, as in a sheet.
+/// starts a new line, as in the composer; without it, Return starts a new line, as in a sheet. With
+/// `mentions`, `@` and `#` complete agents and projects (`MentionCompleter`), whose chosen labels it
+/// keeps linked in `references`; the report and New Task sheets share it without them.
 struct ComposerEditor: NSViewRepresentable {
     @Binding var text: String
     var focused: Binding<Bool>
@@ -15,6 +17,11 @@ struct ComposerEditor: NSViewRepresentable {
     var minHeight: CGFloat = 42
     var maxHeight: CGFloat = 200
     var identifier = "message-input"
+    var mentions: MentionCompleter?
+    var mentionSources: MentionSources?
+    var references: Binding<[MessageReference]> = .constant([])
+    /// The `statusKey`s of the draft's mentions that point at nothing now, which show dotted.
+    var unresolvedMentions: Set<String> = []
 
     private var sizing: ComposerLayout { ComposerLayout(minHeight: minHeight, maxHeight: maxHeight) }
 
@@ -64,11 +71,21 @@ struct ComposerEditor: NSViewRepresentable {
         editor.wantsFocus = focused.wrappedValue
         editor.setAccessibilityLabel(placeholder)
         if editor.isEditable != editable { editor.isEditable = editable }
+        if let mentions {
+            mentions.sources = mentionSources
+            mentions.editor = editor
+            editor.completer = mentions
+        }
         if editor.string != text, !editor.hasMarkedText() {
             let selection = editor.selectedRange()
             editor.string = text
             editor.setSelectedRange(NSRange(location: min(selection.location, (text as NSString).length), length: 0))
+            if mentions != nil { editor.setMentions(references.wrappedValue) }
+        } else if mentions != nil, !editor.hasMarkedText(), editor.mentionReferences != MessageReference.standing(references.wrappedValue, in: text) {
+            // Unlinked, or taken back from the queue with the same text.
+            editor.setMentions(references.wrappedValue)
         }
+        if mentions != nil { editor.unresolvedMentions = unresolvedMentions }
         // In this update, not after it: a frame drawn before the composer takes focus would show the
         // sidebar row just clicked in its focused, accent color for a moment.
         if focused.wrappedValue, let window = editor.window, window.firstResponder !== editor {
@@ -93,9 +110,29 @@ struct ComposerEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let editor = notification.object as? NSTextView else { return }
             parent.text = editor.string
+            guard let editor = editor as? ComposerTextView, let mentions = parent.mentions else { return }
+            // A label edited into other text is no longer linked: it stays as ordinary text.
+            let references = editor.mentionReferences
+            if parent.references.wrappedValue != references { parent.references.wrappedValue = references }
+            editor.styleMentions()
+            mentions.update(typed: editor.isTyping)
+        }
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard notification.object is ComposerTextView, let mentions = parent.mentions, mentions.isOpen else { return }
+            mentions.update(typed: false)
+        }
+        /// Text typed after a chosen label isn't part of it.
+        func textView(_ textView: NSTextView, shouldChangeTypingAttributes oldTypingAttributes: [String: Any] = [:],
+                      toAttributes newTypingAttributes: [NSAttributedString.Key: Any] = [:]) -> [NSAttributedString.Key: Any] {
+            var attributes = newTypingAttributes
+            attributes[.botchuMention] = nil
+            return attributes
         }
         func textDidBeginEditing(_ notification: Notification) { parent.focused.wrappedValue = true }
-        func textDidEndEditing(_ notification: Notification) { parent.focused.wrappedValue = false }
+        func textDidEndEditing(_ notification: Notification) {
+            parent.focused.wrappedValue = false
+            parent.mentions?.close()
+        }
     }
 }
 
@@ -135,6 +172,18 @@ final class ComposerTextView: NSTextView {
     var onSend: (() -> Void)?
     var onPasteImages: (NSPasteboard) -> Bool = { _ in false }
     var wantsFocus = false
+    /// `@` and `#` completion, when the editor has it.
+    weak var completer: MentionCompleter?
+    /// The `statusKey`s of mentions that point at nothing now.
+    var unresolvedMentions: Set<String> = [] {
+        didSet { if unresolvedMentions != oldValue { styleMentions() } }
+    }
+    /// Whether the change under way is typed (input methods and dictation included), which alone opens
+    /// completion; pasted and dropped text isn't.
+    private(set) var isTyping = false
+    private var pasting = false
+    /// Whether the text showed a chosen label when last styled (`styleMentions`).
+    var stylesMentions = false
     private var measured: (text: String, heights: [CGFloat: CGFloat]) = ("", [:])
 
     /// How tall its text lays out at `width`, measured on a copy, so the text shown is laid out only
@@ -162,6 +211,8 @@ final class ComposerTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // An open completion list takes its keys first, so Return that inserts a suggestion never sends.
+        if let completer, completer.handle(event) { return }
         if let onSend, (event.keyCode == 36 || event.keyCode == 76), !hasMarkedText() {
             if !event.modifierFlags.intersection([.shift, .option]).isEmpty { insertNewline(nil) }
             else { onSend() }
@@ -187,7 +238,11 @@ final class ComposerTextView: NSTextView {
     }
 
     override func paste(_ sender: Any?) {
-        if !onPasteImages(.general) { super.paste(sender) }
+        if onPasteImages(.general) { return }
+        if completer != nil, pasteMentions(from: .general) { return }
+        pasting = true
+        defer { pasting = false }
+        super.paste(sender)
     }
 
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
@@ -203,6 +258,163 @@ final class ComposerTextView: NSTextView {
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        onPasteImages(sender.draggingPasteboard) || super.performDragOperation(sender)
+        if onPasteImages(sender.draggingPasteboard) { return true }
+        pasting = true
+        defer { pasting = false }
+        return super.performDragOperation(sender)
+    }
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        if typingAttributes[.botchuMention] != nil { typingAttributes[.botchuMention] = nil }
+        isTyping = !pasting
+        defer { isTyping = false }
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    /// Copying keeps the plain text, readable anywhere, and adds the mentions in it for another message box.
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        let wrote = super.writeSelection(to: pboard, types: types)
+        let selection = selectedRange()
+        guard wrote, completer != nil, selection.length > 0 else { return wrote }
+        let inside = mentionReferences.filter { $0.location >= selection.location && NSMaxRange($0.range) <= NSMaxRange(selection) }
+        guard !inside.isEmpty,
+              let data = try? JSONEncoder().encode(MentionClip(text: (string as NSString).substring(with: selection),
+                                                               references: inside.map { $0.moved(by: -selection.location) }))
+        else { return wrote }
+        pboard.addTypes([.botchuMentions], owner: nil)
+        pboard.setData(data, forType: .botchuMentions)
+        return wrote
+    }
+}
+
+// MARK: Mentions
+
+extension NSAttributedString.Key {
+    /// A label chosen from `@` or `#` completion, on its characters: its `MentionToken`.
+    static let botchuMention = NSAttributedString.Key("BotChuMention")
+}
+
+extension NSPasteboard.PasteboardType {
+    /// Copied text with the mentions in it (`MentionClip`), which pasting into a message box keeps linked.
+    static let botchuMentions = NSPasteboard.PasteboardType("local.BotChu.mentions")
+}
+
+/// What a chosen label's characters carry: one token per choice (equal only to itself), so two labels
+/// side by side stay apart, and characters typed into a label split it into runs that no longer match it.
+final class MentionToken: NSObject {
+    let reference: MessageReference
+    init(_ reference: MessageReference) { self.reference = reference }
+}
+
+/// Copied text and the mentions in it, placed from its start.
+struct MentionClip: Codable {
+    var text: String
+    var references: [MessageReference]
+}
+
+extension ComposerTextView {
+    /// The labels in the text still as chosen, in order. Undo restores a label's characters with their
+    /// token, and so its link; any other edit inside one leaves ordinary text.
+    var mentionReferences: [MessageReference] {
+        guard let storage = textStorage, storage.length > 0 else { return [] }
+        let text = storage.string as NSString
+        var references: [MessageReference] = []
+        storage.enumerateAttribute(.botchuMention, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard let token = value as? MentionToken, text.substring(with: range) == token.reference.label else { return }
+            var reference = token.reference
+            reference.location = range.location
+            references.append(reference)
+        }
+        return references
+    }
+
+    /// Links the labels of `references` that stand in the text, and nothing else.
+    func setMentions(_ references: [MessageReference]) {
+        guard let storage = textStorage else { return }
+        storage.removeAttribute(.botchuMention, range: NSRange(location: 0, length: storage.length))
+        for reference in MessageReference.standing(references, in: string) {
+            storage.addAttribute(.botchuMention, value: MentionToken(reference), range: reference.range)
+        }
+        styleMentions()
+    }
+
+    /// Shows linked labels in the accent color on a faint tint, and those that point at nothing now
+    /// dotted, without changing how the text lays out (#80 measures it).
+    func styleMentions() {
+        guard let layout = layoutManager, let storage = textStorage else { return }
+        let references = mentionReferences
+        // A draft that has never had a label has nothing to restyle.
+        guard stylesMentions || !references.isEmpty else { return }
+        stylesMentions = !references.isEmpty
+        let whole = NSRange(location: 0, length: storage.length)
+        for key in [NSAttributedString.Key.foregroundColor, .backgroundColor, .underlineStyle, .underlineColor] {
+            layout.removeTemporaryAttribute(key, forCharacterRange: whole)
+        }
+        for reference in references {
+            let resolved = !unresolvedMentions.contains(reference.statusKey)
+            layout.addTemporaryAttributes(resolved ? Self.linkedStyle : Self.unresolvedStyle, forCharacterRange: reference.range)
+        }
+    }
+
+    static let linkedStyle: [NSAttributedString.Key: Any] = [
+        .foregroundColor: NSColor.controlAccentColor,
+        .backgroundColor: NSColor.controlAccentColor.withAlphaComponent(0.12),
+    ]
+    static let unresolvedStyle: [NSAttributedString.Key: Any] = [
+        .foregroundColor: NSColor.secondaryLabelColor,
+        .underlineStyle: NSUnderlineStyle.single.union(.patternDot).rawValue,
+        .underlineColor: NSColor.systemOrange,
+    ]
+
+    /// The text's own attributes, without a label's token.
+    private var plainAttributes: [NSAttributedString.Key: Any] {
+        var attributes = typingAttributes
+        attributes[.botchuMention] = nil
+        return attributes
+    }
+
+    /// Replaces `range` (the query) with a chosen label and what follows it, as one undoable change,
+    /// and puts the caret back to writing after it.
+    func insertMention(_ reference: MessageReference, replacing range: NSRange, with replacement: String, caret: Int) {
+        guard let storage = textStorage else { return }
+        breakUndoCoalescing()
+        guard shouldChangeText(in: range, replacementString: replacement) else { return }
+        storage.beginEditing()
+        storage.replaceCharacters(in: range, with: NSAttributedString(string: replacement, attributes: plainAttributes))
+        storage.addAttribute(.botchuMention, value: MentionToken(reference), range: NSRange(location: range.location, length: reference.label.utf16.count))
+        storage.endEditing()
+        didChangeText()
+        breakUndoCoalescing()
+        setSelectedRange(NSRange(location: min(caret, storage.length), length: 0))
+        typingAttributes = plainAttributes
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+    }
+
+    /// Pastes text copied from a message box with its mentions still linked; false for anything else.
+    func pasteMentions(from board: NSPasteboard) -> Bool {
+        guard isEditable, board.availableType(from: [.botchuMentions]) != nil,
+              let data = board.data(forType: .botchuMentions), let clip = try? JSONDecoder().decode(MentionClip.self, from: data),
+              board.string(forType: .string) == clip.text, let storage = textStorage else { return false }
+        let range = selectedRange()
+        breakUndoCoalescing()
+        guard shouldChangeText(in: range, replacementString: clip.text) else { return true }
+        storage.beginEditing()
+        storage.replaceCharacters(in: range, with: NSAttributedString(string: clip.text, attributes: plainAttributes))
+        for reference in MessageReference.standing(clip.references, in: clip.text) {
+            storage.addAttribute(.botchuMention, value: MentionToken(reference), range: reference.moved(by: range.location).range)
+        }
+        storage.endEditing()
+        didChangeText()
+        setSelectedRange(NSRange(location: range.location + clip.text.utf16.count, length: 0))
+        return true
+    }
+
+    /// Where the character at `location` starts, from the editor's left edge.
+    func mentionX(at location: Int) -> CGFloat {
+        guard let layout = layoutManager, let container = textContainer, let scroll = enclosingScrollView,
+              let storage = textStorage, location < storage.length else { return 0 }
+        let glyph = layout.glyphIndexForCharacter(at: location)
+        let x = layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container).minX
+        return max(0, convert(NSPoint(x: x + textContainerOrigin.x, y: 0), to: scroll).x)
     }
 }
