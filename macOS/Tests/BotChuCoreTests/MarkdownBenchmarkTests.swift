@@ -66,7 +66,10 @@ import Testing
             try await Task.sleep(for: .milliseconds(2))
         }
         let lastDelta = DispatchTime.now().uptimeNanoseconds
-        for _ in 0..<1_000 where preparation.source != text { try await Task.sleep(for: .milliseconds(1)) }
+        for _ in 0..<1_000 {
+            if preparation.source == text { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
         let settled = Double(DispatchTime.now().uptimeNanoseconds - lastDelta) / 1_000_000
         let stats = worker.statistics
         lines += ["", "A 128 KB reply given 100 deltas 2 ms apart (worker limit \(worker.limit), one parse under way and one revision waiting per reply)",
@@ -87,7 +90,10 @@ import Testing
                 let source = String(decoding: full.utf8.prefix(end), as: UTF8.self)
                 budgetWorker.prepare(source, for: client) { _ in if source == full { done.mark() } }
             }
-            for _ in 0..<5_000 where !done.isDone { try await Task.sleep(for: .milliseconds(1)) }
+            for _ in 0..<5_000 {
+                if done.isDone { break }
+                try await Task.sleep(for: .milliseconds(1))
+            }
             replies.append(full)
         }
         try await Task.sleep(for: .milliseconds(100))

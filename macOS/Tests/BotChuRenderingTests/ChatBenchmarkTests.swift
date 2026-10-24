@@ -126,7 +126,7 @@ extension RenderingTests {
         }
         let finalText = long.messages.last!.text
         let lastDelta = DispatchTime.now().uptimeNanoseconds
-        for _ in 0..<1_000 where MarkdownCache.shared.cached(finalText) == nil { try await Task.sleep(for: .milliseconds(2)) }
+        try await waitUntil(steps: 1_000, every: .milliseconds(2)) { MarkdownCache.shared.cached(finalText) != nil }
         draw()
         let settled = Double(DispatchTime.now().uptimeNanoseconds - lastDelta) / 1_000_000
         let worker = MarkdownWorker.shared.statistics
@@ -181,7 +181,7 @@ extension RenderingTests {
             draw()
             let drawn = DispatchTime.now().uptimeNanoseconds
             let text = long.messages.last!.text
-            for _ in 0..<2_000 where MarkdownCache.shared.cached(text) == nil { try await Task.sleep(for: .milliseconds(1)) }
+            try await waitUntil(steps: 2_000, every: .milliseconds(1)) { MarkdownCache.shared.cached(text) != nil }
             try await Task.sleep(for: .milliseconds(150))
             shown.append(fine.longest(postedAfter: drawn))
         }
@@ -206,7 +206,7 @@ extension RenderingTests {
         }
         let finalHTML = try #require(RichMarkdown.html(long.messages.last!.text))
         let richLast = DispatchTime.now().uptimeNanoseconds
-        for _ in 0..<2_000 where richWeb.rendered?.html != finalHTML || richWeb.busy { try await Task.sleep(for: .milliseconds(2)) }
+        try await waitUntil(steps: 2_000, every: .milliseconds(2)) { richWeb.rendered?.html == finalHTML && !richWeb.busy }
         let richSettled = Double(DispatchTime.now().uptimeNanoseconds - richLast) / 1_000_000
         report.add("Stream delta, 32 KB rich reply", richDeltas)
         report.add("Last rich delta to WebKit's render done", [richSettled])
@@ -443,6 +443,15 @@ final class MainThreadProbe: @unchecked Sendable {
         defer { lock.unlock() }
         running = false
         return waits
+    }
+}
+
+/// Waits a step at a time, at most `steps` of them, until `done`; it stops looking once it is, as a
+/// timing that follows must not include looking again.
+@MainActor private func waitUntil(steps: Int, every step: Duration, _ done: () -> Bool) async throws {
+    for _ in 0..<steps {
+        if done() { return }
+        try await Task.sleep(for: step)
     }
 }
 
