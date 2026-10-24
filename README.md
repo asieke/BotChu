@@ -215,10 +215,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     arguments and output (the first 20 KB, with Copy for all of it). For this, each tool call keeps its
     arguments (long text shortened, an edit's text as the lines it adds and removes), exit code and
     duration; older threads show what they recorded. The chat opens at its newest items, as many as
-    lay out quickly, with **Show earlier** above them. Only the messages after the last settled item
-    are regrouped as a turn streams in, and a conversation shown again keeps its grouping and opened
-    cards. A reader at the bottom follows new content; one reading earlier content keeps their place
-    while a turn goes on, and **Follow Live** takes them back.
+    lay out quickly, with **Show earlier** above them. As a turn streams in, only what it changed is
+    grouped again: a new call joins a live group, and one that finishes is taken out of the group's
+    summary and put back, so a call costs the same in an exploration of 5,000 calls as in one of 5,
+    and so do its sub-agents' card placement and tool counts. A conversation shown again keeps its
+    grouping and opened cards; a long one opened anew shows its newest items at once, with a spinner
+    where earlier ones go while they are grouped off the main thread. A reader at the bottom follows
+    new content; one reading earlier content keeps their place while a turn goes on, and **Follow
+    Live** takes them back.
   - **Tasks:** besides its Home, a bot can work on tasks, several at once: each in one of your
     GitHub repositories, with its own conversation and CLI session, in its own git worktree, so
     tasks never share files. BotChu does all of this itself, with no other app. **New Task** (⌘T)
@@ -355,7 +359,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `taken.jsonl`, until the conversation is saved with it: when the conversation can't be saved (a
     full disk, a folder without write access), the chat says which file and why, the pending
     messages pause, and the next launch puts that follow-up back into the conversation rather than
-    sending it again. A worktree being prepared finishes setup before follow-ups can run.
+    sending it again. A worktree being prepared finishes setup before follow-ups can run. A message
+    shows in the queue as soon as it is sent and goes to the bot once its queue is saved; when that
+    can't be saved, it goes back into the message box, before anything typed since, and the chat says
+    why. Its turn starts only once the saved conversation holds it; when that can't be saved, it stays
+    queued, paused, and the chat says so. Until then the conversation is busy, and Stop withdraws it.
   - **Mentions:** in a Home or task message box, `@` lists your other agents and `#` your projects,
     in a short list just above the line being typed, over the chat, so the box neither moves nor
     grows. Agents match by name or title, in the sidebar's order, with their avatar and title (and
@@ -440,6 +448,22 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     its own workspace, and not the bots folder itself; moving a bot's workspace in its editor moves its `.botchu/`, `INSTRUCTIONS.md`, `MEMORY.md`, `SOUL.md` and `skills/` with it. Moving
     waits until its turns finish and refuses to overwrite files at the destination. Deleting a bot
     puts only its `.botchu/` in the Trash.
+  - **Saving:** conversations and their queues, bots' and tasks' settings, the turn log, memory
+    notes, sub-agents' and jobs' transcripts and run reviews' records are written off the main
+    thread, so typing, switching conversations and Stop never wait for the disk, however long a
+    conversation is. Each file's writes keep the order they were asked in, and different
+    conversations' go side by side. A file is written whole, and a newer state of it takes the place
+    of one not written yet (one already written isn't written again), so a late save never overwrites
+    a newer one and at most two states of a file are held at once, one being written and one waiting.
+    A conversation's change is on disk once the write under way and its own are done (about 10 ms for
+    1,500 messages, 35 to 40 ms for 5,000 or for 12 MB of tool output, on an M4 Max); a streaming
+    sub-agent's within a second, a job run's within five. A turn's end, what it asked to remember and
+    its review's hand-over happen off the main thread too; the conversation stays busy until its end
+    is saved. Quitting waits up to five seconds for what is being written and lists any file it
+    couldn't finish in the system log, leaving it as it was last saved, never taken as saved.
+    Deleting a bot drops what waits to be written in its folder and waits for what is being written;
+    moving one waits for its writes, so neither leaves the old folder behind. A job's run is still
+    reserved in its `job.json` before it starts, at once, and never twice.
   - **Memory and personality:** each bot's workspace has a `MEMORY.md` for facts and notes it keeps
     itself, and an editable `SOUL.md` for its personality and voice. New bots get a starter soul based
     on their name and title; existing files are preserved, including intentionally empty ones.
@@ -677,8 +701,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
     (`ToolActivity.swift`, reading shell command lines with `ShellCommand.swift`), the chat's activity
-    items, with exploration folded into groups and kept up to date at the tail
-    (`ActivityTranscript.swift`), the identity, instructions,
+    items, with exploration folded into groups whose summaries are kept as calls join and leave them,
+    updated only for new messages, running calls and the last message (an edit of the thread is
+    verified), where delegated runs' cards go, worked out again only when their calls or records
+    change, and sub-agents' tool counts kept as they stream (`ActivityTranscript.swift`, in chunked
+    storage that copies a chunk, not every element, when shared: `ChunkedArray.swift`), the identity, instructions,
     team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
@@ -710,17 +737,22 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     coalesced refreshes (`ProjectSync.swift`),
     an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store, with
     the index saved whole or a failure to show (`Store.swift`), with conversations' files read without losing
-    what can't be read (`Transcript.swift`), and the `Process` runner that launches
+    what can't be read (`Transcript.swift`), the writer that saves files off the main thread, each
+    target's in its own lane and in order, newer states of a file taking the place of waiting ones
+    (`StorageQueue.swift`), and a conversation's transcript and queue saved through it, with the
+    messages a written transcript holds taken out of the queue as it is then (`ConversationStorage.swift`),
+    and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
-    `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (transcripts saved off the main thread
-    while they stream), `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
+    `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (each run's transcript and record saved in
+    a lane of its own, off the main thread, while they stream and at their start and end), `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
     handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
     What replies ask to remember (`MemoryNotes`, in `BotContext.swift`) is saved to memory files
     by `MemoryWriter.swift`: one save at a time, read back to check it held, with notes that wait
     and are tried again. Run reviews are in `RunEvaluation.swift`: what a review sees of a run, its
     prompt, reading its reply, which changes are applied and which are proposals, the saved record,
-    the queue with its limits, retries and relaunch, applying through the writer
+    handing a run over (claimed once, with what it sees built off the main actor, and only while
+    reviews are on), the queue with its limits, retries and relaunch, applying through the writer
     (`MemoryWriter.saveReviewed`), the exact diff it records and its revert (`AppliedChange`), and the
     review's own CLI run, whose tool-free command lines are in `Accounts.swift`
     (`CommandBuilder.toolFreeInvocation`).
@@ -770,11 +802,20 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     earlier revision never shown over a newer one, the last always settling as a full parse), one
     parse for replies without math (shell code with `$HOME`, prices, the word Mermaid) and hundreds
     of expressions put back in one pass, and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
-    commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
-    streamed update regroups only the tail; the sidebar's sections of bots, and searching them; follow-ups the CLI
+    commands) are described and grouped, failures, repeated reads, sub-agent cards, and that an
+    update does work only for what changed (counted for live groups of 400, 1,000 and 5,000 calls),
+    shows what grouping the thread afresh shows through random turns (calls finishing out of order,
+    failing, their kind arriving late, stopped turns, edits of the thread), sees changes of the same
+    length, lets go of a settled group's running state, and leaves sub-agent placement and counts
+    alone while a reply streams; the sidebar's sections of bots, and searching them; follow-ups the CLI
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
-    before the next save, also in a queue going through a relaunch; a section change or a new
+    before the next save, also in a queue going through a relaunch; saving off the main thread: each
+    file's writes in order and different files' side by side, newer states taking the place of waiting
+    ones, repeats skipped, quitting's wait, a deleted bot's folder never made again, a sub-agent's end
+    never written behind another's, and the conversation's guarantees above with writes and the CLI's
+    messages interleaved and each write failing in turn; run reviews handed over without building
+    anything while reviews are off, claimed once, and built off the main actor; a section change or a new
     bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
     grows and how far its text scrolls; each account's allowance, with Muse's check through a
     stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
@@ -826,7 +867,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and New Task (through a stand-in for the general pasteboard, so no test touches the clipboard)
     and what pastes as text instead, New Task starting a task from a project and a brief with an
     image, the activity chat at every density, light and dark and at its
-    narrowest, a chat that follows new content only for a reader at the bottom, a Sub-agents
+    narrowest, a chat that follows new content only for a reader at the bottom, a long
+    conversation opened anew that shows its newest items at once and groups its history off the
+    main thread, then regroups only a streaming reply, a Sub-agents
     tab that folds finished runs and scrolls to one the chat opens, and switching without a flash:
     the toolbar kept, the message box focused in the same update, the chat at its very end, pets
     that never blink out while a clip loads, rich replies shown only once rendered and shown
@@ -838,7 +881,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     links and their context through sending, and the report and New Task boxes without it, a job
     made for its agent, shown in Jobs, delivered to Home as a receipt that leaves Home's draft and
     queue alone, and deleted with its agent, and a sub-agent's handoff and a task's receipt that
-    don't wait for their run reviews. Set
+    don't wait for their run reviews; and, with writes slowed to 250 ms each or failing: a turn that
+    starts only once its message is saved, sending and Stop that never wait for a write, a message
+    that can't be queued coming back to the composer, typing and switching while four conversations
+    save, quitting through the real notification waiting for writes and saying which it couldn't,
+    deleting and moving a bot with writes under way, and a handoff that goes back only once saved. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
@@ -991,9 +1038,13 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   `detailed`, `raw`) chooses the chat density for the run.
 - Chat latency: `BOTCHU_BENCHMARK=<file> swift test --configuration release --package-path macOS
   --filter chatBenchmark` times, from the change until the window has drawn it, switching to long
-  conversations (1,500 messages; outputs of 200 KB to 1 MB; a 400-call exploration; seventeen running
-  sub-agents), a streamed delta, a new call in a live exploration, a sub-agent's update, and opening
-  a large group or output, and writes the table to the file. It also streams 100 deltas into a 128 KB
+  conversations (1,500 messages; outputs of 200 KB to 1 MB; explorations of 400 and 5,000 calls;
+  seventeen running sub-agents; the 1,500 messages with twenty finished and seventeen running
+  sub-agents), again with their grouping forgotten (and until their earlier items are grouped), a
+  streamed delta, a new call in a live exploration, a sub-agent's update, and opening a large group
+  or output; and, in Core alone, a call joining and finishing in a live group of 400, 1,000 and
+  5,000 calls, apart from comparing the group before and after, grouping each afresh, and the memory
+  a 5,000-call projection keeps; and writes the table to the file. It also streams 100 deltas into a 128 KB
   reply while typing in the message box, with how long the main thread keeps a key press waiting
   and how long until the last delta's rendering is drawn, then 60 into a 32 KB reply with 282
   equations, until WebKit has drawn the last, with the worker's and WebKit's counts. `BOTCHU_BENCHMARK_SCOPE=chat` times the
@@ -1006,6 +1057,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   rapid deltas (with the worker's counts and the main thread's time for each), and measures what
   ten 128 KB replies keep, then release under memory pressure. It needs no window, asserts nothing
   about time and isn't part of `check`.
+- Saving: `BOTCHU_PERSISTENCE_BENCHMARK=<file> swift test --configuration release --package-path macOS
+  --filter persistenceBenchmark` times, for 1,500- and 5,000-message conversations and 12 MB of tool
+  output, what a save costs the main thread (now, and as it was when it wrote there), how long it takes
+  to be written, the bytes, writes and states a burst of 30 saves leaves, and what handing a 300-call
+  turn to run reviews costs the main thread, and writes the table to the file. Run with the same
+  variable, the rendering test `typingAndSwitchingStayResponsiveWhileFourConversationsSave` writes
+  typing and switching times while four conversations save beside it, as `<file>.responsiveness`.
+  The benchmark asserts nothing about time and isn't part of `check`.
 - Projects loading: `BOTCHU_PROJECTS_BENCHMARK=<file> swift test --package-path macOS --filter
   projectsBenchmark` times, with your `gh` login (read-only) and a temporary catalog, a first sync
   (until the list shows, and until everything is read), a relaunch (until the saved catalog shows),

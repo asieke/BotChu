@@ -19,6 +19,13 @@ public struct MessageQueue: Equatable, Sendable {
     /// loses them, and they are never sent again: after a relaunch they go back into the
     /// transcript (`restoringTaken`).
     public private(set) var taken: [ChatMessage] = []
+    /// Messages waiting for their first save into the queue (`enqueue(_:unsaved:)`): they show as
+    /// queued but aren't sent until a saved queue holds them (`accepted`), or leave if it can't.
+    public private(set) var unsaved: [UUID] = []
+    /// Messages a turn starts with, waiting for a saved transcript that holds them before the CLI
+    /// runs: they show in the conversation rather than the queue, and stay in the saved queue
+    /// until a saved transcript holds them (`saved`), or go back to waiting (`undeliver`).
+    public private(set) var delivering: [UUID] = []
 
     /// Recovered messages are sent again automatically, unless the owner's Stop or a failed turn
     /// had paused the queue (`paused`, saved beside it). A crash between saving the transcript and
@@ -31,22 +38,54 @@ public struct MessageQueue: Equatable, Sendable {
         isPaused = paused && !messages.isEmpty
     }
 
-    /// The oldest message not yet written to the CLI, unless the queue is paused.
-    public var next: ChatMessage? { isPaused ? nil : messages.first { !inFlight.contains($0.id) } }
+    /// The oldest message not yet written to the CLI, saved and not already starting a turn,
+    /// unless the queue is paused.
+    public var next: ChatMessage? {
+        isPaused ? nil : messages.first { !inFlight.contains($0.id) && !delivering.contains($0.id) && !unsaved.contains($0.id) }
+    }
+
+    /// What the queue shows: the messages not already starting a turn.
+    public var pending: [ChatMessage] { delivering.isEmpty ? messages : messages.filter { !delivering.contains($0.id) } }
 
     public func isInFlight(_ id: UUID) -> Bool { inFlight.contains(id) }
 
-    public mutating func enqueue(_ message: ChatMessage) {
+    /// Adds a message; `unsaved` holds it back until a saved queue holds it (`accepted`).
+    public mutating func enqueue(_ message: ChatMessage, unsaved: Bool = false) {
         guard message.role == .user, (!message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !message.images.isEmpty),
               !messages.contains(where: { $0.id == message.id }) else { return }
         messages.append(message)
+        if unsaved { self.unsaved.append(message.id) }
         isPaused = false
     }
 
-    /// Removes a message that hasn't been written to the CLI; one in flight can't be taken back.
+    /// A saved queue holds the message: it can be sent.
+    public mutating func accepted(_ id: UUID) {
+        unsaved.removeAll { $0 == id }
+    }
+
+    /// Removes a message that hasn't been written to the CLI; one in flight, or starting a turn,
+    /// can't be taken back.
     public mutating func remove(_ id: UUID) {
-        guard !inFlight.contains(id) else { return }
+        guard !inFlight.contains(id), !delivering.contains(id) else { return }
         messages.removeAll { $0.id == id }
+        unsaved.removeAll { $0 == id }
+    }
+
+    /// Puts back a message whose removal couldn't be saved, where it was.
+    public mutating func restore(_ message: ChatMessage, at index: Int) {
+        guard !messages.contains(where: { $0.id == message.id }) else { return }
+        messages.insert(message, at: min(max(0, index), messages.count))
+    }
+
+    /// The message starts a turn: it waits for a saved transcript holding it (`saved`).
+    public mutating func deliver(_ id: UUID) {
+        guard messages.contains(where: { $0.id == id }), !delivering.contains(id) else { return }
+        delivering.append(id)
+    }
+
+    /// Its transcript couldn't be saved: the message waits in the queue again.
+    public mutating func undeliver(_ id: UUID) {
+        delivering.removeAll { $0 == id }
     }
 
     public mutating func resume() { isPaused = false }
@@ -73,11 +112,16 @@ public struct MessageQueue: Equatable, Sendable {
         return message
     }
 
-    /// A transcript was saved: the taken messages it holds leave the queue for good.
+    /// A transcript was saved: the taken messages it holds, and the ones starting a turn, leave the
+    /// queue for good. Only those that transcript holds: one taken since stays.
     public mutating func saved(_ transcript: [ChatMessage]) {
-        guard !taken.isEmpty else { return }
+        guard !taken.isEmpty || !delivering.isEmpty else { return }
         let held = Set(transcript.map(\.id))
         taken.removeAll { held.contains($0.id) }
+        let delivered = delivering.filter(held.contains)
+        guard !delivered.isEmpty else { return }
+        delivering.removeAll { delivered.contains($0) }
+        messages.removeAll { delivered.contains($0.id) }
     }
 
     /// After a relaunch, the saved transcript with the taken messages it lacks put back where they

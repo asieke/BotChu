@@ -32,6 +32,8 @@ final class SubagentRuntime {
     @ObservationIgnored private var rejections: [UUID: [UUID: SubagentResult]] = [:]
     @ObservationIgnored private var pendingFinishes: [UUID: (SubagentPhase, String?)] = [:]
     @ObservationIgnored private var requestCounts: [ChatTarget: Int] = [:]
+    /// Runs whose end is being saved: still active until it is, so their caller waits for them.
+    @ObservationIgnored private var finalizing: Set<UUID> = []
     /// Runs found unfinished after a relaunch are being closed, which aren't reviewed.
     @ObservationIgnored private var restoring = false
 
@@ -144,7 +146,10 @@ final class SubagentRuntime {
         if busy != busyBots { busyBots = busy }
     }
 
-    private var activeRunCount: Int { roots.values.reduce(0) { $0 + $1.runs.filter { $0.phase.isActive }.count } }
+    /// Runs under way, and requests admitted whose record is still being saved, so the limits
+    /// count them while that save is awaited.
+    private var activeRunCount: Int { admitting + roots.values.reduce(0) { $0 + $1.runs.filter { $0.phase.isActive }.count } }
+    @ObservationIgnored private var admitting = 0
 
     func refreshRoster() throws {
         let ipc = SubagentIPC(root: root)
@@ -287,12 +292,21 @@ final class SubagentRuntime {
                                      workspaceMode: mode, workingDirectory: directory, hostID: hostID, phase: .preparing)
             record.callerInvocationID = caller.id
             record.callerHostID = caller.hostID
-            try persist(record, messages: [ChatMessage(role: .user, text: request.brief)])
+            // Admitted once its record is saved, off the main thread; the limits count it meanwhile.
+            admitting += 1
+            requestCounts[caller.target, default: 0] += 1
+            do {
+                try await archive.save(snapshot(record, messages: [ChatMessage(role: .user, text: request.brief)]))
+                admitting -= 1
+            } catch {
+                admitting -= 1
+                requestCounts[caller.target, default: 1] -= 1
+                throw error
+            }
             add(record, to: caller.target)
             live(record.id).messages = [ChatMessage(role: .user, text: request.brief)]
             live(record.id).state = RunState(preparing: true)
             deliveries[record.id] = caller.transport
-            requestCounts[caller.target, default: 0] += 1
             guard contexts[caller.id] != nil else { stop(record.id); return }
             preparations[record.id] = Task { [weak self] in await self?.launch(record.id, targetBot: targetBot, caller: caller) }
             // Admission is durable. A failed acknowledgement must not strand a preparing run;
@@ -405,7 +419,9 @@ final class SubagentRuntime {
             }
             record.phase = .running
             record.startedAt = Date()
-            try persist(record, messages: live(id).messages)
+            try await archive.save(snapshot(record, messages: live(id).messages))
+            // Stopped while its start was being saved: its end is saved instead.
+            guard run(id)?.phase.isActive == true, !finalizing.contains(id), !Task.isCancelled else { endCaller(context.id); return }
             replace(record)
             runners[id] = runner
             live(id).state = RunState()
@@ -451,16 +467,20 @@ final class SubagentRuntime {
     }
 
     /// BotChu is quitting: what each run printed last goes into its transcript, and every
-    /// checkpoint still waiting is written, so nothing streamed is lost.
+    /// checkpoint still waiting is written, so nothing streamed is lost. When the archive writes
+    /// through the app's storage, quitting waits for it there (`AppModel.stopAll`).
     func stopAll() {
         for runner in Array(runners.values) { runner.flushOutput() }
         for record in all where record.phase.isActive { stop(record.id) }
         for id in Array(contexts.keys) { endCaller(id) }
-        archive.flush()
+        archive.flush(timeout: archive.storage === model?.storage ? 0 : model?.quitTimeout ?? AppModel.saveTimeout)
     }
 
+    /// Ends a run once its worker and every descendant have exited. Its end is saved off the main
+    /// thread, and the run stays active until it is: the handoff goes back only once its record is
+    /// durable, and one that can't be saved goes back as a failure.
     private func finish(_ id: UUID, phase: SubagentPhase, error: String?) {
-        guard var record = run(id), record.phase.isActive else { return }
+        guard var record = run(id), record.phase.isActive, !finalizing.contains(id) else { return }
         let working = children(of: id).filter { $0.phase.isActive }
         if !working.isEmpty {
             pendingFinishes[id] = (phase, error)
@@ -468,6 +488,7 @@ final class SubagentRuntime {
             return
         }
         pendingFinishes[id] = nil
+        finalizing.insert(id)
         record.phase = phase
         record.finishedAt = Date()
         record.errorMessage = error
@@ -476,31 +497,48 @@ final class SubagentRuntime {
         var messages = live.messages
         ThreadAssembler.closeRunningTools(&messages)
         if let error { messages.append(ChatMessage(role: phase == .stopped ? .note : .error, text: error)) }
-        // What the run asked to remember goes into the called bot's memory, which its Home hears
-        // about; a save that fails waits to be tried again, and doesn't fail the handoff.
-        if phase == .completed, let model, let targetBot = model.bot(record.targetBotID) {
-            messages += model.saveMemory(from: messages, of: targetBot, reportTo: .home(targetBot.id))
-        }
         live.messages = messages
         live.state = nil
         preparations[id] = nil
+        let reviewed = !restoring
+        // What the run asked to remember goes into the called bot's memory, which its Home hears
+        // about; a save that fails waits to be tried again, and doesn't fail the handoff.
+        if phase == .completed, let model, let targetBot = model.bot(record.targetBotID) {
+            model.saveMemory(from: messages, of: targetBot, reportTo: .home(targetBot.id)) { [weak self] lines in
+                self?.commit(record, messages: messages + lines, reviewed: reviewed)
+            }
+        } else {
+            commit(record, messages: messages, reviewed: reviewed)
+        }
+    }
+
+    /// Saves a finished run, then hands it back to its caller.
+    private func commit(_ record: SubagentRun, messages: [ChatMessage], reviewed: Bool) {
+        let id = record.id
+        if lives[id] != nil { live(id).messages = messages }
+        let done: @MainActor @Sendable (Error?) -> Void = { [weak self] error in
+            guard let self else { return }
+            var record = record
+            if let error {
+                record.phase = .failed
+                record.errorMessage = "Couldn't save the handoff: \(error.localizedDescription)"
+                self.error = record.errorMessage
+            }
+            self.finalizing.remove(id)
+            self.replace(record)
+            self.queueDelivery(record)
+            // A review of the attempt, in the background; the handoff doesn't wait for it.
+            if reviewed { self.model?.evaluateSubagentRun(record, messages: messages) }
+            for (parent, outcome) in self.pendingFinishes where !self.children(of: parent).contains(where: { $0.phase.isActive }) {
+                self.finish(parent, phase: outcome.0, error: outcome.1)
+            }
+            self.model?.sendNextQueued(to: ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID))
+        }
         do {
-            // The handoff goes back only once its record is durable.
-            try persist(record, messages: messages)
+            archive.save(try snapshot(record, messages: messages), done: done)
+        } catch {
+            done(error)
         }
-        catch {
-            record.phase = .failed
-            record.errorMessage = "Couldn't save the handoff: \(error.localizedDescription)"
-            self.error = record.errorMessage
-        }
-        replace(record)
-        queueDelivery(record)
-        // A review of the attempt, in the background; the handoff doesn't wait for it.
-        if !restoring { model?.evaluateSubagentRun(record, messages: messages) }
-        for (parent, outcome) in pendingFinishes where !children(of: parent).contains(where: { $0.phase.isActive }) {
-            finish(parent, phase: outcome.0, error: outcome.1)
-        }
-        model?.sendNextQueued(to: ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID))
     }
 
     private func queueDelivery(_ record: SubagentRun) {
@@ -551,10 +589,6 @@ final class SubagentRuntime {
         return SubagentArchive.Snapshot(record: record, messages: messages, home: BotHome(workspace: owner.workspace))
     }
 
-    /// Saves the run now, after any checkpoint of it under way: its start and its end.
-    private func persist(_ record: SubagentRun, messages: [ChatMessage]) throws {
-        try archive.save(snapshot(record, messages: messages))
-    }
 
     private func restore() {
         guard let model else { return }
@@ -584,19 +618,24 @@ final class SubagentRuntime {
         }
     }
 
+    /// Removes a finished run and its descendants, each folder after any write of it, so nothing
+    /// written later makes it again; the run leaves the inspector once its folder is gone.
     func clear(_ id: UUID) {
-        guard let record = run(id), !record.phase.isActive else { return }
+        guard let record = run(id), !record.phase.isActive, !finalizing.contains(id) else { return }
         let descendants = children(of: id)
         guard !descendants.contains(where: { $0.phase.isActive }) else { return }
         for child in descendants { clear(child.id) }
         guard let owner = model?.bot(record.rootBotID) else { return }
-        let home = BotHome(workspace: owner.workspace)
-        do {
-            try home.removeSubagent(id: id, taskID: record.rootTaskID)
-            root(ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID)).runs.removeAll { $0.id == id }
-            locations[id] = nil
-            lives[id] = nil
-        } catch { self.error = "Couldn't clear the sub-agent: \(error.localizedDescription)" }
+        archive.remove(id, taskID: record.rootTaskID, home: BotHome(workspace: owner.workspace)) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.error = "Couldn't clear the sub-agent: \(error.localizedDescription)"
+                return
+            }
+            self.root(ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID)).runs.removeAll { $0.id == id }
+            self.locations[id] = nil
+            self.lives[id] = nil
+        }
     }
 }
 
@@ -632,7 +671,16 @@ final class SubagentRoot {
 /// A run's transcript and turn as they stream in, observed apart from every other run's.
 @MainActor @Observable
 final class SubagentLive {
-    var messages: [ChatMessage] = []
+    var messages: [ChatMessage] = [] {
+        didSet {
+            tally.update(messages)
+            if tally.counts != counts { counts = tally.counts }
+        }
+    }
+    /// Its tool calls, counted as they stream in (`ToolCallTally`), and observed apart from the
+    /// transcript: a card showing only the counts isn't redrawn by every delta.
+    private(set) var counts = ToolCounts()
+    @ObservationIgnored private var tally = ToolCallTally()
     var state: RunState?
 
     /// Changes the transcript in place, without copying it.
@@ -661,6 +709,9 @@ final class SubagentLive {
             if let newValue { runtime.live(id).messages = newValue } else { runtime.dropLive(id) }
         }
     }
+
+    /// How many tool calls a run's transcript holds.
+    func counts(_ id: UUID) -> ToolCounts { runtime.live(id).counts }
 }
 
 /// `states[id]`: a run's turn, while it runs.

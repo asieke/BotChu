@@ -320,7 +320,7 @@ private func describe(_ message: ChatMessage, root: String? = "/work/BotChu") ->
     private func items(_ messages: [ChatMessage]) -> [ActivityItem] {
         var transcript = ActivityTranscript(root: root)
         transcript.update(messages)
-        return transcript.items
+        return Array(transcript.items)
     }
 
     @Test func consecutiveReadsFoldUntilTextACommandOrAnEdit() {
@@ -388,7 +388,7 @@ private func describe(_ message: ChatMessage, root: String? = "/work/BotChu") ->
         #expect(group.entries[0].count == 2)
         #expect(group.entries[0].detail == "×2 · L1–60")
         // The calls underneath stay inspectable.
-        #expect(group.entries[0].calls.map(\.id) == [messages[0].id, messages[1].id])
+        #expect(group.calls(of: group.entries[0]).map(\.id) == [messages[0].id, messages[1].id])
         #expect(group.files.first?.reads == 3)
     }
 
@@ -434,7 +434,7 @@ private func describe(_ message: ChatMessage, root: String? = "/work/BotChu") ->
         #expect(transcript.lastExamined <= 2)
         for i in 0..<50 { messages.append(call("Grep", "pattern\(i)")) }
         transcript.update(messages)
-        #expect(transcript.lastExamined == 51)
+        #expect(transcript.lastExamined == 50)
         messages[messages.count - 51].toolState = .done
         messages.append(ChatMessage(role: .assistant, text: "Found it."))
         transcript.update(messages)
@@ -454,7 +454,11 @@ private func describe(_ message: ChatMessage, root: String? = "/work/BotChu") ->
         #expect(transcript.settledItems == 0)
         messages[0].toolState = .done
         transcript.update(messages)
-        #expect(transcript.settledItems == 1)
+        // The command still running may yet turn out to only read, and join the group.
+        #expect(transcript.settledItems == 0)
+        messages[1].toolState = .done
+        transcript.update(messages)
+        #expect(transcript.settledItems == 2)
         // A new session replaces the thread.
         transcript.update([ChatMessage(role: .note, text: "New session")])
         #expect(transcript.items.count == 1 && transcript.lastExamined == 1)
@@ -663,7 +667,7 @@ private func describe(_ message: ChatMessage, root: String? = "/work/BotChu") ->
             transcript.update([])
             #expect(transcript.items.isEmpty)
         }
-        #expect(ExplorationGroup(calls: [], isOpen: true, root: nil).summary == "")
+        #expect(ExplorationGroup(messages: [], isOpen: true, root: nil).summary == "")
         for paths in [[""], ["/"], ["//"], ["~"], ["."], [".."], ["/a/../../b"], ["a//b/"], ["", "/", "~/x"]] {
             _ = FolderSummary.describe(files: paths, folders: paths, root: "/")
         }

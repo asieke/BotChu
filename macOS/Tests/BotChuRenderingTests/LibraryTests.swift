@@ -118,6 +118,8 @@ extension RenderingTests {
         #expect(app.drafts[target] == "Keep this draft")
         #expect(app.tab(of: bot.id) == target)
         app.setAccount(account.id, for: target)
+        // Saved off the main thread (#107).
+        app.storage.wait(timeout: 5)
         #expect(BotHome(workspace: bot.workspace).loadTasks().first?.account == account)
         app.newTask(for: bot.id, repo: "octocat/Fieldnotes")
         #expect(app.taskSheet?.repo == "octocat/Fieldnotes")

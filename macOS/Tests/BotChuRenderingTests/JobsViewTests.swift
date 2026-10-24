@@ -52,6 +52,7 @@ extension RenderingTests {
         #expect(app.thread(home).count == before + 1)
         #expect(app.thread(home).last?.role == .receipt)
         #expect(app.thread(home).last?.jobRun == JobRunLink(job: job.id, run: run))
+        await app.storage.settle()
         #expect(BotHome(workspace: bot.workspace).loadThread().last?.jobRun == JobRunLink(job: job.id, run: run))
         #expect(app.drafts[home] == "Keep this draft")
         #expect(app.messageQueues[home]?.messages.isEmpty ?? true)

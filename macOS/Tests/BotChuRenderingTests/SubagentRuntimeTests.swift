@@ -45,6 +45,8 @@ extension RenderingTests {
         #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("HANDOFF-REVIEWED") == true)
         #expect(fixture.app.delegation.all.map(\.phase) == [.completed])
         #expect(fixture.app.thread(.home(fixture.parent.id)).contains { $0.role == .receipt })
+        // What each review sees is built off the main actor, after the handoff and the receipt.
+        try await fixture.wait { fixture.app.evaluator.records.count == 2 && fixture.app.evaluator.records.values.contains { $0.phase == .running } }
         let records = fixture.app.evaluator.records.values
         #expect(records.count == 2)
         let subagent = try #require(records.first { $0.subject.kind == .subagent })
@@ -92,6 +94,29 @@ extension RenderingTests {
         let result = try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: ipc.resultURL(request.id)))
         #expect(result.phase == .failed)
         #expect(fixture.app.delegation.all.isEmpty)
+    }
+
+    /// #107: a run's end is saved off the main thread, slowly here, and its handoff goes back only
+    /// once its record is on disk; meanwhile the run counts as active for its caller.
+    @Test func aHandoffGoesBackOnlyOnceItsRecordIsSaved() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app
+        let slow = StorageQueue(before: { work in if work.label == "save" { Thread.sleep(forTimeInterval: 0.3) } })
+        app.delegation = SubagentRuntime(model: app, root: app.delegation.root, archive: SubagentArchive(storage: slow))
+        let caller = try await app.delegation.prepareCaller(target: fixture.target, directory: fixture.folder.path, machine: .thisMac, hostID: nil)
+        defer { app.delegation.endCaller(caller.id) }
+        let ipc = SubagentIPC(root: URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!))
+        let request = SubagentRequest(invocationID: caller.id, callerBotID: fixture.parent.id, callerTaskID: fixture.target.taskID,
+                                     depth: 0, targetAgent: "Worker", brief: "LEAF")
+        try SubagentIPC.encode(request).write(to: ipc.requestURL(request.id), options: .atomic)
+        try await fixture.wait { FileManager.default.fileExists(atPath: ipc.resultURL(request.id).path) }
+        // Delivered only after the completed record is durable.
+        #expect(fixture.home.loadSubagents(taskID: fixture.target.taskID).first?.phase == .completed)
+        let result = try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: ipc.resultURL(request.id)))
+        #expect(result.phase == .completed)
+        #expect(result.handoffOutput == "HANDOFF-LEAF")
+        #expect(app.delegation.run(request.id)?.phase == .completed)
     }
 
     @Test func transcriptWriteFailureWaitsForTheWorkerToExitBeforeReturningFailure() async throws {
@@ -214,6 +239,7 @@ extension RenderingTests {
 
         try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: memory)
         fixture.app.retryMemory(for: fixture.target)
+        await fixture.app.storage.settle()
         #expect(fixture.app.thread(fixture.target).last?.text == "Saved to Parent's memory: “TASK-LESSON”")
         #expect(Workspace.read(memory).components(separatedBy: "\n").filter { $0 == "- TASK-LESSON" }.count == 1)
         #expect(fixture.app.unsavedMemory[fixture.parent.id] == 0)
@@ -394,6 +420,8 @@ extension RenderingTests {
         try fixture.home.saveSubagent(child)
         let restored = AppModel(store: fixture.store, settings: fixture.settings)
         defer { restored.stopAll() }
+        // Stopped once that is saved, off the main thread (#107).
+        await restored.storage.settle()
         #expect(restored.delegation.run(parent.id)?.phase == .stopped)
         #expect(restored.delegation.run(child.id)?.phase == .completed)
         #expect(fixture.home.loadSubagents(taskID: fixture.target.taskID).allSatisfy { !$0.phase.isActive })
@@ -428,6 +456,7 @@ extension RenderingTests {
         restored.delegation.records[fixture.target] = [parent, child]
         restored.delegation.states[parent.id] = nil
         restored.delegation.clear(parent.id)
+        await restored.storage.settle()
         #expect(restored.delegation.all.isEmpty)
     }
 

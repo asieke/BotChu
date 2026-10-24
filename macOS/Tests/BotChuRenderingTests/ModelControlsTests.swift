@@ -73,11 +73,14 @@ extension RenderingTests {
         #expect(app.runSettings(of: homeTarget)?.model == "opus")
         #expect(app.runSettings(of: homeTarget)?.reasoningEffort == .high)
         #expect(app.runSettings(of: taskTarget)?.model == "sonnet")
+        // Saved off the main thread (#107).
+        app.storage.wait(timeout: 5)
         #expect(home.loadTasks().first?.reasoningEffort == .medium)
         #expect(home.loadTasks().first?.resumableSessionID == "task-session")
 
         app.setModel("haiku", for: homeTarget)
         app.setReasoningEffort(.high, for: homeTarget)
+        app.storage.wait(timeout: 5)
         #expect(home.loadBot()?.model == "haiku")
         #expect(home.loadBot()?.reasoningEffort == nil)
         #expect(home.loadBot()?.resumableSessionID == "home-session")
@@ -122,6 +125,8 @@ extension RenderingTests {
         // A busy task does not prevent changing Home. Same-family switches keep generation choices.
         app.runStates[taskTarget] = RunState()
         app.setAccount(custom.id, for: homeTarget)
+        // Saved off the main thread (#107).
+        app.storage.wait(timeout: 5)
         #expect(home.loadBot()?.account == custom)
         #expect(home.loadBot()?.model == "gpt-6-astra")
         #expect(home.loadBot()?.reasoningEffort == .xhigh)
@@ -138,6 +143,7 @@ extension RenderingTests {
         // An idle task can switch while Home is busy; a new family clears incompatible choices.
         app.runStates[taskTarget] = nil
         app.setAccount("claude-work", for: taskTarget)
+        app.storage.wait(timeout: 5)
         #expect(home.loadTasks().first?.accountID == "claude-work")
         #expect(home.loadTasks().first?.model == "")
         #expect(home.loadTasks().first?.reasoningEffort == nil)

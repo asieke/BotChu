@@ -41,11 +41,11 @@ extension RenderingTests {
         // Delivery was already fetched, but has not yet reached AppModel.send. This exercises
         // the real main-actor boundary even if the settings observer hasn't restarted it yet.
         if change == "cancelled" {
-            let delivery = Task { connection.deliver("must not run", id: UUID(), to: bot.id, from: 42) }
+            let delivery = Task { await connection.deliver("must not run", id: UUID(), to: bot.id, from: 42) }
             delivery.cancel()
             #expect(await delivery.value == .discarded)
         } else {
-            #expect(connection.deliver("must not run", id: UUID(), to: bot.id, from: 42) == .discarded)
+            #expect(await connection.deliver("must not run", id: UUID(), to: bot.id, from: 42) == .discarded)
         }
         #expect(app.thread(.home(bot.id)).allSatisfy { $0.role != .user })
         #expect(app.messageQueues[.home(bot.id)]?.messages.isEmpty != false)

@@ -79,7 +79,7 @@ extension AppModel {
                 let queue = messageQueues[target]
                 conversation = IssueSnapshot.Conversation(
                     settings: settings, task: task(target), status: status(of: target), openTasks: openTasks(of: id).count,
-                    queued: queue?.messages.count ?? 0, queuePaused: queue?.isPaused ?? false,
+                    queued: queue?.pending.count ?? 0, queuePaused: queue?.isPaused ?? false,
                     subagents: delegation?.activeCount(target) ?? 0)
             }
         }

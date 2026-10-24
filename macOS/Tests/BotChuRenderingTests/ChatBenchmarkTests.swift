@@ -69,6 +69,24 @@ extension RenderingTests {
             }
             report.add("Switch to \(name)", samples)
         }
+        // The same, to a conversation whose grouped transcript isn't kept (never shown, or evicted):
+        // until it shows, and until its earlier items, grouped off the main thread, are there too.
+        for (name, target) in bench.conversations {
+            var samples: [Double] = [], ready: [Double] = []
+            for _ in 0..<5 {
+                app.show(bench.home)
+                try await idle(120)
+                TranscriptCache.forget(target)
+                let start = DispatchTime.now().uptimeNanoseconds
+                samples.append(time { app.show(target) })
+                while TranscriptCache.model(for: target).isLoadingEarlier { try await Task.sleep(for: .milliseconds(2)) }
+                draw()
+                ready.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+                try await idle(400)
+            }
+            report.add("Cold switch to \(name)", samples)
+            report.add("  …earlier items ready", ready)
+        }
 
         // A reply streaming into the long conversation, a delta at a time.
         app.show(bench.long)
@@ -162,23 +180,26 @@ extension RenderingTests {
         report.note("32 KB rich reply, 60 deltas: WebKit renders \(richWeb.renders - rendersBefore), revisions skipped while one rendered \(richWeb.skipped - skippedBefore)")
         app.runStates[bench.long] = nil
 
-        // A live exploration: 400 read-only calls so far, then each new call starts and finishes.
-        app.show(bench.explore)
-        app.runStates[bench.explore] = RunState(hasOutput: true, activity: .researching)
-        try await idle(200)
-        let explore = app.conversation(bench.explore)
-        var calls: [Double] = []
-        for i in 0..<30 {
-            var call = ChatBenchFixture.toolCall(index: 10_000 + i, kind: i % 3, state: "running")
-            calls.append(time { explore.stream { $0.append(call) } })
-            try await idle(15)
-            call.toolState = .done
-            call.toolOutput = String(repeating: "let value = \(i)\n", count: 120)
-            calls.append(time { explore.stream { $0[$0.count - 1] = call } })
-            try await idle(15)
+        // A live exploration: 400 (or 5,000) read-only calls so far, then each new call starts and
+        // finishes.
+        for (name, target) in [("400+", bench.explore), ("5,000+", bench.explore5k)] {
+            app.show(target)
+            app.runStates[target] = RunState(hasOutput: true, activity: .researching)
+            try await idle(600)
+            let explore = app.conversation(target)
+            var calls: [Double] = []
+            for i in 0..<30 {
+                var call = ChatBenchFixture.toolCall(index: 10_000 + i, kind: i % 3, state: "running")
+                calls.append(time { explore.stream { $0.append(call) } })
+                try await idle(15)
+                call.toolState = .done
+                call.toolOutput = String(repeating: "let value = \(i)\n", count: 120)
+                calls.append(time { explore.stream { $0[$0.count - 1] = call } })
+                try await idle(15)
+            }
+            report.add("Live exploration call (\(name) calls)", calls)
+            app.runStates[target] = nil
         }
-        report.add("Live exploration call (400+ calls)", calls)
-        app.runStates[bench.explore] = nil
 
         // Seventeen sub-agents streaming their own tool calls while the parent chat is shown.
         app.show(bench.subagents)
@@ -194,6 +215,34 @@ extension RenderingTests {
         }
         report.add("Sub-agent update (17 running)", children)
         app.runStates[bench.subagents] = nil
+
+        // A long history that started thirty-seven sub-agents: twenty finished long ago, seventeen
+        // running now, each with a long transcript of its own. A reply streams into the parent, then
+        // the running children stream tool calls.
+        app.show(bench.combined)
+        app.runStates[bench.combined] = RunState(hasOutput: true)
+        try await idle(400)
+        let combined = app.conversation(bench.combined)
+        combined.append(ChatBenchFixture.message(["role": "assistant", "text": "Streaming"]))
+        try await idle()
+        var parentDeltas: [Double] = []
+        for i in 0..<40 {
+            parentDeltas.append(time {
+                combined.stream { $0[$0.count - 1].text += " token\(i) with **some** words" }
+            })
+            try await idle(20)
+        }
+        report.add("Stream delta, history + 37 sub-agents", parentDeltas)
+        var childUpdates: [Double] = []
+        for i in 0..<34 {
+            let run = bench.combinedRuns[i % bench.combinedRuns.count]
+            var thread = app.delegation.threads[run.id] ?? []
+            thread.append(ChatBenchFixture.toolCall(index: 30_000 + i, kind: i % 4, state: "done"))
+            childUpdates.append(time { app.delegation.threads[run.id] = thread })
+            try await idle(15)
+        }
+        report.add("Sub-agent update, history + 37 sub-agents", childUpdates)
+        app.runStates[bench.combined] = nil
 
         // Expanding: the 400-call exploration group, and a command card with a megabyte of output,
         // each drawn closed and then opened in the chat's column, as a click on it does.
@@ -250,6 +299,59 @@ extension RenderingTests {
         let firstStart = DispatchTime.now().uptimeNanoseconds
         full.update(thread)
         report.add("Group the whole thread once (Core)", [Double(DispatchTime.now().uptimeNanoseconds - firstStart) / 1_000_000])
+
+        // Grouping alone (Core) for one open exploration of 400, 1,000 and 5,000 calls: each new call
+        // starting and then finishing, timed apart from the comparison of the group before and after
+        // it that a row's equality check makes; then grouping each from nothing.
+        for count in [400, 1_000, 5_000] {
+            var messages = (0..<count).map { ChatBenchFixture.coreCall(index: $0, state: .done) }
+            var projection = ActivityTranscript(root: "/Users/me/project")
+            projection.update(messages)
+            var updates: [Double] = [], comparisons: [Double] = []
+            for i in 0..<30 {
+                for step in 0..<2 {
+                    if step == 0 {
+                        messages.append(ChatBenchFixture.coreCall(index: count + i, state: .running))
+                    } else {
+                        messages[messages.count - 1] = ChatBenchFixture.coreCall(index: count + i, state: .done, id: messages[messages.count - 1].id)
+                    }
+                    let before = projection.items.last
+                    let start = DispatchTime.now().uptimeNanoseconds
+                    projection.update(messages)
+                    updates.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+                    let after = projection.items.last
+                    let compared = DispatchTime.now().uptimeNanoseconds
+                    let same = before == after
+                    comparisons.append(Double(DispatchTime.now().uptimeNanoseconds - compared) / 1_000_000)
+                    #expect(!same)
+                }
+            }
+            report.add("Core update, open \(count)-call group", updates)
+            report.add("Group comparison, \(count)-call group", comparisons)
+            var cold: [Double] = []
+            for _ in 0..<5 {
+                var fresh = ActivityTranscript(root: "/Users/me/project")
+                let start = DispatchTime.now().uptimeNanoseconds
+                fresh.update(messages)
+                cold.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            }
+            report.add("Core cold grouping, \(count) calls", cold)
+        }
+        // What a 5,000-call projection keeps, beyond the messages themselves, open and once settled.
+        do {
+            let messages = (0..<5_000).map { ChatBenchFixture.coreCall(index: $0, state: .done) }
+            let settledMessages = messages + [ChatBenchFixture.message(["role": "assistant", "text": "Done."])]
+            let baseline = ChatBenchReport.heapInUse()
+            var open = ActivityTranscript(root: "/Users/me/project")
+            open.update(messages)
+            let afterOpen = ChatBenchReport.heapInUse()
+            var settled = ActivityTranscript(root: "/Users/me/project")
+            settled.update(settledMessages)
+            let afterSettled = ChatBenchReport.heapInUse()
+            report.note(String(format: "Retained by a 5,000-call projection: open %.1f MB, settled %.1f MB",
+                               Double(afterOpen - baseline) / 1_048_576, Double(afterSettled - afterOpen) / 1_048_576))
+            withExtendedLifetime((open, settled)) {}
+        }
 
         let text = report.text(title: "Chat benchmark (\(chatOnly ? "chat column" : "whole window")) · load \(ChatBenchReport.load())")
         print(text)
@@ -325,6 +427,13 @@ struct ChatBenchReport {
     mutating func add(_ name: String, _ samples: [Double]) { rows.append((name, samples)) }
     mutating func note(_ line: String) { notes.append(line) }
 
+    /// Bytes allocated on the heap and not yet freed, in every malloc zone.
+    static func heapInUse() -> Int {
+        var stats = malloc_statistics_t()
+        malloc_zone_statistics(nil, &stats)
+        return Int(stats.size_in_use)
+    }
+
     func text(title: String) -> String {
         var lines = [title, String(format: "%-44@ %8@ %8@ %8@ %4@", "Measure" as NSString, "median" as NSString, "p95" as NSString, "max" as NSString, "n" as NSString)]
         for (name, samples) in rows {
@@ -333,8 +442,8 @@ struct ChatBenchReport {
             let median = sorted[sorted.count / 2]
             let p95 = sorted[min(sorted.count - 1, Int((Double(sorted.count) * 0.95).rounded(.up)) - 1)]
             // A p95 of fewer than 30 samples would only be their maximum again.
-            let p95Text = sorted.count >= 30 ? String(format: "%6.1fms", p95) : "     -  "
-            lines.append(String(format: "%-44@ %6.1fms %@ %6.1fms %4d", name as NSString, median, p95Text as NSString, sorted.last!, sorted.count))
+            let p95Text = sorted.count >= 30 ? String(format: "%6.2fms", p95) : "      -  "
+            lines.append(String(format: "%-44@ %6.2fms %@ %6.2fms %4d", name as NSString, median, p95Text as NSString, sorted.last!, sorted.count))
         }
         return (lines + notes).joined(separator: "\n")
     }
@@ -360,8 +469,15 @@ struct ChatBenchReport {
     let outputs: ChatTarget
     let explore: ChatTarget
     let subagents: ChatTarget
+    let explore5k: ChatTarget
+    let combined: ChatTarget
     var runs: [SubagentRun] = []
-    var conversations: [(String, ChatTarget)] { [("1,500 messages", long), ("large outputs", outputs), ("400-call exploration", explore), ("17 sub-agents", subagents)] }
+    /// The long history's running children.
+    var combinedRuns: [SubagentRun] = []
+    var conversations: [(String, ChatTarget)] {
+        [("1,500 messages", long), ("large outputs", outputs), ("400-call exploration", explore), ("17 sub-agents", subagents),
+         ("5,000-call exploration", explore5k), ("history + 37 sub-agents", combined)]
+    }
 
     init() throws {
         store = Store(root: root.appendingPathComponent("index"))
@@ -390,6 +506,9 @@ struct ChatBenchReport {
         explore = try task("explore", Self.exploration())
         let fanOut = Self.fanOut()
         subagents = try task("subagents", fanOut.messages)
+        explore5k = try task("explore5k", Self.exploration(calls: 5_000))
+        let history = Self.historyWithChildren()
+        combined = try task("combined", history.messages)
         home = .home(bot.id)
         try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
         app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No allowance in benchmarks.") })
@@ -407,6 +526,26 @@ struct ChatBenchReport {
             app.delegation.states[id] = RunState(hasOutput: true, activity: .researching)
         }
         app.delegation.records[subagents] = runs
+        // The long history's children: twenty finished, seventeen running, 300 messages each.
+        var combinedRecords: [SubagentRun] = []
+        for (index, child) in history.children.enumerated() {
+            let helper = Bot(name: "Helper \(index + 1)", emoji: "🦝", workspace: root.appendingPathComponent("helper").path)
+            var run = SubagentRun(id: child.id, rootBotID: bot.id, rootTaskID: combined.taskID, depth: 1, targetBot: helper,
+                                  title: "Investigate area \(index + 1)", brief: "Look into area \(index + 1) and report.",
+                                  workingDirectory: root.path, phase: child.running ? .running : .completed,
+                                  createdAt: start.addingTimeInterval(child.offset + 0.3))
+            run.startedAt = run.createdAt.addingTimeInterval(1)
+            if !child.running {
+                run.finishedAt = run.createdAt.addingTimeInterval(40)
+                run.handoffOutput = "All done in area \(index + 1)."
+            }
+            combinedRecords.append(run)
+            if child.running { combinedRuns.append(run) }
+            app.delegation.threads[child.id] = [Self.message(["role": "user", "text": run.brief])]
+                + (0..<300).map { Self.toolCall(index: index * 1_000 + $0, kind: $0 % 4, state: "done") }
+            if child.running { app.delegation.states[child.id] = RunState(hasOutput: true, activity: .researching) }
+        }
+        app.delegation.records[combined] = combinedRecords
     }
 
     func cleanUp() {
@@ -461,10 +600,10 @@ struct ChatBenchReport {
         return messages
     }
 
-    static func exploration() -> [[String: Any]] {
+    static func exploration(calls: Int = 400) -> [[String: Any]] {
         var messages: [[String: Any]] = [["role": "user", "text": "Trace what happens when I click an agent."],
                                          ["role": "assistant", "text": "I'll trace it, starting with the app model."]]
-        for index in 0..<400 {
+        for index in 0..<calls {
             let failed = index % 37 == 5
             messages.append(toolDictionary(index: index, kind: index % 3, state: failed ? "failed" : "done",
                                            output: failed ? "File does not exist." : String(repeating: "  let x = \(index)\n", count: 200)))
@@ -487,7 +626,43 @@ struct ChatBenchReport {
         return (messages, ids)
     }
 
+    /// The 1,500-message conversation, with a `botchu-subagent spawn` every 75 messages (twenty, whose
+    /// runs finished) and seventeen more at its end, still running, with a `wait` for them.
+    static func historyWithChildren() -> (messages: [[String: Any]], children: [(id: UUID, offset: Double, running: Bool)]) {
+        var messages: [[String: Any]] = []
+        var children: [(id: UUID, offset: Double, running: Bool)] = []
+        func spawn(_ running: Bool) {
+            let id = UUID(), index = children.count
+            children.append((id, Double(messages.count), running))
+            messages.append(["role": "tool", "text": "", "toolID": "spawn-\(index)", "toolName": "Bash",
+                             "toolInput": "botchu-subagent spawn --agent 'Helper \(index + 1)' --title 'Investigate area \(index + 1)' --brief 'Look into area \(index + 1) and report.'",
+                             "toolOutput": id.uuidString.lowercased() + "\n", "toolState": "done"])
+        }
+        for (index, message) in longConversation().enumerated() {
+            messages.append(message)
+            if index % 75 == 74 { spawn(false) }
+        }
+        messages.append(["role": "user", "text": "Now split the rest across seventeen helpers."])
+        for _ in 0..<17 { spawn(true) }
+        let waiting = children.suffix(17).map { $0.id.uuidString.lowercased() }
+        messages.append(["role": "tool", "text": "", "toolID": "wait", "toolName": "Bash",
+                         "toolInput": "botchu-subagent wait " + waiting.joined(separator: " "), "toolState": "running"])
+        return (messages, children)
+    }
+
     // MARK: Messages
+
+    /// A read, a search or a listing made in memory, for grouping alone: distinct files in four folders.
+    static func coreCall(index: Int, state: ChatMessage.ToolState, id: UUID = UUID()) -> ChatMessage {
+        let file = "/Users/me/project/macOS/Sources/BotChu/\(["App", "Chat", "Inspector", "Sidebar"][index % 4])/File\(index).swift"
+        let (name, input, arguments): (String, String, String?) = switch index % 3 {
+        case 0: ("Read", file, #"{"file_path":"\#(file)","limit":120,"offset":\#(1 + index % 5 * 120)}"#)
+        case 1: ("Grep", "func tab\\(of", #"{"pattern":"func tab\\(of","path":"/Users/me/project/macOS/Sources"}"#)
+        default: ("Bash", "ls -la /Users/me/project/macOS/Sources/BotChu", nil)
+        }
+        return ChatMessage(id: id, role: .tool, toolID: "core-\(index)", toolName: name, toolInput: input,
+                           toolOutput: state == .running ? nil : "let value = \(index)\n", toolState: state, toolArguments: arguments)
+    }
 
     /// A tool call as Claude Code saves it: kind 0 reads a file, 1 searches, 2 lists, 3 runs a build.
     static func toolDictionary(index: Int, kind: Int, state: String, output: String) -> [String: Any] {

@@ -623,12 +623,17 @@ extension BotHome {
         TranscriptRead.read(jobRunThreadURL(job: job, run: run)).messages
     }
 
-    public func saveJobThread(_ messages: [ChatMessage], job: UUID, run: UUID) throws {
+    /// Writes a run's transcript and returns its size in bytes.
+    @discardableResult
+    public func saveJobThread(_ messages: [ChatMessage], job: UUID, run: UUID) throws -> Int {
         try prepare()
         let file = jobRunThreadURL(job: job, run: run)
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Self.writeThread(messages, to: file)
+        return try Self.writeThread(messages, to: file)
     }
+
+    /// The lane (`StorageQueue`) a run's transcript is written in.
+    public func jobRunLane(job: UUID, run: UUID) -> String { jobRunThreadURL(job: job, run: run).path }
 }
 
 // MARK: Running
