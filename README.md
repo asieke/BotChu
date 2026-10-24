@@ -275,7 +275,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     each execution machine; SSH mailboxes are polled independently of CLI output. See
     [delegation protocol](docs/subagents.md) for lifecycle and persistence details.
   - **Message box:** a multiline writing area with account, model/effort and send/stop controls in
-    its bottom row. Return sends; Shift-Return (or Option-Return) inserts a new line. The box grows with your draft, then scrolls at its maximum height. Send stays available during a
+    its bottom row. Return sends; Shift-Return (or Option-Return) inserts a new line. The box grows with your draft, its first line staying in place as lines are added or removed, then scrolls at its maximum height with the line being typed in view; the report and New Task boxes do the same. Send stays available during a
     run: follow-ups appear in a queue above the composer and reach the bot on their own, in order,
     in the same CLI session. Where the CLI takes input mid-turn (Claude Code on This Mac, through
     `--input-format stream-json`), a follow-up reaches it at its next tool call, like steering in
@@ -488,7 +488,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
     (`UsageCache.swift`), per-conversation pending-message delivery, keeping a follow-up the CLI
     took until a saved transcript holds it (`MessageQueue.swift`, saved in that order by
-    `Store.swift`), what
+    `Store.swift`), how tall the message box is for its draft and how far its text may scroll
+    (`ComposerLayout.swift`), what
     the status sidebar shows about a bot, from a summary of its thread kept as the thread grows, and
     its `MEMORY.md` (`BotStatus.swift`), replies' parsed Markdown, cached by their text
     (`MarkdownCache.swift`), pets: the activity a tool call means
@@ -555,12 +556,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     streamed update regroups only the tail; the sidebar's sections of bots; follow-ups the CLI
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
-    before the next save, also in a queue going through a relaunch; and a section change or a new
-    bot while `index.json` can't be saved, then the retry and a reload.
+    before the next save, also in a queue going through a relaunch; a section change or a new
+    bot while `index.json` can't be saved, then the retry and a reload; and how tall the
+    message box grows and how far its text scrolls.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
     saves, a follow-up taken while the transcript can't be saved (back in it after a relaunch), model-picker keyboard interaction and persisted choices,
+    the message box's text staying put while it is typed (narrow and wide, past its maximum and back),
     Markdown editor sizing and Save/Cancel, collapsing status sections, the sidebar's sections of
     bots (their menus, the alert that names them, collapsing and revealing, and changes that can't
     be saved, shown until Try Again or quitting saves them), inspector tab navigation and
@@ -689,7 +692,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   opens the composer's picker, and `inspector-model` or `inspector-effort` opens the sidebar's.
   `BOTCHU_INSPECTOR=activity`, `subagents`, `model`, `session` or `memory` selects a status sidebar tab;
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
-  `BOTCHU_WINDOW=compact` checks the minimum window width.
+  `BOTCHU_WINDOW=compact` checks the minimum window width. `BOTCHU_DRAFT=<text>` puts that draft in
+  the message box (`\n` for a new line), to check how it grows and scrolls.
   `BOTCHU_OPEN=report` opens Report a Bug or Feature, and `BOTCHU_REPORT="<report>"` files one at
   launch. A review copy files reports only with a stand-in `gh`, which keeps them (and the images it
   attaches) in `reports/` in
