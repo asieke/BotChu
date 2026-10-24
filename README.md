@@ -15,7 +15,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     takes the status sidebar's darker shade, with a hairline along its edge, so it stands apart from
     the chat; light mode keeps the standard sidebar.
   - **Sections:** bots can be grouped into sections you name, each a heading of its own in the
-    sidebar. A bot's **Move to Section** menu lists Conversations (no section) and the sections,
+    sidebar and in **Agents**, which edits the same sections (below). A bot's **Move to Section** menu lists Conversations (no section) and the sections,
     with its own checked, and **New Section…**, which names a section and moves the bot into it;
     a moved bot goes last in its section. Bots in no section, new bots among them, come first,
     under Conversations, so a sidebar without sections looks as before. A section heading's menu
@@ -26,7 +26,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     in its section.
     Sections are kept in `index.json` with the sidebar's order, so a bot whose folder is missing
     comes back in its section. When `index.json` can't be saved (a full disk, a folder without
-    write access), the change still shows, and a banner above **New Bot** says it isn't saved,
+    write access), the change still shows, and a banner above **New Bot** (and in Agents) says it isn't saved,
     which file and why; this goes for new, moved and deleted bots too. **Try Again**, the next
     change, or quitting BotChu saves the whole sidebar as it is then, each bot once, with the
     missing bots' entries; the banner goes once it saves.
@@ -94,9 +94,16 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     after the metadata PR merges and a sync reads the default branch again. BotChu needs write
     access for this flow; forks can be used through GitHub. The editor creates no commits directly
     on the default branch and never merges metadata PRs.
-  - **Agents:** a searchable gallery of the existing bots, showing their personality summary,
-    provider, activity and task count, with **Open Chat**, **Edit…** and **New Agent**. A bot’s own
-    conversation continues to work without a project.
+  - **Agents:** a gallery of the existing bots, grouped under the sidebar's sections, in its order,
+    with Conversations ("Not in a section") first while any bot is in none, showing their
+    personality summary, provider, activity and task count, with **Open Chat**, **Edit…** and
+    **New Agent**. Sections are edited here with the sidebar's own menus: a card's folder button, or
+    a right click on it, moves its bot to a section, back to Conversations, or into a **New
+    Section…** it names; a heading's ⋯ button, or a right click on it, renames, moves or removes its
+    section. A change in either place shows in both and is saved in `index.json`. Search finds
+    bots by name, title or provider, within their sections, and a section, Conversations among
+    them, by its name, with all its bots. A bot’s own conversation continues to work without a
+    project.
   - **Providers:** gallery/list views of CLI profiles with their logo, command, availability and usage,
     sharing the same allowance cache and refresh limits as the conversation inspector. **Add CLI**
     adds a named profile of Claude Code, Codex, Antigravity, Muse or Pi, with an installed command or
@@ -155,7 +162,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - **Chat:** one continuous thread per bot (its **Home**), and one per task. Replies stream in, rendered as Markdown (each reply
     is parsed once, and recent ones ahead of time, so showing a conversation again doesn't parse it again); the
     agent's tool work shows as activity (below). Headings, nested lists, quotes,
-    tables and fenced code use native block layouts; code has a Copy button. Replies have soft rounded
+    tables and fenced code use native block layouts; code has a Copy button. A table's cells stay on
+    one line, each row ruled straight across whatever its cells hold (empty, or inline code), and a
+    table wider than the chat scrolls sideways. Replies have soft rounded
     bubbles. Inline and display math use bundled KaTeX; Mermaid code fences display diagrams with
     source/copy and fit/actual-size controls. Both render offline in system WebKit, including inside
     tables and lists; a reply's web view is made as it nears the visible part of the chat, with only
@@ -499,9 +508,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     version, an alias's or default's once reported) and public OpenRouter model metadata
     (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model, with the model a
     conversation's CLI last reported running (`Models.swift`), the
-    sections the sidebar groups bots into and where a new bot goes (`BotSections.swift`), skills:
-    finding them, reading their frontmatter, which a bot uses, and making one (`Skills.swift`), one
-    stream parser per
+    sections the sidebar and Agents group bots into, where a new bot goes and what a search of them
+    finds (`BotSections.swift`), skills: finding them, reading their frontmatter, which a bot uses,
+    and making one (`Skills.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
     (`ToolActivity.swift`, reading shell command lines with `ShellCommand.swift`), the chat's activity
@@ -551,7 +560,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, and the
     skills the app lists and edits, `SkillLibrary.swift`),
-    `Sidebar/` (workspace destinations and bot conversations), `Library/` (Projects with its repository sidebar, Agents, Providers and Skills), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
+    `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers and Skills), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
     the hosts), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -578,21 +587,23 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
     and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
     commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
-    streamed update regroups only the tail; the sidebar's sections of bots; follow-ups the CLI
+    streamed update regroups only the tail; the sidebar's sections of bots, and searching them; follow-ups the CLI
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
     before the next save, also in a queue going through a relaunch; a section change or a new
     bot while `index.json` can't be saved, then the retry and a reload; how tall the
     message box grows and how far its text scrolls; and skills: their frontmatter, finding and
     making them, which a bot uses, and the catalog, or (on a host) the files in full, that sessions get.
-  - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
+  - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
+    across every column, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
     saves, a follow-up taken while the transcript can't be saved (back in it after a relaunch), model-picker keyboard interaction and persisted choices,
     the message box's text staying put while it is typed (narrow and wide, past its maximum and back),
     Markdown editor sizing and Save/Cancel, collapsing status sections, the sidebar's sections of
     bots (their menus, the alert that names them, collapsing and revealing, and changes that can't
-    be saved, shown until Try Again or quitting saves them), inspector tab navigation and
+    be saved, shown until Try Again or quitting saves them), Agents grouped under them and editing
+    them with the same menus and alert, inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
     main window's layout at its narrowest, galleries that preserve conversation state, the project
     sidebar's tabs, details and fan-out tasks, custom profile persistence, provider logos in both
@@ -608,8 +619,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     again at once from those kept, within their budget, and typing dots that move. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
-    (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, or `activityChatRendersGroupsCardsAndLiveWork`)
-    to render isolated gallery/table (sidebar, or chat) screenshots with sample data. These
+    (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `activityChatRendersGroupsCardsAndLiveWork`,
+    or `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`) to render isolated gallery/table
+    (sidebar, chat, or Agents' sections, wide and narrow) screenshots with sample data. These
     share a serialized suite because AppKit
     window focus is global; all use isolated windows and no real bot data.
   - `build.sh [outdir]` builds the release binary and wraps it into `{outdir}/BotChu.app` (default
@@ -694,7 +706,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
   tab and an issue or pull request there, read with your `gh` login.
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
-  `BOTCHU_SECTION=<name>` moves the first bot into a sidebar section of that name.
+  `BOTCHU_SECTION=<name>` moves the first bot into a sidebar section of that name, and
+  `BOTCHU_SEARCH=<text>` opens Agents (`BOTCHU_OPEN=agents`) with that search.
   `BOTCHU_TAB=<n>` shows the first bot's nth conversation (and the message goes there), and
   `BOTCHU_TASK="hello-world|<task>"` starts a task in the throwaway repository (a real turn).
   Hosts: `BOTCHU_HOST="<nickname>|<ssh host>|<repositories folder>|<machine>|<account>=<command>,…"`

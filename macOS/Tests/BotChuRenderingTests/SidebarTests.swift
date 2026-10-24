@@ -378,6 +378,90 @@ extension RenderingTests {
         #expect(fixture.store.loadIndex().map(\.section) == [nil, "Scouting"])
     }
 
+    /// #83: Agents groups the agents under the sidebar's sections, and edits them with the sidebar's
+    /// menus and naming alert, so a change made in either shows in both and is saved in the index.
+    @Test func agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem() async throws {
+        _ = NSApplication.shared
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot, quiet = fixture.quiet
+        // The sidebar's sections are Agents' headings; a search finds agents in them, and sections by name.
+        #expect(AgentsView.groups(in: model, matching: "").map(\.title) == ["Conversations"])
+        model.moveBot(quiet.id, toSection: "Research")
+        #expect(AgentsView.groups(in: model, matching: "") == [.init(name: nil, botIDs: [bot.id]), .init(name: "Research", botIDs: [quiet.id])])
+        #expect(AgentsView.groups(in: model, matching: "scout") == [.init(name: "Research", botIDs: [quiet.id])])
+        #expect(AgentsView.groups(in: model, matching: "RESEARCH") == [.init(name: "Research", botIDs: [quiet.id])])
+        #expect(AgentsView.groups(in: model, matching: "10x") == [.init(name: nil, botIDs: [bot.id])])
+        #expect(AgentsView.groups(in: model, matching: "zebra").isEmpty)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            window.contentView = NSHostingView(rootView: AgentsView().environment(model).defaultAppStorage(fixture.defaults))
+            window.makeKeyAndOrderFront(nil)
+            for (name, width) in [("agents-sections", 1000.0), ("agents-sections-narrow", 620.0)] {
+                window.setContentSize(NSSize(width: width, height: 700))
+                try await Task.sleep(for: .milliseconds(300))
+                try agentsCapture(window, into: URL(fileURLWithPath: path), name: name)
+            }
+        }
+        // A card's Move to Section is the sidebar's, with its own section checked.
+        let card = NSHostingView(rootView: AgentCardHarness(bot: bot).environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = card
+        window.setContentSize(NSSize(width: 360, height: 340))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        func moveMenu() throws -> NSMenu {
+            try #require(try agentsMenu(at: NSPoint(x: card.bounds.midX, y: card.bounds.midY), in: card)
+                .items.first { $0.title == "Move to Section" }?.submenu)
+        }
+        let move = try moveMenu()
+        #expect(move.items.map(\.title) == ["Conversations", "Research", "", "New Section…"])
+        #expect(move.items.filter { $0.state == .on }.map(\.title) == ["Conversations"])
+        // Choosing a section moves the agent there, last, and the index keeps it.
+        move.performActionForItem(at: move.indexOfItem(withTitle: "Research"))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(model.botSections.groups == [.init(name: "Research", botIDs: [quiet.id, bot.id])])
+        #expect(fixture.store.loadIndex().map(\.section) == ["Research", "Research"])
+        // New Section… names a new one for it in the sidebar's alert.
+        let again = try moveMenu()
+        again.performActionForItem(at: again.indexOfItem(withTitle: "New Section…"))
+        try await Task.sleep(for: .milliseconds(400))
+        let sheet = try #require(window.attachedSheet)
+        let field = try #require(sheet.firstResponder as? NSTextView)
+        #expect(field.string == "")
+        field.insertText("  Building ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await Task.sleep(for: .milliseconds(100))
+        sidebarKey("\r", code: 36, to: sheet)
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(window.attachedSheet == nil)
+        #expect(model.sections == [quiet.id: "Research", bot.id: "Building"])
+        #expect(model.botSections.names == ["Research", "Building"])
+        // A heading's menu is the sidebar heading's: Move Section Up puts Building first, everywhere.
+        let heading = NSHostingView(rootView: AgentSectionHeading(group: .init(name: "Building", botIDs: [bot.id]), rename: { _ in })
+            .frame(width: 360, height: 44).environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = heading
+        try await Task.sleep(for: .milliseconds(250))
+        let point = NSPoint(x: 30, y: heading.bounds.midY)
+        let menu = try agentsMenu(at: point, in: heading)
+        #expect(menu.items.map(\.title) == ["Rename Section…", "Move Section Up", "Move Section Down", "", "Remove Section"])
+        #expect(menu.items.filter(\.isEnabled).map(\.title) == ["Rename Section…", "Move Section Up", "Remove Section"])
+        menu.performActionForItem(at: menu.indexOfItem(withTitle: "Move Section Up"))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(model.botSections.names == ["Building", "Research"])
+        #expect(fixture.store.loadIndex().map(\.section) == ["Building", "Research"])
+        // Removing it returns its agent to Conversations and deletes nothing; a relaunch reads the same.
+        let removing = try agentsMenu(at: point, in: heading)
+        removing.performActionForItem(at: removing.indexOfItem(withTitle: "Remove Section"))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(model.botSections.groups == [.init(name: nil, botIDs: [bot.id]), .init(name: "Research", botIDs: [quiet.id])])
+        #expect(model.bot(bot.id) != nil && model.openTasks(of: bot.id).count == fixture.tasks.count)
+        let relaunched = AppModel(store: fixture.store, settings: AppSettings(defaults: fixture.defaults),
+                                  usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
+        #expect(relaunched.botSections == model.botSections)
+    }
+
     @Test func darkSidebarTakesTheStatusShadeWithAnEdgeAndFollowsAppearance() async throws {
         _ = NSApplication.shared
         let fixture = try SidebarFixture()
@@ -449,6 +533,28 @@ extension RenderingTests {
         return try #require(menu)
     }
 
+    /// The context menu a right click at the point shows, in a view hosted alone in a window.
+    private func agentsMenu(at point: NSPoint, in host: NSView) throws -> NSMenu {
+        let location = host.convert(point, to: nil)
+        let event = try #require(NSEvent.mouseEvent(with: .rightMouseDown, location: location, modifierFlags: [], timestamp: 0,
+                                                    windowNumber: host.window?.windowNumber ?? 0, context: nil,
+                                                    eventNumber: 0, clickCount: 1, pressure: 1))
+        var view = host.hitTest(host.convert(location, from: nil))
+        var menu: NSMenu?
+        while let current = view, menu == nil {
+            menu = current.menu(for: event)
+            view = current.superview
+        }
+        return try #require(menu)
+    }
+
+    private func agentsCapture(_ window: NSWindow, into folder: URL, name: String) throws {
+        guard let view = window.contentView, let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: image)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try image.representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent(name + ".png"))
+    }
+
     private func sidebarKey(_ text: String, code: UInt16, to window: NSWindow) {
         let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
                                      windowNumber: window.windowNumber, context: nil, characters: text,
@@ -503,5 +609,18 @@ extension RenderingTests {
         model.runStates.removeAll()
         defaults.removePersistentDomain(forName: domain)
         try? FileManager.default.removeItem(at: root)
+    }
+}
+
+/// An agent's card as Agents shows it, with the alert that names a section for it.
+private struct AgentCardHarness: View {
+    let bot: Bot
+    @State private var naming = SectionNaming()
+
+    var body: some View {
+        AgentCard(bot: bot) { naming.ask(.new(botID: bot.id)) }
+            .frame(width: 320)
+            .padding(20)
+            .sectionNamingAlert($naming)
     }
 }

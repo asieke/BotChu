@@ -93,18 +93,24 @@ private struct MarkdownBlockView: View {
                         GridRow {
                             ForEach(Array(columns.enumerated()), id: \.offset) { index, column in
                                 let cell = row.children.first { $0.kind == .tableCell(columnIndex: index) }
+                                // Each cell fills its whole row, so its rule and the header's fill line up
+                                // with the row's tallest cell, also beside an empty or inline-code cell.
                                 inline(cell?.text ?? AttributedString())
                                     .fontWeight(row.kind == .tableHeaderRow ? .semibold : .regular)
                                     .padding(.horizontal, 12).padding(.vertical, 8)
-                                    .frame(maxWidth: .infinity, alignment: alignment(column.alignment))
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment(column.alignment))
                                     .background(row.kind == .tableHeaderRow ? Color.primary.opacity(0.06) : .clear)
-                                    .overlay(alignment: .bottom) { Divider() }
+                                    .overlay(alignment: .bottom) {
+                                        if row.id != block.children.last?.id { Divider() }
+                                    }
                                     .gridColumnAlignment(horizontalAlignment(column.alignment))
                             }
                         }
                     }
                 }
-                .fixedSize(horizontal: true, vertical: false)
+                // At its ideal size both ways: cells don't wrap, and filling a row never makes it taller.
+                .fixedSize()
+                .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.1)))
             }
         case .thematicBreak:
