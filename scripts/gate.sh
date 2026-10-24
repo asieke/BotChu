@@ -1,12 +1,14 @@
 # Standard gate, sourced first by every scripts/check.sh:  . "$(dirname "$0")/gate.sh" "$@"
-#   scripts/check.sh            hygiene, secret scan, the standard's own audit, then the project's checks
-#   scripts/check.sh --report   same, then posts the result as the "check" commit status that branch
-#                               protection requires before merging (needs gh, a clean tree, HEAD
-#                               pushed to GitHub, and the standard's audit)
+#   scripts/check.sh --secrets  hygiene and the secret scan only, in seconds: run it before every push
+#   scripts/check.sh            the same, then the standard's own audit and the project's checks
+#   scripts/check.sh --report   the full check, once, on the pushed head: posts the result as the "check"
+#                               commit status that merging requires (needs gh, a clean tree, HEAD
+#                               pushed to GitHub, the secret scan, and the standard's audit)
 # Identical in every project: copy it from asieke/workspace templates/common/scripts/gate.sh; do not edit.
 # check.sh must not set its own EXIT trap: --report uses it to post the result.
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 gate_report=; [ "${1:-}" != --report ] || gate_report=1
+gate_secrets=; [ "${1:-}" != --secrets ] || gate_secrets=1
 
 if [ -n "$gate_report" ]; then
   [ -z "$(git status --porcelain)" ] || { echo "check: --report needs a clean tree" >&2; exit 1; }
@@ -58,34 +60,42 @@ gate_range=HEAD; git rev-parse --verify -q origin/main >/dev/null && gate_range=
 if gate_gl=$(gate_gitleaks); then
   "$gate_gl" git --redact --no-banner --log-level=warn --log-opts="$gate_range" . \
     || { echo "check: gitleaks found secrets in $gate_range (false positives go in .gitleaksignore)" >&2; exit 1; }
-elif [ -n "$gate_report" ]; then
-  echo "check: could not get gitleaks, and --report requires the secret scan" >&2; exit 1
+elif [ -n "$gate_report$gate_secrets" ]; then
+  echo "check: could not get gitleaks, and ${1:-} requires the secret scan" >&2; exit 1
 else
   echo "check: WARNING: could not get gitleaks; secret scan skipped (--report will require it)" >&2
 fi
+[ -z "$gate_secrets" ] || { echo "check: no secrets in $gate_range; safe to push" >&2; exit 0; }
 
-# The standard's own audit of this checkout (scripts/audit.sh --gate from asieke/workspace's newest main,
-# kept per commit in the cache), so everything that merges meets the version of the standard that
-# PROJECT.md names. Any FAIL fails the check; a requirement that a newer version added waits until the
-# project's standard reaches it. asieke/workspace audits itself with its own copy.
+# The standard's own audit of this checkout (scripts/audit.sh --gate), so everything that merges meets
+# the version of the standard that PROJECT.md names. Any FAIL fails the check; a requirement that a newer
+# version added waits until the project's standard reaches it. The audit comes from the newest copy of
+# asieke/workspace kept in ~/.cache/asieke-workspace/ when that copy knows this version, so a routine
+# check needs no network; the newest main is fetched only when no copy knows it, or to confirm a FAIL.
+# asieke/workspace audits itself with its own copy.
 gate_standard() {
-  local sha dir tmp
+  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/asieke-workspace" std dir sha tmp
   if [ -x scripts/audit.sh ] && [ -f templates/common/scripts/gate.sh ]; then pwd; return; fi
   # asieke/workspace's tests point GATE_WORKSPACE at their copy; --report always uses the real standard.
   if [ -n "${GATE_WORKSPACE:-}" ] && [ -z "$gate_report" ]; then echo "$GATE_WORKSPACE"; return; fi
+  std=$(awk 'NR > 1 && /^---/ { exit } /^standard:/ { print $2; exit }' PROJECT.md 2>/dev/null)
+  dir=$(ls -dt "$cache"/*/ 2>/dev/null | head -1 || :); dir=${dir%/}
+  if [ "${1:-}" != --newest ] && [ -n "$std" ] && [ -x "$dir/scripts/audit.sh" ] && grep -qxF "## $std" "$dir/CHANGELOG.md"; then
+    echo "$dir"; return
+  fi
   # Never stop to ask for a login: without one, the fetch just fails.
   export GH_PROMPT_DISABLED=1 GIT_TERMINAL_PROMPT=0
   sha=$(gh api repos/asieke/workspace/commits/main -H 'Accept: application/vnd.github.sha' 2>/dev/null) \
     || sha=$(git ls-remote https://github.com/asieke/workspace.git refs/heads/main 2>/dev/null | cut -f1)
   [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
-  dir="${XDG_CACHE_HOME:-$HOME/.cache}/asieke-workspace/$sha"
+  dir="$cache/$sha"
   if [ ! -x "$dir/scripts/audit.sh" ]; then
     tmp=$(mktemp -d) || return 1
     if { gh repo clone asieke/workspace "$tmp/w" -- --quiet --depth 1 || git clone --quiet --depth 1 https://github.com/asieke/workspace.git "$tmp/w"; } </dev/null >/dev/null 2>&1; then
-      sha=$(git -C "$tmp/w" rev-parse HEAD); dir="${dir%/*}/$sha"
-      mkdir -p "${dir%/*}" && { [ -e "$dir" ] || mv "$tmp/w" "$dir"; }
+      sha=$(git -C "$tmp/w" rev-parse HEAD); dir="$cache/$sha"
+      mkdir -p "$cache" && { [ -e "$dir" ] || mv "$tmp/w" "$dir"; }
       # Drop the copies of older commits.
-      find "${dir%/*}" -mindepth 1 -maxdepth 1 -type d ! -name "$sha" -mtime +7 -exec rm -rf {} + 2>/dev/null || :
+      find "$cache" -mindepth 1 -maxdepth 1 -type d ! -name "$sha" -mtime +7 -exec rm -rf {} + 2>/dev/null || :
     fi
     rm -rf "$tmp"
     [ -x "$dir/scripts/audit.sh" ] || return 1
@@ -93,7 +103,9 @@ gate_standard() {
   echo "$dir"
 }
 if gate_wow=$(gate_standard); then
+  # A FAIL from a kept copy is confirmed with the newest standard, which may have fixed its audit.
   gate_out=$("$gate_wow/scripts/audit.sh" --gate .) \
+    || { gate_new=$(gate_standard --newest) && [ "$gate_new" != "$gate_wow" ] && gate_wow=$gate_new && gate_out=$("$gate_wow/scripts/audit.sh" --gate .); } \
     || { printf '%s\n' "$gate_out" >&2; echo "check: the standard's audit failed: fix each FAIL above (STANDARD.md in asieke/workspace says what it requires)" >&2; exit 1; }
   gate_warns=$(grep -c '^WARN' <<<"$gate_out" || :)
   echo "check: the standard's audit passed (asieke/workspace at $(git -C "$gate_wow" rev-parse --short HEAD 2>/dev/null || echo "an unknown commit")$([ "$gate_warns" = 0 ] || echo ", $gate_warns warning(s): its scripts/audit.sh lists them"))" >&2

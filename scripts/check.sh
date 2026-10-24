@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Lint, typecheck and test, after the standard gate (scripts/gate.sh: hygiene and secret scan).
-# Run it before pushing; `scripts/check.sh --report` also posts the "check" status that merging requires.
+# `scripts/check.sh --secrets` runs only the gate's secret scan, before a push; `scripts/check.sh --report`
+# runs everything once on the pushed head and posts the "check" status that merging requires.
 # It must pass from a fresh checkout, because scripts/verify-pr.sh runs it in one.
 set -euo pipefail
 . "$(dirname "$0")/gate.sh" "$@"
