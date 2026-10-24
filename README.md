@@ -25,7 +25,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     across launches, but what is selected from elsewhere (Agents, a new bot or task, ⌃Tab) shows
     in its section.
     Sections are kept in `index.json` with the sidebar's order, so a bot whose folder is missing
-    comes back in its section.
+    comes back in its section. When `index.json` can't be saved (a full disk, a folder without
+    write access), the change still shows, and a banner above **New Bot** says it isn't saved,
+    which file and why; this goes for new, moved and deleted bots too. **Try Again**, the next
+    change, or quitting BotChu saves the whole sidebar as it is then, each bot once, with the
+    missing bots' entries; the banner goes once it saves.
   - **Projects:** one project per non-archived GitHub repository returned by `gh` for your account
     and organizations, in a sortable table modeled on GitChu's (or a gallery of cards). Columns show
     where it deploys (local machines by their BotChu name, Vercel, registry), the owner, open issues
@@ -457,7 +461,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     version, an alias's or default's once reported) and public OpenRouter model metadata
     (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model, with the model a
     conversation's CLI last reported running (`Models.swift`), the
-    sections the sidebar groups bots into (`BotSections.swift`), one stream parser per
+    sections the sidebar groups bots into and where a new bot goes (`BotSections.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
     (`ToolActivity.swift`, reading shell command lines with `ShellCommand.swift`), the chat's activity
@@ -483,7 +487,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     (`Repositories.swift`), preserving/validating project metadata (`ProjectRecord.swift`) and reading
     or proposing it through GitHub with retryable, metadata-only PRs (`ProjectGitHub.swift`), the Projects
     tables' rows, their status filter and the open pull requests and issues across repositories (`ProjectOverview.swift`),
-    an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store (`Store.swift`), with conversations' files read without losing what can't be read (`Transcript.swift`), and the `Process` runner that launches
+    an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store, with
+    the index saved whole or a failure to show (`Store.swift`), with conversations' files read without losing
+    what can't be read (`Transcript.swift`), and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
     `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (transcripts saved off the main thread
@@ -524,15 +530,17 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
     commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
     streamed update regroups only the tail; the sidebar's sections of bots; follow-ups the CLI
-    took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks; and
+    took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
-    before the next save, also in a queue going through a relaunch.
+    before the next save, also in a queue going through a relaunch; and a section change or a new
+    bot while `index.json` can't be saved, then the retry and a reload.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
     saves, a follow-up taken while the transcript can't be saved (back in it after a relaunch), model-picker keyboard interaction and persisted choices,
     Markdown editor sizing and Save/Cancel, collapsing status sections, the sidebar's sections of
-    bots (their menus, the alert that names them, collapsing and revealing), inspector tab navigation and
+    bots (their menus, the alert that names them, collapsing and revealing, and changes that can't
+    be saved, shown until Try Again or quitting saves them), inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
     main window's layout at its narrowest, galleries that preserve conversation state, the project
     sidebar's tabs, details and fan-out tasks, custom profile persistence, provider logos in both

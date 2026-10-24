@@ -2,7 +2,8 @@ import SwiftUI
 import BotChuCore
 
 /// The sections the sidebar groups bots into (`BotSections`): moving a bot into one, and renaming,
-/// reordering and removing them. Each change saves the bots' order and sections in `index.json`.
+/// reordering and removing them. Each change saves the bots' order and sections in `index.json`; when
+/// that fails, the change stays, unsaved, and the sidebar says so until a save works (`indexFailure`).
 extension AppModel {
     /// The bots as the sidebar groups them.
     var botSections: BotSections { BotSections(order: bots.map(\.id), membership: sections) }
