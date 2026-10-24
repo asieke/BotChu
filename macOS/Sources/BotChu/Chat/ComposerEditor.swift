@@ -131,7 +131,17 @@ struct ComposerEditor: NSViewRepresentable {
         func textDidBeginEditing(_ notification: Notification) { parent.focused.wrappedValue = true }
         func textDidEndEditing(_ notification: Notification) {
             parent.focused.wrappedValue = false
-            parent.mentions?.close()
+            if let mentions = parent.mentions, let editor = notification.object as? NSTextView { closeOnceFocusLeft(mentions, editor) }
+        }
+
+        /// Closes the list when the editor has lost focus for good: not while the mouse is down, as when
+        /// a click on one of its rows, which ends editing first, has yet to insert it.
+        private func closeOnceFocusLeft(_ mentions: MentionCompleter, _ editor: NSTextView) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self, weak mentions, weak editor] in
+                guard let self, let mentions, let editor, mentions.isOpen else { return }
+                if NSEvent.pressedMouseButtons != 0 { return self.closeOnceFocusLeft(mentions, editor) }
+                if editor.window?.firstResponder !== editor { mentions.close() }
+            }
         }
     }
 }
