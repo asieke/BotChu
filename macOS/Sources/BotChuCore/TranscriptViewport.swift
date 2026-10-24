@@ -170,6 +170,19 @@ public struct TranscriptViewport: Sendable {
     /// How many items' heights are kept.
     public var keptItems: Int { cache.count }
 
+    /// The reader's row and their offset into it, for tests.
+    public var anchorRow: (row: RowID, offset: Double)? { anchor.map { ($0.row, $0.offset) } }
+
+    /// What it knows, in a line, for a failing test to say.
+    public var summary: String {
+        let rows = plan.rows.first.map { "\($0.index)/\($0.part)@\(Int($0.top))" } ?? "-"
+        let last = plan.rows.last.map { "\($0.index)/\($0.part)@\(Int($0.top + $0.height))" } ?? "-"
+        return "pinned \(pinned), start \(plan.start), rows \(plan.rows.count) \(rows)…\(last) of \(Int(plan.total)), "
+            + "visible \(visibleTop.map { "\(Int($0))" } ?? "-")+\(viewport.map { "\(Int($0))" } ?? "-"), "
+            + "anchor \(anchor.map { "\(ids.firstIndex(of: $0.row.item).map { "\(plan.start + $0)" } ?? "gone")/\($0.row.part)+\(Int($0.offset))" } ?? "-"), "
+            + "correction \(correction.map { "\(Int($0))" } ?? "-")"
+    }
+
     /// Lets every height go, as under memory pressure: rows are estimated again, then measured.
     public mutating func forgetHeights() {
         cache.removeAll()
