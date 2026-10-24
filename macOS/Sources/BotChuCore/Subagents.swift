@@ -206,7 +206,8 @@ public enum SubagentError: LocalizedError, Equatable {
 }
 
 public enum SubagentResolver {
-    public static func resolve(_ target: String, bots: [Bot]) throws -> Bot {
+    /// `list` is the command that prints the roster, for the error's advice.
+    public static func resolve(_ target: String, bots: [Bot], list: String = "botchu-subagent list") throws -> Bot {
         let query = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { throw SubagentError.invalid("Choose an agent name, slug or UUID.") }
         if let id = UUID(uuidString: query), let bot = bots.first(where: { $0.id == id }) { return bot }
@@ -214,8 +215,8 @@ public enum SubagentResolver {
             $0.name.caseInsensitiveCompare(query) == .orderedSame || Bot.slug($0.name).caseInsensitiveCompare(query) == .orderedSame
         }
         guard matches.count == 1 else {
-            if matches.isEmpty { throw SubagentError.invalid("No BotChu agent matches ‘\(query)’. Run botchu-subagent list.") }
-            throw SubagentError.invalid("Several BotChu agents match ‘\(query)’. Use the agent's UUID from botchu-subagent list.")
+            if matches.isEmpty { throw SubagentError.invalid("No BotChu agent matches ‘\(query)’. Run \(list).") }
+            throw SubagentError.invalid("Several BotChu agents match ‘\(query)’. Use the agent's UUID from \(list).")
         }
         return matches[0]
     }

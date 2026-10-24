@@ -268,8 +268,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - **Home coordinates:** a bot asks for a task itself by writing a JSON request into
     `.botchu/dispatch/` in its folder (`{"repo": "owner/name", "issue": 48, "task": "…"}`, or
     `"review": 12` with `"comment": true` to post it, and `"machine"` for a host), as its
-    `AGENTS.md` explains. While a Home turn runs, BotChu takes requests within seconds and starts
-    each in its own sidebar row. Home gets a receipt when a task starts, ends a turn or fails (with an Open
+    `AGENTS.md` explains. While any turn runs, of any bot, BotChu takes requests within seconds,
+    whichever conversation wrote them, and starts each in its own sidebar row; `"agent"` hands the
+    task to another bot (below). Home gets a receipt when a task starts, ends a turn or fails (with an Open
     link to its conversation), or can't start, and its next turn opens with a report on those tasks: their
     state, pull request and the start of their last reply. A new Home session also lists the open
     tasks. The sidebar row counts the bot's conversations with news.
@@ -289,6 +290,21 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     runaway fan-out. Interrupted records become stopped on relaunch. The helper needs Python 3 on
     each execution machine; SSH mailboxes are polled independently of CLI output. See
     [delegation protocol](docs/subagents.md) for lifecycle and persistence details.
+  - **Tasks for other bots:** a conversation hands work to another bot in one of two ways, each
+    with its own command, and an `@bot` mention only names the bot. "New task @bot" (or "hand this
+    off to @bot as a new task") makes a **Task**: `botchu-task create --agent <bot> --repo
+    owner/name --brief …` (or `--issue`, `--pr`, `--review`, with `--title` and `--machine`), from
+    Home, a task (also on a host) or a sub-agent run. The Task is the named bot's own, in the left
+    sidebar under it, on its account, model and effort, in its own worktree, as if its Home had
+    asked, and goes on after the asking turn ends or stops; nothing reaches that bot's Home but the
+    usual receipts. It records which conversation asked (shown to the bot in its first message).
+    The asking conversation gets a receipt that opens the Task, and the command prints the bot, the
+    Task and whether it was created, its first turn started, or why not: pending, created, started,
+    start failed, or failed (with nothing made, so it can be run again). The same command run again
+    from the same conversation, also in a later turn or after a relaunch, returns the same Task
+    rather than a second. "New subagent @bot" (or "delegate this to @bot as a sub-agent") is a
+    **sub-agent run** (above): child work of the turn, in its Sub-agents inspector, with no sidebar
+    row. A batch goes to one bot as one Task, whose turn spawns a sub-agent run per issue.
   - **Jobs:** an agent can own scheduled jobs, saved instructions it runs on a schedule, such as a
     morning issue triage on weekdays at 9:00. **Jobs** in the sidebar is one table of every agent's
     jobs: the job, its agent, its schedule and time zone, its next run, its state (on, paused,
@@ -738,7 +754,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
     `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (each run's transcript and record saved in
     a lane of its own, off the main thread, while they stream and at their start and end), `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
-    handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
+    handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation. A Task
+    handed to another bot (`botchu-task create`, the same helper under a second name) goes through
+    the same mailbox; `TaskHandoff.swift` reads and checks the request, recognizes it when asked
+    again, and holds what is written back.
     What replies ask to remember (`MemoryNotes`, in `BotContext.swift`) is saved to memory files
     by `MemoryWriter.swift`: one save at a time, read back to check it held, with notes that wait
     and are tried again. Run reviews are in `RunEvaluation.swift`: what a review sees of a run, its
@@ -760,7 +779,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     in standard system materials: `App/` (the app, window, model, each conversation's state, observed
     on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
-    computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, the
+    computers, `TaskPlaces.swift`, Tasks handed to other bots, `TaskHandoffs.swift`, what a report says about the app, `IssueReports.swift`, the
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished runs to run reviews, `Evaluations.swift`),
@@ -777,7 +796,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     turns on each account named the way the app does (see **Test**).
   - `Tests/BotChuCoreTests/` — parser tests against captured output of every CLI (with the model
     Claude Code and Muse report running), how models are named, command lines,
-    context and store, and tasks: naming, dispatch requests, checkouts, `gh`'s output, and worktrees
+    context and store, and tasks: naming, dispatch requests, Tasks handed to other bots (the
+    helper's request and every answer it prints, checks, and the same request recognized), checkouts, `gh`'s output, and worktrees
     made in throwaway repositories, the project status filter, issues and pull requests read in
     full from `gh`'s output, and fan-out briefs; the Projects catalog and its sync through a stand-in
     `gh` (the saved catalog shown before any request completes, checks for changes that read only
@@ -868,7 +888,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     links and their context through sending, and the report and New Task boxes without it, a job
     made for its agent, shown in Jobs, delivered to Home as a receipt that leaves Home's draft and
     queue alone, and deleted with its agent, and a sub-agent's handoff and a task's receipt that
-    don't wait for their run reviews; and, with writes slowed to 250 ms each or failing: a turn that
+    don't wait for their run reviews, a Task handed to another bot whose Home is idle, from Home, a
+    task and a task on a host, that goes on after the asking turn (also a batch whose workers are
+    its own sub-agent runs, stopped with it), asked for again, a bot or repository that can't be
+    found, and a dispatch file in another bot's folder that no longer waits for its Home; and, with writes slowed to 250 ms each or failing: a turn that
     starts only once its message is saved, sending and Stop that never wait for a write, a message
     that can't be queued coming back to the composer, typing and switching while four conversations
     save, quitting through the real notification waiting for writes and saying which it couldn't,

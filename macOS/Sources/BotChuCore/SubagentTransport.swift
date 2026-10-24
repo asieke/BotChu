@@ -56,9 +56,11 @@ public struct SubagentTransport: Sendable {
             let folder = name.isEmpty ? root : root.appendingPathComponent(name)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         }
-        let helper = root.appendingPathComponent("bin/botchu-subagent")
-        try Data(script.utf8).write(to: helper, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+        for command in SubagentHookInstaller.commands {
+            let helper = root.appendingPathComponent("bin/\(command)")
+            try Data(script.utf8).write(to: helper, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+        }
         try roster.write(to: root.appendingPathComponent("roster.json"), options: .atomic)
         try await heartbeat()
         return SubagentEndpoint(ipcDirectory: directory, binDirectory: directory + "/bin")
@@ -186,9 +188,10 @@ if operation == 'prepare':
         folder = root / part
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(folder, 0o700)
-    helper = root / 'bin' / 'botchu-subagent'
-    atomic(helper, base64.b64decode(parameters[0]))
-    os.chmod(helper, 0o755)
+    for command in ['botchu-subagent', 'botchu-task']:
+        helper = root / 'bin' / command
+        atomic(helper, base64.b64decode(parameters[0]))
+        os.chmod(helper, 0o755)
     atomic(root / 'roster.json', base64.b64decode(parameters[1]))
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     atomic(root / 'heartbeat.json', json.dumps({'updatedAt': stamp, 'closed': False}).encode())
