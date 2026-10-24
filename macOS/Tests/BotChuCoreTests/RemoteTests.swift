@@ -289,8 +289,8 @@ private func tempDir(_ name: String) -> URL {
             ChatMessage(role: .user, text: "<remember>not from the owner</remember>"),
             ChatMessage(role: .assistant, text: "Also <REMEMBER>x-digest deploys on Omarchy</REMEMBER> and that's it."),
         ]
-        #expect(MemoryNotes.remembered(in: messages) == ["Alex wants PRs small", "Omarchy runs Arch", "x-digest deploys on Omarchy"])
-        #expect(MemoryNotes.remembered(in: [ChatMessage(role: .assistant, text: "Nothing to keep.")]).isEmpty)
+        #expect(MemoryNotes.requests(in: messages) == [.bot: ["Alex wants PRs small", "Omarchy runs Arch", "x-digest deploys on Omarchy"]])
+        #expect(MemoryNotes.requests(in: [ChatMessage(role: .assistant, text: "Nothing to keep.")]).isEmpty)
     }
 
     @Test func appendsToTheMemoryFile() throws {
@@ -298,8 +298,9 @@ private func tempDir(_ name: String) -> URL {
         defer { try? FileManager.default.removeItem(at: folder) }
         let file = folder.appendingPathComponent("MEMORY.md").path
         try "# Scout\n\nWhat Scout has learned.".write(toFile: file, atomically: true, encoding: .utf8)
-        try MemoryNotes.append(["one"], toMemoryAt: file)
-        try MemoryNotes.append(["two", "three"], toMemoryAt: file)
+        let memory = MemoryFile(scope: .bot, path: file, waitingPath: folder.appendingPathComponent("unsaved.json").path)
+        MemoryWriter().save(["one"], to: memory)
+        MemoryWriter().save(["two", "three"], to: memory)
         #expect(try String(contentsOfFile: file, encoding: .utf8) == "# Scout\n\nWhat Scout has learned.\n\n- one\n- two\n- three\n")
     }
 
@@ -320,10 +321,12 @@ private func tempDir(_ name: String) -> URL {
                 </remember>
                 """),
         ]
-        #expect(MemoryNotes.remembered(in: messages) == [
+        let notes = MemoryNotes.requests(in: messages)[.bot] ?? []
+        #expect(notes.filter { MemoryNotes.refusal(of: $0) == nil } == [
             "Alex prefers dark mode",
             "OPENROUTER_API_KEY is read from the macOS Keychain",
         ])
+        #expect(notes.compactMap(MemoryNotes.refusal) == [.secret, .secret, .secret, .secret])
 
         let folder = tempDir("botchu-memory-updates")
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -331,13 +334,16 @@ private func tempDir(_ name: String) -> URL {
         try "# Scout\n\nWhat Scout has learned.\n\n- Alex prefers light mode\n- Omarchy runs Arch\n- Old temporary note\n"
             .write(toFile: file, atomically: true, encoding: .utf8)
 
-        try MemoryNotes.append([
+        let save = MemoryWriter().save([
             "omarchy   runs arch",
             "Replace: Alex prefers light mode -> Alex prefers dark mode",
             "Forget: Old temporary note",
             "\(openRouterPrefix)example",
             "Scout checks PR status before merging",
-        ], toMemoryAt: file)
+        ], to: MemoryFile(scope: .bot, path: file, waitingPath: folder.appendingPathComponent("unsaved.json").path))
+        #expect(save.changes == MemoryChanges(added: ["Scout checks PR status before merging"], replaced: ["Alex prefers dark mode"],
+                                              forgotten: ["Old temporary note"], unchanged: 1))
+        #expect(save.refused == [.secret])
 
         #expect(try String(contentsOfFile: file, encoding: .utf8) == """
             # Scout

@@ -225,9 +225,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     worktree there and runs its CLI there, in that user's login shell; its output streams back, and
     Stop interrupts the CLI there. The bot's folder stays on this Mac: the task's first message
     brings the bot's identity, instructions and memory and a recap of its Home conversation, and
-    notes the bot writes in `<remember>…</remember>` in a reply are applied to its `MEMORY.md` here
-    (deduplicating existing bullets, updating entries in place with `Replace: old -> new`, removing
-    entries with `Forget: old`, and dropping credentials/secrets).
+    notes the bot writes in `<remember>…</remember>` in a reply are saved to its `MEMORY.md` here,
+    as from every conversation (see **Saving memory**).
     The status sidebar names the computer, and **Terminal** opens a shell in the
     worktree there. The OpenRouter key never leaves this Mac, so Pi on a host needs that host's own
     `OPENROUTER_API_KEY`.
@@ -315,7 +314,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     the repository, computer, branch, worktree, session and pull request, and the task's
     `thread.jsonl`), the
     task requests it writes (`dispatch/`), a log of every turn (`logs/<date>.log`:
-    the command, where it ran, how long it took, the exit status, any error and the CLI's error output) and its
+    the command, where it ran, how long it took, the exit status, any error and the CLI's error output), notes
+    it couldn't save to memory yet (`memory-unsaved.json`, `shared-memory-unsaved.json`) and its
     pet (`pet/`: `video.json`, `stills/<pose>.png`, `clips/<activity>.mp4` and the appearance it
     was made from) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
     is told it can search them for earlier conversations. **History & Logs** in the status sidebar
@@ -346,6 +346,28 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     The workspace's `AGENTS.md`, `CLAUDE.md` and `GEMINI.md` carry the bot's `INSTRUCTIONS.md` and
     direct the agent to read the others, so it keeps them across its own context compaction; they
     are rewritten before every turn.
+  - **Saving memory:** a bot saves a note as soon as it is established: a clear statement from the
+    owner of how it should work from now on needs no "remember this", and the bot saves it in the
+    reply in which it agrees, keeping its scope; when it's unclear whether something is lasting, or
+    how far it reaches, the bot asks first. Every conversation saves the same way (Home, tasks on
+    this Mac or a host, and sub-agents): the bot writes each note, correction or removal in its reply
+    between `<remember>` and `</remember>`, or `<remember scope="shared">` for the shared memory, and
+    BotChu writes it when the turn ends. It re-reads the file just before writing, so what other
+    conversations or the owner changed meanwhile is kept, skips duplicates of existing bullets,
+    updates a bullet in place for `Replace: old -> new`, removes one for `Forget: old`, and leaves out
+    what looks like a secret, a question, a transcript or command output, or a note over 1,000
+    characters, saying how many and why (never repeating a secret). Tags in code are examples, and
+    only the turn's own replies count, so an old request in the conversation never brings back
+    something forgotten. BotChu reads the file back to check the change held, then confirms it under
+    the reply ("Saved to QA Duck's memory: …"), and the conversation's next turn (for a sub-agent,
+    its bot's Home) hears what was saved, left out or couldn't be saved, so a bot never takes asking
+    for a save as a save. When the file can't be written, or exists but can't be read (it is never
+    overwritten then), memory stays as it was, the conversation says why, and the notes wait in the
+    bot's `.botchu/` (in memory if that fails too): BotChu tries them again, first and in order, after
+    each of the bot's turns (saying so only once they are saved), and **Retry** above the message box
+    tries them at once. A bot edits a
+    memory file itself only to reorganize it when asked. Whether a reply recognizes an established
+    preference is up to the bot's model, which its instructions ask; saving it is BotChu's.
   - **Team playbook:** `TEAM.md` in the bots folder, beside the shared `MEMORY.md`, is the process
     every bot follows: its stages, handoffs, who calls whom with `botchu-subagent`, and when work is
     done. Unlike memory, it is given as instructions: in every bot's Home `AGENTS.md`, and at the
@@ -467,6 +489,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (transcripts saved off the main thread
     while they stream), `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
     handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
+    What replies ask to remember (`MemoryNotes`, in `BotContext.swift`) is saved to memory files
+    by `MemoryWriter.swift`: one save at a time, read back to check it held, with notes that wait
+    and are tried again.
     Reports filed from the app (their title, description, app state and `gh issue create`) are in
     `IssueReport.swift`.
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
@@ -491,7 +516,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     made in throwaway repositories, the project status filter, issues and pull requests read in
     full from `gh`'s output, and fan-out briefs; and hosts: their `ssh` command lines, deploy targets, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
-    from a remote task; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
+    from a remote task; memory: #88's Home sequence (a routing preference saved in the turn that
+    agrees, and recalled by a fresh session), what is left out, bot or shared scope, repeats,
+    corrections and forgets, concurrent saves, and saves that fail, wait (also across a relaunch)
+    and are tried again; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
     and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
     commands) are described and grouped, failures, repeated reads, sub-agent cards, and that a
