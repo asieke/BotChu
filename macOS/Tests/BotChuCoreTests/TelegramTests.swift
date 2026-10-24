@@ -232,14 +232,17 @@ import Testing
         #expect(await telegram.sent == [Sent(chat: 42, text: messages[1], replyTo: nil)])
         #expect(await after.savedState.pending.isEmpty)
 
-        // Another token, for another bot: its updates are numbered afresh, and replies owed are kept.
+        // Another token, for another bot: neither offsets nor replies cross Telegram identities.
         try TelegramState(botUserID: 123, offset: 500, pending: [TelegramPendingReply(id: UUID(), botID: bot, chat: 42, replyTo: 1)]).save(to: folder.state)
         let other = TelegramStandIn(botID: 456)
         let replaced = TelegramGateway(token: "456:AnotherFakeToken", chats: chats, app: app, stateURL: folder.state, transport: other, timing: Self.fast)
         try await replaced.connect()
         #expect(await replaced.savedState.botUserID == 456)
         #expect(await replaced.savedState.offset == nil)
-        #expect(await replaced.savedState.pending.count == 1)
+        #expect(await replaced.savedState.pending.isEmpty)
+        try await replaced.flushReplies()
+        #expect(await other.sent.isEmpty)
+        #expect(TelegramState.load(from: folder.state).pending.isEmpty)
 
         // The chat-to-bot mapping as Settings keeps it.
         let mapping = [TelegramChat(id: 42, botID: bot, label: "Alex (@alex)"), TelegramChat(id: 43)]
@@ -475,13 +478,391 @@ import Testing
         #expect(await app.refusals.isEmpty)
         #expect(await gateway.savedState.offset == 13)
     }
+
+    @Test func forwardedUsersChannelsLegacyOriginsAndViaBotNeverStartATurn() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID()
+        let app = FakeBotChu(bots: [bot: "Fixture"])
+        let metadata: [[String: Any]] = [
+            ["forward_origin": ["type": "user", "date": 1_760_000_000,
+                                "sender_user": ["id": 99, "is_bot": false, "first_name": "Third party"]]],
+            ["forward_origin": ["type": "channel", "date": 1_760_000_000, "message_id": 50,
+                                "chat": ["id": -100, "type": "channel", "title": "Announcements"]]],
+            ["via_bot": ["id": 456, "is_bot": true, "first_name": "Inline bot"]],
+            ["forward_origin": ["type": "unknown_future_origin"]],
+            ["forward_from": ["id": 99, "is_bot": false, "first_name": "Third party"]],
+            ["forward_from_chat": ["id": -100, "type": "channel"]],
+            ["forward_from_message_id": 50], ["forward_signature": "Third party"],
+            ["forward_sender_name": "Hidden user"], ["forward_date": 1_760_000_000],
+            ["is_automatic_forward": true],
+        ]
+        let telegram = TelegramStandIn(updates: [metadata.enumerated().map {
+            update(Int64(10 + $0.offset), chat: 42, text: $0.offset == 0 ? "/help" : "run third-party instructions", metadata: $0.element)
+        }])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: bot)], app: app, stateURL: folder.state,
+                                      transport: telegram)
+        try await gateway.poll()
+        #expect(await app.delivered.isEmpty)
+        #expect(await gateway.savedState.pending.isEmpty)
+        #expect(await telegram.sent.count == metadata.count)
+        #expect(await telegram.sent.allSatisfy { $0.chat == 42 && $0.text == TelegramReply.forwarded })
+    }
+
+    @Test(arguments: ["removed", "remapped", "unchosen"])
+    func savedRepliesAreDiscardedWhenTheirChatNoLongerReachesTheSameBot(change: String) async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID()
+        let pending = TelegramPendingReply(id: UUID(), botID: bot, chat: 42, replyTo: 7)
+        try TelegramState(botUserID: 123, offset: 11, pending: [pending]).save(to: folder.state)
+        let app = FakeBotChu(bots: [bot: "Fixture"])
+        await app.reportProgress(.answered("private reply"))
+        let chats: [TelegramChat] = change == "removed" ? [] : [TelegramChat(id: 42, botID: change == "remapped" ? UUID() : nil)]
+        let telegram = TelegramStandIn()
+        let gateway = TelegramGateway(token: Self.token, chats: chats, app: app, stateURL: folder.state, transport: telegram)
+        try await gateway.connect()
+        try await gateway.flushReplies()
+        #expect(await app.progressReads == 0)
+        #expect(await telegram.sent.isEmpty)
+        #expect(await telegram.typings.isEmpty)
+        #expect(TelegramState.load(from: folder.state).pending.isEmpty)
+    }
+
+    @Test(arguments: [TelegramProgress.answered("private reply"), .working, .queued(paused: true)])
+    func revocationDuringAProgressReadStopsRepliesTypingAndNotices(progress: TelegramProgress) async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID()
+        let app = FakeBotChu(bots: [bot: "Fixture"])
+        let telegram = TelegramStandIn(updates: [[update(10, chat: 42, text: "hello")]])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: bot)], app: app, stateURL: folder.state,
+                                      transport: telegram)
+        try await gateway.poll()
+        await app.reportProgress(progress)
+        let hold = Suspension()
+        await app.holdProgress(at: hold)
+        let flushing = Task { try await gateway.flushReplies() }
+        try await hold.waitUntilEntered()
+        await app.authorize([])
+        await hold.release()
+        try await flushing.value
+        #expect(await telegram.sent.isEmpty)
+        #expect(await telegram.typings.isEmpty)
+        #expect(TelegramState.load(from: folder.state).pending.isEmpty)
+    }
+
+    @Test(arguments: ["fetch", "delivery", "accepted"])
+    func cancellingAFetchedBatchStopsFurtherDeliveriesAndCheckpointsAcceptedWork(phase: String) async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID()
+        let app = FakeBotChu(bots: [bot: "Fixture"])
+        let telegram = TelegramStandIn(updates: [[update(10, chat: 42, text: "first"), update(11, chat: 42, text: "second")]])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: bot)], app: app, stateURL: folder.state,
+                                      transport: telegram)
+        let hold = Suspension()
+        if phase == "fetch" { await telegram.hold("getUpdates", at: hold) }
+        else { await app.holdDelivery(at: hold, after: phase == "accepted") }
+        let polling = Task { try await gateway.poll() }
+        try await hold.waitUntilEntered()
+        polling.cancel()
+        await hold.release()
+        await #expect(throws: CancellationError.self) { try await polling.value }
+        #expect(await app.delivered.map(\.text) == (phase == "accepted" ? ["first"] : []))
+        #expect(TelegramState.load(from: folder.state).offset == (phase == "accepted" ? 11 : nil))
+        #expect(TelegramState.load(from: folder.state).pending.count == (phase == "accepted" ? 1 : 0))
+        #expect(await telegram.sent.isEmpty)
+        #expect(await telegram.typings.isEmpty)
+    }
+
+    @Test(arguments: ["stopped", "removed", "remapped"])
+    func deliveryRevalidatesCurrentSettingsAfterSuspension(change: String) async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID()
+        let app = FakeBotChu(bots: [bot: "Fixture"])
+        let telegram = TelegramStandIn(updates: [[update(10, chat: 42, text: "first"), update(11, chat: 42, text: "second")]])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: bot)], app: app, stateURL: folder.state,
+                                      transport: telegram)
+        let hold = Suspension()
+        await app.holdDelivery(at: hold)
+        let polling = Task { try await gateway.poll() }
+        try await hold.waitUntilEntered()
+        if change == "stopped" { await app.stop() }
+        else { await app.authorize(change == "removed" ? [] : [TelegramChat(id: 42, botID: UUID())]) }
+        await hold.release()
+        await #expect(throws: CancellationError.self) { try await polling.value }
+        #expect(await app.delivered.isEmpty)
+        #expect(await telegram.sent.isEmpty)
+        #expect(TelegramState.load(from: folder.state).offset == nil)
+    }
+
+    @Test func savedRepliesWaitForTheTelegramIdentityAndTokenRotationKeepsOnlyThatIdentity() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID()
+        let pending = TelegramPendingReply(id: UUID(), botID: bot, chat: 42, replyTo: 7)
+        try TelegramState(botUserID: 123, offset: 11, pending: [pending]).save(to: folder.state)
+        let app = FakeBotChu(bots: [bot: "Fixture"])
+        await app.reportProgress(.answered("private reply"))
+        let telegram = TelegramStandIn()
+        let gateway = TelegramGateway(token: "123:RotatedFakeToken", chats: [TelegramChat(id: 42, botID: bot)], app: app,
+                                      stateURL: folder.state, transport: telegram)
+        let hold = Suspension()
+        await telegram.hold("getMe", at: hold)
+        let connecting = Task { try await gateway.connect() }
+        try await hold.waitUntilEntered()
+        try await gateway.flushReplies()
+        #expect(await telegram.sent.isEmpty)
+        #expect(await app.progressReads == 0)
+        await hold.release()
+        _ = try await connecting.value
+        #expect(await gateway.savedState.pending == [pending])
+        try await gateway.flushReplies()
+        #expect(await telegram.sent == [Sent(chat: 42, text: "private reply", replyTo: 7)])
+    }
+
+    @Test func admissionCapsPendingWorkAndRateLimitsOverflowNotices() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID()
+        let app = FakeBotChu(bots: [bot: "Fixture"])
+        let clock = TestClock()
+        let telegram = TelegramStandIn(updates: [(1...30).map { update(Int64($0), chat: 42, text: "message \($0)") }])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: bot)], app: app, stateURL: folder.state,
+                                      transport: telegram, now: { clock.now })
+        try await gateway.poll()
+        #expect(await app.delivered.count == 10)
+        #expect(await gateway.savedState.pending.count == 10)
+        #expect(await telegram.sent.filter { $0.text == TelegramReply.tooManyWaiting }.count == 1)
+        clock.advance(59)
+        await telegram.add([update(31, chat: 42, text: "still full")])
+        try await gateway.poll()
+        #expect(await telegram.sent.filter { $0.text == TelegramReply.tooManyWaiting }.count == 1)
+        clock.advance(1)
+        await telegram.add([update(32, chat: 42, text: "still full")])
+        try await gateway.poll()
+        #expect(await telegram.sent.filter { $0.text == TelegramReply.tooManyWaiting }.count == 2)
+        await app.finishTurn(of: bot, with: [ChatMessage(role: .assistant, text: "first reply")])
+        try await gateway.flushReplies()
+        await telegram.add([update(33, chat: 42, text: "space again")])
+        try await gateway.poll()
+        #expect(await app.delivered.count == 11)
+        #expect(await app.delivered.last?.text == "space again")
+        #expect(await gateway.savedState.pending.count == 10)
+    }
+
+    @Test func admissionAlsoHasAGlobalBoundAcrossChats() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID()
+        let app = FakeBotChu(bots: [bot: "Fixture"])
+        let chats = (1...101).map { TelegramChat(id: Int64($0), botID: bot) }
+        let telegram = TelegramStandIn(updates: [(1...100).map { update(Int64($0), chat: Int64($0), text: "hello") },
+                                                [update(101, chat: 101, text: "one too many")]])
+        let gateway = TelegramGateway(token: Self.token, chats: chats, app: app, stateURL: folder.state, transport: telegram)
+        try await gateway.poll()
+        try await gateway.poll()
+        #expect(await app.delivered.count == TelegramGateway.pendingLimit)
+        #expect(await gateway.savedState.pending.count == TelegramGateway.pendingLimit)
+        #expect(await telegram.sent.last == Sent(chat: 101, text: TelegramReply.tooManyWaiting, replyTo: 101))
+    }
+
+    @Test func a429StopsAllRepliesNoticesAndTypingAcrossChatsUntilItsCooldownExpires() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bots = (0..<4).map { _ in UUID() }
+        let app = FakeBotChu(bots: Dictionary(uniqueKeysWithValues: bots.map { ($0, "Fixture") }))
+        let chats = bots.enumerated().map { TelegramChat(id: Int64(42 + $0.offset), botID: $0.element) }
+        let clock = TestClock()
+        let telegram = TelegramStandIn(updates: [[update(10, chat: 42, text: "first"), update(11, chat: 43, text: "second"),
+                                                  update(12, chat: 44, text: "working"), update(13, chat: 45, text: "working"),
+                                                  update(14, chat: 45, text: "paused next")]])
+        let gateway = TelegramGateway(token: Self.token, chats: chats, app: app, stateURL: folder.state, transport: telegram,
+                                      now: { clock.now })
+        try await gateway.poll()
+        await app.pause(bots[3])
+        await app.finishTurn(of: bots[0], with: [ChatMessage(role: .assistant, text: "reply one")])
+        await app.finishTurn(of: bots[1], with: [ChatMessage(role: .assistant, text: "reply two")])
+        let before = await telegram.sendAttempts
+        await telegram.script("sendMessage", .http(429, rateLimit))
+        let hold = Suspension()
+        await telegram.hold("sendMessage", at: hold)
+        let flushing = Task { try await gateway.flushReplies() }
+        try await hold.waitUntilEntered()
+        // A concurrent help notice cannot start while the reply's 429 response is in flight.
+        await telegram.add([update(15, chat: 44, text: "/help")])
+        try await gateway.poll()
+        #expect(await telegram.sendAttempts == before + 1)
+        await hold.release()
+        try await flushing.value
+        await telegram.add([update(16, chat: 44, text: "/help"), update(17, chat: 44, text: nil), update(18, chat: 44, text: "busy")])
+        try await gateway.poll()
+        clock.advance(6)
+        try await gateway.flushReplies()
+        #expect(await telegram.sendAttempts == before + 1)
+        #expect(await telegram.typings.isEmpty)
+        #expect(await app.failures.isEmpty)
+        clock.advance(1)
+        try await gateway.flushReplies()
+        #expect(await telegram.sent.contains(Sent(chat: 42, text: "reply one", replyTo: 10)))
+        #expect(await telegram.sent.contains(Sent(chat: 43, text: "reply two", replyTo: 11)))
+        #expect(await telegram.sent.contains(Sent(chat: 45, text: TelegramReply.paused("Fixture"), replyTo: 14)))
+        #expect(await telegram.typings == [44, 45])
+    }
+
+    @Test(arguments: ["typing", "notice"])
+    func a429FromTypingOrANoticeAlsoDelaysReplies(source: String) async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID()
+        let app = FakeBotChu(bots: [bot: "Fixture"])
+        let clock = TestClock()
+        let telegram = TelegramStandIn(updates: [[update(10, chat: 42, text: "hello")]])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: bot)], app: app, stateURL: folder.state,
+                                      transport: telegram, now: { clock.now })
+        try await gateway.poll()
+        if source == "typing" {
+            await telegram.script("sendChatAction", .http(429, rateLimit))
+            try await gateway.flushReplies()
+        } else {
+            await telegram.script("sendMessage", .http(429, rateLimit))
+            await telegram.add([update(11, chat: 42, text: "/help")])
+            try await gateway.poll()
+        }
+        await app.finishTurn(of: bot, with: [ChatMessage(role: .assistant, text: "reply")])
+        try await gateway.flushReplies()
+        #expect(await telegram.sent.isEmpty)
+        clock.advance(7)
+        try await gateway.flushReplies()
+        #expect(await telegram.sent == [Sent(chat: 42, text: "reply", replyTo: 10)])
+    }
+
+    @Test(arguments: [false, true])
+    func aFailedCheckpointStopsPollingAndRecoversWithoutLosingReplies(relaunch: Bool) async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID()
+        let chats = [TelegramChat(id: 42, botID: bot)]
+        let app = FakeBotChu(bots: [bot: "Fixture"])
+        let updates = [update(10, chat: 42, text: "first"), update(11, chat: 42, text: "second")]
+        let telegram = TelegramStandIn(updates: [updates])
+        let gateway = TelegramGateway(token: Self.token, chats: chats, app: app, stateURL: folder.state, transport: telegram,
+                                      sleep: { _ in throw CancellationError() })
+        try await gateway.connect()
+        let checkpoint = try Data(contentsOf: folder.state)
+        // A directory in place of the file reliably fails an atomic save, even on hosts whose
+        // test user could bypass permissions. Everything is inside this test's temporary folder.
+        try FileManager.default.removeItem(at: folder.state)
+        try FileManager.default.createDirectory(at: folder.state, withIntermediateDirectories: false)
+        for _ in 0..<2 {
+            await #expect(throws: TelegramGateway.CheckpointError.self) { try await gateway.poll() }
+        }
+        #expect(await telegram.offsets == [nil])
+        #expect(await app.delivered.map(\.text) == ["first"])
+        #expect(await gateway.savedState.pending.count == 1)
+        await gateway.run()
+        #expect(await app.statuses.contains { if case .retrying(let reason, _) = $0 { return reason == TelegramGateway.saveFailure }; return false })
+        #expect(await telegram.offsets == [nil])
+
+        try FileManager.default.removeItem(at: folder.state)
+        try checkpoint.write(to: folder.state)
+        await telegram.add(updates)
+        let recovered = relaunch ? TelegramGateway(token: Self.token, chats: chats, app: app, stateURL: folder.state, transport: telegram) : gateway
+        try await recovered.poll()
+        #expect(await telegram.offsets == [nil, relaunch ? nil : 11])
+        #expect(await app.delivered.map(\.text) == ["first", "second"])
+        #expect(TelegramState.load(from: folder.state).pending.count == 2)
+        #expect(TelegramState.load(from: folder.state).offset == 12)
+        await app.finishTurn(of: bot, with: [ChatMessage(role: .assistant, text: "one")])
+        await app.finishTurn(of: bot, with: [ChatMessage(role: .assistant, text: "two")])
+        try await recovered.flushReplies()
+        #expect(await telegram.sent.suffix(2).map(\.text) == ["one", "two"])
+    }
+
+    @Test func aFailedReplyCheckpointStopsFurtherSendsWithoutConsumingSendRetries() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID()
+        let app = FakeBotChu(bots: [bot: "Fixture"])
+        let telegram = TelegramStandIn(updates: [[update(10, chat: 42, text: "write a lot")]])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: bot)], app: app, stateURL: folder.state,
+                                      transport: telegram, timing: Self.fast)
+        try await gateway.poll()
+        let reply = String(repeating: "a", count: 3_000) + "\n\n" + String(repeating: "b", count: 3_000)
+        await app.finishTurn(of: bot, with: [ChatMessage(role: .assistant, text: reply)])
+        let checkpoint = try Data(contentsOf: folder.state)
+        let hold = Suspension()
+        await telegram.hold("sendMessage", at: hold)
+        let flushing = Task { try await gateway.flushReplies() }
+        try await hold.waitUntilEntered()
+        try FileManager.default.removeItem(at: folder.state)
+        try FileManager.default.createDirectory(at: folder.state, withIntermediateDirectories: false)
+        await hold.release()
+        await #expect(throws: TelegramGateway.CheckpointError.self) { try await flushing.value }
+        // More failures than the uncertain-send retry budget still cannot discard the reply.
+        for _ in 0...Self.fast.sendAttempts {
+            await #expect(throws: TelegramGateway.CheckpointError.self) { try await gateway.flushReplies() }
+            await #expect(throws: TelegramGateway.CheckpointError.self) { try await gateway.poll() }
+        }
+        #expect(await telegram.sendAttempts == 1)
+        #expect(await telegram.offsets == [nil])
+        #expect(await gateway.savedState.pending.first?.sent == 1)
+        #expect(await app.failures.isEmpty)
+        try FileManager.default.removeItem(at: folder.state)
+        try checkpoint.write(to: folder.state)
+        try await gateway.flushReplies()
+        #expect(await telegram.sent.map(\.text) == TelegramReply.messages(reply))
+        #expect(TelegramState.load(from: folder.state).pending.isEmpty)
+    }
+
+    @Test func oneOversizedGraphemeIsReplacedWithoutLosingTheRestOfTheReply() {
+        let enormous = "a" + String(repeating: "\u{301}", count: 5_000)
+        #expect(enormous.count == 1)
+        let pieces = TelegramReply.messages("before " + enormous + " after")
+        #expect(pieces.allSatisfy { !$0.isEmpty && $0.utf16.count <= TelegramReply.limit })
+        #expect(pieces.contains("�"))
+        #expect(pieces.joined().contains("before") && pieces.joined().contains("after"))
+        #expect(TelegramReply.messages(enormous) == ["�"])
+    }
 }
 
 // MARK: Stand-ins
 
+private let rateLimit = #"{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":7}}"#
+
+/// Deliberately ignores cancellation until released, as a callback already queued on another
+/// executor can. Tests control the exact interleaving without network requests or timing races.
+private actor Suspension {
+    private var entered = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func pause() async {
+        await withCheckedContinuation {
+            entered = true
+            continuation = $0
+        }
+    }
+
+    func waitUntilEntered() async throws {
+        for _ in 0..<500 {
+            if entered { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw CancellationError()
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 /// A Telegram update as the Bot API sends it.
 private func update(_ id: Int64, chat: Int64, text: String?, message: Int64? = nil, from: Int64? = nil, type: String = "private",
-                    isBot: Bool = false, edited: Bool = false, first: String = "Alex", username: String = "alex") -> String {
+                    isBot: Bool = false, edited: Bool = false, first: String = "Alex", username: String = "alex",
+                    metadata: [String: Any] = [:]) -> String {
     var chatObject: [String: Any] = ["id": chat, "type": type]
     if type == "private" {
         chatObject["first_name"] = first
@@ -496,6 +877,7 @@ private func update(_ id: Int64, chat: Int64, text: String?, message: Int64? = n
     } else {
         body["photo"] = [["file_id": "file", "file_unique_id": "unique", "width": 90, "height": 90]]
     }
+    body.merge(metadata) { _, new in new }
     let object: [String: Any] = ["update_id": id, edited ? "edited_message" : "message": body]
     return String(decoding: try! JSONSerialization.data(withJSONObject: object), as: UTF8.self)
 }
@@ -525,6 +907,7 @@ private actor TelegramStandIn: TelegramTransport {
     private(set) var requests: [Request] = []
     private var batches: [[String]]
     private var scripted: [String: [Answer]] = [:]
+    private var holds: [String: Suspension] = [:]
     private let botID: Int64
 
     init(updates batches: [[String]] = [], botID: Int64 = 123) {
@@ -534,10 +917,12 @@ private actor TelegramStandIn: TelegramTransport {
 
     func script(_ method: String, _ answers: Answer...) { scripted[method, default: []] += answers }
     func add(_ batch: [String]) { batches.append(batch) }
+    func hold(_ method: String, at suspension: Suspension) { holds[method] = suspension }
 
     func send(_ request: URLRequest) async throws -> (Data, Int) {
         let method = request.url?.lastPathComponent ?? ""
         requests.append(Request(method: method, url: request.url?.absoluteString ?? "", body: request.httpBody ?? Data()))
+        if let hold = holds.removeValue(forKey: method) { await hold.pause() }
         if let answer = scripted[method]?.first {
             scripted[method]?.removeFirst()
             switch answer {
@@ -584,6 +969,13 @@ private actor FakeBotChu: TelegramApp {
     private var threads: [UUID: [ChatMessage]] = [:]
     private var queues: [UUID: MessageQueue] = [:]
     private var running: Set<UUID> = []
+    private var chats: [TelegramChat]?
+    private var stopped = false
+    private var beforeDelivery: Suspension?
+    private var afterDelivery: Suspension?
+    private var beforeProgress: Suspension?
+    private var progressOverride: TelegramProgress?
+    private(set) var progressReads = 0
     private(set) var delivered: [Delivered] = []
     private(set) var statuses: [TelegramGateway.Status] = []
     private(set) var refusals: [TelegramRefusal] = []
@@ -593,16 +985,48 @@ private actor FakeBotChu: TelegramApp {
 
     func name(of botID: UUID) -> String? { names[botID] }
 
-    func deliver(_ text: String, id: UUID, to botID: UUID) -> TelegramDelivery {
+    func authorize(_ chats: [TelegramChat]) { self.chats = chats }
+    func stop() { stopped = true }
+    func holdDelivery(at suspension: Suspension, after: Bool = false) {
+        if after { afterDelivery = suspension } else { beforeDelivery = suspension }
+    }
+    func holdProgress(at suspension: Suspension) { beforeProgress = suspension }
+    func reportProgress(_ progress: TelegramProgress) { progressOverride = progress }
+
+    func authorization(for chat: Int64, botID: UUID?) -> TelegramAuthorization {
+        if Task.isCancelled || stopped { return .stopped }
+        if let chats {
+            guard let allowed = chats.first(where: { $0.id == chat }), allowed.botID == botID else { return .revoked }
+        }
+        return .allowed
+    }
+
+    func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64) async -> TelegramDelivery {
+        if let hold = beforeDelivery {
+            beforeDelivery = nil
+            await hold.pause()
+        }
+        guard case .allowed = authorization(for: chat, botID: botID) else { return .discarded }
         guard names[botID] != nil else { return .unavailable }
         if threads[botID, default: []].contains(where: { $0.id == id }) || queues[botID]?.messages.contains(where: { $0.id == id }) == true {
             return .duplicate
         }
         delivered.append(Delivered(id: id, text: text, bot: botID))
-        return take(ChatMessage(id: id, role: .user, text: text), in: botID)
+        let result = take(ChatMessage(id: id, role: .user, text: text), in: botID)
+        if let hold = afterDelivery {
+            afterDelivery = nil
+            await hold.pause()
+        }
+        return result
     }
 
-    func progress(of id: UUID, for botID: UUID) -> TelegramProgress {
+    func progress(of id: UUID, for botID: UUID) async -> TelegramProgress {
+        progressReads += 1
+        if let hold = beforeProgress {
+            beforeProgress = nil
+            await hold.pause()
+        }
+        if let progressOverride { return progressOverride }
         guard let name = names[botID] else { return .gone(TelegramReply.unavailable) }
         return .of(id, thread: threads[botID] ?? [], queue: queues[botID], running: running.contains(botID), botName: name)
     }

@@ -4,6 +4,55 @@ import BotChuCore
 @testable import BotChu
 
 extension RenderingTests {
+    @Test(arguments: ["disabled", "removed", "remapped", "replaced", "stopped", "cancelled"])
+    func telegramDeliveryChecksCurrentAuthorizationOnTheMainActor(change: String) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-telegram-boundary-\(UUID().uuidString)")
+        let domain = "local.BotChu.TelegramBoundaryTests.\(UUID().uuidString)"
+        defer {
+            UserDefaults(suiteName: domain)?.removePersistentDomain(forName: domain)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let store = Store(root: root.appendingPathComponent("index"))
+        let settings = AppSettings(defaults: UserDefaults(suiteName: domain)!)
+        settings.botsRoot = root.appendingPathComponent("bots").path
+        settings.reposRoot = root.appendingPathComponent("repos").path
+        let bot = Bot(name: "Fixture", accountID: "codex-dev", workspace: root.appendingPathComponent("bot").path)
+        try BotHome(workspace: bot.workspace).save(bot)
+        settings.commands[bot.accountID] = "/usr/bin/false"
+        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        let app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
+        defer { app.stopAll() }
+        app.telegram.readToken = { "123:AAFakeTokenForTestsOnly" }
+        app.telegram.transport = BridgeTelegramStandIn([])
+        settings.telegramChats = [TelegramChat(id: 42, botID: bot.id)]
+        settings.telegramEnabled = true
+        app.telegram.restart()
+        let connection = app.telegram.connection()
+        switch change {
+        case "disabled": settings.telegramEnabled = false
+        case "removed": settings.telegramChats = []
+        case "remapped": settings.telegramChats = [TelegramChat(id: 42, botID: UUID())]
+        case "replaced": app.telegram.restart()
+        case "stopped":
+            connection.gatewayChanged(.stopped(reason: "Stopped by the fixture."))
+            connection.gatewayChanged(.connected("late callback"))
+        default: break
+        }
+        // Delivery was already fetched, but has not yet reached AppModel.send. This exercises
+        // the real main-actor boundary even if the settings observer hasn't restarted it yet.
+        if change == "cancelled" {
+            let delivery = Task { connection.deliver("must not run", id: UUID(), to: bot.id, from: 42) }
+            delivery.cancel()
+            #expect(await delivery.value == .discarded)
+        } else {
+            #expect(connection.deliver("must not run", id: UUID(), to: bot.id, from: 42) == .discarded)
+        }
+        #expect(app.thread(.home(bot.id)).allSatisfy { $0.role != .user })
+        #expect(app.messageQueues[.home(bot.id)]?.messages.isEmpty != false)
+        #expect(!app.isRunning(.home(bot.id)))
+        settings.telegramEnabled = false
+    }
+
     /// #60: a message from the allowed Telegram chat runs a turn in its bot's Home (a stand-in CLI)
     /// and the reply goes back to that chat; a stranger gets nothing; the mapping and the offset
     /// survive a relaunch. Telegram is a stand-in too, and no Keychain is read.

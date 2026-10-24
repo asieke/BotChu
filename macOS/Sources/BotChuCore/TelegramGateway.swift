@@ -59,6 +59,7 @@ public enum TelegramInbound: Equatable, Sendable {
     case help(chat: Int64, botID: UUID?, replyTo: Int64)
     /// From an allowed chat, but not something the gateway passes on: it says so.
     case unsupported(chat: Int64, replyTo: Int64, edited: Bool)
+    case forwarded(chat: Int64, replyTo: Int64)
     /// Not allowed: nothing is said or done.
     case refused(TelegramRefusal)
     case ignored
@@ -71,6 +72,7 @@ public enum TelegramInbound: Equatable, Sendable {
             return .refused(TelegramRefusal(message))
         }
         let replyTo = message.messageID
+        guard !message.isForwarded, !message.isViaBot else { return .forwarded(chat: chat.id, replyTo: replyTo) }
         guard update.message != nil else { return .unsupported(chat: chat.id, replyTo: replyTo, edited: true) }
         guard let text = message.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .unsupported(chat: chat.id, replyTo: replyTo, edited: false)
@@ -136,6 +138,7 @@ public enum TelegramReply {
     }
 
     static func split(_ text: String, limit: Int) -> [String] {
+        guard limit > 0 else { return [] }
         var pieces: [String] = []
         var rest = Substring(text.trimmingCharacters(in: .whitespacesAndNewlines))
         while rest.utf16.count > limit {
@@ -160,10 +163,14 @@ public enum TelegramReply {
                 }
                 afterNewline = character.isNewline
             }
-            // Where the text breaks, unless that leaves a short message; a character longer than
-            // the limit on its own still goes, alone.
-            var cut = [paragraph, line, space].compactMap { $0 }.first { $0.units >= limit / 2 }?.index ?? end
-            if cut == rest.startIndex { cut = rest.index(after: cut) }
+            // A single grapheme can exceed Telegram's limit (thousands of combining accents).
+            // Replace it with one bounded character rather than losing the entire reply.
+            let cut = [paragraph, line, space].compactMap { $0 }.first { $0.units >= limit / 2 }?.index ?? end
+            if cut == rest.startIndex {
+                pieces.append("�")
+                rest = rest.dropFirst()
+                continue
+            }
             let piece = trimmingTrailingWhitespace(rest[..<cut])
             if !piece.isEmpty { pieces.append(piece) }
             rest = rest[cut...].drop { $0.isNewline }
@@ -187,6 +194,8 @@ public enum TelegramReply {
 
     public static let unrouted = "This chat isn't connected to a bot yet. Choose one in BotChu ▸ Settings ▸ Telegram."
     public static let unavailable = "The bot this chat was connected to isn't in BotChu any more. Choose another in BotChu ▸ Settings ▸ Telegram."
+    static let forwarded = "Forwarded messages and messages sent via another bot aren't taken. Write your own text message instead."
+    static let tooManyWaiting = "Too many messages are waiting for replies. Wait for a reply, then send this message again."
 
     static func unsupported(edited: Bool) -> String {
         edited
@@ -217,7 +226,15 @@ public enum TelegramDelivery: Equatable, Sendable {
     case duplicate
     /// The bot isn't there any more.
     case unavailable
+    /// The gateway stopped or this chat no longer reaches that bot. Nothing was handed over.
+    case discarded
     case failed(String)
+}
+
+public enum TelegramAuthorization: Sendable {
+    case allowed
+    case revoked
+    case stopped
 }
 
 /// Where a message handed to a conversation stands.
@@ -248,10 +265,12 @@ public enum TelegramProgress: Equatable, Sendable {
 
 /// What the gateway needs from BotChu, which answers from its conversations.
 public protocol TelegramApp: Sendable {
+    /// Current settings and gateway generation, checked again at each delivery/send boundary.
+    func authorization(for chat: Int64, botID: UUID?) async -> TelegramAuthorization
     /// The bot's name, or nil when it isn't there any more.
     func name(of botID: UUID) async -> String?
     /// Hands the owner's message to the bot's Home through its queue, under `id`.
-    func deliver(_ text: String, id: UUID, to botID: UUID) async -> TelegramDelivery
+    func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64) async -> TelegramDelivery
     func progress(of id: UUID, for botID: UUID) async -> TelegramProgress
     /// A reply couldn't be sent to Telegram: BotChu says so in the conversation.
     func replyFailed(_ id: UUID, for botID: UUID, reason: String) async
@@ -282,7 +301,7 @@ public struct TelegramPendingReply: Codable, Equatable, Sendable {
 /// What the gateway keeps across relaunches (`telegram.json`, beside `index.json`): where its
 /// updates are up to, and the replies it owes. No message text and no token.
 public struct TelegramState: Codable, Equatable, Sendable {
-    /// The bot the offset belongs to: another token's updates are numbered afresh.
+    /// The Telegram bot the offset and pending replies belong to.
     public var botUserID: Int64?
     /// The next update to ask for: one past the last handled.
     public var offset: Int64?
@@ -315,6 +334,12 @@ public struct TelegramState: Codable, Equatable, Sendable {
 /// that may have reached it (a timeout, a server error, so it can arrive twice) up to
 /// `Timing.sendAttempts` times. One Telegram refuses is reported in the conversation at once.
 public actor TelegramGateway {
+    public static let pendingLimitPerChat = 10
+    public static let pendingLimit = 100
+    static let overflowNoticeInterval: Double = 60
+    static let saveFailure = "BotChu couldn't save Telegram's progress. Check storage space and permissions."
+    /// A local write failure never counts as an uncertain Telegram send or consumes its retries.
+    enum CheckpointError: Error { case cannotSave }
     public enum Status: Equatable, Sendable {
         case connecting
         /// The bot's username (or name).
@@ -346,7 +371,8 @@ public actor TelegramGateway {
     private let timing: Timing
     private let sleep: @Sendable (Double) async throws -> Void
     private let now: @Sendable () -> Date
-    private var state: TelegramState
+    private var state: TelegramState { didSet { needsSave = true } }
+    private var needsSave = false
     private var me: TelegramUser?
     private var typedAt: [Int64: Date] = [:]
     /// Failed tries at a reply's next message (`attempts` counts those that may have reached
@@ -354,6 +380,11 @@ public actor TelegramGateway {
     private var retries: [UUID: (attempts: Int, waits: Int, at: Date)] = [:]
     /// Replies whose chat was told their message waits in a paused queue.
     private var toldPaused: Set<UUID> = []
+    private var overflowAt: [Int64: Date] = [:]
+    /// Shared by replies, notices and typing, across every chat. Only one outgoing request can
+    /// be in flight, so a second request cannot slip past a 429 while its response is awaited.
+    private var sending = false
+    private var outgoingAfter = Date.distantPast
 
     public init(token: String, chats: [TelegramChat], app: any TelegramApp, stateURL: URL,
                 transport: any TelegramTransport = URLSessionTelegramTransport(), timing: Timing = .standard,
@@ -404,7 +435,10 @@ public actor TelegramGateway {
             } catch is CancellationError {
                 return
             } catch {
-                let error = error as? TelegramError ?? TelegramError(kind: .transient, reason: "The request to Telegram failed.")
+                if Task.isCancelled { return }
+                let error = error as? TelegramError ?? TelegramError(kind: .transient,
+                    reason: error is CheckpointError ? Self.saveFailure : "The request to Telegram failed.")
+                coolDown(after: error)
                 if error.stopsGateway {
                     await app.gatewayChanged(.stopped(reason: error.reason))
                     return
@@ -421,9 +455,13 @@ public actor TelegramGateway {
         while !Task.isCancelled {
             do {
                 try await flushReplies()
+            } catch is CancellationError {
+                return
             } catch let error as TelegramError where error.stopsGateway {
                 await app.gatewayChanged(.stopped(reason: error.reason))
                 return
+            } catch is CheckpointError {
+                await app.gatewayChanged(.retrying(reason: Self.saveFailure, seconds: Int(timing.replyInterval.rounded(.up))))
             } catch {}
             do { try await sleep(timing.replyInterval) } catch { return }
         }
@@ -432,27 +470,41 @@ public actor TelegramGateway {
     /// Asks Telegram which bot the token belongs to.
     @discardableResult
     public func connect() async throws -> TelegramUser {
+        try Task.checkCancellation()
         let me = try await client.me()
+        try Task.checkCancellation()
         if state.botUserID != me.id {
-            state.botUserID = me.id
-            state.offset = nil
-            save()
+            // Both offsets and reply obligations belong to the Telegram identity, not the token
+            // text. Rotating its token preserves them; switching to another bot discards them.
+            state = TelegramState(botUserID: me.id)
+            retries.removeAll()
+            toldPaused.removeAll()
+            typedAt.removeAll()
         }
+        try save()
         self.me = me
         return me
     }
 
     /// Asks Telegram for the updates after the last one handled, and handles them in order.
     public func poll(timeout: Int? = nil) async throws {
+        try Task.checkCancellation()
         let me: TelegramUser
         if let known = self.me { me = known } else { me = try await connect() }
+        // getUpdates with a higher offset acknowledges earlier updates at Telegram. Never make
+        // that request until the reply obligations and offset are durably saved.
+        try save()
+        try Task.checkCancellation()
         let updates = try await client.updates(offset: state.offset, timeout: timeout ?? timing.pollSeconds)
         for update in updates.sorted(by: { $0.updateID < $1.updateID }) where update.updateID >= state.offset ?? .min {
-            await handle(update, bot: me.id)
+            try Task.checkCancellation()
+            try await handle(update, bot: me.id)
         }
     }
 
-    private func handle(_ update: TelegramUpdate, bot: Int64) async {
+    private func handle(_ update: TelegramUpdate, bot: Int64) async throws {
+        try Task.checkCancellation()
+        try save()
         var answer: (chat: Int64, text: String, replyTo: Int64)?
         switch TelegramInbound.classify(update, chats: chats, bot: bot) {
         case .ignored:
@@ -461,16 +513,29 @@ public actor TelegramGateway {
             await app.refused(refusal)
         case let .unsupported(chat, replyTo, edited):
             answer = (chat, TelegramReply.unsupported(edited: edited), replyTo)
+        case let .forwarded(chat, replyTo):
+            answer = (chat, TelegramReply.forwarded, replyTo)
         case let .help(chat, botID, replyTo):
+            guard try await authorized(chat, botID: botID) else { break }
             var name: String?
             if let botID { name = await app.name(of: botID) }
             answer = (chat, TelegramReply.help(botName: name, chosen: botID != nil), replyTo)
         case let .message(chat, botID, text, replyTo, id):
+            guard try await authorized(chat, botID: botID) else { break }
             guard let botID else {
                 answer = (chat, TelegramReply.unrouted, replyTo)
                 break
             }
-            switch await app.deliver(text, id: id, to: botID) {
+            if !state.pending.contains(where: { $0.id == id }),
+               state.pending.count >= Self.pendingLimit || state.pending.filter({ $0.chat == chat }).count >= Self.pendingLimitPerChat {
+                if overflowAt[chat].map({ now().timeIntervalSince($0) >= Self.overflowNoticeInterval }) ?? true {
+                    overflowAt[chat] = now()
+                    answer = (chat, TelegramReply.tooManyWaiting, replyTo)
+                }
+                break
+            }
+            try Task.checkCancellation()
+            switch await app.deliver(text, id: id, to: botID, from: chat) {
             case .queued(let busy):
                 expect(TelegramPendingReply(id: id, botID: botID, chat: chat, replyTo: replyTo))
                 if busy, let name = await app.name(of: botID) { answer = (chat, TelegramReply.busy(name), replyTo) }
@@ -481,59 +546,85 @@ public actor TelegramGateway {
                 answer = (chat, TelegramReply.unavailable, replyTo)
             case .failed(let reason):
                 answer = (chat, TelegramReply.notTaken(reason), replyTo)
+            case .discarded:
+                throw CancellationError()
             }
         }
+        // A delivery already accepted before cancellation must still be checkpointed; the next
+        // update and any outgoing notice below must not run after cancellation.
         state.offset = update.updateID + 1
-        save()
+        try save()
+        try Task.checkCancellation()
         // The gateway's own words get one try: they say nothing the conversation needs.
-        if let answer { try? await client.send(answer.text, to: answer.chat, replyingTo: answer.replyTo) }
+        if let answer {
+            _ = try await notice(answer.text, chat: answer.chat, botID: chats.first { $0.id == answer.chat }?.botID,
+                                 replyTo: answer.replyTo)
+        }
     }
 
     /// Sends the replies whose turns have ended, and shows "typing…" while a turn is under way.
     public func flushReplies() async throws {
+        try Task.checkCancellation()
+        // Startup cannot send saved replies until getMe establishes which Telegram bot owns them.
+        guard me != nil else { return }
+        try save()
         for pending in state.pending {
+            guard try await authorized(pending.chat, botID: pending.botID) else {
+                try finish(pending.id)
+                continue
+            }
             if let retry = retries[pending.id], retry.at > now() { continue }
-            switch await app.progress(of: pending.id, for: pending.botID) {
+            let progress = await app.progress(of: pending.id, for: pending.botID)
+            guard try await authorized(pending.chat, botID: pending.botID) else {
+                try finish(pending.id)
+                continue
+            }
+            switch progress {
             case .queued(let paused):
                 guard paused else {
                     toldPaused.remove(pending.id)
                     continue
                 }
                 if !toldPaused.contains(pending.id), let name = await app.name(of: pending.botID) {
-                    toldPaused.insert(pending.id)
-                    try? await client.send(TelegramReply.paused(name), to: pending.chat, replyingTo: pending.replyTo)
+                    if try await notice(TelegramReply.paused(name), chat: pending.chat, botID: pending.botID, replyTo: pending.replyTo) {
+                        toldPaused.insert(pending.id)
+                    }
                 }
             case .working:
-                try await showTyping(in: pending.chat)
+                try await showTyping(for: pending)
             case .answered(let text), .gone(let text):
                 try await send(text, for: pending)
             }
         }
     }
 
-    private func showTyping(in chat: Int64) async throws {
-        if let last = typedAt[chat], now().timeIntervalSince(last) < timing.typingInterval { return }
-        typedAt[chat] = now()
+    private func showTyping(for pending: TelegramPendingReply) async throws {
+        if let last = typedAt[pending.chat], now().timeIntervalSince(last) < timing.typingInterval { return }
         do {
-            try await client.typing(in: chat)
-        } catch let error as TelegramError where error.stopsGateway {
-            throw error
-        } catch {}
+            if try await outgoing(nil, chat: pending.chat, botID: pending.botID) { typedAt[pending.chat] = now() }
+        } catch let error as TelegramError where !error.stopsGateway {}
     }
 
     private func send(_ text: String, for pending: TelegramPendingReply) async throws {
         let messages = TelegramReply.messages(text)
         var sent = pending.sent
         while sent < messages.count {
+            guard try await authorized(pending.chat, botID: pending.botID) else {
+                try finish(pending.id)
+                return
+            }
+            try save()
             do {
                 // The first message replies to the owner's, so it's clear what it answers.
-                try await client.send(messages[sent], to: pending.chat, replyingTo: sent == 0 ? pending.replyTo : nil)
+                guard try await outgoing(messages[sent], chat: pending.chat, botID: pending.botID,
+                                         replyTo: sent == 0 ? pending.replyTo : nil) else { return }
             } catch let error as TelegramError {
                 if error.stopsGateway { throw error }
                 let retry = retries[pending.id] ?? (0, 0, now())
                 let attempts = retry.attempts + (error.kind == .transient ? 1 : 0)
                 if error.kind == .refused || attempts >= timing.sendAttempts {
-                    finish(pending.id)
+                    try finish(pending.id)
+                    try Task.checkCancellation()
                     await app.replyFailed(pending.id, for: pending.botID, reason: error.kind == .refused
                         ? error.reason : "Telegram didn't take it after \(attempts) tries. \(error.reason)")
                 } else {
@@ -546,10 +637,59 @@ public actor TelegramGateway {
             retries[pending.id] = nil
             if let i = state.pending.firstIndex(where: { $0.id == pending.id }) {
                 state.pending[i].sent = sent
-                save()
+                try save()
             }
         }
-        finish(pending.id)
+        try finish(pending.id)
+    }
+
+    /// Current mapping as well as the gateway's snapshot: revoked replies are discarded, while
+    /// stopping a gateway preserves valid replies for the next run.
+    private func authorized(_ chat: Int64, botID: UUID?) async throws -> Bool {
+        try Task.checkCancellation()
+        guard let allowed = chats.first(where: { $0.id == chat }), allowed.botID == botID else { return false }
+        let authorization = await app.authorization(for: chat, botID: botID)
+        try Task.checkCancellation()
+        switch authorization {
+        case .allowed: return true
+        case .revoked: return false
+        case .stopped: throw CancellationError()
+        }
+    }
+
+    /// Nil text means typing. Notices are best effort; replies remain pending when another
+    /// request is in flight or Telegram's shared cooldown has not expired.
+    private func outgoing(_ text: String?, chat: Int64, botID: UUID?, replyTo: Int64? = nil) async throws -> Bool {
+        guard try await authorized(chat, botID: botID), !sending, now() >= outgoingAfter else { return false }
+        try save()
+        sending = true
+        defer { sending = false }
+        do {
+            if let text {
+                try await client.send(text, to: chat, replyingTo: replyTo)
+            } else {
+                try await client.typing(in: chat)
+            }
+            return true
+        } catch let error as TelegramError {
+            coolDown(after: error)
+            throw error
+        }
+    }
+
+    private func notice(_ text: String, chat: Int64, botID: UUID?, replyTo: Int64) async throws -> Bool {
+        do {
+            for part in TelegramReply.messages(text) {
+                guard try await outgoing(part, chat: chat, botID: botID, replyTo: replyTo) else { return false }
+            }
+            return true
+        } catch let error as TelegramError where !error.stopsGateway {
+            return false
+        }
+    }
+
+    private func coolDown(after error: TelegramError) {
+        if let wait = error.retryAfter { outgoingAfter = max(outgoingAfter, now().addingTimeInterval(wait)) }
     }
 
     private func expect(_ reply: TelegramPendingReply) {
@@ -557,16 +697,22 @@ public actor TelegramGateway {
         state.pending.append(reply)
     }
 
-    private func finish(_ id: UUID) {
+    private func finish(_ id: UUID) throws {
         state.pending.removeAll { $0.id == id }
         retries[id] = nil
         toldPaused.remove(id)
-        save()
+        try save()
     }
 
-    /// A state that can't be saved costs no duplicate turn: a message Telegram sends again is
-    /// recognized by its ID.
-    private func save() {
-        try? state.save(to: stateURL)
+    /// Keep unsaved progress in memory and retry before polling or sending anything else. Never
+    /// expose filesystem errors (which may contain paths) in status or conversation text.
+    private func save() throws {
+        guard needsSave else { return }
+        do {
+            try state.save(to: stateURL)
+            needsSave = false
+        } catch {
+            throw CheckpointError.cannotSave
+        }
     }
 }

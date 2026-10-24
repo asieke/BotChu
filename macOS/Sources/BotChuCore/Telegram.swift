@@ -98,10 +98,30 @@ public struct TelegramMessage: Decodable, Equatable, Sendable {
     public let chat: TelegramChatInfo
     /// Nil for anything but a text message: a photo, a file, a voice note, a sticker…
     public let text: String?
+    /// Presence is enough to refuse these messages, including unknown origin variants. Never
+    /// interpret third-party forwarded or inline-bot content as the owner's instruction.
+    public let isForwarded: Bool
+    public let isViaBot: Bool
 
     enum CodingKeys: String, CodingKey {
         case from, chat, text
         case messageID = "message_id"
+        case forwardOrigin = "forward_origin"
+        case forwardFrom = "forward_from", forwardFromChat = "forward_from_chat"
+        case forwardFromMessageID = "forward_from_message_id", forwardSignature = "forward_signature"
+        case forwardSenderName = "forward_sender_name", forwardDate = "forward_date"
+        case isAutomaticForward = "is_automatic_forward", viaBot = "via_bot"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        messageID = try container.decode(Int64.self, forKey: .messageID)
+        from = try container.decodeIfPresent(TelegramUser.self, forKey: .from)
+        chat = try container.decode(TelegramChatInfo.self, forKey: .chat)
+        text = try container.decodeIfPresent(String.self, forKey: .text)
+        isForwarded = [CodingKeys.forwardOrigin, .forwardFrom, .forwardFromChat, .forwardFromMessageID,
+                       .forwardSignature, .forwardSenderName, .forwardDate, .isAutomaticForward].contains { container.contains($0) }
+        isViaBot = container.contains(.viaBot)
     }
 }
 

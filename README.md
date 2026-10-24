@@ -583,8 +583,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     before the next save, also in a queue going through a relaunch; a section change or a new
     bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
     grows and how far its text scrolls; and the Telegram gateway against a stand-in Bot API: round
-    trips, refused chats, each chat's own bot, busy conversations, repeated updates, relaunches,
-    reconnecting, failed sends and long replies.
+    trips, refused and revoked chats, each chat's own bot, busy conversations, repeated updates,
+    cancelled batches, relaunches, forwarded input, pending-work limits, shared rate-limit waits,
+    reconnecting, failed sends and checkpoints, and long replies.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
     across every column, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
