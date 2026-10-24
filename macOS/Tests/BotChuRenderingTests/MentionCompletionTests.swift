@@ -105,7 +105,15 @@ extension RenderingTests {
         #expect(sample.draft.text == "Ask @QAx Duck ")
         #expect(sample.draft.references.isEmpty)
         try await Task.sleep(for: .milliseconds(50))
-        editor.undoManager?.undo()
+        let undo = try #require(editor.undoManager)
+        undo.undo()
+        #expect(sample.draft.text == "Ask @QA Duck ")
+        #expect(sample.draft.references == [MessageReference.agent(MentionSample.duck, at: 4)])
+        // Redo unlinks it again, and undo relinks it again.
+        undo.redo()
+        #expect(sample.draft.text == "Ask @QAx Duck ")
+        #expect(sample.draft.references.isEmpty)
+        undo.undo()
         #expect(sample.draft.text == "Ask @QA Duck ")
         #expect(sample.draft.references == [MessageReference.agent(MentionSample.duck, at: 4)])
         // Deleting the label leaves no link behind.
@@ -115,7 +123,15 @@ extension RenderingTests {
         // A draft restored with a link (a queued message taken back) shows it linked.
         sample.draft.text = "Ask @QA Duck"
         sample.draft.references = [MessageReference.agent(MentionSample.duck, at: 4)]
-        try await Task.sleep(for: .milliseconds(50))
+        try await sample.settle { editor.string == "Ask @QA Duck" && !editor.mentionReferences.isEmpty }
+        #expect(editor.mentionReferences == sample.draft.references)
+        // With the same text, Unlink leaves ordinary text, and taking the link back relinks it.
+        sample.draft.references = []
+        try await sample.settle { editor.mentionReferences.isEmpty }
+        #expect(editor.mentionReferences.isEmpty)
+        #expect(editor.string == "Ask @QA Duck")
+        sample.draft.references = [MessageReference.agent(MentionSample.duck, at: 4)]
+        try await sample.settle { !editor.mentionReferences.isEmpty }
         #expect(editor.mentionReferences == sample.draft.references)
     }
 
@@ -252,6 +268,33 @@ private func findMentionTextView(in view: NSView) -> ComposerTextView? {
     var references: [MessageReference] = []
 }
 
+/// The message box as `Composer` builds it: its body reads the draft (for the placeholder) and its links
+/// (for the unresolved ones), so a change to either from outside, as taking a queued message back makes,
+/// reaches the editor.
+private struct MentionBox: View {
+    let draft: MentionDraft
+    let completer: MentionCompleter
+    let sources: MentionSources
+    let send: () -> Void
+
+    var body: some View {
+        VStack {
+            Spacer()
+            ZStack(alignment: .topLeading) {
+                if draft.text.isEmpty { Text("Message").foregroundStyle(.tertiary).allowsHitTesting(false) }
+                ComposerEditor(text: Binding(get: { draft.text }, set: { draft.text = $0 }), focused: .constant(true), placeholder: "Message",
+                               send: send, pasteImages: { _ in false },
+                               mentions: completer, mentionSources: sources,
+                               references: Binding(get: { draft.references }, set: { draft.references = $0 }),
+                               unresolvedMentions: Set(draft.references.filter { !sources.status($0).isResolved }.map(\.statusKey)))
+                    .overlay(alignment: .topLeading) { MentionPopupView(completer: completer) }
+            }
+        }
+        .padding(20)
+        .frame(width: 560, height: 420)
+    }
+}
+
 /// A message box with completion over two agents (and a namesake) and two projects, in a window.
 @MainActor private final class MentionSample {
     static let duck = BotRosterEntry(bot: Bot(name: "QA Duck", emoji: "🦆", title: "A Duck that QAs", workspace: "/tmp/duck"))
@@ -277,18 +320,8 @@ private func findMentionTextView(in view: NSView) -> ComposerTextView? {
                          ProjectCatalogEntry(name: "GitChu", repo: "asieke/GitChu", status: .paused)] },
             catalog: { MentionCatalogState(login: "asieke", loaded: true, syncedAt: Date()) },
             favoredRepo: nil, status: { _ in .resolved }, loadProjects: {}, openAgents: {})
-        let draft = draft, completer = completer, sends = sends
-        let view = VStack {
-            Spacer()
-            ComposerEditor(text: Binding(get: { draft.text }, set: { draft.text = $0 }), focused: .constant(true), placeholder: "Message",
-                           send: { sends.count += 1 }, pasteImages: { _ in false },
-                           mentions: completer, mentionSources: sources,
-                           references: Binding(get: { draft.references }, set: { draft.references = $0 }))
-                .overlay(alignment: .topLeading) { MentionPopupView(completer: completer) }
-        }
-        .padding(20)
-        .frame(width: 560, height: 420)
-        let host = NSHostingView(rootView: view)
+        let sends = sends
+        let host = NSHostingView(rootView: MentionBox(draft: draft, completer: completer, sources: sources, send: { sends.count += 1 }))
         window.contentView = host
         host.layoutSubtreeIfNeeded()
         editor = try #require(findMentionTextView(in: host))
@@ -298,6 +331,16 @@ private func findMentionTextView(in view: NSView) -> ComposerTextView? {
     func key(_ code: UInt16, _ characters: String) -> NSEvent {
         NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
                          characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+    }
+
+    /// Lets SwiftUI apply a change to the draft, which the display cycle would on screen: this window
+    /// is never shown, so its layout runs here.
+    func settle(until condition: () -> Bool) async throws {
+        for _ in 0..<50 where !condition() {
+            try await Task.sleep(for: .milliseconds(20))
+            window.updateConstraintsIfNeeded()
+            window.layoutIfNeeded()
+        }
     }
 
     func close() {

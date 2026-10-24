@@ -683,7 +683,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     again at once from those kept, within their budget, and typing dots that move, a Telegram
     message answered in its bot's Home, with stand-ins for the CLI and Telegram, and `@` and `#`
     completion: Return and Tab that insert and never send, Escape, an edited label unlinked and undo
-    linking it again, pasted text that opens nothing, links kept through copy and paste, a message's
+    linking it again (and redo unlinking it), a draft taken back from the queue shown linked, pasted
+    text that opens nothing, links kept through copy and paste, a message's
     links and their context through sending, and the report and New Task boxes without it. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
