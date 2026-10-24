@@ -12,7 +12,12 @@ struct Composer<Controls: View>: View {
     var onAddImages: ([URL]) -> Void = { _ in }
     var onPasteImages: (NSPasteboard) -> Bool = { _ in false }
     var attachmentError: String?
+    /// The agents and projects chosen in the draft from `@` and `#` completion.
+    var references: Binding<[MessageReference]> = .constant([])
+    /// Where `@` and `#` complete from; nil leaves completion off.
+    var mentions: MentionSources?
     @State private var dropTargeted = false
+    @State private var completer = MentionCompleter()
     /// "Message Scout", or for a task, "Message Scout about GitChu #48".
     let placeholder: String
     let running: Bool
@@ -35,12 +40,24 @@ struct Composer<Controls: View>: View {
                     }
                 }
             }
+            let unresolved = unresolvedMentions
+            if let mentions, !unresolved.isEmpty {
+                MentionProblems(problems: unresolved.compactMap { $0.status.problem($0.reference) },
+                                projects: unresolved.contains { $0.reference.kind == .project },
+                                refresh: { mentions.loadProjects() },
+                                unlink: {
+                                    let keys = Set(unresolved.map(\.reference.statusKey))
+                                    references.wrappedValue.removeAll { keys.contains($0.statusKey) }
+                                })
+            }
             ZStack(alignment: .topLeading) {
                 if draft.isEmpty {
                     Text(placeholder).foregroundStyle(.tertiary).padding(.top, 4).padding(.leading, 4)
                         .allowsHitTesting(false).accessibilityHidden(true)
                 }
-                ComposerEditor(text: $draft, focused: focused, placeholder: placeholder, send: onSend, pasteImages: onPasteImages)
+                ComposerEditor(text: $draft, focused: focused, placeholder: placeholder, send: onSend, pasteImages: onPasteImages,
+                               mentions: mentions == nil ? nil : completer, mentionSources: mentions, references: references,
+                               unresolvedMentions: Set(unresolved.map(\.reference.statusKey)))
             }
             if let attachmentError { Text(attachmentError).font(.caption).foregroundStyle(.red) }
             HStack(spacing: 8) {
@@ -62,6 +79,20 @@ struct Composer<Controls: View>: View {
         }
         .takesImageDrops(isTargeted: $dropTargeted, add: onAddImages, paste: onPasteImages)
         .shadow(color: .black.opacity(0.05), radius: 12, y: 3)
+        .overlay(alignment: .topLeading) {
+            if mentions != nil { MentionPopupView(completer: completer, inset: 14) }
+        }
+    }
+
+    /// The draft's mentions that point at nothing now, one per agent or project.
+    private var unresolvedMentions: [(reference: MessageReference, status: ReferenceStatus)] {
+        guard let mentions, !references.wrappedValue.isEmpty else { return [] }
+        var seen = Set<String>()
+        return references.wrappedValue.compactMap { reference in
+            guard seen.insert(reference.statusKey).inserted else { return nil }
+            let status = mentions.status(reference)
+            return status.isResolved ? nil : (reference, status)
+        }
     }
 
     private func button(_ symbol: String, label: String, enabled: Bool = true, help: String, action: @escaping () -> Void) -> some View {

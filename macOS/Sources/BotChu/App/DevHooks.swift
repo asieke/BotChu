@@ -26,6 +26,9 @@ import BotChuCore
 /// - `BOTCHU_TAB`: show the selected bot's tab with this number at launch (0 is Home, 1 its first task).
 /// - `BOTCHU_DRAFT`: with `BOTCHU_DATA_DIR`, put this draft in the shown conversation's message box at
 ///   launch (`\n` starts a new line), to review how the box grows and scrolls.
+/// - `BOTCHU_TYPE`: with `BOTCHU_DATA_DIR`, type this into the shown conversation's message box a moment
+///   after launch, a character at a time as the keyboard does, so `@` and `#` completion opens;
+///   `{down}`, `{up}`, `{tab}`, `{return}` and `{escape}` press those keys.
 /// - `BOTCHU_DEMO=activity`: with `BOTCHU_DATA_DIR`, make the shown conversation a long agent run
 ///   in memory (`DemoActivity`), to review the chat's activity cards without a real turn.
 /// - `BOTCHU_DENSITY`: with `BOTCHU_DATA_DIR`, the chat density (`compact`, `detailed` or `raw`).
@@ -218,6 +221,9 @@ enum DevHooks {
         if dataDir != nil, let draft = env["BOTCHU_DRAFT"], let id = model.selection {
             model.drafts[model.tab(of: id)] = draft.replacingOccurrences(of: "\\n", with: "\n")
         }
+        if dataDir != nil, let typed = env["BOTCHU_TYPE"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { type(typed) }
+        }
         if let text = env["BOTCHU_SEND"], let id = model.selection {
             model.send(text, to: model.tab(of: id))
         }
@@ -241,6 +247,26 @@ enum DevHooks {
             if report != nil, let request = model.issueReport {
                 let filer = model.issueFiler
                 Task { await request.submit(with: filer) }
+            }
+        }
+    }
+
+    /// Types `text` into the message box that has focus (`BOTCHU_TYPE`).
+    static func type(_ text: String) {
+        guard let editor = NSApp.windows.lazy.compactMap({ $0.firstResponder as? ComposerTextView }).first else { return }
+        let keys: [String: (code: UInt16, characters: String)] = ["down": (125, "\u{F701}"), "up": (126, "\u{F700}"), "tab": (48, "\t"),
+                                                                   "return": (36, "\r"), "escape": (53, "\u{1B}")]
+        var rest = Substring(text.replacingOccurrences(of: "\\n", with: "\n"))
+        while let character = rest.first {
+            if character == "{", let end = rest.firstIndex(of: "}"), let key = keys[String(rest[rest.index(after: rest.startIndex)..<end])],
+               let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: editor.window?.windowNumber ?? 0,
+                                            context: nil, characters: key.characters, charactersIgnoringModifiers: key.characters,
+                                            isARepeat: false, keyCode: key.code) {
+                editor.keyDown(with: event)
+                rest = rest[rest.index(after: end)...]
+            } else {
+                editor.insertText(String(character), replacementRange: editor.selectedRange())
+                rest = rest.dropFirst()
             }
         }
     }
