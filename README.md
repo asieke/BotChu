@@ -479,7 +479,25 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     guidance without displaying credentials. Settings also contains the bots folder, the repositories folder, the hosts and where you chose to work
     on repositories, each account's command, the Codex account that draws pets' stills, the
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
-    and default OpenRouter model.
+    and default OpenRouter model, and the Telegram gateway (below).
+  - **Telegram:** an opt-in gateway, in Settings ▸ **Telegram**, lets you message bots from
+    Telegram through a Telegram bot of your own (made with BotFather) while BotChu runs on this
+    Mac. There is no server or webhook: BotChu asks Telegram for new messages itself (long
+    polling). The bot token is kept in the Keychain and never goes into a log, a conversation or a
+    prompt. Only the private chats listed there reach BotChu, each reaching the bot chosen for it,
+    in its Home (not its tasks). Anything else (another person, a group, a bot) is ignored before
+    BotChu reads it or says anything, and Settings lists the chats it refused since launch, with
+    **Allow** for your own. A message goes into the Home through its queue, as one typed in BotChu
+    does, so it resumes the Home's CLI session and waits behind a turn under way (the chat is told).
+    While a turn works, Telegram shows "typing…". When it ends, the turn's reply goes back to that
+    chat as plain text, in messages of up to 4,096 characters (at most eight, then "the rest is in
+    BotChu"). A failed or stopped turn says so, without its error. It takes text only: photos, files
+    and edits get a reply saying so, and `/start` or `/help` says where messages go. Where its
+    updates are up to and the replies it owes are kept in `telegram.json`, so a relaunch neither
+    misses a message nor starts a turn twice: a message Telegram sends again has the same ID in
+    the conversation. A reply that fails is tried again, and one Telegram won't take is noted in the
+    conversation. While the Mac sleeps or BotChu isn't running, messages wait on Telegram for up to
+    a day. See [Telegram gateway](docs/telegram.md) for setup and troubleshooting.
   - **Reporting bugs and features:** the ladybug button at the toolbar's trailing end, on every
     screen, or **Help ▸ Report a Bug or Feature…** opens a sheet with one field, which takes up to
     eight images as the message box does. **Submit** (⌘↩)
@@ -553,16 +571,20 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     by `MemoryWriter.swift`: one save at a time, read back to check it held, with notes that wait
     and are tried again.
     Reports filed from the app (their title, description, app state and `gh issue create`) are in
-    `IssueReport.swift`.
+    `IssueReport.swift`. The Telegram gateway is in `Telegram.swift` (the Bot API client: long
+    polling, sending, and errors that never hold the token) and `TelegramGateway.swift` (which chats
+    may reach which bot, message IDs that recognize a repeated update, replies cut to Telegram's
+    limit, the saved offset and replies owed, and retries).
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
     in standard system materials: `App/` (the app, window, model, each conversation's state, observed
     on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
-    computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, and the
-    skills the app lists and edits, `SkillLibrary.swift`),
+    computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, the
+    skills the app lists and edits, `SkillLibrary.swift`, and the Telegram gateway in the app,
+    `TelegramBridge.swift`),
     `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers and Skills), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share), `Inspector/` (the
     status sidebar, a bot's and a task's), `Editor/` (the bot, Markdown, New Task and report sheets), `Settings/` (with
-    the hosts), and
+    the hosts and Telegram), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
     only to identify the CLI an account runs).
@@ -591,9 +613,13 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
     before the next save, also in a queue going through a relaunch; a section change or a new
-    bot while `index.json` can't be saved, then the retry and a reload; how tall the
-    message box grows and how far its text scrolls; and skills: their frontmatter, finding and
-    making them, which a bot uses, and the catalog, or (on a host) the files in full, that sessions get.
+    bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
+    grows and how far its text scrolls; skills: their frontmatter, finding and making them, which a
+    bot uses, and the catalog, or (on a host) the files in full, that sessions get; and the Telegram
+    gateway against a stand-in Bot API: round trips, refused and revoked chats, each chat's own bot,
+    busy conversations, repeated updates, cancelled batches, relaunches, forwarded input,
+    pending-work limits, shared rate-limit waits, reconnecting, failed sends and checkpoints, and
+    long replies.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
     across every column, streaming updates, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
@@ -616,7 +642,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     tab that folds finished runs and scrolls to one the chat opens, and switching without a flash:
     the toolbar kept, the message box focused in the same update, the chat at its very end, pets
     that never blink out while a clip loads, rich replies shown only once rendered and shown
-    again at once from those kept, within their budget, and typing dots that move. Set
+    again at once from those kept, within their budget, and typing dots that move, and a Telegram
+    message answered in its bot's Home, with stand-ins for the CLI and Telegram. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `activityChatRendersGroupsCardsAndLiveWork`,
@@ -635,12 +662,15 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     throwaway data for checking its screens (see **Test**).
 - Data: each bot's `.botchu/` folder in its workspace (above), and `index.json` in
   `~/Library/Application Support/BotChu/`, which only lists the bots' workspaces in sidebar order,
-  with the section each is in.
+  with the section each is in, and `telegram.json` there: where the Telegram gateway's updates are
+  up to and the replies it owes (IDs only, no text).
   Versions before bot folders kept everything in `bots.json` and `threads/` there; the first launch
   moves them into the bots' folders and keeps the old files in `backup-before-bot-folders/`.
   Project metadata stays in each repository’s `PROJECT.md` on GitHub; what Projects read from GitHub
-  for the signed-in account is saved in `projects.json` there, written off the main thread. Settings, with added CLI profiles, the hosts and where you chose to work on repositories, are in the `defaults` domain
-  `local.BotChu`; the OpenRouter key is in the Keychain (service `local.BotChu`). Bot workspaces are
+  for the signed-in account is saved in `projects.json` there, written off the main thread. Settings,
+  with added CLI profiles, the hosts, where you chose to work on repositories and the Telegram
+  chats, are in the `defaults` domain `local.BotChu`; the OpenRouter key and the Telegram bot token
+  are in the Keychain (service `local.BotChu`). Bot workspaces are
   under `~/BotChu/` by default; tasks run in worktrees of checkouts on this Mac or on a host. No
   database and no port.
 - Each turn runs one headless CLI process in the bot's folder, or a task's worktree. On a host,
@@ -758,13 +788,16 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   reads each account's usage through the same client as the inspector. It prints only the normalized
   usage fields, never raw CLI output or credentials. Muse makes its brief usage request; OpenRouter
   needs `OPENROUTER_API_KEY` in the environment. This is separate from the two-turn conversation smoke.
+- Telegram end to end: the gateway's tests use stand-ins for Telegram, so a real exchange is
+  checked by hand, with your own Telegram bot: see
+  [Checking it end to end](docs/telegram.md#checking-it-end-to-end).
 - Smoke test after deploy: `macOS/install.sh` fails unless the installed app starts (launched hidden,
   found by its executable's path in `ps`, so a review copy running meanwhile doesn't count, and
   quit again unless it was already open).
 
 ## Deploy
 - **Host machine:** `Alexs-MacBook-Pro-92440`. The live checkout is `~/Desktop/WORKSPACE/BotChu`, which always stays on `main`; the app is installed to `~/Applications/BotChu.app`.
-- **Secrets:** None in the repository or `.env`. The OpenRouter key lives in the Keychain, entered in Settings.
+- **Secrets:** None in the repository or `.env`. The OpenRouter key and the Telegram bot token live in the Keychain, entered in Settings.
 - **Deploy only on request:** `scripts/deploy.sh` sets `DEPLOY_ON_REQUEST=1`, because installing restarts BotChu and stops any bot mid-turn. A full `scripts/sync.sh` fetches and reports how far `origin/main` is ahead of what is live, and changes nothing; run `scripts/deploy.sh` in the live checkout to test and install `main` (`--force` reinstalls anyway). Every attempt is a line in `.git/deploys`.
 - **Sync first:** run `scripts/sync.sh` before running or restarting the app or using its live data, and after merging a pull request. It refuses if `~/Desktop/WORKSPACE/BotChu` has local edits or commits not on `origin/main`; fix those through a pull request. Unless it refuses, it then removes worktrees whose pull request merged. Run from a worktree, it removes them too, but does not deploy.
 - **Session start:** Claude Code runs `scripts/sync.sh --inspect`, and every other agent runs it first. It fetches and reports the live checkout's state and what a full sync would do, but deploys nothing, so a session that only reviews or inspects never touches the app. A full sync that refuses blocks live-app operations, not reviews.

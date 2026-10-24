@@ -2,7 +2,8 @@ import Foundation
 import Observation
 import BotChuCore
 
-/// Settings kept in `defaults` (domain `local.BotChu`); the OpenRouter key is in the Keychain.
+/// Settings kept in `defaults` (domain `local.BotChu`); the OpenRouter key and the Telegram bot
+/// token are in the Keychain.
 @MainActor @Observable
 final class AppSettings {
     private let defaults: UserDefaults
@@ -27,6 +28,10 @@ final class AppSettings {
     var petAccountID: String { didSet { defaults.set(petAccountID, forKey: "petAccountID") } }
     /// The OpenRouter model that turns a pet's stills into clips.
     var petModelID: String { didSet { defaults.set(petModelID, forKey: "petModelID") } }
+    /// Whether the Telegram gateway runs (`TelegramBridge`), and the private chats it lets reach a
+    /// bot's Home.
+    var telegramEnabled: Bool { didSet { defaults.set(telegramEnabled, forKey: "telegramEnabled") } }
+    var telegramChats: [TelegramChat] { didSet { save(telegramChats, forKey: "telegramChats") } }
     /// Invalidates allowance readings when the saved OpenRouter key changes, without retaining it.
     var usageCredentialRevision = 0
 
@@ -51,6 +56,8 @@ final class AppSettings {
         commands = defaults.dictionary(forKey: "commands") as? [String: String] ?? [:]
         petAccountID = defaults.string(forKey: "petAccountID") ?? "codex-personal"
         petModelID = defaults.string(forKey: "petModelID") ?? PetVideo.defaultModel.id
+        telegramEnabled = defaults.bool(forKey: "telegramEnabled")
+        telegramChats = Self.load([TelegramChat].self, from: defaults, forKey: "telegramChats") ?? []
     }
 
     func account(_ id: String) -> Account { accounts.first { $0.id == id } ?? Accounts.account(id: id) }

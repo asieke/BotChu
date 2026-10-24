@@ -98,6 +98,8 @@ final class AppModel {
     /// bots in no section first. See `SidebarSections.swift`.
     var sections: [UUID: String] = [:]
     var delegation: SubagentRuntime!
+    /// Messages from Telegram, into bots' Homes, and their replies back (Settings ▸ Telegram).
+    var telegram: TelegramBridge!
     /// Each bot's tasks, open and closed, oldest first.
     var tasks: [UUID: [BotTask]] = [:]
     /// Every conversation (each bot's Home, and each task), observed one by one: see
@@ -234,6 +236,7 @@ final class AppModel {
         warmMarkdown()
         delegation = SubagentRuntime(model: self, root: (store != nil || DevHooks.dataDir != nil)
             ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot)
+        telegram = TelegramBridge(model: self, stateURL: self.store.root.appendingPathComponent("telegram.json"))
         selection = bots.first?.id
         showSavedProjects()
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
@@ -860,8 +863,10 @@ final class AppModel {
 
     // MARK: Turns
 
+    /// `id` is the message's own: a message from Telegram has one made from it, so the same
+    /// message sent again is recognized.
     @discardableResult
-    func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = []) -> Bool {
+    func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [], id: UUID = UUID()) -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard images.count <= ImageAttachment.maximumCount else {
             attachmentErrors[target] = "Attach up to 8 images per message. Remove an image before sending."
@@ -872,7 +877,7 @@ final class AppModel {
             return beginTurn(text, for: target, message: nil)
         }
         var queue = messageQueues[target] ?? MessageQueue()
-        queue.enqueue(ChatMessage(role: .user, text: text, images: images))
+        queue.enqueue(ChatMessage(id: id, role: .user, text: text, images: images))
         // Save before clearing the composer; a failed write must leave the owner's draft intact.
         guard saveQueue(queue, for: target) else { return false }
         messageQueues[target] = queue
@@ -1441,6 +1446,12 @@ final class AppModel {
 
     private func append(_ message: ChatMessage, to target: ChatTarget) {
         conversation(target).append(message)
+    }
+
+    /// Adds one of BotChu's own lines to a conversation, and saves it.
+    func note(_ text: String, in target: ChatTarget) {
+        append(ChatMessage(role: .note, text: text), to: target)
+        saveThread(target)
     }
 
     /// Parses the recent replies of every conversation in the background, so a conversation

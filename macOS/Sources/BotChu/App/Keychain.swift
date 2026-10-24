@@ -5,6 +5,9 @@ import Security
 enum Keychain {
     static let service = "local.BotChu"
     static let openRouterAccount = "openrouter"
+    /// The Telegram gateway's bot token. A review copy (`DevHooks`) has its own, so it never reads
+    /// the real bot's messages.
+    @MainActor static var telegramAccount: String { DevHooks.dataDir == nil ? "telegram" : "telegram-dev" }
 
     static func get(_ account: String) -> String? {
         let query: [String: Any] = [
