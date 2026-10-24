@@ -182,4 +182,176 @@ import Testing
         try home.move(toWorkspace: destination)
         #expect(BotHome(workspace: destination).loadQueuedMessages(task: task).map(\.id) == [taskMessage.id])
     }
+
+    /// #77: a message the CLI took stays apart from unsent ones, so recovery never sends it again.
+    @Test func takenMessagesAreNeverSentAgainAndGoBackIntoTheTranscript() {
+        let start = ChatMessage(role: .user, text: "Fix the build")
+        let steer = ChatMessage(role: .user, text: "Also run the tests")
+        let later = ChatMessage(role: .user, text: "Then update the README")
+        var queue = MessageQueue()
+        queue.enqueue(steer)
+        queue.enqueue(later)
+        queue.markInFlight(steer.id)
+        let taken = queue.acknowledge()
+        #expect(taken == steer)
+        #expect(queue.taken == [steer])
+        #expect(queue.next == later)
+        // A transcript that doesn't hold it keeps it taken; one that does lets it go.
+        queue.saved([start])
+        #expect(queue.taken == [steer])
+        queue.saved([start, steer])
+        #expect(queue.taken.isEmpty)
+
+        // BotChu stopped between writing the taken and the pending messages: it is in both.
+        let both = MessageQueue(saved: [steer, later], taken: [steer, steer], delivered: [start])
+        #expect(both.taken == [steer])
+        #expect(both.messages == [later])
+        #expect(both.next == later)
+        let restored = both.restoringTaken(into: [start])
+        #expect(restored.map(\.id).prefix(2) == [start.id, steer.id])
+        #expect(restored.count == 3)
+        #expect(restored.last?.role == .note)
+        #expect(restored.last?.text.hasPrefix("The bot took this message before BotChu could save") == true)
+        // Saved in the transcript, but not the queue after it: nothing to restore.
+        let delivered = MessageQueue(saved: [later], taken: [steer], delivered: [start, steer])
+        #expect(delivered.taken.isEmpty)
+        #expect(delivered.restoringTaken(into: [start, steer]).map(\.id) == [start.id, steer.id])
+    }
+
+    /// #77: saving the transcript fails (its file is locked) while saving the queue works. The
+    /// message the CLI took stays in the saved queue, the rest pause, and a relaunch puts it back
+    /// into the transcript once it can be saved, without sending it again. Home and a task.
+    @Test(arguments: [false, true]) func takenFollowUpSurvivesAFailedTranscriptSaveAndARelaunch(inTask: Bool) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let home = BotHome(workspace: root.path)
+        let task: UUID? = inTask ? UUID() : nil
+        let file = task.map(home.taskThreadURL) ?? home.threadURL
+        func lock(_ locked: Bool) throws { try FileManager.default.setAttributes([.immutable: locked], ofItemAtPath: file.path) }
+        func savedTranscript() -> [ChatMessage] { task.map { home.loadThread(task: $0) } ?? home.loadThread() }
+        defer {
+            try? lock(false)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let earlier = [ChatMessage(role: .user, text: "Fix the build"), ChatMessage(role: .assistant, text: "On it")]
+        var queue = MessageQueue()
+        #expect(home.checkpoint(earlier, queue: &queue, task: task).saved)
+        let steer = ChatMessage(role: .user, text: "Also run the tests")
+        let later = ChatMessage(role: .user, text: "Then update the README")
+        queue.enqueue(steer)
+        queue.enqueue(later)
+        try home.saveQueue(queue, task: task)
+        queue.markInFlight(steer.id)
+        let taken = queue.acknowledge()
+        #expect(taken == steer)
+
+        try lock(true)
+        let failed = home.checkpoint(earlier + [steer], queue: &queue, task: task)
+        #expect(!failed.saved)
+        #expect(failed.failures.map(\.item) == [.conversation(paused: true)])
+        #expect(failed.failures.first?.file == file)
+        let message = try #require(failed.failures.first?.message)
+        #expect(message.hasPrefix("Couldn't save this conversation ("))
+        #expect(message.contains("thread.jsonl"))
+        #expect(message.contains("aren't sent again. Pending messages wait for Send next."))
+        #expect(!message.contains(".."))
+        #expect(queue.taken == [steer])
+        #expect(queue.isPaused)
+        #expect(queue.next == nil)
+        // Both durable copies: the transcript as last saved, and the queue with the taken message.
+        #expect(savedTranscript().map(\.id) == earlier.map(\.id))
+        #expect(home.loadQueuedMessages(task: task).map(\.id) == [later.id])
+        #expect(home.loadQueuePaused(task: task))
+        #expect(home.loadQueue(delivered: savedTranscript(), task: task).taken.map(\.id) == [steer.id])
+
+        // Relaunch while the transcript still can't be saved: neither lost nor sent again.
+        var transcript = savedTranscript()
+        var relaunch = home.recoverQueue(transcript: &transcript, task: task)
+        #expect(relaunch.queue.taken.map(\.id) == [steer.id])
+        #expect(relaunch.queue.messages.map(\.id) == [later.id])
+        #expect(relaunch.queue.next == nil)
+        #expect(relaunch.failures.map(\.item) == [.conversation(paused: true)])
+        #expect(Array(transcript.map(\.id).prefix(3)) == (earlier + [steer]).map(\.id))
+        #expect(savedTranscript().map(\.id) == earlier.map(\.id))
+        #expect(home.loadQueue(delivered: savedTranscript(), task: task).taken.map(\.id) == [steer.id])
+
+        // Once it can be saved, the next relaunch puts the message back into the transcript, once,
+        // and leaves only the unsent message, still paused, to send.
+        try lock(false)
+        transcript = savedTranscript()
+        relaunch = home.recoverQueue(transcript: &transcript, task: task)
+        #expect(relaunch.failures.isEmpty)
+        #expect(transcript.map(\.role) == [.user, .assistant, .user, .note])
+        #expect(Array(transcript.map(\.id).prefix(3)) == (earlier + [steer]).map(\.id))
+        #expect(savedTranscript().map(\.id) == transcript.map(\.id))
+        #expect(relaunch.queue.taken.isEmpty)
+        #expect(relaunch.queue.messages.map(\.id) == [later.id])
+        #expect(relaunch.queue.isPaused)
+        #expect(!FileManager.default.fileExists(atPath: (task.map(home.taskURL) ?? home.url).appendingPathComponent("taken.jsonl").path))
+        transcript = savedTranscript()
+        let again = home.recoverQueue(transcript: &transcript, task: task)
+        #expect(again.queue.taken.isEmpty)
+        #expect(transcript.map(\.id) == savedTranscript().map(\.id))
+    }
+
+    /// #77: the next transcript save that works, such as the one at the turn's end, takes the
+    /// message out of the saved queue; a failure with nothing taken doesn't touch the queue.
+    @Test func laterSavedTranscriptReleasesTheTakenMessage() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let home = BotHome(workspace: root.path)
+        func lock(_ locked: Bool) throws { try FileManager.default.setAttributes([.immutable: locked], ofItemAtPath: home.threadURL.path) }
+        defer {
+            try? lock(false)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let earlier = [ChatMessage(role: .user, text: "Fix the build")]
+        var queue = MessageQueue()
+        #expect(home.checkpoint(earlier, queue: &queue).saved)
+        try lock(true)
+        let untouched = home.checkpoint(earlier, queue: &queue)
+        #expect(!untouched.saved)
+        #expect(untouched.failures.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: home.queueURL().path))
+
+        let steer = ChatMessage(role: .user, text: "Also run the tests")
+        queue.enqueue(steer)
+        queue.markInFlight(steer.id)
+        _ = queue.acknowledge()
+        let failed = home.checkpoint(earlier + [steer], queue: &queue)
+        // Nothing left to pause.
+        #expect(failed.failures.map(\.item) == [.conversation(paused: false)])
+        #expect(failed.failures.first?.message.contains("Send next") == false)
+        #expect(!home.loadQueuePaused())
+        #expect(home.loadQueue(delivered: home.loadThread()).taken.map(\.id) == [steer.id])
+
+        try lock(false)
+        let reply = ChatMessage(role: .assistant, text: "Tests pass")
+        let later = home.checkpoint(earlier + [steer, reply], queue: &queue)
+        #expect(later.saved)
+        #expect(later.failures.isEmpty)
+        #expect(queue.taken.isEmpty)
+        #expect(home.loadThread().map(\.id) == (earlier + [steer, reply]).map(\.id))
+        #expect(home.loadQueue(delivered: []).taken.isEmpty)
+        #expect(home.loadQueuedMessages().isEmpty)
+    }
+
+    /// #77: when the queue can't be saved either, that is said too.
+    @Test func failedQueueSaveIsReportedWithItsFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let home = BotHome(workspace: root.path)
+        let task = UUID()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var queue = MessageQueue()
+        let steer = ChatMessage(role: .user, text: "Also run the tests")
+        queue.enqueue(steer)
+        queue.markInFlight(steer.id)
+        _ = queue.acknowledge()
+        // Neither file can be written: each is a folder.
+        try FileManager.default.createDirectory(at: home.taskThreadURL(task), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home.taskURL(task).appendingPathComponent("taken.jsonl"), withIntermediateDirectories: true)
+        let failed = home.checkpoint([steer], queue: &queue, task: task)
+        #expect(failed.failures.map(\.item) == [.conversation(paused: false), .pendingMessages])
+        #expect(failed.failures.last?.file == home.queueURL(task: task))
+        #expect(failed.failures.last?.message.hasPrefix("Couldn't save pending messages (") == true)
+        #expect(queue.taken == [steer])
+    }
 }
