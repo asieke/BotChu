@@ -5,7 +5,7 @@ import Testing
 /// #107's measurements, opt-in and not part of `check`: what saving a conversation costs the main
 /// actor now and before, how long a save takes to be written, how many bytes it writes and how many
 /// states it keeps, for 1,500- and 5,000-message histories and multi-megabyte tool output; and what
-/// handing a 300-call turn to run reviews costs the main actor. It asserts nothing about time.
+/// handing a 300-call turn to run reviews costs the main actor, and reading it as a review starts. It asserts nothing about time.
 ///
 ///     BOTCHU_PERSISTENCE_BENCHMARK=/tmp/persistence.txt swift test --configuration release \
 ///         --package-path macOS --filter persistenceBenchmark
@@ -78,11 +78,12 @@ import Testing
                                 before.line, asking.line, written.line, stats.runs, stats.coalesced, Double(stats.bytesWritten) / 1_048_576, stats.peakRetained))
         }
 
-        // Handing a 300-call task turn to run reviews: the main actor claims it; the request is built off it.
-        lines += ["", "run review handover, 300 tool calls | main actor (claim and hand over) | request built off the main actor"]
+        // Handing a 300-call task turn to run reviews: the main actor only extends the task's
+        // stretch (#138); its day is read off the main actor, from the saved transcript, as a review starts.
+        lines += ["", "run review handover, 300 tool calls | main actor (extend the stretch) | the day read off the main actor"]
         let bot = Bot(name: "Bench", workspace: root.appendingPathComponent("bench-bot").path)
-        try BotHome(workspace: bot.workspace).save(bot)
-        let task = BotTask(for: bot, repo: "asieke/BotChu", checkout: "/tmp/x", work: nil, brief: "Fix the thing")
+        let home = BotHome(workspace: bot.workspace)
+        try home.save(bot)
         var thread: [ChatMessage] = [ChatMessage(role: .user, text: "Fix the thing")]
         for i in 0..<300 {
             thread.append(ChatMessage(role: .tool, text: "", toolID: "t\(i)", toolName: i % 2 == 0 ? "Bash" : "Read",
@@ -91,21 +92,28 @@ import Testing
                                       toolState: i % 17 == 0 ? .failed : .done))
             if i % 10 == 0 { thread.append(ChatMessage(role: .assistant, text: String(repeating: "Progress note with `code`. ", count: 20))) }
         }
-        let evaluator = RunEvaluator(workspace: { _ in bot.workspace }, sharedMemoryPath: { "" }, teamPath: { "" })
+        let evaluator = RunEvaluator(bot: { $0 == bot.id ? bot : nil }, sharedMemoryPath: { "" }, teamPath: { "" })
         evaluator.runner = { _ in "" }
-        evaluator.limits.delay = 3_600
         var handover = Sample(), build = Sample()
         for _ in 0..<30 {
-            // A turn of its own each time (its first message names it).
-            let turn = [thread[0], ChatMessage(role: .assistant, text: "Starting.")] + thread.dropFirst()
-            let subject = try #require(EvaluationRequest.taskTurnSubject(task, of: bot, thread: turn, turnStart: 1))
-            let start = DispatchTime.now().uptimeNanoseconds
-            evaluator.enqueue(subject, workspace: bot.workspace, account: task.account) { toolFree in
-                EvaluationRequest.taskTurn(task, of: bot, thread: turn, turnStart: 1, ending: .finished, error: nil, machine: "This Mac", snapshot: toolFree)
+            // A task of its own each time, its turn saved as its end saves it.
+            let task = BotTask(for: bot, repo: "asieke/BotChu", checkout: "/tmp/x", work: nil, brief: "Fix the thing")
+            try home.save(task)
+            let turn = thread.map { message in
+                var message = message
+                message.id = UUID()
+                return message
             }
+            try home.saveThread(turn, task: task.id)
+            let conversation = ReviewConversation(botID: bot.id, taskID: task.id)
+            let start = DispatchTime.now().uptimeNanoseconds
+            evaluator.turnEnded(conversation, prompt: turn[0].id, last: turn.last!.id, accountID: task.accountID)
             handover.add(Self.ms(since: start))
+            let stretch = try #require(evaluator.states[bot.id]?.stretches.first { $0.conversation == conversation })
+            let input = ReviewDayInput(botID: bot.id, botName: bot.name, workspace: bot.workspace,
+                                       sources: [ReviewDayInput.Source(stretch: stretch, workspace: bot.workspace, owner: bot.name)])
             let built = DispatchTime.now().uptimeNanoseconds
-            _ = EvaluationRequest.taskTurn(task, of: bot, thread: turn, turnStart: 1, ending: .finished, error: nil, machine: "This Mac")
+            _ = ReviewDay.build(input, limits: evaluator.limits)
             build.add(Self.ms(since: built))
         }
         await evaluator.settle()

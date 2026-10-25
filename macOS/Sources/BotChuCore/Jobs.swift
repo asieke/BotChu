@@ -535,16 +535,25 @@ public enum JobPlanner {
     /// `JobLimits.onTimeGrace`, or late once, within the job's catch-up window, when it runs missed
     /// runs. Earlier ones fold into it, so a backlog is never replayed.
     public static func decide(_ job: Job, now: Date, grace: TimeInterval = JobLimits.onTimeGrace) -> JobDecision {
-        guard job.enabled, let latest = job.schedule.latest(atOrBefore: now, after: job.handledThrough) else { return .none }
-        let earlier = job.schedule.count(after: job.handledThrough, before: latest)
+        guard job.enabled else { return .none }
+        return decide(job.schedule, handledThrough: job.handledThrough, missedRuns: job.missedRuns, catchUpWindow: job.catchUpWindow,
+                      now: now, grace: grace)
+    }
+
+    /// The same for a schedule of BotChu's own that isn't a job, from the last occurrence it
+    /// handled: the daily time of run reviews (`ReviewTime`).
+    public static func decide(_ schedule: JobSchedule, handledThrough: Date, missedRuns: MissedRunPolicy, catchUpWindow: TimeInterval,
+                              now: Date, grace: TimeInterval = JobLimits.onTimeGrace) -> JobDecision {
+        guard let latest = schedule.latest(atOrBefore: now, after: handledThrough) else { return .none }
+        let earlier = schedule.count(after: handledThrough, before: latest)
         let late = now.timeIntervalSince(latest)
         if late <= grace { return .run(occurrence: latest, trigger: .scheduled, coalesced: earlier) }
-        switch job.missedRuns {
-        case .runOnce where late <= job.catchUpWindow:
+        switch missedRuns {
+        case .runOnce where late <= catchUpWindow:
             return .run(occurrence: latest, trigger: .catchUp, coalesced: earlier)
         case .runOnce:
             return .skip(occurrence: latest, coalesced: earlier,
-                         reason: "Missed by more than its catch-up window (\(JobWords.duration(job.catchUpWindow))) while BotChu was closed or the Mac asleep.")
+                         reason: "Missed by more than its catch-up window (\(JobWords.duration(catchUpWindow))) while BotChu was closed or the Mac asleep.")
         case .skip:
             return .skip(occurrence: latest, coalesced: earlier,
                          reason: "Missed while BotChu was closed or the Mac asleep; this job skips missed runs.")

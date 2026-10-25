@@ -616,8 +616,8 @@ final class SubagentRuntime {
             self.restored.remove(id)
             self.replace(record)
             self.queueDelivery(record)
-            // A review of the attempt, in the background; the handoff doesn't wait for it.
-            if reviewed { self.model?.evaluateSubagentRun(record, messages: messages) }
+            // The attempt joins the next run review of the bot it ran as; the handoff doesn't wait for one.
+            if reviewed { self.model?.evaluateSubagentRun(record) }
             for (parent, outcome) in self.pendingFinishes where !self.children(of: parent).contains(where: { $0.phase.isActive }) {
                 self.finish(parent, phase: outcome.0, error: outcome.1)
             }

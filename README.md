@@ -509,7 +509,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     job, where its schedule is up to and its runs, and each run's transcript in `runs/<run>.jsonl`),
     a log of every turn and job run (`logs/<date>.log`:
     the command, where it ran, how long it took, the exit status, any error and the CLI's error output), notes
-    it couldn't save to memory yet (`memory-unsaved.json`, `shared-memory-unsaved.json`), the reviews of its runs (`evaluations/`, below) and its
+    it couldn't save to memory yet (`memory-unsaved.json`, `shared-memory-unsaved.json`), the reviews of its work (`evaluations/`
+    and `run-reviews.json`, below) and its
     pet (`pet/`: `video.json`, `stills/<pose>.png`, `clips/<activity>.mp4` and the appearance it
     was made from) in `.botchu/` inside its workspace, with a `.gitignore` so a repository never commits them. The bot
     is told it can search them for earlier conversations. **History & Logs** in the status sidebar
@@ -608,69 +609,109 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     tries them at once. A bot edits a
     memory file itself only to reorganize it when asked. Whether a reply recognizes an established
     preference is up to the bot's model, which its instructions ask; saving it is BotChu's.
-  - **Run reviews:** a minute after a task's turn or a sub-agent's run ends, if it used tools or
-    failed, BotChu reviews it in the background: what went well, what didn't, and whether anything
-    should change in how the bot works. The turn's receipt, the handoff, queued messages and
-    switching conversations never wait for it, and a review's failure never changes how the run
-    is reported. One review runs at a time across all bots, as a new session on the account the run
-    used, with no tools at all, which the CLI itself enforces: Claude Code without its built-in tools
-    (`--tools ""`), with every tool denied, no MCP servers, skills or commands, and nothing approved
-    (`dontAsk`); Codex in its read-only sandbox approving nothing, without your Codex configuration
-    (its MCP servers and plugins) or rules, with its shell, code mode, sub-agents, apps, browser and
-    web search turned off; Muse in its empty preset, with its shell, writes and web tools off.
-    Nothing bypasses permissions, and no review session is saved. A review that still reports a tool
-    call is stopped at once and fails (**tool use**), keeping nothing. Antigravity has no such mode,
-    and Pi's (`--no-tools`) hasn't been checked with a real run, so their runs are recorded as not
-    reviewed, spending nothing. A review runs in an empty temporary folder (removed afterwards),
-    without the delegation helper, at utility priority, and only while that account has no turn,
-    sub-agent or scheduled job running: at most 12 model calls a day per account, retries included, each review
-    stopped after 5 minutes (its CLI interrupted, then terminated, then killed), with one automatic
-    retry; an account out of allowance waits an hour, and a review still waiting 48 hours after its
-    run (or after its **Retry**) is skipped. A review is neither a task turn nor a sub-agent, so it is never reviewed itself,
-    and BotChu's turn log records it as a "run review", without lines that look like secrets. It sees
-    a snapshot of up to 24,000 characters: how the run ended (a finished turn isn't proof the work
-    succeeded; a stopped run is neither a failure nor finished work, and isn't continued), the brief,
-    the owner's messages and corrections, the bot's replies and handoff, and each tool call with its
-    exit code (and the end of a failed one's output), each labelled so the review cites them as
-    evidence. Lines that look like secrets are left out before anything is shortened; text from the
-    run is indented and BotChu's own tags in it are neutralized, so it can't pose as a label or end
-    the snapshot, and only the labels BotChu wrote count as evidence. With it come the bot's
-    instructions and memory as they are now, the shared memory and `TEAM.md`, all as evidence rather
-    than instructions. The result is **No durable change**, **Memory updated**, **Change proposed**,
-    or a failure, with sign-in, allowance, the review itself, tool use and saving told apart. BotChu
-    applies at most three changes a run, each citing evidence, verified, general and one line of
-    plain text, and only to the bot's own `MEMORY.md` (which sessions read as data, not
-    instructions), through the same writer as **Saving memory** (above): notes, and corrections and
-    removals of a note that is there exactly, once (never one that merely contains it). Every change
-    to `INSTRUCTIONS.md` is a proposal for you, as are the shared memory, `TEAM.md`, the bot that
-    delegated the run, the repository's own documents (which change through its pull requests; a
-    review never edits a repository), an unverified hypothesis, a change without evidence, a
-    correction of a note that has changed since, and any line that could loosen a safeguard, widen
-    what the bot may do, or name a web address or a command to run. A change of more than one line,
-    or with Markdown or HTML structure (a heading, list item, quote, table row, code fence or tag) or
-    control characters, is left out before anything is written, as are one-off details; secrets,
-    transcripts and command output are left out, as in memory, and a secret is never quoted; and a
-    note memory lost since the run (a correction or `Forget:`) isn't saved again. A sub-agent's run
-    is reviewed about the bot it ran as, on its account, and the caller's own turns about the caller,
-    so a lesson isn't saved to every bot that took part. Each review is saved at every step in
-    `.botchu/evaluations/<run>.json` in that bot's folder, without lines that look like secrets, so a
-    relaunch neither repeats one nor applies one twice (quitting stops a running review, which runs
-    again after the next launch); the newest 50 a bot are kept, and any that called the model in
-    the last 24 hours, which the daily limit still counts. A change that couldn't be saved stays
-    with its review, whose **Retry** saves it, rather than waiting with the conversations' notes, and
-    conversations' notes still waiting for the file are saved first, on their own. **Activity ▸ Run
-    reviews** in the status sidebar lists them (Home: those about the bot; a task: those of its turns
-    and of its sub-agents), each opening to its summary, what worked and didn't, the evidence it
-    cited, every line it added and removed (read from the file just before and just after the save,
-    so a review that wrote anything never shows as no change, and no copy of the file is kept), its
-    proposals (with Copy) and what it left out, with **Revert**, which undoes each of its changes only
-    where the file still holds exactly what it left, in the same section, and lists any you have
-    changed since as not reverted, keeping your edit; and **Retry**. Home gets a note for a change
-    made or proposed, and for a failure once per kind until a review succeeds; reviews that change
-    nothing stay quiet. Saved notes reach the bot's next new session, never a running one. Settings ▸
-    **Run reviews** turns them off; they are on by default, since the CLIs enforce the tool-free
-    sessions and only memory notes change by themselves, and they spend the account's allowance.
-    Only the installed app runs reviews, never tests or review copies.
+  - **Run reviews:** once a day, at the review time (04:00 in this Mac's time zone, unless you set
+    another in Settings ▸ **Run reviews**), BotChu reviews each bot's work since its last review in
+    one pass, in the background: every conversation, its Home and its tasks, with the sub-agent runs
+    they delegated that ran as it, for what went well, what didn't, and whether anything should
+    change in how the bot works. A turn's or sub-agent's end only extends its conversation's stretch
+    of unreviewed work, from the last message reviewed (its cursor) to the end of its last finished
+    turn, so nothing is reviewed twice and nothing between two reviews is missed: it builds nothing
+    and adds no review, and the turn's receipt, the handoff, queued messages and switching
+    conversations never wait for one. A sub-agent that ran as another bot joins that bot's review,
+    never one of its own, and the caller's own turns are reviewed about the caller, so a lesson isn't
+    saved to every bot that took part. The time and missed days come from the jobs' `JobSchedule`
+    and `JobPlanner`, though a review isn't a job and isn't listed in Jobs: the jobs' 20-second check,
+    a wake and a clock change make the day's reviews due, and a review time missed while BotChu was
+    closed or the Mac asleep is due once, at the first chance afterwards, never twice for one day,
+    whatever a change of the Mac's time zone or daylight saving does. Each bot has at most one review
+    waiting: one that can't run before the next review time (its account busy, or out of allowance)
+    takes the next day too, since its cursors haven't moved, and work left unreviewed for 7 days
+    (from its end, or from the last **Retry** of its review) is skipped and counted as not reviewed
+    in time. **Review now** in Activity reviews a bot's unreviewed work (in Home), or a task's alone,
+    moving only that task's cursor, without waiting for the review time, under the same rules. Only
+    work with signal is reviewed, as its transcripts show without a model call: a failed turn or
+    sub-agent run (a handoff that couldn't be saved fails its run), a run the owner stopped, an owner
+    message after a task's brief (in Home each message is a new request, not steering), 3 or more
+    failed tool calls, 60 or more tool calls, or 45 minutes or more at work in one conversation's
+    stretch. A day without signal asks no model: its cursors move, and it counts as without signal.
+    Work still running when a review starts waits for the next one. A review runs on the bot's own
+    account, model and effort, as its Home uses them, since one review covers runs that may have used
+    several accounts: one at a time across all bots, once that account has been idle for a minute
+    (no turn, sub-agent or scheduled job on it), as a new session with no tools at all, which the CLI
+    itself enforces: Claude Code without its built-in tools (`--tools ""`), with every tool denied,
+    no MCP servers, skills or commands, and nothing approved (`dontAsk`); Codex in its read-only
+    sandbox approving nothing, without your Codex configuration (its MCP servers and plugins) or
+    rules, with its shell, code mode, sub-agents, apps, browser and web search turned off; Muse in
+    its empty preset, with its shell, writes and web tools off. Nothing bypasses permissions, and no
+    review session is saved. A review that still reports a tool call is stopped at once and fails
+    (**tool use**), keeping nothing. Antigravity has no such mode, and Pi's (`--no-tools`) hasn't been
+    checked with a real run, so a bot on either isn't reviewed, spending nothing, and its work doesn't
+    wait for a review that can't come. A review runs in an empty temporary folder (removed
+    afterwards), without the delegation helper, at utility priority: at most 12 model calls a day per
+    account, retries included, each review stopped after 5 minutes (its CLI interrupted, then
+    terminated, then killed), with one automatic retry; an account out of allowance waits an hour. A
+    review is neither a turn nor a sub-agent, so it is never reviewed itself, and BotChu's turn log
+    records it as a "run review", without lines that look like secrets. It sees one snapshot of the
+    day, of up to 48,000 characters, read from the saved transcripts and sub-agent runs off the main
+    thread as it starts, grouped by conversation, those with signal first and newest first in each
+    group. Each conversation has a header line (Home or the task, its repository and computer, open or
+    closed, and its signal), and each turn and sub-agent run one (how it ended, its tool calls and
+    failed ones, and its time: a finished turn isn't proof the work succeeded; a stopped run is
+    neither a failure nor finished work, and isn't continued). Header lines are never left out, long
+    passages are shortened first, and a conversation without signal gives its header lines alone.
+    Under them come the brief, the owner's messages and corrections, the bot's replies and handoffs,
+    and each tool call with its exit code (and the end of a failed one's output), each labelled across
+    the day so the review cites them as evidence. Lines that look like secrets are left out before
+    anything is shortened; text from the work is indented and BotChu's own tags in it are
+    neutralized, so it can't pose as a label or end the snapshot, and only the labels BotChu wrote
+    count as evidence. With it come the bot's instructions and memory as they are now, the shared
+    memory and `TEAM.md`, all as evidence rather than instructions. The review is asked for lessons
+    that hold across the day's work, a mistake repeated in several conversations being one pattern,
+    and to correct or remove an existing note rather than add a near-duplicate. The result is **No
+    durable change**, **Memory updated**, **Change proposed**, or a failure, with sign-in, allowance,
+    the review itself, tool use and saving told apart. BotChu applies at most three changes a review,
+    so three a bot a day, each citing evidence, verified, general and one line of plain text, and only
+    to the bot's own `MEMORY.md` (which sessions read as data, not instructions), through the same
+    writer as **Saving memory** (above): notes, and corrections and removals of a note that is there
+    exactly, once (never one that merely contains it). Every change to `INSTRUCTIONS.md` is a proposal
+    for you, as are the shared memory, `TEAM.md`, a bot that delegated a run, the repository's own
+    documents (which change through its pull requests; a review never edits a repository), an
+    unverified hypothesis, a change without evidence, a correction of a note that has changed since,
+    and any line that could loosen a safeguard, widen what the bot may do, or name a web address or a
+    command to run. A change of more than one line, or with Markdown or HTML structure (a heading,
+    list item, quote, table row, code fence or tag) or control characters, is left out before
+    anything is written, as are one-off details; secrets, transcripts and command output are left
+    out, as in memory, and a secret is never quoted; and a note memory lost while the review ran (a
+    correction or `Forget:`) isn't saved again. Each review is saved at every step in
+    `.botchu/evaluations/<id>.json` in that bot's folder, and the work waiting for its next one, each
+    conversation's stretch with its cursor, in `.botchu/run-reviews.json`, without lines that look
+    like secrets, so a relaunch neither repeats one nor applies one twice (quitting stops a running
+    review, which runs again after the next launch); the newest 50 a bot are kept, and any that called
+    the model in the last 24 hours, which the daily limit still counts. Reviews of single runs still
+    waiting from before daily reviews fold into their bot's next daily review at launch, without a
+    model call: each conversation's stretch starts before its oldest one. Finished ones stay as they
+    are. A change that couldn't be saved stays with its review, whose **Retry** saves it, rather than
+    waiting with the conversations' notes, and conversations' notes still waiting for the file are
+    saved first, on their own. **Activity ▸ Run reviews** in the status sidebar starts with one line
+    saying what the reviews are doing, such as "Next review at 04:00 · 3 conversations with unreviewed
+    work", "Waiting · Claude Personal is busy", "Waiting · daily limit, next at 14:05", "Reviewing on
+    Claude Personal…" or "Up to date", with **Review now** while there is unreviewed work and no
+    review of it waits. Below it come rows only for reviews with news (**Memory updated**, **Change
+    proposed** or **Failed**), each naming its day and the conversations its changes cite, and
+    opening to its summary, what worked and didn't, the evidence it cited, every line it added and
+    removed (read from the file just before and just after the save, so a review that wrote anything
+    never shows as no change, and no copy of the file is kept), its proposals (with Copy) and what it
+    left out, with **Revert**, which undoes each of its changes only where the file still holds
+    exactly what it left, in the same section, and lists any you have changed since as not reverted,
+    keeping your edit; and **Retry**. One line counts the week's others: "This week: 5 days with no
+    change · 2 without signal · 0 not reviewed in time". Home's covers all the bot's work, and says
+    so; a task's lists the reviews that covered it. Home gets a note for a change made or proposed,
+    and for a failure once per kind until a review succeeds; reviews that change nothing, or find no
+    signal, stay quiet. Saved notes reach the bot's next new session, never a running one; what a
+    conversation asks to remember (`<remember>`, above) isn't a review, and is still saved at once.
+    Settings ▸ **Run reviews** turns them off and sets the review time; they are on by default, since
+    the CLIs enforce the tool-free sessions and only memory notes change by themselves, and they spend
+    the bot's allowance. Only the installed app runs reviews, never tests or review copies.
   - **Team playbook:** `TEAM.md` in the bots folder, beside the shared `MEMORY.md`, is the process
     every bot follows: its stages, handoffs, who calls whom with `botchu-subagent`, and when work is
     done. Unlike memory, it is given as instructions: in every bot's Home `AGENTS.md`, and at the
@@ -708,7 +749,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     or error. The character and ring convey status
     without a dot or status pill. The card and pet animation reflect only the shown Home or task;
     the bot list still shows activity across its tasks. Five icon tabs sit below the character,
-    in a rounded bar with a raised selected segment: **Activity** (Home's closed tasks, run reviews and conversation stats), **Sub-agents** (delegated work),
+    in a rounded bar with a raised selected segment: **Activity** (Home's closed tasks, run reviews of all the bot's work and conversation stats; a task's, the reviews that covered it), **Sub-agents** (delegated work),
     **Model & Usage** (account, agent, model, reasoning and allowance), **Session** (the CLI session
     and workspace controls), and **Memory** (instructions, personality, memory, the team
     playbook and skills). Hover for tab names, or
@@ -765,7 +806,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     guidance without displaying credentials. Settings also contains the bots folder, the repositories folder, the hosts and where you chose to work
     on repositories, each account's command, the Codex account that draws pets' stills, the
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
-    and default OpenRouter model, whether finished work gets a run review, and the Telegram gateway (below).
+    and default OpenRouter model, whether each bot's work gets a daily run review and at what time, and the Telegram gateway (below).
   - **Telegram:** an opt-in gateway, in Settings ▸ **Telegram**, lets you message bots from
     Telegram through a Telegram bot of your own (made with BotFather) while BotChu runs on this
     Mac. There is no server or webhook: BotChu asks Telegram for new messages itself (long
@@ -888,10 +929,14 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     again, and holds what is written back.
     What replies ask to remember (`MemoryNotes`, in `BotContext.swift`) is saved to memory files
     by `MemoryWriter.swift`: one save at a time, read back to check it held, with notes that wait
-    and are tried again. Run reviews are in `RunEvaluation.swift`: what a review sees of a run, its
-    prompt, reading its reply, which changes are applied and which are proposals, the saved record,
-    handing a run over (claimed once, with what it sees built off the main actor, and only while
-    reviews are on), the queue with its limits, retries and relaunch, applying through the writer
+    and are tried again. Run reviews are in `ReviewStretch.swift` and `RunEvaluation.swift`: each
+    conversation's stretch of unreviewed work and its cursor (`ReviewStretch`), the signal gate over
+    a stretch's messages and sub-agent runs (`ReviewSignals`), the daily review time and missed days
+    through `JobSchedule` and `JobPlanner` (`ReviewTime`), the day's snapshot read off the main actor
+    (`ReviewDay`), the prompt, reading its reply, which changes are applied and which are proposals,
+    the saved record, the evaluator (`RunEvaluator`: work handed over, one waiting review a bot, the
+    idle gate, the 7-day skip, limits, retries, relaunch and the upgrade from reviews of single runs,
+    `waitReason` and Activity's summary line), applying through the writer
     (`MemoryWriter.saveReviewed`), the exact diff it records and its revert (`AppliedChange`), and the
     review's own CLI run, whose tool-free command lines are in `Accounts.swift`
     (`CommandBuilder.toolFreeInvocation`).
@@ -911,10 +956,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     screenshot of its window, through ScreenCaptureKit, `WindowCapture.swift`, the
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
-    of scheduled jobs, `JobRuntime.swift`, and handing finished runs to run reviews, `Evaluations.swift`),
+    of scheduled jobs, `JobRuntime.swift`, and handing finished turns and runs to the daily run reviews, `Evaluations.swift`),
     `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
     status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
-    the hosts and Telegram), and
+    the hosts, Telegram and run reviews), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
     only to identify the CLI an account runs).
@@ -961,8 +1006,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     file's writes in order and different files' side by side, newer states taking the place of waiting
     ones, repeats skipped, quitting's wait, a deleted bot's folder never made again, a sub-agent's end
     never written behind another's, and the conversation's guarantees above with writes and the CLI's
-    messages interleaved and each write failing in turn; run reviews handed over without building
-    anything while reviews are off, claimed once, and built off the main actor; a section change or a new
+    messages interleaved and each write failing in turn; a turn handed to run reviews as a stretch
+    of work, building nothing; a section change or a new
     bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
     grows and how far its text scrolls; each account's allowance, with Muse's check through a
     stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
@@ -987,9 +1032,16 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     whatever the preview and the read list hold, pull requests left out, loading, not read,
     unavailable, zero and kept after a failed read, and another repository's answer never showing
     under the one switched to; and run reviews, with stand-in reviewers (no test
-    runs a real review): the bounded snapshot of finished, failed and stopped runs, and labels and
-    tags in a run's text that can't pass for its own, handing a run over without waiting, one review
-    despite repeated ends and relaunches, a review cut short by quitting, no-change outcomes, which
+    runs a real review): a stretch and its cursor, so that nothing is reviewed twice or missed; the
+    signal gate (failures, stops, steering, failed tool calls, tool calls, time, Home's messages not
+    steering); the review time once a day, missed days, time zone and daylight-saving changes; a
+    review folded into the next day's, the 7-day skip and Retry restarting it, the idle gate, Review
+    now of a task moving only its cursor, a sub-agent run reviewed about the bot it ran as, a day
+    without signal asking no model, the upgrade from waiting reviews of single runs, the summary
+    line and the counts; 35 runs a day across conversations staying at one waiting review a bot and
+    one model call a day; the bounded snapshot of a day, grouped by conversation with every header
+    line, and labels and tags in the work's text that can't pass for its own, handing work over
+    without waiting, one review despite repeated ends and relaunches, a review cut short by quitting, no-change outcomes, which
     changes are applied or proposed (evidence, verification, scope, safeguards, addresses and
     commands, instructions always proposed), changes of more than one plain line, every write
     recorded in full, edits made meanwhile, exact corrections and a revert that keeps later edits,
@@ -1052,7 +1104,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     links and their context through sending, and the report and New Task boxes without it, a job
     made for its agent, shown in Jobs, delivered to Home as a receipt that leaves Home's draft and
     queue alone, and deleted with its agent, a sub-agent's handoff and a task's receipt that
-    don't wait for their run reviews, a task's Activity listing its repository's open issues:
+    don't wait for run reviews, which review each bot's own work on its own account, Activity's run
+    reviews (the summary line, news rows and counts line, in light and dark, and Review now) and
+    the review time in Settings, a task's Activity listing its repository's open issues:
     one or all opened in Projects and back to the task with its draft, switching tasks, a failed
     refresh keeping what was read, and no GitHub request from showing or updating it, a Task handed
     to another bot whose Home is idle, from Home, a task and a task on a host, that goes on after
@@ -1119,7 +1173,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   with `--disable` for its shell, unified exec, code mode, sub-agents, apps, plugins, browser,
   computer use, images, goals, sleep, tool suggestions, skills and hooks; and `muse exec --json
   --preset empty --disable-shell --disable-write --disable-web-tools --disable-request-user-input
-  --disable-reminders --no-session-log`. None runs on Antigravity or Pi.
+  --disable-reminders --no-session-log`, on the reviewed bot's own account. None runs on Antigravity or Pi.
 
 ## Run locally
 - Prerequisites: macOS 14 or later with full Xcode 16 or later (`xcode-select -p` must point into
@@ -1271,7 +1325,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   --filter persistenceBenchmark` times, for 1,500- and 5,000-message conversations and 12 MB of tool
   output, what a save costs the main thread (now, and as it was when it wrote there), how long it takes
   to be written, the bytes, writes and states a burst of 30 saves leaves, and what handing a 300-call
-  turn to run reviews costs the main thread, and writes the table to the file. Run with the same
+  turn to run reviews costs the main thread (and reading it off the main thread, as its review
+  starts), and writes the table to the file. Run with the same
   variable, the rendering test `typingAndSwitchingStayResponsiveWhileFourConversationsSave` writes
   typing and switching times while four conversations save beside it, as `<file>.responsiveness`.
   The benchmark asserts nothing about time and isn't part of `check`.

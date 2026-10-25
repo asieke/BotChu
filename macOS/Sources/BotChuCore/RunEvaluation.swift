@@ -2,21 +2,39 @@ import Foundation
 
 // MARK: What is reviewed
 
-/// A finished run BotChu reviews in the background (`RunEvaluator`): one turn of a task, or one
-/// sub-agent attempt. Its `key` names the review, so a run is reviewed once, however often its end
-/// is reported and across relaunches.
+/// What a review BotChu runs in the background (`RunEvaluator`) is about: a bot's day of work, or
+/// one task's work on request (#138). Before #138 a review was of one run, a task's turn or a
+/// sub-agent attempt, and the records of those stay as they were. Its `key` names the review.
 public struct EvaluationSubject: Codable, Hashable, Sendable {
     public enum Kind: String, Codable, Sendable {
+        /// Every conversation of the bot's, and every sub-agent run as it, since their last review:
+        /// at the review time, or on Review now.
+        case day
+        /// One task's stretch alone, on Review now.
+        case task
+        /// One turn of a task, or one sub-agent attempt (before #138).
         case taskTurn, subagent
+
+        /// A review of one run, from before daily reviews.
+        public var isPerRun: Bool { self == .taskTurn || self == .subagent }
     }
 
     public var kind: Kind
-    /// The bot whose conversation the run belongs to: the task's, or the one that delegated the sub-agent.
+    /// The bot whose conversation it is about: the bot itself for a day; for a run, the task's bot,
+    /// or the one that delegated the sub-agent.
     public var conversationBotID: UUID
-    /// The task the turn was in, or the task the sub-agent was delegated from; nil for Home.
+    /// The task it covers alone, or (for a run) the task the turn was in or the sub-agent was delegated from.
     public var taskID: UUID?
-    /// The turn (the id of its first message) or the sub-agent run.
+    /// The review itself, or the turn (the id of its first message) or sub-agent run it was of.
     public var runID: UUID
+
+    public static func day(botID: UUID) -> EvaluationSubject {
+        EvaluationSubject(kind: .day, conversationBotID: botID, taskID: nil, runID: UUID())
+    }
+
+    public static func task(_ taskID: UUID, of botID: UUID) -> EvaluationSubject {
+        EvaluationSubject(kind: .task, conversationBotID: botID, taskID: taskID, runID: UUID())
+    }
 
     public static func taskTurn(botID: UUID, taskID: UUID, turnID: UUID) -> EvaluationSubject {
         EvaluationSubject(kind: .taskTurn, conversationBotID: botID, taskID: taskID, runID: turnID)
@@ -28,6 +46,8 @@ public struct EvaluationSubject: Codable, Hashable, Sendable {
 
     public var key: String {
         switch kind {
+        case .day: "day-\(runID.uuidString.lowercased())"
+        case .task: "review-\(taskID?.uuidString.lowercased() ?? "home")-\(runID.uuidString.lowercased())"
         case .taskTurn: "task-\(taskID?.uuidString.lowercased() ?? "home")-\(runID.uuidString.lowercased())"
         case .subagent: "subagent-\(runID.uuidString.lowercased())"
         }
@@ -44,104 +64,97 @@ public enum RunEnding: String, Codable, Sendable {
     case stopped
 }
 
-/// What a review sees of a run, within `maxCharacters`: how it ended, its brief, and its messages
-/// and tool calls, each labelled (`[M1]`, `[T1]`) so the review can cite them as evidence. Images
-/// and BotChu's own notes are left out, and so is any line that looks like a secret. The labels and
-/// the lines they start are recorded as BotChu writes them (`evidence`), and text from the run can't
-/// start a line or close the snapshot, so nothing in the run can pass for evidence or for the end of it.
+/// What a review sees, within `RunEvaluator.Limits.snapshotCharacters`: a bot's day of work
+/// (`ReviewDay`), each conversation's turns and sub-agent runs with how they ended, and their
+/// messages and tool calls, each labelled (`[M1]`, `[T1]`) so the review can cite them as evidence.
+/// Images and BotChu's own notes are left out, and so is any line that looks like a secret. The
+/// labels and the lines they start are recorded as BotChu writes them (`evidence`), and text from
+/// the work can't start a line or close the snapshot, so nothing in it can pass for evidence or for
+/// the end of it.
 public struct EvaluationSnapshot: Codable, Equatable, Sendable {
     public var text: String
     /// The line each label starts in `text`, shortened, by label: the evidence a review may cite.
     public var evidence: [String: String]
     public var toolCalls: Int
     public var failedToolCalls: Int
+    /// The conversation each label is in, as a review names the conversations its changes cite;
+    /// nil in the snapshot of a single run (before #138).
+    public var sources: [String: String]?
 
-    public static let maxCharacters = 24_000
-    static let maxMessageCharacters = 1_500
-    static let maxLastReplyCharacters = 3_000
-    static let maxBriefCharacters = 3_000
-    static let maxToolInputCharacters = 200
-    static let maxToolOutputCharacters = 600
+    public static let maxCharacters = 48_000
+    static let maxMessageCharacters = Passages.tiers[0].message
+    static let maxToolOutputCharacters = Passages.tiers[0].toolOutput
     static let maxEvidenceCharacters = 240
 
-    /// `heading` says what the run was; `firstMessage` labels the first user message (the owner's,
-    /// or a brief), which is left out when it is the `brief` itself.
-    public init(heading: String, ending: RunEnding, error: String?, brief: String?, messages: [ChatMessage],
-                firstMessage: String = "Owner", limit: Int = maxCharacters) {
-        let brief = brief?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        var items: [(label: String, text: String)] = []
-        var messageCount = 0, tools = 0, failed = 0
-        var firstUser = true
+    public init(text: String, evidence: [String: String], toolCalls: Int, failedToolCalls: Int, sources: [String: String]? = nil) {
+        self.text = text
+        self.evidence = evidence
+        self.toolCalls = toolCalls
+        self.failedToolCalls = failedToolCalls
+        self.sources = sources
+    }
+
+    /// How long each passage may be: a long day is shortened tier by tier before anything is left out.
+    struct Passages: Sendable {
+        var message: Int
+        var lastReply: Int
+        var brief: Int
+        var toolInput: Int
+        var toolOutput: Int
+
+        static let tiers = [
+            Passages(message: 1_500, lastReply: 3_000, brief: 3_000, toolInput: 200, toolOutput: 600),
+            Passages(message: 600, lastReply: 1_200, brief: 1_200, toolInput: 120, toolOutput: 300),
+            Passages(message: 240, lastReply: 600, brief: 400, toolInput: 80, toolOutput: 160),
+        ]
+    }
+
+    /// The items of one turn or run, unlabelled: each message and tool call, in order. `opening`
+    /// labels the conversation's first message (the owner's, or a brief), which is left out when it
+    /// is the `brief` itself, given once above it.
+    static func items(_ messages: [ChatMessage], brief: String, opening: (id: UUID, label: String)?,
+                      passages: Passages) -> [(tool: Bool, text: String)] {
+        var items: [(tool: Bool, text: String)] = []
         let lastReply = messages.lastIndex { $0.role == .assistant }
         for (index, message) in messages.enumerated() {
             let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
             switch message.role {
             case .user:
-                defer { firstUser = false }
-                if firstUser, !brief.isEmpty, text == brief { continue }
-                messageCount += 1
+                let first = message.id == opening?.id
+                if first, !brief.isEmpty, text == brief { continue }
                 let images = message.images.isEmpty ? "" : " (with \(message.images.count) image\(message.images.count == 1 ? "" : "s"))"
-                items.append(("M\(messageCount)", "\(firstUser ? firstMessage : "Owner"): \(Self.quoted(text, Self.maxMessageCharacters))\(images)"))
+                items.append((false, "\(first ? opening!.label : "Owner"): \(Self.quoted(text, passages.message))\(images)"))
             case .assistant:
                 guard !text.isEmpty else { continue }
-                messageCount += 1
-                let limit = index == lastReply ? Self.maxLastReplyCharacters : Self.maxMessageCharacters
-                items.append(("M\(messageCount)", "Bot: \(Self.quoted(MemoryNotes.handoffText(text), limit))"))
+                let limit = index == lastReply ? passages.lastReply : passages.message
+                items.append((false, "Bot: \(Self.quoted(MemoryNotes.handoffText(text), limit))"))
             case .error:
-                messageCount += 1
-                items.append(("M\(messageCount)", "Error: \(Self.quoted(text, Self.maxMessageCharacters))"))
+                items.append((false, "Error: \(Self.quoted(text, passages.message))"))
             case .tool:
-                tools += 1
                 var line = Self.quoted(Self.oneLine(message.toolName ?? "tool"), 80)
-                let input = Self.oneLine(Self.window(message.toolInput ?? "", Self.maxToolInputCharacters))
+                let input = Self.oneLine(Self.window(message.toolInput ?? "", passages.toolInput))
                 if !input.isEmpty { line += ": " + Self.neutralized(input) }
                 let exit = message.toolExitCode
                 let showsOutput: Bool
                 switch message.toolState ?? .done {
                 case .failed:
-                    failed += 1
                     line += " → failed" + (exit.map { " (exit \($0))" } ?? "")
                     showsOutput = true
                 case .running, .interrupted:
                     line += " → interrupted"
                     showsOutput = false
                 case .done:
-                    if let exit, exit != 0 { failed += 1 }
                     line += " → " + (exit.map { "exit \($0)" } ?? "done")
                     showsOutput = (exit ?? 0) != 0
                 }
                 let output = (message.toolOutput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if showsOutput, !output.isEmpty { line += "\n    " + Self.quoted(output, Self.maxToolOutputCharacters, fromEnd: true) }
-                items.append(("T\(tools)", line))
+                if showsOutput, !output.isEmpty { line += "\n    " + Self.quoted(output, passages.toolOutput, fromEnd: true) }
+                items.append((true, line))
             case .note, .receipt:
                 continue
             }
         }
-        toolCalls = tools
-        failedToolCalls = failed
-
-        var header = ["Run: \(Self.quoted(Self.oneLine(heading), 500))"]
-        switch ending {
-        case .finished:
-            header.append("How it ended, as BotChu saw it: the CLI ended its turn without an error. That alone doesn't show the work succeeded; judge from the evidence.")
-        case .failed:
-            header.append("How it ended, as BotChu saw it: it failed: \(Self.quoted(Self.oneLine(Self.redacted(error ?? "no reason given")), 500))")
-        case .stopped:
-            header.append("How it ended, as BotChu saw it: it was stopped before it finished. That is neither a failure nor finished work; don't continue it.")
-        }
-        header.append("Tool calls: \(tools)" + (failed > 0 ? " (\(failed) failed)" : ""))
-        if !brief.isEmpty { header.append("Brief:\n    \(Self.quoted(brief, Self.maxBriefCharacters))") }
-        header.append("Transcript, oldest first ([M#] messages, [T#] tool calls):")
-        let head = header.joined(separator: "\n")
-        let lines = items.map { "[\($0.label)] \($0.text)" }
-        let kept = Self.bounded(lines, within: max(1_000, limit - head.count - 1))
-        var evidence: [String: String] = [:]
-        for index in kept.indices.compactMap({ $0 }) {
-            let first = lines[index].split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
-            evidence[items[index].label] = Self.clip(first, Self.maxEvidenceCharacters)
-        }
-        self.evidence = evidence
-        text = head + "\n" + kept.lines.joined(separator: "\n")
+        return items
     }
 
     /// The labels the review may cite, such as "M1" and "T3".
@@ -227,85 +240,6 @@ public struct EvaluationSnapshot: Codable, Equatable, Sendable {
             .joined(separator: "\n")
         // A secret split across lines (`password:` then the value) goes whole.
         return MemoryNotes.isSecret(lines) ? secretLine : lines
-    }
-}
-
-/// A run to review, as its conversation hands it over: whose guidance the review is about (the
-/// task's bot, or the bot a sub-agent ran as), the account it ran on, and what it saw.
-public struct EvaluationRequest: Sendable {
-    public var subject: EvaluationSubject
-    public var botID: UUID
-    public var botName: String
-    public var workspace: String
-    public var accountID: String
-    public var accountProfile: Account?
-    public var model: String
-    public var reasoningEffort: ReasoningEffort?
-    public var title: String
-    public var ending: RunEnding
-    public var snapshot: EvaluationSnapshot
-
-    /// Whether a run is worth a review: it used tools, or failed. A conversation without tool calls
-    /// leaves little to learn that its own turn couldn't save (`<remember>`), and a stopped one
-    /// without tool calls did nothing.
-    static func worthReviewing(_ snapshot: EvaluationSnapshot, ending: RunEnding) -> Bool {
-        snapshot.toolCalls > 0 || ending == .failed
-    }
-
-    /// The same, from the messages, without building a snapshot.
-    static func worthReviewing(_ messages: some Collection<ChatMessage>, ending: RunEnding) -> Bool {
-        ending == .failed || messages.contains { $0.role == .tool }
-    }
-
-    /// What a review of a task's turn is about (`taskTurn`), known before anything is built.
-    public static func taskTurnSubject(_ task: BotTask, of bot: Bot, thread: [ChatMessage], turnStart: Int) -> EvaluationSubject? {
-        let start = min(max(0, turnStart), thread.count)
-        guard start < thread.count else { return nil }
-        return .taskTurn(botID: bot.id, taskID: task.id, turnID: thread[start].id)
-    }
-
-    /// A review of a task's turn, from the message that started it to its end; `turnStart` is where
-    /// the turn's output began in `thread`. Nil when the turn isn't worth one.
-    /// `snapshot` false (the account's CLI can't run a review) builds none, for a run recorded as
-    /// not reviewed.
-    public static func taskTurn(_ task: BotTask, of bot: Bot, thread: [ChatMessage], turnStart: Int,
-                                ending: RunEnding, error: String?, machine: String, snapshot builds: Bool = true) -> EvaluationRequest? {
-        let start = min(max(0, turnStart), thread.count)
-        guard start < thread.count else { return nil }
-        let prompt = thread[..<start].lastIndex { $0.role == .user } ?? start
-        var heading = "a turn of the task “\(task.title)” in \(task.repo)"
-        if let work = task.work { heading += task.review == nil ? ", on \(work.reference)" : ", reviewing \(work.reference)" }
-        heading += ", on \(machine)"
-        guard worthReviewing(thread[prompt...], ending: ending) else { return nil }
-        let snapshot = EvaluationSnapshot(heading: heading, ending: ending, error: error, brief: task.brief,
-                                          messages: builds ? Array(thread[prompt...]) : [],
-                                          firstMessage: task.origin == .home && prompt == thread.firstIndex { $0.role == .user }
-                                              ? "Brief (from the bot's Home)" : "Owner")
-        return EvaluationRequest(subject: .taskTurn(botID: bot.id, taskID: task.id, turnID: thread[start].id),
-                                 botID: bot.id, botName: bot.name, workspace: bot.workspace, accountID: task.accountID,
-                                 accountProfile: task.accountProfile, model: task.model, reasoningEffort: task.reasoningEffort,
-                                 title: "“\(task.title)” turn", ending: ending, snapshot: snapshot)
-    }
-
-    /// A review of a finished sub-agent attempt, about the bot it ran as (`bot`, as it is now), on
-    /// the account it ran on. Nil while it runs, or when it isn't worth one.
-    public static func subagent(_ run: SubagentRun, bot: Bot, messages: [ChatMessage], caller: String,
-                                snapshot builds: Bool = true) -> EvaluationRequest? {
-        let ending: RunEnding
-        switch run.phase {
-        case .completed: ending = .finished
-        case .failed: ending = .failed
-        case .stopped: ending = .stopped
-        case .queued, .preparing, .running: return nil
-        }
-        let place = run.workspaceMode == .sharedCallerWorkspace ? "in the caller's workspace" : "in its own folder"
-        guard worthReviewing(messages, ending: ending) else { return nil }
-        let snapshot = EvaluationSnapshot(heading: "a sub-agent run “\(run.title)” of \(run.targetBotName), delegated by \(caller) at depth \(run.depth), \(place)",
-                                          ending: ending, error: run.errorMessage, brief: run.brief, messages: builds ? messages : [],
-                                          firstMessage: "Brief (from \(caller))")
-        return EvaluationRequest(subject: .subagent(run), botID: bot.id, botName: bot.name, workspace: bot.workspace,
-                                 accountID: run.accountID, accountProfile: run.accountProfile, model: run.model,
-                                 reasoningEffort: run.reasoningEffort, title: "sub-agent “\(run.title)”", ending: ending, snapshot: snapshot)
     }
 }
 
@@ -508,15 +442,15 @@ public struct EvaluationPlan: Equatable, Sendable {
             case .caller: "It is about the bot that delegated the run, whose own reviews cover its guidance"
             case .memory: nil
             }
-            if change.held == nil, change.evidence.isEmpty { change.held = "It cites no evidence from the run" }
-            if change.held == nil, !change.verified { change.held = "A hypothesis the run didn't verify" }
+            if change.held == nil, change.evidence.isEmpty { change.held = "It cites no evidence from the snapshot" }
+            if change.held == nil, !change.verified { change.held = "A hypothesis the evidence didn't verify" }
             if change.held == nil, let added, added.range(of: Self.safeguardPattern, options: .regularExpression) != nil {
                 change.held = "It could loosen a safeguard or widen what the bot may do"
             }
             if change.held == nil, let added, added.range(of: Self.directivePattern, options: .regularExpression) != nil {
                 change.held = "It names a web address or a command to run, which only the owner adds"
             }
-            if change.held == nil, apply.count >= Self.maxApplied { change.held = "More than \(Self.maxApplied) changes from one run" }
+            if change.held == nil, apply.count >= Self.maxApplied { change.held = "More than \(Self.maxApplied) changes from one review" }
             if change.held == nil { apply.append(change) } else { proposals.append(change) }
         }
     }
@@ -795,19 +729,25 @@ public struct EvaluationFailure: Codable, Equatable, Sendable {
     }
 }
 
-/// A review of one run, from waiting to done, saved in `.botchu/evaluations/<key>.json` in the
-/// folder of the bot it is about, so a relaunch neither loses nor repeats it.
+/// A review, from waiting to done, saved in `.botchu/evaluations/<key>.json` in the folder of the
+/// bot it is about, so a relaunch neither loses nor repeats it: a bot's day of work (or one task's,
+/// on Review now), or, from before #138, one run.
 public struct EvaluationRecord: Codable, Equatable, Identifiable, Sendable {
     public enum Phase: String, Codable, Sendable {
-        /// Waiting for its turn: one review at a time, while its account is idle, within the daily limit.
+        /// Waiting for its turn: one review at a time, once its account has been idle for a while,
+        /// within the daily limit.
         case pending
+        /// Reading the work it covers, then asking the model.
         case running
         /// Reviewed; applying the changes in `plan` (again, after a relaunch, which changes nothing twice).
         case applying
         case done, failed
-        /// Not reviewed (`skipReason`): its CLI can't run a session without tools, it waited too
-        /// long, or its bot is gone.
+        /// Not reviewed (`skipReason`): its CLI can't run a session without tools, its work waited
+        /// too long (`expired`), or its bot is gone.
         case skipped
+        /// A review of one run that was waiting when daily reviews came: its work went into the
+        /// bot's next daily review, without a model call.
+        case folded
 
         public var isWaiting: Bool { self == .pending || self == .running || self == .applying }
     }
@@ -816,12 +756,15 @@ public struct EvaluationRecord: Codable, Equatable, Identifiable, Sendable {
     /// already there changed nothing.
     public enum Outcome: String, Codable, Sendable {
         case noChange, memoryUpdated, proposed
+        /// No conversation it covered had signal (`ReviewSignals`), so no model was asked.
+        case noSignal
 
         public var label: String {
             switch self {
             case .noChange: "No durable change"
             case .memoryUpdated: "Memory updated"
             case .proposed: "Change proposed"
+            case .noSignal: "No signal"
             }
         }
     }
@@ -831,28 +774,43 @@ public struct EvaluationRecord: Codable, Equatable, Identifiable, Sendable {
     /// The bot whose guidance the review is about.
     public var botID: UUID
     public var botName: String
+    /// What it runs on: the bot's own account, model and effort, as it starts (a run's, before #138).
     public var accountID: String
     public var accountProfile: Account?
     public var model: String
     public var reasoningEffort: ReasoningEffort?
+    /// What it reviews, as "Reviewed …" and "Couldn't review …" say it: "the work of Sat, Oct 25".
     public var title: String
-    public var ending: RunEnding
+    /// How the run ended, for a review of one run.
+    public var ending: RunEnding?
     public var createdAt: Date
     public var phase: Phase
+    /// For a daily review, the review time it is for, and how many earlier days folded into it
+    /// because it couldn't run before the next review time.
+    public var scheduledFor: Date?
+    public var coalesced: Int?
+    /// Asked for with Review now.
+    public var requested: Bool?
     /// Model calls made for it since it was last retried by hand.
     public var attempts = 0
     /// When each model call for it started, retries included: the account's daily limit counts these.
     public var attemptTimes: [Date] = []
     public var notBefore: Date?
-    /// When the owner last asked for it again (Retry): it may wait `Limits.expiry` from then,
-    /// however old its run.
+    /// When the owner last asked for it again (Retry), which restarts the wait of the work it covers.
     public var retriedAt: Date?
     public var startedAt: Date?
     public var finishedAt: Date?
-    /// What is reviewed; dropped once the review is done.
+    /// What is reviewed, built as it starts; dropped once the review is done.
     public var snapshot: EvaluationSnapshot?
-    /// The bullets of the bot's `MEMORY.md` when the run ended, without any that look like secrets,
-    /// until the review is done: a note removed since then isn't saved again from the old run.
+    /// What it covered of each conversation's stretch, once it started: their cursors move past
+    /// exactly that once it is reviewed, and a task's Activity lists the reviews that covered it.
+    public var covered: [ReviewCoverage]?
+    /// The conversations the evidence of its changes and proposals is from.
+    public var cited: [String]?
+    /// Its work waited longer than `Limits.skipAfter` and was skipped: counted as not reviewed in time.
+    public var expired: Bool?
+    /// The bullets of the bot's `MEMORY.md` as it started, without any that look like secrets,
+    /// until the review is done: a note removed since then isn't saved again from it.
     public var memoryAtRun: [String]?
     public var findings: EvaluationFindings?
     /// The changes to apply, while applying (and for a retry after a failed save).
@@ -872,20 +830,21 @@ public struct EvaluationRecord: Codable, Equatable, Identifiable, Sendable {
     public var unreverted: [String] = []
     public var revertError: String?
 
-    public init(_ request: EvaluationRequest, at date: Date) {
-        id = request.subject.key
-        subject = request.subject
-        botID = request.botID
-        botName = request.botName
-        accountID = request.accountID
-        accountProfile = request.accountProfile
-        model = request.model
-        reasoningEffort = request.reasoningEffort
-        title = request.title
-        ending = request.ending
+    /// A review waiting to start, on `bot`'s account, model and effort as they are now.
+    public init(_ subject: EvaluationSubject, bot: Bot, title: String, at date: Date, scheduledFor: Date? = nil, requested: Bool = false) {
+        id = subject.key
+        self.subject = subject
+        botID = bot.id
+        botName = bot.name
+        accountID = bot.accountID
+        accountProfile = bot.accountProfile
+        model = bot.model
+        reasoningEffort = bot.reasoningEffort
+        self.title = title
         createdAt = date
         phase = .pending
-        snapshot = request.snapshot
+        self.scheduledFor = scheduledFor
+        self.requested = requested ? true : nil
     }
 
     public var account: Account { accountProfile.flatMap { $0.id == accountID ? $0 : nil } ?? Accounts.account(id: accountID) }
@@ -914,13 +873,31 @@ public struct EvaluationRecord: Codable, Equatable, Identifiable, Sendable {
         return record
     }
 
+    /// A failed review is tried again (a failed save applies its plan again; anything else reads
+    /// the work it covers again, as it starts); one of a run, before #138, asks about that run.
     public var canRetry: Bool {
         switch phase {
-        case .failed: plan != nil || snapshot != nil
+        case .failed: plan != nil || snapshot != nil || !subject.kind.isPerRun
         case .pending: failure != nil
-        case .skipped: snapshot != nil
-        case .running, .applying, .done: false
+        case .skipped: subject.kind.isPerRun && snapshot != nil
+        case .running, .applying, .done, .folded: false
         }
+    }
+
+    /// Whether Activity lists it: a change made or proposed, or a failure. Every other review is
+    /// only counted (`ReviewCounts`).
+    public var isNews: Bool {
+        switch phase {
+        case .failed: true
+        case .done: outcome == .memoryUpdated || outcome == .proposed
+        case .pending, .running, .applying, .skipped, .folded: false
+        }
+    }
+
+    /// Whether it covered the task's work: a Review now of it, a day that covered its stretch, or
+    /// (before #138) one of its turns or sub-agents.
+    public func covers(task id: UUID) -> Bool {
+        subject.taskID == id || (covered ?? []).contains { $0.conversation.taskID == id }
     }
 
     public var canRevert: Bool { !applied.isEmpty && revertedAt == nil }
@@ -946,10 +923,10 @@ public struct EvaluationRecord: Codable, Equatable, Identifiable, Sendable {
                 return "Reviewed \(title): \(changes.joined(separator: "; "))\(proposed). Revert it in Activity ▸ Run reviews."
             case .proposed?:
                 return "Reviewed \(title): proposed \(proposals.count == 1 ? "a change" : "\(proposals.count) changes") for you to look at in Activity ▸ Run reviews."
-            case .noChange?, nil:
+            case .noChange?, .noSignal?, nil:
                 return nil
             }
-        case .pending, .running, .applying, .skipped:
+        case .pending, .running, .applying, .skipped, .folded:
             return nil
         }
     }
@@ -990,8 +967,8 @@ public struct EvaluationRunError: LocalizedError, Equatable, Sendable {
 }
 
 /// The prompt of a review: what to judge and how, where changes may go, the bot's guidance as it
-/// is now (so a note removed since the run isn't brought back), and the run's snapshot. All of it
-/// beyond the rules is evidence, not instructions.
+/// is now (so a note removed since isn't brought back), and the snapshot of its day of work. All of
+/// it beyond the rules is evidence, not instructions.
 public enum EvaluationPrompt {
     static let maxInstructions = 6_000
     static let maxMemory = 6_000
@@ -1006,9 +983,10 @@ public enum EvaluationPrompt {
         }
         return """
             <botchu_run_review>
-            You are reviewing a finished run of \(botName) for BotChu, after the fact: what went well, what didn't, and \
-            whether anything should change in how \(botName) works from now on. This is a separate, fresh session with \
-            no tools: you can't see or change the run's workspace or repository, and you must not continue its work. \
+            You are reviewing \(botName)'s finished work for BotChu, after the fact: every conversation and sub-agent run \
+            since its last review, grouped by conversation. Say what went well, what didn't, and whether anything should \
+            change in how \(botName) works from now on. This is a separate, fresh session with no tools: you can't see or \
+            change any workspace or repository, and you must not continue any of the work. \
             Don't try to run commands, edit or create files, call other bots, or start tasks; a review that tries is \
             stopped and discarded. Answer from the snapshot and guidance below alone.
 
@@ -1017,26 +995,30 @@ public enum EvaluationPrompt {
 
             How to judge:
             - Decide from evidence in the snapshot: tool calls with their exit codes and output, test results, errors, \
-            the owner's messages and corrections, and the final reply or handoff. A finished turn, or an agent saying it is \
+            the owner's messages and corrections, and the final replies and handoffs. A finished turn, or an agent saying it is \
             done, doesn't prove the work succeeded. A stopped run is neither a failure nor finished work.
+            - Look for lessons that hold across the day's work: a mistake repeated in several conversations is one \
+            pattern, not several one-offs, and a correction in one conversation can inform another. A conversation given \
+            by its header lines alone had nothing worth reviewing in detail.
             - Tell verified causes (shown by the evidence, such as a command that failed, then passed after a specific \
             fix) apart from hypotheses and incomplete evidence. Mark a change "verified": true only when the evidence shows it.
-            - A lesson may reinforce an approach that worked, not only correct a mistake. Most runs teach nothing \
+            - A lesson may reinforce an approach that worked, not only correct a mistake. Most days teach nothing \
             durable, and then the answer is no change. Don't invent criticism, and don't turn one failed attempt into a broad rule.
-            - Keep only what generalizes beyond this run ("generalizes": true). Temporary errors, one-off details, plans, \
-            progress and debugging state stay in the run's history.
+            - Keep only what generalizes beyond this work ("generalizes": true). Temporary errors, one-off details, plans, \
+            progress and debugging state stay in the conversations' history. At most three changes are applied.
 
             Where a change goes ("destination"), one place per lesson, never repeated in several:
             - "memory": \(botName)'s own MEMORY.md: a lasting fact about the owner or setup, a preference, or a reusable \
             lesson specific to \(botName), which its sessions read as data, not instructions. One concise note per \
             change, on one line of plain text. To correct a note in current memory, write "Replace: <existing note> -> \
-            <new note>" with the existing note exactly as it is; to remove one, "Forget: <existing note>". Don't add back \
-            what current memory no longer holds, or what contradicts it.
+            <new note>" with the existing note exactly as it is; to remove one, "Forget: <existing note>". Correct or \
+            remove an existing note rather than add a near-duplicate of it. Don't add back what current memory no longer \
+            holds, or what contradicts it.
             - "instructions": a reusable change in how \(botName) behaves, for its INSTRUCTIONS.md. Never rewrite its \
             identity, widen what it may do, or loosen a safeguard its owner set (checks, tests, reviews, approvals, \
             asking first).
             - "shared": the memory every bot shares, only for an established owner-wide fact or preference. "team": the \
-            TEAM.md playbook. "caller": the bot that delegated this run. "repository": the repository's own rules, \
+            TEAM.md playbook. "caller": a bot that delegated one of these runs. "repository": a repository's own rules, \
             architecture or documents, which change through its normal pull requests. BotChu keeps these, and anything \
             for "instructions", as proposals for the owner, and never edits a repository.
 
@@ -1046,7 +1028,7 @@ public enum EvaluationPrompt {
 
             Reply with only this JSON object, between <evaluation> and </evaluation>:
             <evaluation>
-            {"summary": "one or two sentences on how the run went",
+            {"summary": "one or two sentences on how the work went",
              "worked": ["what went well, briefly"],
              "didNotWork": ["what went wrong or was wasted, briefly"],
              "changes": [{"destination": "memory", "text": "the note", "why": "why the evidence supports it and why it generalizes",
@@ -1104,26 +1086,113 @@ extension BotHome {
 
 // MARK: Running reviews
 
-/// Reviews finished task turns and sub-agent runs in the background, and applies what a review
-/// justifies to the bot's memory through `MemoryWriter`, the writer every conversation saves memory with.
+/// Why a waiting review hasn't started, or what it is doing (`RunEvaluator.waitReason`).
+public enum ReviewWait: Equatable, Sendable {
+    case reviewing(account: String)
+    case saving
+    /// A turn, sub-agent or job is on its account, or was within `Limits.delay`.
+    case busy(account: String)
+    /// Another review is running: one at a time, across every bot.
+    case another
+    case dailyLimit(until: Date)
+    case allowance(account: String, until: Date)
+    case retrying(at: Date)
+    /// Its bot's CLI can't run a review without tools.
+    case unavailable(AgentKind)
+    case starting
+}
+
+/// What Activity's summary line says about a bot's reviews, or a task's (`RunEvaluator.status`).
+public enum ReviewStatus: Equatable, Sendable {
+    case off
+    case upToDate
+    case next(Date, conversations: Int)
+    case waiting(ReviewWait, conversations: Int)
+
+    /// Such as "Next review at 04:00 · 3 conversations with unreviewed work", or "Waiting · daily
+    /// limit, next at 14:05".
+    public func text(in zone: TimeZone = .current, locale: Locale = .current) -> String {
+        func time(_ date: Date) -> String { ReviewTime.timeText(date, in: zone, locale: locale) }
+        switch self {
+        case .off: return "Off in Settings ▸ Run reviews"
+        case .upToDate: return "Up to date"
+        case .next(let date, let count):
+            return "Next review at \(time(date)) · \(count) conversation\(count == 1 ? "" : "s") with unreviewed work"
+        case .waiting(let wait, _):
+            switch wait {
+            case .reviewing(let account): return "Reviewing on \(account)…"
+            case .saving: return "Saving the review…"
+            case .busy(let account): return "Waiting · \(account) is busy"
+            case .another: return "Waiting · another review is running"
+            case .dailyLimit(let until): return "Waiting · daily limit, next at \(time(until))"
+            case .allowance(let account, let until): return "Waiting · \(account) is out of allowance, next try at \(time(until))"
+            case .retrying(let at): return "Waiting · retrying at \(time(at))"
+            case .unavailable(let kind): return "Not reviewed · \(kind.displayName) can't run a review without tools"
+            case .starting: return "Starting the review…"
+            }
+        }
+    }
+}
+
+/// The reviews that brought no news, which Activity counts in one line instead of listing.
+public struct ReviewCounts: Equatable, Sendable {
+    public var noChange = 0
+    public var noSignal = 0
+    public var notReviewed = 0
+
+    public init(noChange: Int = 0, noSignal: Int = 0, notReviewed: Int = 0) {
+        self.noChange = noChange
+        self.noSignal = noSignal
+        self.notReviewed = notReviewed
+    }
+
+    /// Those that finished since `date`.
+    public init(_ records: some Sequence<EvaluationRecord>, since date: Date) {
+        for record in records where (record.finishedAt ?? record.createdAt) >= date {
+            switch (record.phase, record.outcome) {
+            case (.done, .noChange?): noChange += 1
+            case (.done, .noSignal?): noSignal += 1
+            case (.skipped, _) where record.expired == true: notReviewed += 1
+            default: break
+            }
+        }
+    }
+
+    public var isEmpty: Bool { noChange == 0 && noSignal == 0 && notReviewed == 0 }
+
+    /// Such as "This week: 5 days with no change · 2 without signal · 0 not reviewed in time".
+    public var text: String {
+        "This week: \(noChange) day\(noChange == 1 ? "" : "s") with no change · \(noSignal) without signal · \(notReviewed) not reviewed in time"
+    }
+}
+
+/// Reviews each bot's work once a day, in one pass over everything it did since its last review,
+/// and applies what a review justifies to the bot's memory through `MemoryWriter`, the writer every
+/// conversation saves memory with (#138).
 ///
-/// Handing a run over (`enqueue`) only saves a small record and returns: completion, handoffs,
-/// receipts and queues never wait for a review. Reviews run one at a time (`Limits`), each as a new
-/// session with no tools on the run's own account (`runner`, `CommandBuilder.toolFreeInvocation`),
-/// only while that account has no conversation turn or sub-agent running, up to a daily number of
-/// model calls per account, with a timeout, one automatic retry, and a longer wait after the account
-/// reports its allowance used up. A run on a CLI that can't run without tools is recorded as not
-/// reviewed, spending nothing. Records are saved at every step, so a relaunch picks up what was
-/// waiting, never asks the model twice for a reviewed run, and applies a reviewed plan at most once
-/// (applying it again changes nothing). A review's own run is never reviewed: it is neither a task
-/// turn nor a sub-agent.
+/// A turn's or sub-agent's end only extends the stretch of work waiting in its conversation
+/// (`turnEnded`, `subagentEnded`): it builds nothing, adds no review, and nothing waits for it. At
+/// the review time (`ReviewTime`, through `JobSchedule` and `JobPlanner`) each bot with unreviewed
+/// work gets one waiting review, or the one it has waiting takes the new day; Review now asks for
+/// one at once (`reviewNow`). Reviews run one at a time, each once its account has been idle for
+/// `Limits.delay`, within a daily number of model calls per account. As one starts, it reads the
+/// bot's day from the saved transcripts and sub-agent runs off the main actor (`ReviewDay`): without
+/// signal it asks no model and only moves the cursors. Otherwise it runs as a new session with no
+/// tools on the bot's own account, model and effort (`runner`, `CommandBuilder.toolFreeInvocation`),
+/// with a timeout, one automatic retry, and a longer wait after the account reports its allowance
+/// used up; a bot on a CLI that can't run without tools isn't reviewed, spending nothing. Work left
+/// unreviewed for `Limits.skipAfter` is skipped. Records and stretches are saved at every step, so
+/// a relaunch picks up what was waiting, never asks the model twice about reviewed work, and applies
+/// a reviewed plan at most once (applying it again changes nothing). A review's own run is never
+/// reviewed: it is neither a turn nor a sub-agent.
 @MainActor
 public final class RunEvaluator {
     public struct Limits: Sendable {
         /// Reviews running at once, across every bot and account.
         public var concurrent = 1
-        /// How long a review waits after its run ends before it may start, in seconds, so the
-        /// owner's next message or the next queued turn gets the account first.
+        /// How long a review's account must have been idle, with no turn, sub-agent or job on it,
+        /// before the review starts, in seconds, so the owner's next message or the next queued turn
+        /// gets the account first.
         public var delay: TimeInterval = 60
         /// Model calls per account in any 24 hours, retries included; more wait.
         public var perAccountPerDay = 12
@@ -1135,8 +1204,16 @@ public final class RunEvaluator {
         public var retryDelay: TimeInterval = 300
         /// How long a review waits after its account reports its allowance used up.
         public var allowanceDelay: TimeInterval = 3_600
-        /// A review not done this long after its run, or after its last Retry, is skipped.
-        public var expiry: TimeInterval = 48 * 3_600
+        /// Work left unreviewed this long after it ended, or after the last Retry of its review, is
+        /// skipped: its cursor moves, and it counts as not reviewed in time.
+        public var skipAfter: TimeInterval = 7 * 86_400
+        /// The signal gate (`ReviewSignals`): failed tool calls, tool calls and time at work in one
+        /// conversation's stretch that make it worth a review by themselves.
+        public var failedToolCalls = 3
+        public var toolCalls = 60
+        public var turnTime: TimeInterval = 45 * 60
+        /// The longest snapshot of a day.
+        public var snapshotCharacters = EvaluationSnapshot.maxCharacters
         /// Finished records kept per bot, newest first, besides those whose model calls the daily
         /// limit still counts.
         public var kept = 50
@@ -1150,51 +1227,71 @@ public final class RunEvaluator {
 
     /// Runs one review; nil turns reviews off (tests, review copies), and nothing is handed over.
     public var runner: Runner?
-    /// The owner's switch (Settings ▸ Run reviews), read whenever a run is handed over or a review would start.
+    /// The owner's switch (Settings ▸ Run reviews), read whenever work is handed over or a review would start.
     public var isEnabled: () -> Bool = { true }
     public var limits = Limits()
     public var isAccountBusy: (String) -> Bool = { _ in false }
+    /// The review time (Settings ▸ Run reviews) and the Mac's time zone, read whenever reviews are looked at.
+    public var reviewTime: () -> ReviewTime = { .standard }
+    public var timeZone: () -> TimeZone = { .current }
     /// Called after every change to a record.
     public var onChange: (EvaluationRecord) -> Void = { _ in }
+    /// Called after the work waiting for a bot's review changes.
+    public var onStateChange: (UUID) -> Void = { _ in }
     public var now: () -> Date = { Date() }
     public let writer: MemoryWriter
-    /// The bot's folder as it is now, or nil once the bot is gone.
-    let workspace: (UUID) -> String?
+    /// The bot as it is now, or nil once it is gone: a review runs on its own account, model and effort.
+    let bot: (UUID) -> Bot?
     let sharedMemoryPath: () -> String
     let teamPath: () -> String
 
     public private(set) var records: [String: EvaluationRecord] = [:]
-    /// Where records are saved, off the main actor, each in its own lane, in order.
+    /// Each bot's work waiting for its review, by the bot the review is about.
+    public private(set) var states: [UUID: ReviewState] = [:]
+    /// Where records and stretches are saved, off the main actor, each in its own lane, in order.
     public let storage: StorageQueue
     private var running: [String: Task<Void, Never>] = [:]
     private var wakeTask: Task<Void, Never>?
     /// BotChu is quitting (`stopAll`).
     private var stopping = false
-    /// Runs handed over by `enqueue(_:workspace:account:prepare:)`, so a run's end reported again,
-    /// before or after its request is ready, isn't prepared twice; and the preparations under way.
-    private var claimed: Set<String> = []
-    private var preparations: [String: Task<Void, Never>] = [:]
+    /// When each account last had a turn, sub-agent or job on it, as far as BotChu has seen.
+    private var lastActive: [String: Date] = [:]
 
-    public init(writer: MemoryWriter = .shared, storage: StorageQueue = StorageQueue(qos: .utility), workspace: @escaping (UUID) -> String?,
+    public init(writer: MemoryWriter = .shared, storage: StorageQueue = StorageQueue(qos: .utility), bot: @escaping (UUID) -> Bot?,
                 sharedMemoryPath: @escaping () -> String, teamPath: @escaping () -> String) {
         self.writer = writer
         self.storage = storage
-        self.workspace = workspace
+        self.bot = bot
         self.sharedMemoryPath = sharedMemoryPath
         self.teamPath = teamPath
     }
 
-    /// Reads the bots' saved reviews after a launch. A review that was running when BotChu quit
-    /// waits again (or fails, once out of attempts); one being applied is applied again.
+    /// Reads the bots' saved reviews and waiting work after a launch. A review that was running
+    /// when BotChu quit waits again (or fails, once out of attempts); one being applied is applied
+    /// again. A review of one run still waiting from before daily reviews is folded into its bot's
+    /// next daily review, without a model call: each conversation's stretch starts before its
+    /// oldest such run. Finished ones stay as they are.
     public func load(bots: [(id: UUID, workspace: String)]) {
+        let date = now()
         for bot in bots {
             let home = BotHome(workspace: bot.workspace)
-            for var record in home.loadEvaluations() where records[record.id] == nil {
-                if record.phase == .running {
+            let saved = home.loadReviewState()
+            var state = saved ?? ReviewState()
+            if state.handled == nil { state.handled = reviewTime().handled(atOrBefore: date, in: timeZone()) }
+            let loaded = home.loadEvaluations().filter { records[$0.id] == nil }.sorted { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }
+            for var record in loaded {
+                if record.subject.kind.isPerRun, record.phase == .pending || record.phase == .running {
+                    Self.fold(record, into: &state)
+                    record.phase = .folded
+                    record.finishedAt = date
+                    record.snapshot = nil
+                    record.memoryAtRun = nil
+                    try? home.save(record)
+                } else if record.phase == .running {
                     if record.attempts >= limits.attempts {
                         record.phase = .failed
                         record.finishedAt = now()
-                        record.failure = EvaluationFailure(.evaluation, "BotChu quit while reviewing this run")
+                        record.failure = EvaluationFailure(.evaluation, "BotChu quit while reviewing this")
                     } else {
                         record.phase = .pending
                     }
@@ -1202,118 +1299,248 @@ public final class RunEvaluator {
                 }
                 records[record.id] = record
             }
+            states[bot.id] = state
+            if state != saved { save(state, workspace: bot.workspace) }
         }
         pump()
     }
 
-    /// Hands a finished run over for review, with its request built already, and returns at once;
-    /// false when reviews are off, or the run was handed over before (also before a relaunch). The
-    /// app hands runs over with `enqueue(_:workspace:account:prepare:)`, which builds the request
-    /// off the main actor.
-    @discardableResult
-    public func enqueue(_ request: EvaluationRequest) -> Bool {
-        guard runner != nil, isEnabled() else { return false }
-        let key = request.subject.key
-        guard records[key] == nil, !FileManager.default.fileExists(atPath: BotHome(workspace: request.workspace).evaluationURL(key).path)
-        else { return false }
-        let record = EvaluationRecord(request, at: now()).redacted()
-        admit(Prepared(record: record, memory: CommandBuilder.runsToolFree(record.account.kind) ? Self.memoryNotes(workspace: request.workspace) : nil))
-        return true
-    }
-
-    /// Hands a finished run over for review without building what it sees on the main actor. The
-    /// run is claimed here first: false, and nothing built, when reviews are off, there is no runner,
-    /// BotChu is quitting, or the run was handed over before. `prepare` then builds its request off
-    /// the main actor, with `toolFree` false when the account's CLI can't run a review (no snapshot
-    /// is built, and the run is recorded as not reviewed), along with the bot's memory as it is; the
-    /// request is handed over only if reviews are still on and the run still unreviewed.
-    @discardableResult
-    public func enqueue(_ subject: EvaluationSubject, workspace: String, account: Account,
-                        prepare: @escaping @Sendable (_ toolFree: Bool) -> EvaluationRequest?) -> Bool {
-        let key = subject.key
-        guard runner != nil, isEnabled(), !stopping, records[key] == nil, claimed.insert(key).inserted else { return false }
-        let toolFree = CommandBuilder.runsToolFree(account.kind)
-        let file = BotHome(workspace: workspace).evaluationURL(key)
-        let date = now()
-        preparations[key] = Task.detached(priority: .utility) { [weak self] in
-            let prepared: Prepared? = prepare(toolFree).flatMap { request in
-                guard !FileManager.default.fileExists(atPath: file.path) else { return nil }
-                return Prepared(record: EvaluationRecord(request, at: date).redacted(),
-                                memory: toolFree ? Self.memoryNotes(workspace: workspace) : nil)
-            }
-            await self?.prepared(key, prepared)
-        }
-        return true
-    }
-
-    /// A run's request, built and redacted, and the bot's memory notes when it ended.
-    private struct Prepared: Sendable {
-        var record: EvaluationRecord
-        var memory: [String]?
-    }
-
-    private func prepared(_ key: String, _ prepared: Prepared?) {
-        preparations[key] = nil
-        guard let prepared, runner != nil, isEnabled(), !stopping, records[key] == nil else { return }
-        admit(prepared)
-    }
-
-    private func admit(_ prepared: Prepared) {
-        var record = prepared.record
-        guard CommandBuilder.runsToolFree(record.account.kind) else {
-            record.snapshot = nil
-            update(Self.skipped(record, Self.unavailable(record.account.kind), at: record.createdAt), redacted: true)
+    /// A waiting review of one run, from before daily reviews, as the stretch of its conversation:
+    /// a turn's stretch starts at that turn's first message (or an earlier one's) and ends when the
+    /// newest of them ended; a sub-agent run joins it.
+    private static func fold(_ record: EvaluationRecord, into state: inout ReviewState) {
+        let conversation = ReviewConversation(botID: record.subject.conversationBotID, taskID: record.subject.taskID)
+        var stretch = state.stretches.first { $0.conversation == conversation } ?? ReviewStretch(conversation: conversation, since: record.createdAt)
+        switch record.subject.kind {
+        case .taskTurn:
+            if !stretch.hasTurns, stretch.cursorDate == nil { stretch.from = record.subject.runID }
+            stretch.throughDate = max(stretch.throughDate ?? .distantPast, record.createdAt)
+        case .subagent:
+            if !stretch.subagents.contains(record.subject.runID) { stretch.subagents.append(record.subject.runID) }
+        case .day, .task:
             return
         }
-        if limits.delay > 0 { record.notBefore = record.createdAt.addingTimeInterval(limits.delay) }
-        record.memoryAtRun = prepared.memory
-        update(record, redacted: true)
+        stretch.since = min(stretch.since, record.createdAt)
+        state.upsert(stretch)
+    }
+
+    // MARK: Work handed over
+
+    /// A conversation's turn ended: its stretch now runs through `last`, the turn's last message, and
+    /// starts at `prompt`, the turn's first, when it is the first since the conversation's last
+    /// review. Nothing is built and no review is added. A turn that ends while reviews are off is
+    /// never reviewed.
+    public func turnEnded(_ conversation: ReviewConversation, prompt: UUID, last: UUID, accountID: String) {
+        guard runner != nil, !stopping else { return }
+        let date = now()
+        accountActivity(accountID, at: date)
+        var state = state(of: conversation.botID, at: date)
+        if let index = state.stretches.firstIndex(where: { $0.conversation == conversation }) {
+            if isEnabled() {
+                var stretch = state.stretches[index]
+                if !stretch.hasTurns, stretch.cursorDate == nil { stretch.from = prompt }
+                stretch.through = last
+                stretch.throughDate = date
+                state.stretches[index] = stretch
+            } else if let kept = state.stretches[index].dropping(through: last, at: date) {
+                state.stretches[index] = kept
+            } else {
+                state.stretches.remove(at: index)
+            }
+        } else if isEnabled() {
+            state.stretches.append(ReviewStretch(conversation: conversation, from: prompt, through: last, throughDate: date, since: date))
+        } else {
+            return
+        }
+        setState(conversation.botID, state)
+    }
+
+    /// A sub-agent run finished: it joins the stretch of the conversation it was delegated from, in
+    /// the review of the bot it ran as, never one of its own.
+    public func subagentEnded(_ run: SubagentRun) {
+        guard runner != nil, !stopping, !run.phase.isActive else { return }
+        let date = now()
+        accountActivity(run.accountID, at: date)
+        guard isEnabled() else { return }
+        let conversation = ReviewConversation(botID: run.rootBotID, taskID: run.rootTaskID)
+        var state = state(of: run.targetBotID, at: date)
+        var stretch = state.stretches.first { $0.conversation == conversation } ?? ReviewStretch(conversation: conversation, since: date)
+        guard !stretch.subagents.contains(run.id) else { return }
+        stretch.subagents.append(run.id)
+        state.upsert(stretch)
+        setState(run.targetBotID, state)
+    }
+
+    /// Something ran on the account (a turn, a sub-agent or a scheduled job, which just ended):
+    /// reviews on it wait `Limits.delay` from then.
+    public func accountActivity(_ accountID: String, at date: Date? = nil) {
+        let date = date ?? now()
+        lastActive[accountID] = max(lastActive[accountID] ?? .distantPast, date)
+    }
+
+    /// Whether a review may start on the account at `date`: nothing runs on it, and nothing has for `Limits.delay`.
+    func isIdle(_ accountID: String, at date: Date) -> Bool {
+        !isAccountBusy(accountID) && date.timeIntervalSince(lastActive[accountID] ?? .distantPast) >= limits.delay
+    }
+
+    private func state(of botID: UUID, at date: Date) -> ReviewState {
+        states[botID] ?? ReviewState(handled: reviewTime().handled(atOrBefore: date, in: timeZone()))
+    }
+
+    /// Keeps a bot's waiting work and saves it off the main actor, then reports the change.
+    private func setState(_ botID: UUID, _ state: ReviewState) {
+        states[botID] = state
+        if let workspace = bot(botID)?.workspace { save(state, workspace: workspace) }
+        onStateChange(botID)
+    }
+
+    private func save(_ state: ReviewState, workspace: String) {
+        let home = BotHome(workspace: workspace)
+        storage.replace(home.reviewStateURL.path, slot: "state", value: state, write: { state in
+            try home.save(state)
+            return 0
+        })
+    }
+
+    // MARK: When reviews are due
+
+    /// Makes the day's reviews due at the review time: each bot with unreviewed work gets one
+    /// waiting review, or the one it has waiting (its account was busy or out of allowance) takes
+    /// the new day and covers both, since its cursors haven't moved. Called on the jobs' tick, at a
+    /// wake and a clock change, and by `pump`.
+    public func dailyCheck() {
+        guard runner != nil, isEnabled(), !stopping else { return }
+        let date = now(), time = reviewTime(), zone = timeZone()
+        for botID in states.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard var state = states[botID], let handled = state.handled else { continue }
+            switch time.due(now: date, in: zone, after: handled) {
+            case .none:
+                continue
+            case .handled(let next):
+                state.handled = next
+                setState(botID, state)
+            case .review(let next, let missed):
+                state.handled = next
+                setState(botID, state)
+                guard !state.unreviewed().isEmpty, let bot = bot(botID) else { continue }
+                if var waiting = waiting(botID, task: nil) {
+                    waiting.coalesced = (waiting.coalesced ?? 0) + 1 + missed
+                    waiting.scheduledFor = next.occurrence
+                    waiting.title = Self.title(upTo: next.occurrence, days: waiting.coalesced ?? 0, zone: zone)
+                    update(waiting)
+                } else {
+                    var record = EvaluationRecord(.day(botID: botID), bot: bot, title: Self.title(upTo: next.occurrence, days: missed, zone: zone),
+                                                  at: date, scheduledFor: next.occurrence)
+                    if missed > 0 { record.coalesced = missed }
+                    update(record)
+                }
+            }
+        }
+    }
+
+    /// "the work up to Sat, Oct 25, 4:00 AM", with how many earlier days folded into it.
+    static func title(upTo date: Date, days: Int, zone: TimeZone, task: String? = nil) -> String {
+        let moment = ReviewTime.format(date, "EEEMMMdjmm", zone: zone, locale: .current)
+        let work = task.map { "the work on \($0)" } ?? "the work"
+        return "\(work) up to \(moment)" + (days > 0 ? " (\(days + 1) days)" : "")
+    }
+
+    /// The bot's review waiting to start: its day's, or with `task`, that task's Review now.
+    private func waiting(_ botID: UUID, task taskID: UUID?) -> EvaluationRecord? {
+        records.values.filter { $0.botID == botID && $0.phase == .pending && $0.subject.kind == (taskID == nil ? .day : .task) && $0.subject.taskID == taskID }
+            .min { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }
+    }
+
+    /// Whether Review now can review the bot's unreviewed work (or, with `task`, that task's): it
+    /// has some, and no review of it waits or runs already.
+    public func canReviewNow(_ botID: UUID, task taskID: UUID? = nil) -> Bool {
+        guard runner != nil, isEnabled(), !stopping, !(states[botID]?.unreviewed(task: taskID).isEmpty ?? true) else { return false }
+        return !records.values.contains { record in
+            record.botID == botID && record.phase.isWaiting
+                && (record.subject.kind == .day || (taskID != nil && record.subject.kind == .task && record.subject.taskID == taskID))
+        }
+    }
+
+    /// Reviews the bot's unreviewed work (or, with `task`, that task's stretch alone, moving only
+    /// its cursor) without waiting for the review time, under the same idle and daily rules. False
+    /// when there is nothing to review or a review of it waits already.
+    @discardableResult
+    public func reviewNow(_ botID: UUID, task taskID: UUID? = nil, title taskTitle: String? = nil) -> Bool {
+        guard canReviewNow(botID, task: taskID), let bot = bot(botID) else { return false }
+        let date = now()
+        let subject: EvaluationSubject = taskID.map { .task($0, of: botID) } ?? .day(botID: botID)
+        let title = Self.title(upTo: date, days: 0, zone: timeZone(), task: taskID == nil ? nil : "“\(taskTitle ?? "the task")”")
+        update(EvaluationRecord(subject, bot: bot, title: title, at: date, requested: true))
         pump()
-    }
-
-    private nonisolated static func memoryNotes(workspace: String) -> [String] {
-        MemoryNotes.bullets(in: Workspace.read(MemoryFile.bot(workspace: workspace).path)).filter { !MemoryNotes.isSecret($0) }
-    }
-
-    /// Why a run on a CLI isn't reviewed when the CLI can't run a session without tools.
-    public nonisolated static func unavailable(_ kind: AgentKind) -> String {
-        "Run reviews aren't available on \(kind.displayName): it has no way, verified by BotChu, to run a review without tools"
+        return true
     }
 
     /// Starts what can start now: plans to apply, then waiting reviews whose account is idle and
-    /// within its daily limit. Looks again in `limits.wake` while any wait.
+    /// within its daily limit. Looks again in `limits.wake` while any wait (sooner when one waits
+    /// only for its account's idle time).
     public func pump() {
         wakeTask?.cancel()
         wakeTask = nil
-        guard !stopping else { return }
+        guard !stopping, runner != nil else { return }
         let date = now()
-        for record in records.values where record.phase == .pending && date.timeIntervalSince(record.retriedAt ?? record.createdAt) > limits.expiry {
-            let since = record.retriedAt == nil ? "the run" : "its Retry"
-            skip(record.id, "Not reviewed within \(Int(limits.expiry / 3_600)) hours of \(since): its account was busy or at its daily limit")
-        }
-        guard runner != nil, isEnabled() else { return }
+        expire(at: date)
+        guard isEnabled() else { return }
+        dailyCheck()
         for record in records.values where record.phase == .applying && running[record.id] == nil { applyOnceSaved(record.id) }
+        for record in records.values where record.phase == .pending {
+            let account = account(for: record).id
+            if isAccountBusy(account) { lastActive[account] = date }
+        }
         while running.count < limits.concurrent, let next = nextReview(at: date) { start(next) }
-        if records.values.contains(where: { $0.phase == .pending }) {
-            let wake = limits.wake
-            wakeTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: UInt64(max(1, wake) * 1_000_000_000))
-                guard !Task.isCancelled else { return }
-                self?.pump()
-            }
+        let pending = records.values.filter { $0.phase == .pending }
+        guard !pending.isEmpty else { return }
+        var wake = limits.wake
+        for record in pending {
+            let account = account(for: record).id
+            guard !isAccountBusy(account), let active = lastActive[account] else { continue }
+            let idle = active.addingTimeInterval(limits.delay).timeIntervalSince(date)
+            if idle > 0 { wake = min(wake, idle + 1) }
+        }
+        wakeTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(1, wake) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.pump()
         }
     }
 
-    /// Reviews again: a failed save applies its plan again, anything else asks the model again.
+    /// Skips work left unreviewed for `Limits.skipAfter`: its cursors move, and a record counts it
+    /// as not reviewed in time. Not while a review of the bot runs, which may still review it.
+    private func expire(at date: Date) {
+        for botID in states.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let state = states[botID], let bot = bot(botID) else { continue }
+            let old = state.stretches.filter { $0.hasWork && date.timeIntervalSince($0.since) > limits.skipAfter }
+            guard !old.isEmpty, !records.values.contains(where: { $0.botID == botID && ($0.phase == .running || $0.phase == .applying) })
+            else { continue }
+            var record = EvaluationRecord(.day(botID: botID), bot: bot, title: Self.title(upTo: date.addingTimeInterval(-limits.skipAfter), days: 0,
+                                                                                           zone: timeZone()), at: date)
+            record.covered = old.map { $0.coverage() }
+            record.expired = true
+            advance(botID, past: record.covered ?? [])
+            update(Self.skipped(record, "Not reviewed within \(Int((limits.skipAfter / 86_400).rounded())) days: its account was busy, at its daily limit or out of allowance, or its reviews failed", at: date))
+        }
+    }
+
+    /// Reviews again: a failed save applies its plan again; anything else waits again and reads
+    /// the work it covers anew as it starts, and the wait of that work starts again (a review of one
+    /// run, from before #138, asks about that run again).
     public func retry(_ id: String) {
         guard var record = records[id], record.canRetry else { return }
         if record.plan != nil, record.failure?.kind == .storage {
             record.phase = .applying
-        } else if record.snapshot != nil {
+        } else if !record.subject.kind.isPerRun || record.snapshot != nil {
             record.phase = .pending
             record.attempts = 0
             record.notBefore = nil
             record.retriedAt = now()
+            if !record.subject.kind.isPerRun {
+                record.snapshot = nil
+                restartWait(of: record)
+            }
         } else { return }
         record.failure = nil
         record.skipReason = nil
@@ -1321,12 +1548,21 @@ public final class RunEvaluator {
         pump()
     }
 
+    private func restartWait(of record: EvaluationRecord) {
+        guard var state = states[record.botID] else { return }
+        let date = now()
+        for index in state.stretches.indices where record.subject.kind == .day || state.stretches[index].conversation.taskID == record.subject.taskID {
+            state.stretches[index].since = max(state.stretches[index].since, date)
+        }
+        setState(record.botID, state)
+    }
+
     /// Undoes what the review changed, through the writer, keeping every other edit made since: each
     /// of its hunks is undone only where the file still holds exactly the lines it left, in the same
     /// section (`AppliedChange.reverting`). One the owner has changed since stays as the owner left it,
     /// and is listed as not reverted.
     public func revert(_ id: String) {
-        guard var record = records[id], record.canRevert, let workspace = workspace(record.botID) else { return }
+        guard var record = records[id], record.canRevert, let workspace = bot(record.botID)?.workspace else { return }
         var undone: [AppliedChange] = []
         var unresolved: [String] = []
         for change in record.applied.reversed() {
@@ -1358,15 +1594,61 @@ public final class RunEvaluator {
         update(record)
     }
 
+    // MARK: What Activity shows
+
     /// The reviews about a bot's guidance, newest first.
     public func records(aboutBot id: UUID) -> [EvaluationRecord] {
         records.values.filter { $0.botID == id }.sorted { ($0.createdAt, $0.id) > ($1.createdAt, $1.id) }
     }
 
-    /// The reviews of a task's turns and of the sub-agents it delegated, newest first.
+    /// The reviews that covered a task's work, newest first.
     public func records(ofTask id: UUID) -> [EvaluationRecord] {
-        records.values.filter { $0.subject.taskID == id }.sorted { ($0.createdAt, $0.id) > ($1.createdAt, $1.id) }
+        records.values.filter { $0.covers(task: id) }.sorted { ($0.createdAt, $0.id) > ($1.createdAt, $1.id) }
     }
+
+    /// Why a waiting review hasn't started, or what it is doing; nil once it is done.
+    public func waitReason(_ record: EvaluationRecord) -> ReviewWait? {
+        let account = account(for: record)
+        switch record.phase {
+        case .running:
+            return .reviewing(account: account.name)
+        case .applying:
+            return .saving
+        case .pending:
+            let date = now()
+            if !CommandBuilder.runsToolFree(account.kind) { return .unavailable(account.kind) }
+            if let notBefore = record.notBefore, notBefore > date {
+                return record.failure?.kind == .allowance ? .allowance(account: account.name, until: notBefore) : .retrying(at: notBefore)
+            }
+            if !isIdle(account.id, at: date) { return .busy(account: account.name) }
+            let calls = attemptTimes(on: account.id, at: date)
+            if calls.count >= limits.perAccountPerDay { return .dailyLimit(until: calls[calls.count - limits.perAccountPerDay].addingTimeInterval(Self.day)) }
+            if running.count >= limits.concurrent { return .another }
+            return .starting
+        case .done, .failed, .skipped, .folded:
+            return nil
+        }
+    }
+
+    /// What Activity's summary line says of a bot's reviews (or, with `task`, a task's): the
+    /// review under way or waiting and why, else when the next one is and how many conversations
+    /// have work waiting for it, or that everything is reviewed.
+    public func status(of botID: UUID, task taskID: UUID? = nil) -> ReviewStatus {
+        guard runner != nil, isEnabled() else { return .off }
+        let unreviewed = states[botID]?.unreviewed(task: taskID).count ?? 0
+        let current = records.values.filter { record in
+            record.botID == botID && record.phase.isWaiting && !record.subject.kind.isPerRun
+                && (taskID == nil || record.subject.taskID == taskID || (record.subject.kind == .day && unreviewed > 0))
+        }
+        .min { (rank($0), $0.createdAt) < (rank($1), $1.createdAt) }
+        if let current, let reason = waitReason(current) { return .waiting(reason, conversations: unreviewed) }
+        guard unreviewed > 0 else { return .upToDate }
+        if let kind = bot(botID)?.account.kind, !CommandBuilder.runsToolFree(kind) { return .waiting(.unavailable(kind), conversations: unreviewed) }
+        guard let next = reviewTime().next(after: now(), in: timeZone(), handled: states[botID]?.handled) else { return .upToDate }
+        return .next(next, conversations: unreviewed)
+    }
+
+    private func rank(_ record: EvaluationRecord) -> Int { record.phase == .pending ? 1 : 0 }
 
     /// BotChu is quitting: stops the reviews running (their CLI is interrupted), which stay
     /// "running" in their saved records, so the next launch tries them again, or fails them once
@@ -1378,37 +1660,114 @@ public final class RunEvaluator {
         for task in running.values { task.cancel() }
     }
 
-    /// Waits until no review runs or is being prepared, and every record is saved (for tests).
+    /// Waits until no review runs or is being read, and every record is saved (for tests).
     public func settle() async {
-        while let task = running.values.first ?? preparations.values.first { await task.value }
+        while let task = running.values.first { await task.value }
         await storage.settle()
+    }
+
+    // MARK: Running one
+
+    /// What a review runs on: its bot's account as it is now (a review of one run, the run's).
+    private func account(for record: EvaluationRecord) -> Account {
+        record.subject.kind.isPerRun ? record.account : bot(record.botID)?.account ?? record.account
+    }
+
+    /// The waiting work a review covers: all of its bot's, or one task's.
+    private func scope(of record: EvaluationRecord) -> [ReviewStretch] {
+        states[record.botID]?.unreviewed(task: record.subject.kind == .task ? record.subject.taskID : nil) ?? []
     }
 
     private func nextReview(at date: Date) -> String? {
         records.values.filter { record in
-            record.phase == .pending && running[record.id] == nil && (record.notBefore ?? .distantPast) <= date
-                && !isAccountBusy(record.accountID) && attemptsToday(on: record.accountID, at: date) < limits.perAccountPerDay
+            guard record.phase == .pending, running[record.id] == nil, (record.notBefore ?? .distantPast) <= date else { return false }
+            let account = account(for: record)
+            // One its bot's CLI can't run starts at once, to be skipped.
+            guard CommandBuilder.runsToolFree(account.kind) else { return true }
+            return isIdle(account.id, at: date) && attemptsToday(on: account.id, at: date) < limits.perAccountPerDay
         }
         .min { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }?.id
     }
 
     /// The model calls made on the account in the 24 hours before `date`, of every review and retry.
     func attemptsToday(on accountID: String, at date: Date) -> Int {
-        records.values.filter { $0.accountID == accountID }
-            .reduce(0) { count, record in count + record.attemptTimes.filter { date.timeIntervalSince($0) < Self.day }.count }
+        attemptTimes(on: accountID, at: date).count
+    }
+
+    private func attemptTimes(on accountID: String, at date: Date) -> [Date] {
+        records.values.filter { $0.accountID == accountID }.flatMap(\.attemptTimes).filter { date.timeIntervalSince($0) < Self.day }.sorted()
     }
 
     /// The window `Limits.perAccountPerDay` counts model calls in.
     private static let day: TimeInterval = 86_400
 
+    /// Starts a review: it takes its bot's account, model and effort as they are now, then reads
+    /// the work it covers off the main actor (`prepared`).
     private func start(_ id: String) {
-        guard var record = records[id], let runner else { return }
-        guard let workspace = workspace(record.botID) else { return skip(id, "Its bot is gone") }
-        guard CommandBuilder.runsToolFree(record.account.kind) else {
-            record.snapshot = nil
-            return update(Self.skipped(record, Self.unavailable(record.account.kind), at: now()))
+        guard var record = records[id], runner != nil else { return }
+        guard let bot = bot(record.botID) else { return skip(id, "Its bot is gone") }
+        if record.subject.kind.isPerRun {
+            // A review of one run, from before #138, retried: about that run, on its account.
+            guard CommandBuilder.runsToolFree(record.account.kind) else {
+                record.snapshot = nil
+                return update(Self.skipped(record, Self.unavailable(record.account.kind), at: now()))
+            }
+            guard record.snapshot != nil else { return skip(id, "Nothing to review") }
+            return ask(id)
         }
-        guard let snapshot = record.snapshot else { return skip(id, "Nothing to review") }
+        record.botName = bot.name
+        record.accountID = bot.accountID
+        record.accountProfile = bot.accountProfile
+        record.model = bot.model
+        record.reasoningEffort = bot.reasoningEffort
+        let scope = scope(of: record)
+        guard CommandBuilder.runsToolFree(bot.account.kind) else {
+            // Its work isn't reviewed, and doesn't wait for a review that can't come.
+            record.covered = scope.map { $0.coverage() }
+            advance(bot.id, past: record.covered ?? [])
+            return update(Self.skipped(record, Self.unavailable(bot.account.kind), at: now()))
+        }
+        guard !scope.isEmpty else { return remove(id) }
+        record.phase = .running
+        record.startedAt = now()
+        record.notBefore = nil
+        record.snapshot = nil
+        update(record)
+        let input = ReviewDayInput(botID: bot.id, botName: bot.name, workspace: bot.workspace, sources: scope.map { stretch in
+            let owner = self.bot(stretch.conversation.botID)
+            return ReviewDayInput.Source(stretch: stretch, workspace: owner?.workspace, owner: owner?.name ?? "a bot that is gone")
+        }, zone: timeZone())
+        let limits = limits
+        running[id] = Task { [weak self] in
+            let day = await Task.detached(priority: .utility) { ReviewDay.build(input, limits: limits) }.value
+            self?.prepared(id, day)
+        }
+    }
+
+    /// The work a review covers, as read: without signal, its cursors move and no model is asked;
+    /// with it, the model is asked about its snapshot.
+    private func prepared(_ id: String, _ day: ReviewDay) {
+        running[id] = nil
+        defer { pump() }
+        guard !stopping, var record = records[id], record.phase == .running else { return }
+        guard !day.coverage.isEmpty else { return remove(id) }
+        record.covered = day.coverage
+        guard day.hasSignal else {
+            advance(record.botID, past: day.coverage)
+            record.phase = .done
+            record.outcome = .noSignal
+            record.finishedAt = now()
+            return update(record)
+        }
+        record.snapshot = day.snapshot
+        record.memoryAtRun = day.memory
+        update(record)
+        ask(id)
+    }
+
+    /// Asks the model, once the record saying so is saved.
+    private func ask(_ id: String) {
+        guard var record = records[id], let runner, let snapshot = record.snapshot, let workspace = bot(record.botID)?.workspace else { return }
         record.phase = .running
         record.attempts += 1
         record.startedAt = now()
@@ -1429,6 +1788,36 @@ public final class RunEvaluator {
             let attempt = await Self.run(job, with: runner, timeout: timeout)
             self?.finish(id, attempt)
         }
+    }
+
+    /// Moves the cursors of the bot's stretches past what a review covered.
+    private func advance(_ botID: UUID, past coverage: [ReviewCoverage]) {
+        guard var state = states[botID], !coverage.isEmpty else { return }
+        for covered in coverage {
+            guard let index = state.stretches.firstIndex(where: { $0.conversation == covered.conversation }) else { continue }
+            if let kept = state.stretches[index].advanced(past: covered) {
+                state.stretches[index] = kept
+            } else {
+                state.stretches.remove(at: index)
+            }
+        }
+        setState(botID, state)
+    }
+
+    /// Forgets a review that found nothing to cover, with its file.
+    private func remove(_ id: String) {
+        guard let record = records.removeValue(forKey: id) else { return }
+        if let workspace = bot(record.botID)?.workspace {
+            let home = BotHome(workspace: workspace), lane = home.evaluationURL(id).path
+            storage.cancel(lane, slot: "record")
+            storage.submit(lane, label: "remove", work: { home.removeEvaluation(id) })
+        }
+        onChange(record)
+    }
+
+    /// Why a run on a CLI isn't reviewed when the CLI can't run a session without tools.
+    public nonisolated static func unavailable(_ kind: AgentKind) -> String {
+        "Run reviews aren't available on \(kind.displayName): it has no way, verified by BotChu, to run a review without tools"
     }
 
     /// The reply of one review run, or why there is none, named so the task group's children
@@ -1506,7 +1895,7 @@ public final class RunEvaluator {
         defer { pump() }
         guard !stopping, var record = records[id], record.phase == .running else { return }
         if let reply = attempt.reply {
-            guard let parsed = EvaluationResponse.parse(reply), let snapshot = record.snapshot, workspace(record.botID) != nil else {
+            guard let parsed = EvaluationResponse.parse(reply), let snapshot = record.snapshot, bot(record.botID) != nil else {
                 return fail(&record, EvaluationFailure(.evaluation, "Its reply held no review BotChu could read"))
             }
             let plan = EvaluationPlan(parsed.changes, snapshot: snapshot)
@@ -1518,6 +1907,15 @@ public final class RunEvaluator {
             record.leftOut = plan.leftOut
                 + (parsed.unknown > 0 ? ["\(parsed.unknown) change\(parsed.unknown == 1 ? "" : "s") for a place BotChu doesn't know"] : [])
                 + (parsed.extra > 0 ? ["\(parsed.extra) change\(parsed.extra == 1 ? "" : "s") beyond the \(EvaluationResponse.maxChanges) a review may suggest"] : [])
+            // The conversations its changes rest on, in the order they cite them.
+            let sources = snapshot.sources ?? [:]
+            var conversations: [String] = []
+            for label in (plan.apply + plan.proposals).flatMap(\.evidence) {
+                if let source = sources[label], !conversations.contains(source) { conversations.append(source) }
+            }
+            record.cited = conversations.isEmpty ? nil : conversations
+            // Reviewed: the work it covered waits no more, whatever becomes of saving its changes.
+            if let covered = record.covered { advance(record.botID, past: covered) }
             record.phase = .applying
             update(record)
             applyOnceSaved(id)
@@ -1547,7 +1945,7 @@ public final class RunEvaluator {
     /// Applies the plan once the record saying it is being applied is saved, so a relaunch applies
     /// it again (which changes nothing) rather than asking the model again.
     private func applyOnceSaved(_ id: String) {
-        guard running[id] == nil, let record = records[id], let workspace = workspace(record.botID) else { return apply(id) }
+        guard running[id] == nil, let record = records[id], let workspace = bot(record.botID)?.workspace else { return apply(id) }
         let lane = BotHome(workspace: workspace).evaluationURL(id).path, storage = storage
         running[id] = Task { [weak self] in
             await storage.barrier(lane)
@@ -1567,7 +1965,7 @@ public final class RunEvaluator {
     /// note that has changed since is kept as a proposal instead.
     private func apply(_ id: String) {
         guard var record = records[id], record.phase == .applying else { return }
-        guard let workspace = workspace(record.botID) else { return skip(id, "Its bot is gone") }
+        guard let workspace = bot(record.botID)?.workspace else { return skip(id, "Its bot is gone") }
         let file = MemoryFile.bot(workspace: workspace)
         let atRun = Set((record.memoryAtRun ?? []).map(MemoryNotes.normalized))
         let current = Set(MemoryNotes.bullets(in: Workspace.read(file.path)).map(MemoryNotes.normalized))
@@ -1648,7 +2046,7 @@ public final class RunEvaluator {
     /// Saves the record in its own lane, after its earlier saves (a newer state takes the place of
     /// one not written yet); a failure shows in the record until a save works.
     private func save(_ record: EvaluationRecord) {
-        guard let workspace = workspace(record.botID) else { return }
+        guard let workspace = bot(record.botID)?.workspace else { return }
         let home = BotHome(workspace: workspace), id = record.id
         storage.replace(home.evaluationURL(id).path, slot: "record", value: record, write: { record in
             var record = record
@@ -1672,7 +2070,7 @@ public final class RunEvaluator {
     /// Keeps the newest `limits.kept` finished reviews of a bot, and any that called the model in
     /// the last 24 hours, which its account's daily limit still counts (also after a relaunch).
     private func prune(_ botID: UUID) {
-        guard let workspace = workspace(botID) else { return }
+        guard let workspace = bot(botID)?.workspace else { return }
         let date = now()
         let finished = records(aboutBot: botID).filter { !$0.phase.isWaiting }
         let home = BotHome(workspace: workspace)
