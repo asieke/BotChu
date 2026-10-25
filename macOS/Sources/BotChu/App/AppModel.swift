@@ -235,6 +235,10 @@ final class AppModel {
     /// shows it, and the ones read so far, by `owner/name#number`.
     let workDetailLookup: @Sendable (String, Int, Bool) async -> Result<GitHubLookup.WorkDetail, TaskWorktree.Failure>
     @ObservationIgnored var workDetails: [String: GitHubLookup.WorkDetail] = [:]
+    /// The issue the owner chose to delete in Projects, until they confirm it, and then why GitHub
+    /// didn't delete it; the issues being deleted, by `owner/name#number` (`Projects.swift`).
+    var issueDeletion: IssueDeletion?
+    var deletingIssues: Set<String> = []
     var githubConnection: ProjectGitHub.Connection?
     var githubChecking = false
     let projectGitHub: ProjectGitHub

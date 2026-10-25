@@ -55,6 +55,12 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     (**Review with**, **Review and Comment with**), continues it (unless it comes from a fork) or
     starts a task on an issue with a bot, opening New Task with it chosen, or opens the task already
     on it. They are read with one GraphQL query per ten repositories whose open work changed (below).
+    An issue's menu also has **Delete Issue…**, as its page in the sidebar has Delete (#154): after
+    an alert naming the repository and number says it can't be undone, `gh issue delete <n> --repo
+    <owner/name> --yes` deletes it on GitHub for good. It then leaves the lists, the counts and
+    `projects.json` at once, without a sync (one under way that read it before doesn't bring it
+    back), and the sidebar showing it goes back to its Issues. When GitHub refuses (it lets only a
+    repository's admins delete issues) or can't be reached, nothing is removed and an alert says why.
   - **Saved and synced:** the repositories, their `PROJECT.md`, and the open pull requests and
     issues with GitHub's counts are kept on this Mac (`projects.json`) for the account `gh` is signed
     in to, with when they were last synced, so Projects, New Task and Home's task requests have them
@@ -77,9 +83,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     table opens that tab. **Overview** has its open work, its type, status, merge policy and
     deployment, where its tasks work, the open tasks on it, **Start Task with**, **Edit Metadata…**
     and GitHub. **Issues** and **PRs** list the open ones read for it (saying so when there are
-    more), with their labels, checks and the bots on them; each opens in place, read with `gh issue
+    more), with their labels, checks and the bots on them, and the tables' menu; each opens in place, read with `gh issue
     view` or `gh pr view`: its description, labels and conversation, and a pull request's branches,
-    checks, changed files and reviews. An issue's **Fix with** starts a task on it with an agent, and
+    checks, changed files and reviews. An open issue's bar has Delete (the trash), which deletes it
+    as **Delete Issue…** does (above). An issue's **Fix with** starts a task on it with an agent, and
     **Fix All** one task in which the agent hands each listed issue that no task works on to a
     parallel sub-agent of its own (`botchu-subagent spawn`, at most four at once), each in its own
     worktree and branch with a pull request that closes its issue. A pull request's **Review**
@@ -942,7 +949,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     the saved Projects catalog, what a sync reads again and how it takes the answers, GitHub's REST
     answers, and the projects offline readers such as completion see (`ProjectCatalog.swift`), and the
     sync that keeps it on disk and in step with GitHub, with its ETags, probes, bounded requests and
-    coalesced refreshes (`ProjectSync.swift`), a repository's open issues at a glance as a task's
+    coalesced refreshes, and deleting an issue with `gh` (`ProjectSync.swift`), a repository's open issues at a glance as a task's
     Activity shows them, from that catalog (`IssuePreview.swift`),
     an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store, with
     the index saved whole or a failure to show (`Store.swift`), with conversations' files read without losing
@@ -1012,7 +1019,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     full from `gh`'s output, and fan-out briefs; the Projects catalog and its sync through a stand-in
     `gh` (the saved catalog shown before any request completes, checks for changes that read only
     what changed, failures, removals, coalesced refreshes, another account, a missing or unreadable
-    file, and the four-request limit); and hosts: their `ssh` command lines, where a repository is worked on, clones,
+    file, the four-request limit, and a deleted issue leaving it at once, also while a sync that read
+    it is under way, or staying when gh refuses, with why); and hosts: their `ssh` command lines, where a repository is worked on, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
     from a remote task; memory: #88's Home sequence (a routing preference saved in the turn that
     agrees, and recalled by a fresh session), what is left out, bot or shared scope, repeats,
@@ -1120,7 +1128,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     restored selection, conversation-scoped allowance reads that show the background's reading
     instead of checking again, automatic task branch creation, the
     main window's layout at its narrowest, galleries that preserve conversation state, the project
-    sidebar's tabs, details and fan-out tasks, custom profile persistence, the Providers table's
+    sidebar's tabs, details and fan-out tasks, deleting an issue from the Issues table's and the
+    sidebar's menus and its detail (confirmed first, through a stand-in `gh`, and refused), custom profile persistence, the Providers table's
     rows under 100 points in every state and at its narrowest, provider logos in both
     appearances and in account menus, the report
     sheet, with a stand-in screenshot (taken of its window before the sheet opens, removed, not
@@ -1174,7 +1183,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     Telegram recognizing a repeated message in a Home not read yet. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
-    (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
+    (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `issuesAreDeletedFromTheirMenuAndDetailAfterConfirming`, `providersTableRowsStayCompact`,
     `activityChatRendersGroupsCardsAndLiveWork`, `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`,
     `jobsBelongToTheirAgentAndReachHomeOnlyAsReceipts`, `aJobsRunIsANewTaskInItsAgentsTasks`, `taskActivityShowsItsRepositorysOpenIssues`, or
     `conversationColumnFollowsTheWindowAndTheOwnersChoice`)
