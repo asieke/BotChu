@@ -1,6 +1,6 @@
 import Foundation
 
-public struct UsageState: Equatable, Sendable {
+public struct UsageState: Equatable, Sendable, Codable {
     public var reading: ProviderUsage?
     public var error: String?
     public var checkedAt: Date?
@@ -21,20 +21,42 @@ public struct UsageState: Equatable, Sendable {
 
 /// Shared across bots on the same account command. Never stores credentials or raw responses.
 /// Coalesces concurrent checks and keeps the last successful reading labelled stale on failure.
+/// Given a file, it keeps what it last read there, so a relaunch shows those readings at once; a
+/// reading saved is only usage fields, and one unchecked for a week is dropped.
 public actor UsageCache {
     public typealias Fetch = @Sendable (UsageRequest, String?) async throws -> ProviderUsage
     private let fetch: Fetch
+    private let file: URL?
     private var states: [UsageRequest: UsageState] = [:]
     private var running: [UsageRequest: Task<UsageState, Never>] = [:]
 
-    public init(fetch: @escaping Fetch = { try await ProviderUsageClient.read($0, openRouterKey: $1) }) { self.fetch = fetch }
+    public init(fetch: @escaping Fetch = { try await ProviderUsageClient.read($0, openRouterKey: $1) }, file: URL? = nil) {
+        self.fetch = fetch
+        self.file = file
+        if let file, let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode([Saved].self, from: data) {
+            states = Dictionary(saved.map { ($0.request, $0.state) }) { $1 }
+        }
+    }
 
-    public func read(_ request: UsageRequest, openRouterKey: String? = nil, manual: Bool = false, now: Date = .now) async -> UsageState {
+    /// What was last read for this profile, here or before a relaunch, without checking.
+    public func saved(_ request: UsageRequest) -> UsageState? { states[request] }
+
+    /// Whether `read` would check now rather than give the last reading: none is under way, no
+    /// retry is pending, and the last check is older than the interval (`maxAge`, else the
+    /// request's own).
+    public func isDue(_ request: UsageRequest, manual: Bool = false, maxAge: TimeInterval? = nil, now: Date = .now) -> Bool {
+        guard running[request] == nil else { return false }
+        let previous = states[request] ?? UsageState()
+        if let retry = previous.retryAt, now < retry { return false }
+        let interval = manual ? request.manualInterval : maxAge ?? request.refreshInterval
+        return previous.checkedAt.map { now.timeIntervalSince($0) >= interval } ?? true
+    }
+
+    public func read(_ request: UsageRequest, openRouterKey: String? = nil, manual: Bool = false, maxAge: TimeInterval? = nil,
+                     now: Date = .now) async -> UsageState {
         if let task = running[request] { return await task.value }
         let previous = states[request] ?? UsageState()
-        if let retry = previous.retryAt, now < retry { return previous }
-        let interval = manual ? request.manualInterval : request.refreshInterval
-        if let checked = previous.checkedAt, now.timeIntervalSince(checked) < interval { return previous }
+        guard isDue(request, manual: manual, maxAge: maxAge, now: now) else { return previous }
         let fetch = fetch
         let task = Task<UsageState, Never> {
             do {
@@ -51,6 +73,21 @@ public actor UsageCache {
         let state = await task.value
         states[request] = state
         running[request] = nil
+        save(now: now)
         return state
+    }
+
+    private struct Saved: Codable {
+        var request: UsageRequest
+        var state: UsageState
+    }
+
+    /// Writes every profile's last state, atomically; one that can't be written stays in memory.
+    private func save(now: Date) {
+        guard let file else { return }
+        let kept = states.filter { now.timeIntervalSince($0.value.checkedAt ?? .distantPast) < 7 * 86_400 }
+        guard let data = try? JSONEncoder().encode(kept.map { Saved(request: $0.key, state: $0.value) }) else { return }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: file, options: .atomic)
     }
 }

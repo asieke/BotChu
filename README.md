@@ -105,18 +105,25 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     project.
   - **Providers:** one compact table of CLI profiles, a row each, under 100 points high whatever
     its state: the logo, name and CLI family; the command, and whether the login shell finds it;
-    a line per allowance window, with its use and reset (the reset when the column has room, and
-    at most four lines, the rest in the tooltip), whose bars, percentages and resets line up from
-    row to row; when it was read, marked stale or failed (with
-    the error in a tooltip and a popover); and Refresh. It shares the conversation inspector's
-    allowance cache and refresh limits, and searches by name or family. **Add CLI**
+    a line per allowance window, with its use, a bar and its reset (the reset when the column has
+    room, and at most four lines, the rest in the tooltip), whose bars, percentages and resets
+    line up from row to row, reset times on their colons; chips for what the account has besides:
+    the money left under an OpenRouter key's spending limit, and Codex's usage credits and free
+    resets of its limits (or that it has none); when it was read, marked stale or failed (with
+    the error in a tooltip and a popover); and Refresh. The name, command and freshness columns
+    have fixed widths for a compact, regular or wide table, and the allowance column takes the
+    rest, so its bars grow with the window. Readings are saved between launches (`usage.json`
+    beside the bot index; usage fields only) and kept current in the background, every 15
+    minutes for a CLI profile and hourly for Muse, and every 5 minutes while Providers shows,
+    so it opens on the last numbers and updates them in place. It shares the conversation
+    inspector's allowance cache and refresh limits, and searches by name or family. **Add CLI**
     adds a named profile of Claude Code, Codex, Antigravity, Muse or Pi, with an installed command or
     wrapper and **Test Command**. Sign in through that CLI in Terminal; BotChu does not create its
     login. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
     Codex profiles can also draw pets. Bots and tasks retain a copy of their custom profile’s CLI
     family and command across relaunches. Command overrides remain editable in Settings. Pi profiles
-    use the shared OpenRouter key. Provider usage refreshes while visible, with Muse’s existing
-    brief request and hourly automatic limit.
+    use the shared OpenRouter key. Muse is checked with its existing brief request, at most
+    hourly by itself.
   - **Bots:** create, edit and delete bots. A bot has a name, an emoji, a one-line title, private
     instructions, an account, an optional model and a workspace folder (default `~/BotChu/<name>`).
     A new bot introduces itself in one reply, so a misread role shows up at once. Instructions are
@@ -785,8 +792,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     offset into it (`TranscriptViewport.swift`), the identity, instructions,
     team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries,
-    and the lines Providers shows, lined up across its rows (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
-    (`UsageCache.swift`), per-conversation pending-message delivery, keeping a follow-up the CLI
+    and the lines Providers shows, lined up across its rows and laid out across a column's width, its
+    chips, and how its columns share the table's width (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled cache,
+    saved between launches (`UsageCache.swift`), per-conversation pending-message delivery, keeping a follow-up the CLI
     took until a saved transcript holds it (`MessageQueue.swift`, saved in that order by
     `Store.swift`), how tall the message box is for its draft and how far its text may scroll
     (`ComposerLayout.swift`), what
@@ -1132,8 +1140,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   `pets.txt` lists each pet player's clip, state and time.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
-  querying any account; `mixed` gives Providers a row in each state (more windows than a row
-  shows, stale, failed, stale after a failed check, and a key without a limit). Usage fixtures
+  querying any account (`sample` gives Codex profiles credits and free resets, and the Pi
+  profile a key with a spending limit); `mixed` gives Providers a row in each state (more
+  windows than a row shows, stale, failed, stale after a failed check, no credits, and a key
+  without a limit). Usage fixtures
   are ignored outside throwaway data runs. `BOTCHU_PROFILE="<name>|<family>|<command>"` (several
   separated by `;`, `family` one of `claude`, `codex`, `antigravity`, `muse`, `pi`) adds CLI
   profiles to the run, such as one with a long name or a command that isn't installed.
@@ -1142,7 +1152,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   opens the composer's picker, and `inspector-model` or `inspector-effort` opens the sidebar's.
   `BOTCHU_INSPECTOR=activity`, `subagents`, `model`, `session` or `memory` selects a status sidebar tab;
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
-  `BOTCHU_WINDOW=compact` checks the minimum window width. `BOTCHU_DRAFT=<text>` puts that draft in
+  `BOTCHU_WINDOW=compact` checks the minimum window width, and `BOTCHU_WINDOW=1908x960` a window
+  of that size, as a report gives it. `BOTCHU_DRAFT=<text>` puts that draft in
   the message box (`\n` for a new line), to check how it grows and scrolls.
   `BOTCHU_OPEN=report` opens Report a Bug or Feature, and `BOTCHU_REPORT="<report>"` files one,
   two seconds after launch, each with the window's screenshot (`BOTCHU_SCREENSHOT_FAIL=1` shows a

@@ -23,6 +23,7 @@
 #   BOTCHU_OPEN=report macOS/ui-review.sh  # open Report a Bug or Feature
 #   BOTCHU_OPEN=providers BOTCHU_USAGE=mixed BOTCHU_PROFILE="A long profile name|claude|claude-long" macOS/ui-review.sh
 #                                          # Providers with a row in each usage state, and an added profile
+#   BOTCHU_WINDOW=1908x960 macOS/ui-review.sh  # at that window size (compact: its minimum width)
 #   BOTCHU_OPEN=projects BOTCHU_PROJECT=<owner/name> BOTCHU_PROJECT_TAB=issues BOTCHU_PROJECT_ITEM=<number> macOS/ui-review.sh
 #                                          # open Projects with that repository's sidebar, on a tab and an
 #                                          # issue or pull request there (read with your gh login)

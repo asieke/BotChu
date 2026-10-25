@@ -1,13 +1,17 @@
 import SwiftUI
 import BotChuCore
 
-/// Every CLI profile in one compact table: its family, command, allowance and when that was read.
-/// Rows stay short in every state; the longer explanations are in tooltips and the details popover.
+/// Every CLI profile in one table: its family, command, allowance and when that was read. The
+/// columns share out the table's width (`ProvidersColumns`) and the allowance gets the rest, so its
+/// bars grow with the window; rows stay short in every state, the longer explanations in tooltips
+/// and the details popover. The numbers come from the app's usage board, kept current in the
+/// background and saved between launches, so the table opens on them without checking.
 struct ProvidersView: View {
     @Environment(AppModel.self) private var model
     @State private var query = ""
     @State private var adding = false
-    @State private var board = ProviderUsageBoard()
+    /// The table's width, which its columns are worked out from.
+    @State private var tableWidth = 0.0
     private var matches: [Account] {
         model.settings.accounts.filter { query.isEmpty || [$0.name, $0.kind.displayName].joined(separator: " ").localizedCaseInsensitiveContains(query) }
     }
@@ -15,7 +19,8 @@ struct ProvidersView: View {
         UsageRequest(account: account, command: model.settings.command(for: account), credentialRevision: model.settings.usageCredentialRevision)
     }
     var body: some View {
-        let requests = model.settings.accounts.map(request)
+        let board = model.usageBoard
+        let requests = model.usageRequests
         VStack(alignment: .leading, spacing: 0) {
             LibraryHeading(title: "Providers", subtitle: "Your CLI profiles and their available allowance.", count: model.settings.accounts.count) {
                 Button { adding = true } label: { Label("Add CLI", systemImage: "plus") }.buttonStyle(.borderedProminent)
@@ -28,39 +33,51 @@ struct ProvidersView: View {
                     // The timeline's date is its last tick, before a reading made since.
                     let now = max(context.date, Date())
                     // Every row's lines take the same widths, so their bars and resets line up.
-                    let widths = UsageLineWidths.measured(matches.flatMap { board.states[request($0)]?.reading?.lines(at: now).shown ?? [] })
-                    Table(matches) {
-                        TableColumn("Provider") { (account: Account) in ProviderNameCell(account: account) }
-                            .width(min: 130, ideal: 190, max: 300)
-                        TableColumn("Command") { (account: Account) in
-                            ProviderCommandCell(command: model.settings.command(for: account), found: board.found[model.settings.command(for: account)])
-                        }
-                        .width(min: 80, ideal: 170, max: 320)
-                        TableColumn("Allowance") { (account: Account) in
-                            let request = request(account)
-                            ProviderAllowanceCell(request: request, state: board.states[request], checking: board.checking.contains(request), now: now, widths: widths)
-                        }
-                        .width(min: 180, ideal: 340)
-                        TableColumn("Updated") { (account: Account) in
-                            let request = request(account)
-                            ProviderFreshnessCell(request: request, state: board.states[request], checking: board.checking.contains(request)) {
-                                Task { await board.refresh(request, usage: model.usage, openRouterKey: model.openRouterKey, manual: true) }
+                    let widths = UsageLineWidths.measured(matches.flatMap { board.states[request($0)]?.reading?.rowLines(at: now).shown ?? [] })
+                    let columns = ProvidersColumns(width: tableWidth)
+                    // Made once its width is known, and made anew in another size: the table
+                    // itself resizes only the allowance column, and a width changed after it is
+                    // laid out would come on top of that.
+                    if tableWidth > 0 {
+                        Table(matches) {
+                            TableColumn("Provider") { (account: Account) in ProviderNameCell(account: account) }
+                                .width(columns.provider)
+                            TableColumn("Command") { (account: Account) in
+                                ProviderCommandCell(command: model.settings.command(for: account), found: board.found[model.settings.command(for: account)])
                             }
+                            .width(columns.command)
+                            TableColumn("Allowance") { (account: Account) in
+                                let request = request(account)
+                                ProviderAllowanceCell(request: request, state: board.states[request], checking: board.checking.contains(request), now: now, widths: widths)
+                            }
+                            .width(min: ProvidersColumns.minimumAllowance)
+                            TableColumn("Updated") { (account: Account) in
+                                let request = request(account)
+                                ProviderFreshnessCell(request: request, state: board.states[request], checking: board.checking.contains(request)) {
+                                    Task { await board.refresh(request, usage: model.usage, openRouterKey: model.openRouterKey, manual: true) }
+                                }
+                            }
+                            .width(columns.updated)
                         }
-                        .width(min: 104, ideal: 132, max: 180)
+                        .tableStyle(.inset(alternatesRowBackgrounds: true))
+                        .id(columns.size)
+                    } else {
+                        Color.clear
                     }
-                    .tableStyle(.inset(alternatesRowBackgrounds: true))
                 }
+                .onGeometryChange(for: Double.self) { Double($0.size.width) } action: { tableWidth = $0 }
             }
         }.background(Color(nsColor: .windowBackgroundColor)).frame(minWidth: 580, maxWidth: .infinity, maxHeight: .infinity).navigationTitle("Providers")
         .sheet(isPresented: $adding) { AddProviderSheet().environment(model) }
-        // Every profile, not only the ones the search shows; the cache decides when a check is due.
+        // Every profile, not only the ones the search shows, at the shorter interval while shown;
+        // the cache decides when a check is due.
         .task(id: requests) { await board.watch(requests, usage: model.usage, openRouterKey: model.openRouterKey) }
     }
 }
 
 /// Each profile's allowance as the shared usage cache last gave it, and whether its command is
-/// found. A table's cells share no state, so its rows read them from here.
+/// found. A table's cells share no state, so its rows read them from here. The app keeps one,
+/// refreshed in the background (`AppModel`) and while Providers shows.
 @MainActor @Observable final class ProviderUsageBoard {
     private(set) var states: [UsageRequest: UsageState] = [:]
     private(set) var checking: Set<UsageRequest> = []
@@ -83,12 +100,21 @@ struct ProvidersView: View {
         }
     }
 
-    func refresh(_ request: UsageRequest, usage: UsageCache, openRouterKey: @MainActor () -> String?, manual: Bool = false) async {
-        guard !checking.contains(request) else { return }
+    /// Shows what the cache has, then checks if that is due: after the request's own interval,
+    /// or its longer `backgroundInterval` for a check nobody is looking at.
+    func refresh(_ request: UsageRequest, usage: UsageCache, openRouterKey: @MainActor () -> String?, manual: Bool = false, background: Bool = false) async {
+        await sync(request, usage: usage)
+        let maxAge = background ? request.backgroundInterval : nil
+        guard !checking.contains(request), await usage.isDue(request, manual: manual, maxAge: maxAge) else { return }
         checking.insert(request)
         defer { checking.remove(request) }
         let key = request.account.kind == .pi ? openRouterKey() : nil
-        states[request] = await usage.read(request, openRouterKey: key, manual: manual)
+        states[request] = await usage.read(request, openRouterKey: key, manual: manual, maxAge: maxAge)
+    }
+
+    /// What the cache last read for the profile, also when something else read it.
+    func sync(_ request: UsageRequest, usage: UsageCache) async {
+        if let saved = await usage.saved(request), saved != states[request] { states[request] = saved }
     }
 
     private func check(_ command: String) async {
@@ -106,7 +132,7 @@ private struct ProviderNameCell: View {
                 Text(account.kind.displayName).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
         .help("\(account.name) · \(account.kind.displayName)")
     }
 }
@@ -128,9 +154,10 @@ private struct ProviderCommandCell: View {
     }
 }
 
-/// One line per allowance window, its reset when the column has room. At most four lines, so a
-/// row stays under 100 points; the rest are in the tooltip. Each part of a line takes the width the
-/// table gives it, the same in every row.
+/// One line per allowance window, at most four, so a row stays under 100 points (the rest are in
+/// the tooltip), then the account's chips: money left under a spending limit, usage credits and
+/// free resets. Each line is laid out across the cell's width (`UsageLineLayout`) from widths every
+/// row shares, so bars, percentages and resets line up down the table.
 private struct ProviderAllowanceCell: View {
     let request: UsageRequest
     let state: UsageState?
@@ -140,75 +167,133 @@ private struct ProviderAllowanceCell: View {
     var body: some View {
         Group {
             if let reading = state?.reading, !reading.windows.isEmpty {
-                let lines = reading.lines(at: now)
-                VStack(alignment: .leading, spacing: 3) {
-                    ViewThatFits(in: .horizontal) {
-                        self.lines(lines.shown, resets: true)
-                        self.lines(lines.shown, resets: false)
-                    }
+                let lines = reading.rowLines(at: now)
+                let badges = reading.badges(at: now)
+                let stale = state?.isStale(at: now, interval: request.backgroundInterval) == true
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(lines.shown) { ProviderUsageLine(line: $0, widths: widths, dimmed: stale) }
                     if lines.more > 0 {
                         Text("+\(lines.more) more").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
+                    if !badges.isEmpty { UsageBadges(badges: badges).padding(.top, 2) }
                 }
-                .help(details(reading, now: now))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(reading.details(at: now))
             } else if let note = state?.reading?.note {
-                Text(note).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2).help(note)
+                Text(note).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2).help(note)
             } else if let error = state?.error {
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text("Usage unavailable").font(.system(size: 12, weight: .medium))
                     Text(error).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 .help(error)
             } else if state == nil || checking {
                 Text(request.account.kind == .muse ? "Checking with a brief Muse request…" : "Checking…")
-                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
             } else {
-                Text("Usage unavailable").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("Usage unavailable").font(.system(size: 12)).foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
     }
+}
 
-    /// Without resets, a column too narrow for the titles cuts them short, in every row alike.
-    private func lines(_ lines: [UsageLine], resets: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(lines) { line in
-                HStack(spacing: 8) {
-                    Text(line.title).font(UsageLineWidths.font(.title)).lineLimit(1)
-                        .frame(minWidth: resets ? widths.title : 0, idealWidth: widths.title, maxWidth: widths.title, alignment: .leading)
-                    Group {
-                        if let percent = line.percent { UsageBar(title: line.title, percent: percent) } else { Capsule().fill(Palette.rowDivider) }
-                    }
-                    .frame(width: 48, height: 4)
-                    Text(line.percentText).font(UsageLineWidths.font(.percent)).foregroundStyle(.secondary).fixedSize()
-                        .frame(width: widths.percent, alignment: .trailing)
-                    if resets {
-                        Text(line.reset).font(UsageLineWidths.font(.reset)).foregroundStyle(.secondary).fixedSize()
-                            .frame(width: widths.reset, alignment: .leading)
-                    }
-                }
+/// A window's line: its title, the share used, a bar across what is left, and its reset, the
+/// weekday and the time apart so times line up.
+private struct ProviderUsageLine: View {
+    let line: UsageLine
+    let widths: UsageLineWidths
+    let dimmed: Bool
+    var body: some View {
+        UsageLineStack(widths: widths, dated: line.resetDay != nil) {
+            Text(line.title).font(UsageLineWidths.font(.title)).lineLimit(1)
+            Text(line.percentText).font(UsageLineWidths.font(.percent)).foregroundStyle(line.percent == nil ? .tertiary : .primary).lineLimit(1)
+            if let percent = line.percent {
+                UsageBar(title: line.title, percent: percent, track: .primary.opacity(0.1), dimmed: dimmed)
+            } else {
+                Capsule().fill(.primary.opacity(0.1))
             }
+            Text(line.resetDay ?? "").font(UsageLineWidths.font(.day)).foregroundStyle(.secondary).lineLimit(1)
+            Text(line.resetTime ?? "").font(UsageLineWidths.font(.time)).foregroundStyle(.secondary).lineLimit(1)
+            Text(line.reset).font(UsageLineWidths.font(.reset)).foregroundStyle(.secondary).lineLimit(1)
+        }
+        // A part with no room is put outside the line, which doesn't draw it.
+        .clipped()
+    }
+}
+
+/// Places a usage line's parts where `UsageLineLayout` puts them in the width its cell gives it,
+/// so the line follows its column as that is resized: the title, the share used, the bar, then
+/// the reset as a weekday and a time (`dated`) or in words.
+private struct UsageLineStack: Layout {
+    let widths: UsageLineWidths
+    let dated: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        CGSize(width: proposal.width ?? UsageLineLayout.idealWidth(widths), height: 16)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let layout = UsageLineLayout(width: bounds.width, widths: widths)
+        func place(_ index: Int, _ slot: UsageLineLayout.Slot?, height: Double = 16, trailing: Bool = false) {
+            guard let slot, slot.width > 0 else {
+                subviews[index].place(at: CGPoint(x: bounds.maxX + 1, y: bounds.minY), proposal: .zero)
+                return
+            }
+            subviews[index].place(at: CGPoint(x: bounds.minX + (trailing ? slot.x + slot.width : slot.x), y: bounds.midY),
+                                  anchor: trailing ? .trailing : .leading, proposal: ProposedViewSize(width: slot.width, height: height))
+        }
+        place(0, layout.title)
+        place(1, layout.percent, trailing: true)
+        place(2, layout.bar, height: 6)
+        let reset = layout.reset
+        place(3, dated ? reset.map { .init(x: $0.x, width: widths.day) } : nil)
+        place(4, dated ? reset.map { .init(x: $0.x + widths.day + UsageLineWidths.dayGap, width: widths.time) } : nil, trailing: true)
+        place(5, dated ? nil : reset)
+    }
+}
+
+/// The account's chips in a row, or a chip a line where the cell is too narrow for that.
+private struct UsageBadges: View {
+    let badges: [UsageBadge]
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) { chips }
+            VStack(alignment: .leading, spacing: 4) { chips }
         }
     }
 
-    private func details(_ reading: ProviderUsage, now: Date) -> String {
-        let lines = reading.windows.map { window in
-            let percent = window.currentPercent(at: now).map { "\($0.formatted(.number.precision(.fractionLength(0))))% used" } ?? "not reported"
-            let reset = window.hasReset(at: now) ? "reset passed, awaiting an update"
-                : window.resetsAt.map { "resets \($0.formatted(date: .complete, time: .shortened))" } ?? window.resetDescription ?? "reset time not reported"
-            return ["\(window.title): \(percent), \(reset)", window.hasReset(at: now) ? nil : window.detail].compactMap { $0 }.joined(separator: " · ")
+    private var chips: some View {
+        ForEach(badges) { badge in
+            HStack(spacing: 4) {
+                Image(systemName: Self.symbol(badge.kind)).font(.system(size: 10, weight: .semibold))
+                Text(badge.text).monospacedDigit()
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(badge.available ? AnyShapeStyle(GitHubColors.open) : AnyShapeStyle(.secondary))
+            .lineLimit(1).fixedSize()
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(badge.available ? GitHubColors.open.opacity(0.14) : Color.primary.opacity(0.07), in: Capsule())
+            .help(badge.help)
         }
-        return (lines + [reading.note].compactMap { $0 }).joined(separator: "\n")
+    }
+
+    private static func symbol(_ kind: UsageBadge.Kind) -> String {
+        switch kind {
+        case .spend: "dollarsign.circle"
+        case .credits: "creditcard"
+        case .resets: "arrow.counterclockwise"
+        }
     }
 }
 
 private extension UsageLineWidths {
-    /// Each part's font, measured as it is drawn.
+    /// Each part's font, measured as it is drawn; numbers in tabular digits.
     static func nsFont(_ part: UsageLine.Part) -> NSFont {
         switch part {
-        case .title: .systemFont(ofSize: 11, weight: .medium)
-        case .percent: .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        case .reset: .systemFont(ofSize: 11)
+        case .title: .systemFont(ofSize: 12, weight: .medium)
+        case .percent, .time: .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        case .day, .reset: .systemFont(ofSize: 12)
         }
     }
 
@@ -243,7 +328,7 @@ private struct ProviderFreshnessCell: View {
                 .help(refreshHelp(at: now))
                 .accessibilityLabel("Refresh \(request.account.name) usage")
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, 8)
         }
     }
 
@@ -261,7 +346,7 @@ private struct ProviderFreshnessCell: View {
             }
         } else if let reading = state?.reading {
             VStack(alignment: .leading, spacing: 1) {
-                if state?.isStale(at: now, interval: request.refreshInterval) == true {
+                if state?.isStale(at: now, interval: request.backgroundInterval) == true {
                     Text("Stale").font(.system(size: 11, weight: .medium)).foregroundStyle(.orange)
                 }
                 age(reading, now: now)
@@ -271,8 +356,9 @@ private struct ProviderFreshnessCell: View {
         }
     }
 
+    /// As old as the Projects table says its dates are.
     private func age(_ reading: ProviderUsage, now: Date) -> some View {
-        Text(now.timeIntervalSince(reading.readAt) < 60 ? "Just now" : reading.readAt.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
+        Text(RelativeDate.text(reading.readAt, now: now)).monospacedDigit()
             .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             .help("Read \(reading.readAt.formatted(date: .complete, time: .standard))")
     }
