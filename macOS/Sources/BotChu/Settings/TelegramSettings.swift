@@ -65,7 +65,7 @@ struct TelegramSection: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(verbatim: chat.label.isEmpty ? "Chat \(chat.id)" : chat.label)
-                        Text(verbatim: "Chat \(chat.id) · reaches the bot's Home")
+                        Text(verbatim: "Chat \(chat.id) · reaches this bot's Home, or another bot chosen with @")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -97,7 +97,7 @@ struct TelegramSection: View {
             Text("Telegram")
         } footer: {
             HStack(spacing: 4) {
-                Text("Your private chat with your own Telegram bot reaches the bot chosen here, in its Home, while BotChu runs; anyone else is ignored. The token is kept in your Keychain.")
+                Text("Your private chat with your own Telegram bot reaches the bot chosen here, in its Home, while BotChu runs, or another bot it chooses with @; anyone else is ignored. The token is kept in your Keychain.")
                 Link("Set up", destination: URL(string: "https://github.com/asieke/BotChu/blob/main/docs/telegram.md")!)
             }
             .font(.caption).foregroundStyle(.secondary)
