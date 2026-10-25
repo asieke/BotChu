@@ -103,6 +103,7 @@ struct ProjectsView: View {
             }
             .inspectorColumnWidth(min: 280, ideal: 320, max: 480)
         }
+        .modifier(IssueDeletionPrompt())
     }
 
     private var scopePicker: some View {
@@ -357,8 +358,8 @@ struct ProjectsTable: View {
 }
 
 /// Open pull requests or issues across the repositories. Selecting one opens it in the sidebar, and
-/// double-click on GitHub; its menu reviews it or starts a task on it with a bot, or opens the task
-/// already on it.
+/// double-click on GitHub; its menu reviews it or starts a task on it with a bot, opens the task
+/// already on it, or deletes an issue.
 struct WorkTable: View {
     @Environment(AppModel.self) private var model
     var items: [GitHubLookup.OpenItem]
@@ -426,13 +427,21 @@ struct WorkTable: View {
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
         .contextMenu(forSelectionType: GitHubLookup.OpenItem.ID.self) { ids in
-            if let item = sorted.first(where: { ids.contains($0.id) }) { menu(item, tasks: model.tasks(on: item, among: open)) }
+            if let item = sorted.first(where: { ids.contains($0.id) }) { WorkMenu(item: item, tasks: model.tasks(on: item, among: open)) }
         } primaryAction: { ids in
             for item in sorted where ids.contains(item.id) { NSWorkspace.shared.open(item.url) }
         }
     }
+}
 
-    @ViewBuilder private func menu(_ item: GitHubLookup.OpenItem, tasks: [(bot: Bot, task: BotTask)]) -> some View {
+/// An open pull request's or issue's menu, in the tables and the sidebar's lists: it on GitHub, the
+/// tasks on it, a review or a task on it with a bot, and Delete Issue….
+struct WorkMenu: View {
+    @Environment(AppModel.self) private var model
+    let item: GitHubLookup.OpenItem
+    let tasks: [(bot: Bot, task: BotTask)]
+
+    var body: some View {
         Button("Open on GitHub") { NSWorkspace.shared.open(item.url) }
         Button("Copy Link") {
             NSPasteboard.general.clearContents()
@@ -453,6 +462,9 @@ struct WorkTable: View {
                 .disabled(item.fromFork)
         } else {
             botMenu("Start Task with") { model.newTask(for: $0, repo: item.repo, work: item.work) }
+            Divider()
+            Button("Delete Issue…", role: .destructive) { model.askToDeleteIssue(item.number, of: item.repo, title: item.title) }
+                .disabled(model.deletingIssues.contains(item.id))
         }
     }
 
@@ -461,6 +473,34 @@ struct WorkTable: View {
             ForEach(model.bots) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id) } }
         }
         .disabled(model.bots.isEmpty)
+    }
+}
+
+/// Asks before deleting the issue the owner chose (`AppModel.issueDeletion`), since GitHub deletes
+/// it for everyone and for good; then says why one wasn't deleted.
+struct IssueDeletionPrompt: ViewModifier {
+    @Environment(AppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        let request = model.issueDeletion
+        content
+            .confirmationDialog("Delete issue #\(request?.number ?? 0) of \(request?.repo ?? "")?", isPresented: Binding(
+                get: { model.issueDeletion != nil && model.issueDeletion?.failure == nil },
+                set: { if !$0, model.issueDeletion?.failure == nil { model.issueDeletion = nil } }),
+                titleVisibility: .visible, presenting: request) { request in
+                Button("Delete Issue", role: .destructive) {
+                    Task { await model.deleteIssue(request.number, of: request.repo, title: request.title) }
+                }
+            } message: { request in
+                Text("“\(request.title)” is deleted on GitHub for everyone, with its comments. This can’t be undone. "
+                     + "GitHub lets only the repository’s admins delete issues.")
+            }
+            .alert("Couldn’t Delete Issue #\(request?.number ?? 0)", isPresented: Binding(
+                get: { model.issueDeletion?.failure != nil }, set: { if !$0 { model.issueDeletion = nil } }), presenting: request) { _ in
+                Button("OK") {}
+            } message: { request in
+                Text(request.failure ?? "")
+            }
     }
 }
 

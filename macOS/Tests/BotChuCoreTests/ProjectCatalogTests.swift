@@ -188,6 +188,123 @@ import Testing
         #expect(await fixture.sync.state.issueStatus?["asieke/orbit"] == OpenIssueStatus(count: 3))
     }
 
+    /// #154: an issue deleted with gh leaves the issues, GitHub's counts and the saved catalog at
+    /// once, without a sync; one gh couldn't delete stays, with why.
+    @Test func deletedIssuesLeaveTheCatalogAtOnce() async throws {
+        let github = StandInGitHub(repos: StandInGitHub.sample)
+        let fixture = try Fixture(github)
+        defer { fixture.remove() }
+        await fixture.sync.sync(.full)
+        _ = await github.takeCalls()
+        var updates = fixture.sync.updates.makeAsyncIterator()
+        _ = await updates.next()
+
+        switch await fixture.sync.deleteIssue(4, of: "asieke/Orbit") {
+        case .success: break
+        case .failure(let failure): Issue.record("Not deleted: \(failure.message)")
+        }
+        #expect(await github.deletions == [["gh", "issue", "delete", "4", "--repo", "asieke/Orbit", "--yes"]])
+        // Only the deletion: nothing is read again for it.
+        #expect(await github.takeCalls() == ["delete:asieke/Orbit#4"])
+        let state = await fixture.sync.state
+        #expect(state.openItems?.map(\.id).sorted() == ["asieke/BotChu#7", "asieke/Orbit#3"])
+        #expect(state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 1)
+        #expect(state.issueStatus?["asieke/orbit"] == OpenIssueStatus(count: 1))
+        #expect(await updates.next()?.openItems == state.openItems)
+        let saved = try #require(ProjectSync.read(fixture.file))
+        #expect(saved.openItems.map(\.id).sorted() == ["asieke/BotChu#7", "asieke/Orbit#3"])
+        #expect(saved.work["asieke/Orbit"]?.counts == GitHubLookup.OpenCounts(issues: 1, pullRequests: 0))
+        // The next sync reads Orbit again (its open count moved), and agrees.
+        await fixture.sync.sync(.changes)
+        #expect(await github.takeCalls().contains("work:asieke/Orbit"))
+        #expect(await fixture.sync.state.openItems == state.openItems)
+        #expect(await fixture.sync.state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 1)
+
+        // GitHub refuses one the account isn't an admin of; offline, it can't be asked. Neither
+        // changes anything, and neither does a name gh can't be given.
+        let before = try #require(ProjectSync.read(fixture.file))
+        await github.set(denyDeletes: true)
+        guard case .failure(let denied) = await fixture.sync.deleteIssue(3, of: "asieke/Orbit") else {
+            Issue.record("Deleted without admin rights"); return
+        }
+        #expect(denied.message.contains("only a repository's admins"))
+        await github.set(denyDeletes: false)
+        await github.set(offline: true)
+        guard case .failure(let offline) = await fixture.sync.deleteIssue(3, of: "asieke/Orbit") else {
+            Issue.record("Deleted offline"); return
+        }
+        #expect(offline.message.contains("Couldn't reach GitHub"))
+        await github.set(offline: false)
+        for (number, repo) in [(0, "asieke/Orbit"), (3, "asieke/Orbit --admin"), (3, "-R")] {
+            guard case .failure = await fixture.sync.deleteIssue(number, of: repo) else { Issue.record("Deleted \(repo)#\(number)"); return }
+        }
+        #expect(await github.deletions.count == 3)
+        #expect(await fixture.sync.state.openItems?.contains { $0.id == "asieke/Orbit#3" } == true)
+        #expect(ProjectSync.read(fixture.file) == before)
+
+        // A number the catalog has no issue for (a pull request's) changes nothing in it.
+        #expect(deleted(await fixture.sync.deleteIssue(7, of: "asieke/BotChu")))
+        #expect(await fixture.sync.state.openItems?.contains { $0.id == "asieke/BotChu#7" } == true)
+        #expect(ProjectSync.read(fixture.file) == before)
+    }
+
+    /// A sync under way that read an issue before it was deleted doesn't bring it back.
+    @Test func aSyncUnderWayKeepsADeletedIssueOut() async throws {
+        let github = StandInGitHub(repos: StandInGitHub.sample)
+        let fixture = try Fixture(github)
+        defer { fixture.remove() }
+        await fixture.sync.sync(.full)
+        // A comment flags Orbit, whose open work is read with #4, and held there.
+        await github.update("asieke/Orbit") { $0.activity += 1 }
+        await github.holdWork(1)
+        let syncing = Task { await fixture.sync.sync(.changes) }
+        try await github.waitUntilHeld(1)
+        #expect(deleted(await fixture.sync.deleteIssue(4, of: "asieke/Orbit")))
+        #expect(await fixture.sync.state.openItems?.contains { $0.id == "asieke/Orbit#4" } == false)
+        await github.release()
+        await syncing.value
+        let state = await fixture.sync.state
+        #expect(state.error == nil)
+        #expect(state.openItems?.map(\.id).sorted() == ["asieke/BotChu#7", "asieke/Orbit#3"])
+        #expect(state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 1)
+        #expect(ProjectSync.read(fixture.file)?.openItems.contains { $0.id == "asieke/Orbit#4" } == false)
+    }
+
+    /// What gh prints when it can't delete an issue, as the owner reads it.
+    @Test func deletionFailuresSayWhy() {
+        func failure(_ status: Int32, _ errors: String) -> String {
+            ProjectSync.deletionFailure(Shell.Result(status: status, output: "", errors: errors), number: 12, repo: "asieke/Orbit").message
+        }
+        // gh 2.102.0, for a repository it can't find.
+        #expect(failure(1, "GraphQL: Could not resolve to a Repository with the name 'asieke/botchu-no-such-repo-xyz'. (repository)\n")
+            == "GitHub has no issue #12 in asieke/Orbit for gh's account; it may be deleted already. Refresh to update Projects.")
+        #expect(failure(1, "GraphQL: octocat does not have the correct permissions to execute `DeleteIssue` (deleteIssue)\n")
+            == "GitHub lets only a repository's admins delete its issues, and gh's account isn't an admin of asieke/Orbit.")
+        #expect(failure(1, "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n")
+            == "Couldn't reach GitHub. Check the connection, then try again.")
+        #expect(failure(4, "To get started with GitHub CLI, please run:  gh auth login\n").contains("isn't signed in"))
+        #expect(failure(127, "zsh:1: command not found: gh\n").contains("Install the GitHub CLI"))
+        #expect(failure(1, "something else\n") == "gh couldn't delete it: something else")
+        #expect(failure(1, "") == "gh couldn't delete it (exit 1) and printed nothing.")
+    }
+
+    @Test func removingAnIssueTakesOnlyThatIssue() {
+        var snapshot = ProjectSnapshot(login: "asieke")
+        let date = Date(timeIntervalSince1970: 1_790_000_000)
+        let item = { (number: Int, pull: Bool) in
+            GitHubLookup.OpenItem(repo: "asieke/Orbit", number: number, title: "Item \(number)", url: URL(string: "https://github.com/asieke/Orbit/issues/\(number)")!,
+                                  isPullRequest: pull, author: "octocat", createdAt: date, updatedAt: date)
+        }
+        snapshot.takeWork(["asieke/Orbit"], .success(GitHubLookup.OpenWork(items: [item(3, false), item(4, false), item(5, true)],
+                                                                           counts: ["asieke/Orbit": .init(issues: 40, pullRequests: 1)])),
+                          under: [:], etags: [:])
+        // Any case of the name; a pull request of the same number stays.
+        let removed = [(4, "ASIEKE/orbit"), (5, "asieke/Orbit"), (4, "asieke/Orbit"), (3, "asieke/Other")].map { snapshot.removeIssue($0, of: $1) }
+        #expect(removed == [true, false, false, false])
+        #expect(snapshot.openItems.map(\.number).sorted() == [3, 5])
+        #expect(snapshot.work["asieke/Orbit"]?.counts == GitHubLookup.OpenCounts(issues: 39, pullRequests: 1))
+    }
+
     @Test func repositoriesGoOnlyOnceGitHubConfirmsIt() async throws {
         let github = StandInGitHub(repos: StandInGitHub.sample + [.init(name: "asieke/Old"), .init(name: "asieke/Shared")])
         let fixture = try Fixture(github)
@@ -403,6 +520,10 @@ import Testing
     }
 }
 
+private func deleted(_ result: Result<Void, ProjectSync.DeletionFailure>) -> Bool {
+    if case .success = result { true } else { false }
+}
+
 /// Waits (up to two seconds) until `condition` holds.
 private func waitFor(_ condition: @escaping @Sendable () async -> Bool) async throws {
     for _ in 0..<400 {
@@ -467,6 +588,9 @@ private actor StandInGitHub {
     private var failRecords: Set<String> = []
     private var unreadableWork: Set<String> = []
     private var workDown = false
+    private var denyDeletes = false
+    private(set) var deletions: [[String]] = []
+    private var worksToHold = 0
     private var listStatus: Int?
     private var userStatus: Int?
     private var recordDelay: Duration = .zero
@@ -491,6 +615,7 @@ private actor StandInGitHub {
         if let recordDelay { self.recordDelay = recordDelay }
     }
     func set(listStatus: Int?, userStatus: Int? = nil) { self.listStatus = listStatus; self.userStatus = userStatus }
+    func set(denyDeletes: Bool) { self.denyDeletes = denyDeletes }
     func update(_ name: String, _ change: (inout Repo) -> Void) {
         guard let index = repos.firstIndex(where: { $0.name == name }) else { return }
         change(&repos[index])
@@ -505,9 +630,12 @@ private actor StandInGitHub {
 
     func hold() { holding = true; answered = 0 }
     func holdRecords(_ count: Int) { recordsToHold = count }
+    /// Holds the next `count` answers to the open work query, as read then.
+    func holdWork(_ count: Int) { worksToHold = count }
     func release() {
         holding = false
         recordsToHold = 0
+        worksToHold = 0
         let waiting = held
         held = []
         for continuation in waiting { continuation.resume() }
@@ -532,8 +660,16 @@ private actor StandInGitHub {
             answered += 1
             if isRecord { recordActive -= 1; recordCompleted += 1 }
         }
+        if arguments.starts(with: ["gh", "issue", "delete"]) { return delete(arguments) }
         if offline { return Shell.Result(status: 1, output: "", errors: "error connecting to api.github.com") }
-        if arguments.starts(with: ["gh", "api", "graphql"]) { return work(arguments.last ?? "") }
+        if arguments.starts(with: ["gh", "api", "graphql"]) {
+            let read = work(arguments.last ?? "")
+            if worksToHold > 0 {
+                worksToHold -= 1
+                await withCheckedContinuation { held.append($0) }
+            }
+            return read
+        }
         let path = arguments.last { !$0.hasPrefix("-") && $0 != "gh" && $0 != "api" && $0 != "github.com" && $0 != "GET" } ?? ""
         if isRecord { return record(String(path.dropFirst("repos/".count).dropLast("/contents/PROJECT.md".count))) }
         guard arguments.contains("-i") else {
@@ -563,6 +699,22 @@ private actor StandInGitHub {
         }
         calls.append("exists:\(name)")
         return repos.contains { $0.name == name } || shown.contains(name) ? http(200, etag: nil, body: #"{"full_name":"\#(name)"}"#) : http(404, etag: nil)
+    }
+
+    /// `gh issue delete <number> --repo <owner/name> --yes`, as gh answers it.
+    private func delete(_ arguments: [String]) -> Shell.Result {
+        deletions.append(arguments)
+        if offline { return Shell.Result(status: 1, output: "", errors: "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n") }
+        guard arguments.count == 7, arguments[4] == "--repo", arguments[6] == "--yes", let number = Int(arguments[3]),
+              let index = repos.firstIndex(where: { $0.name == arguments[5] }) else {
+            return Shell.Result(status: 1, output: "", errors: "GraphQL: Could not resolve to a Repository with the name '\(arguments.dropFirst(5).first ?? "")'. (repository)\n")
+        }
+        if denyDeletes {
+            return Shell.Result(status: 1, output: "", errors: "GraphQL: \(login) does not have the correct permissions to execute `DeleteIssue` (deleteIssue)\n")
+        }
+        calls.append("delete:\(arguments[5])#\(number)")
+        repos[index].issues.removeAll { $0 == number }
+        return Shell.Result(status: 0, output: "", errors: "")
     }
 
     private func conditional(_ asked: String?, current: String, body: String, link: String? = nil) -> Shell.Result {
