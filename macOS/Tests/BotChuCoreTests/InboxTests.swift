@@ -257,6 +257,8 @@ private final class InboxFixture {
         state[report.id].done = true
         try state.save(to: root)
         #expect(InboxState.load(from: root) == state)
+        let file = try JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("inbox.json"))) as? [String: Any]
+        #expect((file?["entries"] as? [String: Any])?[report.id.uuidString] != nil, "Kept by ID, as an object")
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("inbox.json").path))
         #expect(InboxState.load(from: root.appendingPathComponent("missing")) == InboxState())
     }
