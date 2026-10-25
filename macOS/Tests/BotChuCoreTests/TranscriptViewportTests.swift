@@ -324,6 +324,23 @@ private struct Layout {
         #expect(layout.viewport.correction == nil)
     }
 
+    /// A reader who went to the very end without following stays there as the rows near it are
+    /// measured taller than estimated, so the chat sees them at the bottom and follows again.
+    @Test func aReaderAtTheEndStaysThere() {
+        var layout = Layout(items(conversation(2_000)))
+        layout.start = 0
+        layout.settle()
+        layout.pinned = false
+        layout.jump(to: 10_000)
+        layout.scale = 1.6
+        layout.viewport.forgetHeights()
+        layout.jump(to: layout.viewport.plan.total - layout.height)
+        layout.scale = 2.1
+        layout.viewport.forgetHeights()
+        layout.settle()
+        #expect(abs(layout.top - (layout.viewport.plan.total - layout.height)) < 0.5)
+    }
+
     /// The rows moved in the scroll view (the intro above them changed height): the reader's row
     /// is held where it was.
     @Test func rowsMovedUnderTheReaderAreHeld() {

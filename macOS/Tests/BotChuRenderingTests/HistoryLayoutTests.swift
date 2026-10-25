@@ -168,11 +168,15 @@ extension RenderingTests {
         let group = try #require(model.items(for: app.thread(fixture.task), root: app.task(fixture.task)?.folder,
                                              epoch: app.conversation(fixture.task).epoch).first { if case .exploration = $0 { true } else { false } })
         let entry = calls[2].id
+        let head = TranscriptViewport.RowID(item: group.id, part: 0)
         for round in 0..<4 {
             try await scrollTo(0)
+            // Opened where the reader clicked it, it grows downward from its header.
+            let clicked = try #require(BrowsingFixture.position(model, head))
             model.toggle(group.id, default: false)
             try await settle(window, frames: 10)
             #expect(model.realized <= limit)
+            #expect(BrowsingFixture.position(model, head).map { abs($0 - clicked) < 1.5 } == true)
             if round == 0 { model.toggleExpanded(entry) }
             for step in 1...8 { try await scrollTo(CGFloat(step) * 9_000) }
             #expect(model.isExpanded(entry))
