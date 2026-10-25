@@ -138,10 +138,11 @@ final class AppModel {
     var unsavedMemory: [UUID: Int] = [:]
     /// What became of the notes each conversation asked to remember, for its next turn.
     @ObservationIgnored private var memoryReports: [ChatTarget: [String]] = [:]
-    /// Reviews of finished task turns and sub-agent runs (`Evaluations.swift`), and the records
-    /// the status sidebar shows, by id.
+    /// Daily reviews of each bot's work (`Evaluations.swift`), the records the status sidebar
+    /// shows, by id, and the work waiting for each bot's next review.
     @ObservationIgnored var evaluator: RunEvaluator!
     var evaluationRecords: [String: EvaluationRecord] = [:]
+    var reviewStates: [UUID: ReviewState] = [:]
     /// The kind of review failure each bot's Home was last told about, so a repeat isn't.
     @ObservationIgnored var noticedEvaluationFailures: [UUID: EvaluationFailure.Kind] = [:]
     /// Unsent follow-ups and short pet reactions belong to one conversation, not the whole bot.
@@ -309,6 +310,7 @@ final class AppModel {
         for bot in bots { takeDispatches(for: bot.id) }
         evaluator.load(bots: bots.map { ($0.id, $0.workspace) })
         evaluationRecords = evaluator.records
+        reviewStates = evaluator.states
         // Follow-ups left queued when BotChu quit go out on their own, unless Stop or a failure
         // paused them, once their own conversation is recovered (`recovered`), after the window is up.
     }
@@ -1685,10 +1687,9 @@ final class AppModel {
                             self.runStates[target] = nil
                             if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
                             if self.visibleBotID != id || self.tab(of: id) != target { self.unread.insert(target) }
-                            if target.taskID != nil {
-                                self.finishTaskTurn(target, stopped: stopped, failure: failure)
-                                self.evaluateTaskTurn(target, thread: messages, turnStart: turnStart, stopped: stopped, failure: failure)
-                            }
+                            if target.taskID != nil { self.finishTaskTurn(target, stopped: stopped, failure: failure) }
+                            // Home's turns and tasks' join the work their bot's next run review covers.
+                            self.reviewTurn(target, thread: messages, turnStart: turnStart, accountID: account.id)
                             // Only Stop and real failures pause the queue (not quitting BotChu); messages the
                             // CLI never took go out as the next turn.
                             self.messageQueues[target]?.finishTurn(stopped: stopped && !self.terminating,

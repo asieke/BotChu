@@ -1,10 +1,13 @@
 import SwiftUI
 import BotChuCore
 
-/// Activity's run reviews (`RunEvaluator`): Home lists those about the bot's guidance, a task those
-/// of its turns and of the sub-agents it delegated. Each row opens to the review's findings and
+/// Activity's run reviews (`RunEvaluator`, #138): one summary line with what the reviews are doing
+/// (the next review time, or the real reason one waits) and Review now; rows only for reviews with
+/// news (memory updated, a change proposed, or a failure), each opening to its findings and
 /// evidence, the changes it saved (every line added and removed), its proposals and what it left
-/// out, with Revert (and what Revert left as the owner had changed it) and Retry. Hidden while there are none.
+/// out, with Revert (and what Revert left as the owner had changed it) and Retry; and one line
+/// counting the past week's other reviews. Home's covers all the bot's work; a task's lists the
+/// reviews that covered it. Hidden while reviews are off and there are none.
 struct RunReviewsSection: View {
     @Environment(AppModel.self) private var model
     let target: ChatTarget
@@ -12,30 +15,100 @@ struct RunReviewsSection: View {
     static let shown = 8
 
     var body: some View {
+        let status = model.reviewStatus(for: target)
         let records = model.evaluations(for: target)
-        if !records.isEmpty {
-            let shown = Array(records.prefix(Self.shown))
-            InspectorSection("Run reviews", trailing: trailing(records)) {
+        let news = records.filter(\.isNews)
+        let counts = model.reviewCounts(for: target)
+        if status != .off || !news.isEmpty || !counts.isEmpty {
+            let shown = Array(news.prefix(Self.shown))
+            InspectorSection("Run reviews", trailing: trailing(news)) {
                 InspectorCard {
-                    ForEach(Array(shown.enumerated()), id: \.element.id) { index, record in
-                        RunReviewRow(record: record, last: index == shown.count - 1)
+                    RunReviewSummary(target: target)
+                }
+                if !shown.isEmpty {
+                    InspectorCard {
+                        ForEach(Array(shown.enumerated()), id: \.element.id) { index, record in
+                            RunReviewRow(record: record, last: index == shown.count - 1)
+                        }
                     }
                 }
-                if records.count > Self.shown {
-                    Text("\(records.count - Self.shown) earlier reviews are in .botchu/evaluations/.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.secondaryText)
-                        .padding(.horizontal, 4)
+                VStack(alignment: .leading, spacing: 2) {
+                    if !counts.isEmpty { Text(counts.text) }
+                    if news.count > Self.shown { Text("\(news.count - Self.shown) earlier reviews are in .botchu/evaluations/.") }
                 }
+                .font(.system(size: 11))
+                .foregroundStyle(Palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
             }
         }
     }
 
-    private func trailing(_ records: [EvaluationRecord]) -> String? {
-        let waiting = records.filter { $0.phase.isWaiting }.count
-        let failed = records.filter { $0.phase == .failed }.count
-        let parts = [waiting > 0 ? "\(waiting) waiting" : nil, failed > 0 ? "\(failed) failed" : nil].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    private func trailing(_ news: [EvaluationRecord]) -> String? {
+        let failed = news.filter { $0.phase == .failed }.count
+        return failed > 0 ? "\(failed) failed" : nil
+    }
+}
+
+/// The reviews' state in one line, kept current as time passes, with Review now while there is
+/// unreviewed work and no review of it waits; Home's says it covers all the bot's work.
+private struct RunReviewSummary: View {
+    @Environment(AppModel.self) private var model
+    let target: ChatTarget
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { _ in
+            let status = model.reviewStatus(for: target)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: symbol(status))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(color(status))
+                        .frame(width: 16)
+                    Text(status.text())
+                        .font(.system(size: 12))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if target.taskID == nil, let bot = model.bot(target.botID) {
+                    Text("Covers all of \(bot.name)'s work: its Home, its tasks and the sub-agents that ran as it.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 26)
+                }
+                if model.canReviewNow(target) {
+                    Button("Review now") { model.reviewNow(target) }
+                        .buttonStyle(InspectorButtonStyle())
+                        .help(target.taskID == nil ? "Review all of this bot's unreviewed work without waiting for the review time"
+                                                   : "Review this task's unreviewed work without waiting for the review time")
+                        .padding(.leading, 26)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+        }
+    }
+
+    private func symbol(_ status: ReviewStatus) -> String {
+        switch status {
+        case .off: "pause.circle"
+        case .upToDate: "checkmark.circle"
+        case .next: "clock"
+        case .waiting(let wait, _):
+            switch wait {
+            case .reviewing, .saving, .starting: "ellipsis.circle"
+            case .unavailable: "minus.circle"
+            case .busy, .another, .dailyLimit, .allowance, .retrying: "hourglass"
+            }
+        }
+    }
+
+    private func color(_ status: ReviewStatus) -> Color {
+        switch status {
+        case .waiting(.reviewing, _), .waiting(.saving, _), .waiting(.starting, _): StatusLook.working.dot
+        default: Palette.secondaryText
+        }
     }
 }
 
@@ -54,13 +127,19 @@ private struct RunReviewRow: View {
                         .foregroundStyle(color)
                         .frame(width: 16)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(record.title)
+                        Text(title)
                             .font(.system(size: 13, weight: .medium))
                             .lineLimit(1)
                         Text(status)
                             .font(.system(size: 11))
                             .foregroundStyle(Palette.secondaryText)
                             .lineLimit(1)
+                        if let cited = record.cited, !cited.isEmpty {
+                            Text("From " + cited.joined(separator: ", "))
+                                .font(.system(size: 11))
+                                .foregroundStyle(Palette.secondaryText)
+                                .lineLimit(1)
+                        }
                     }
                     Spacer(minLength: 4)
                     Image(systemName: "chevron.right")
@@ -85,6 +164,19 @@ private struct RunReviewRow: View {
         }
     }
 
+    /// The day a review is for, or (before #138) the run it was of.
+    private var title: String {
+        switch record.subject.kind {
+        case .day, .task:
+            var title = "Review of " + ReviewTime.dayText(record.scheduledFor ?? record.createdAt, in: .current)
+            if let days = record.coalesced, days > 0 { title += " · \(days + 1) days" }
+            if record.requested == true { title += " · Review now" }
+            return title
+        case .taskTurn, .subagent:
+            return record.title.prefix(1).uppercased() + record.title.dropFirst()
+        }
+    }
+
     private var status: String {
         switch record.phase {
         case .pending:
@@ -96,7 +188,7 @@ private struct RunReviewRow: View {
             let outcome = record.outcome?.label ?? "Done"
             return outcome + (record.revertedAt == nil ? "" : " · reverted") + " · " + BotInspector.ago(record.finishedAt ?? record.createdAt)
         case .failed: return "Failed (\(record.failure?.kind.label ?? "review"))"
-        case .skipped: return "Not reviewed"
+        case .skipped, .folded: return "Not reviewed"
         }
     }
 
@@ -105,12 +197,12 @@ private struct RunReviewRow: View {
         case .pending: "clock"
         case .running, .applying: "ellipsis.circle"
         case .failed: "exclamationmark.triangle"
-        case .skipped: "minus.circle"
+        case .skipped, .folded: "minus.circle"
         case .done:
             switch record.outcome {
             case .memoryUpdated?: record.revertedAt == nil ? "brain" : "arrow.uturn.backward.circle"
             case .proposed?: "lightbulb"
-            case .noChange?, nil: "checkmark.circle"
+            case .noChange?, .noSignal?, nil: "checkmark.circle"
             }
         }
     }
@@ -174,7 +266,7 @@ private struct RunReviewDetail: View {
                     }
                     if record.canRetry {
                         Button("Retry") { model.retryEvaluation(record.id) }
-                            .help(record.failure?.kind == .storage ? "Save this review's changes again" : "Review this run again")
+                            .help(record.failure?.kind == .storage ? "Save this review's changes again" : "Review this work again")
                     }
                 }
                 .buttonStyle(InspectorButtonStyle())
@@ -186,12 +278,17 @@ private struct RunReviewDetail: View {
     }
 
     private var footer: String {
-        let ending = switch record.ending {
+        let tries = record.attempts > 1 ? " · \(record.attempts) tries" : ""
+        guard let ending = record.ending else {
+            let covered = (record.covered ?? []).map(\.title).filter { !$0.isEmpty }
+            return (covered.isEmpty ? "" : "Covered \(covered.joined(separator: ", ")) · ") + "reviewed on \(record.account.name)" + tries
+        }
+        let ended = switch ending {
         case .finished: "finished"
         case .failed: "failed"
         case .stopped: "was stopped"
         }
-        return "The run \(ending) · reviewed on \(record.account.name)" + (record.attempts > 1 ? " · \(record.attempts) tries" : "")
+        return "The run \(ended) · reviewed on \(record.account.name)" + tries
     }
 
     private func place(_ destination: EvaluationChange.Destination) -> String {

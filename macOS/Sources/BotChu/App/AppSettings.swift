@@ -33,8 +33,15 @@ final class AppSettings {
     var petAccountID: String { didSet { defaults.set(petAccountID, forKey: "petAccountID") } }
     /// The OpenRouter model that turns a pet's stills into clips.
     var petModelID: String { didSet { defaults.set(petModelID, forKey: "petModelID") } }
-    /// Whether finished task turns and sub-agent runs are reviewed in the background (`RunEvaluator`).
+    /// Whether each bot's work is reviewed in the background once a day (`RunEvaluator`), and when,
+    /// in the Mac's time zone.
     var evaluateRuns: Bool { didSet { defaults.set(evaluateRuns, forKey: "evaluateRuns") } }
+    var reviewTime: ReviewTime {
+        didSet {
+            defaults.set(reviewTime.hour, forKey: "reviewHour")
+            defaults.set(reviewTime.minute, forKey: "reviewMinute")
+        }
+    }
     /// Whether the Telegram gateway runs (`TelegramBridge`), and the private chats it lets reach a
     /// bot's Home.
     var telegramEnabled: Bool { didSet { defaults.set(telegramEnabled, forKey: "telegramEnabled") } }
@@ -64,6 +71,8 @@ final class AppSettings {
         petAccountID = defaults.string(forKey: "petAccountID") ?? "codex-personal"
         petModelID = defaults.string(forKey: "petModelID") ?? PetVideo.defaultModel.id
         evaluateRuns = defaults.object(forKey: "evaluateRuns") as? Bool ?? true
+        reviewTime = (defaults.object(forKey: "reviewHour") as? Int).map { ReviewTime(hour: $0, minute: defaults.integer(forKey: "reviewMinute")) }
+            ?? .standard
         telegramEnabled = defaults.bool(forKey: "telegramEnabled")
         telegramChats = Self.load([TelegramChat].self, from: defaults, forKey: "telegramChats") ?? []
         Task { [weak self, macName] in

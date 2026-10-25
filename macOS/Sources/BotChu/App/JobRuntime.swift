@@ -245,6 +245,8 @@ final class JobRuntime {
         guard !quitting else { return }
         launch(engine.tick(busy: busy))
         refresh()
+        // The same tick, wake and clock change make the daily run reviews due (#138).
+        model?.evaluator.pump()
     }
 
     private func launch(_ launches: [JobEngine.Launch]) {
@@ -415,6 +417,8 @@ final class JobRuntime {
             model.saveThread(target)
         }
         let next = engine.finish(runID, outcome: outcome, quiet: quiet, summary: summary, busy: busy)
+        // Run reviews on its account wait a while after it.
+        if let accountID = engine.jobs.lazy.flatMap(\.runs).first(where: { $0.id == runID })?.accountID { model?.evaluator.accountActivity(accountID) }
         let job = engine.jobs.first(where: { $0.runs.contains { $0.id == runID } })
         if let job, target == nil {
             if lives[runID] == nil, outcome == .failed {

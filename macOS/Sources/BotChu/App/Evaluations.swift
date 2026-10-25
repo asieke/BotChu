@@ -1,19 +1,25 @@
 import Foundation
 import BotChuCore
 
-/// Run reviews (`RunEvaluator`): after a task turn or a sub-agent run, a background review, in a
-/// session without tools, of what went well and what didn't, whose justified notes go to the bot's
-/// memory and whose other changes are proposals for the owner. The turn, its receipt, the handoff
-/// and the queue never wait for it.
+/// Run reviews (`RunEvaluator`): once a day, at the review time, a background review of each bot's
+/// work since its last review, in a session without tools, whose justified notes go to the bot's
+/// memory and whose other changes are proposals for the owner (#138). A turn's or sub-agent's end
+/// only extends the work the next review covers: the turn, its receipt, the handoff and the queue
+/// never wait for a review.
 extension AppModel {
     func makeEvaluator(runner: RunEvaluator.Runner?) -> RunEvaluator {
-        let evaluator = RunEvaluator(storage: storage, workspace: { [weak self] id in self?.bot(id)?.workspace },
+        let evaluator = RunEvaluator(storage: storage, bot: { [weak self] id in self?.bot(id) },
                                      sharedMemoryPath: { [weak self] in self?.settings.sharedMemoryPath ?? "" },
                                      teamPath: { [weak self] in self?.settings.teamPath ?? "" })
         evaluator.runner = runner
         evaluator.isEnabled = { [weak self] in self?.settings.evaluateRuns ?? false }
         evaluator.isAccountBusy = { [weak self] id in self?.accountIsBusy(id) ?? true }
+        evaluator.reviewTime = { [weak self] in self?.settings.reviewTime ?? .standard }
         evaluator.onChange = { [weak self] record in self?.evaluationChanged(record) }
+        evaluator.onStateChange = { [weak self] _ in
+            guard let self else { return }
+            self.reviewStates = self.evaluator.states
+        }
         return evaluator
     }
 
@@ -33,42 +39,58 @@ extension AppModel {
             || (jobs?.jobs ?? []).contains { $0.activeRun?.outcome == .running && $0.activeRun?.accountID == accountID }
     }
 
-    /// Hands a task's finished turn over for review, unless BotChu is quitting (which interrupts it).
-    /// What the review sees is built off the main actor, and only when reviews are on and the run
-    /// wasn't handed over before (`RunEvaluator.enqueue(_:workspace:account:prepare:)`).
-    func evaluateTaskTurn(_ target: ChatTarget, thread: [ChatMessage], turnStart: Int, stopped: Bool, failure: String?) {
-        guard !terminating, let bot = bot(target.botID), let task = task(target),
-              let subject = EvaluationRequest.taskTurnSubject(task, of: bot, thread: thread, turnStart: turnStart) else { return }
-        let machine = task.isRemote ? "\(machineName(task.hostID, fallback: task.hostName)) over SSH" : "This Mac"
-        let ending: RunEnding = stopped ? .stopped : failure == nil ? .finished : .failed
-        evaluator.enqueue(subject, workspace: bot.workspace, account: task.account) { toolFree in
-            EvaluationRequest.taskTurn(task, of: bot, thread: thread, turnStart: turnStart, ending: ending, error: failure,
-                                       machine: machine, snapshot: toolFree)
-        }
+    /// Hands a conversation's finished turn, Home's or a task's, to run reviews, unless BotChu is
+    /// quitting (which interrupts it): the turn joins the stretch of work its bot's next review
+    /// covers, and nothing is built.
+    func reviewTurn(_ target: ChatTarget, thread: [ChatMessage], turnStart: Int, accountID: String) {
+        let start = min(max(0, turnStart), thread.count)
+        guard !terminating, bot(target.botID) != nil, start < thread.count, let last = thread.last else { return }
+        let prompt = thread[..<start].lastIndex { $0.role == .user } ?? start
+        evaluator.turnEnded(ReviewConversation(botID: target.botID, taskID: target.taskID), prompt: thread[prompt].id, last: last.id,
+                            accountID: accountID)
     }
 
-    /// Hands a finished sub-agent attempt over for review, about the bot it ran as.
-    func evaluateSubagentRun(_ run: SubagentRun, messages: [ChatMessage]) {
-        guard !terminating, let bot = bot(run.targetBotID), !run.phase.isActive else { return }
-        let caller = run.parentSubagentID.flatMap { delegation?.run($0)?.targetBotName } ?? self.bot(run.rootBotID)?.name ?? "a bot"
-        evaluator.enqueue(.subagent(run), workspace: bot.workspace, account: run.account) { toolFree in
-            EvaluationRequest.subagent(run, bot: bot, messages: messages, caller: caller, snapshot: toolFree)
-        }
+    /// Hands a finished sub-agent attempt to run reviews: it joins the review of the bot it ran as.
+    func evaluateSubagentRun(_ run: SubagentRun) {
+        guard !terminating, bot(run.targetBotID) != nil, !run.phase.isActive else { return }
+        evaluator.subagentEnded(run)
     }
 
-    /// The reviews the status sidebar lists, newest first: Home's are those about the bot's
-    /// guidance; a task's, those of its turns and of the sub-agents it delegated.
+    /// The reviews of a conversation, newest first: Home's are those about the bot's guidance,
+    /// which cover all its work; a task's, those that covered its work.
     func evaluations(for target: ChatTarget) -> [EvaluationRecord] {
         let all = evaluationRecords.values
-        let shown = target.taskID.map { id in all.filter { $0.subject.taskID == id } } ?? all.filter { $0.botID == target.botID }
+        let shown = target.taskID.map { id in all.filter { $0.covers(task: id) } } ?? all.filter { $0.botID == target.botID }
         return shown.sorted { ($0.createdAt, $0.id) > ($1.createdAt, $1.id) }
+    }
+
+    /// Activity's summary line: the review under way or waiting and why, or when the next one is.
+    func reviewStatus(for target: ChatTarget) -> ReviewStatus {
+        // Read for observation: the line follows the records and the work waiting.
+        _ = (evaluationRecords.count, reviewStates[target.botID])
+        return evaluator.status(of: target.botID, task: target.taskID)
+    }
+
+    /// The reviews of the past week that brought no news, counted.
+    func reviewCounts(for target: ChatTarget) -> ReviewCounts {
+        ReviewCounts(evaluations(for: target), since: Date().addingTimeInterval(-7 * 86_400))
+    }
+
+    func canReviewNow(_ target: ChatTarget) -> Bool {
+        _ = (evaluationRecords.count, reviewStates[target.botID])
+        return evaluator.canReviewNow(target.botID, task: target.taskID)
+    }
+
+    func reviewNow(_ target: ChatTarget) {
+        evaluator.reviewNow(target.botID, task: target.taskID, title: task(target)?.title)
     }
 
     func retryEvaluation(_ id: String) { evaluator.retry(id) }
     func revertEvaluation(_ id: String) { evaluator.revert(id) }
 
     /// Keeps the sidebar's records, and tells the bot's Home about a change made or proposed, or a
-    /// review that failed (once per kind of failure until one succeeds); no-change reviews stay quiet.
+    /// review that failed (once per kind of failure until one succeeds); reviews that changed
+    /// nothing or found no signal stay quiet.
     private func evaluationChanged(_ record: EvaluationRecord) {
         let before = evaluationRecords[record.id]?.phase
         evaluationRecords = evaluator.records

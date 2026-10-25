@@ -32,6 +32,8 @@ extension RenderingTests {
         }
         let reviewed = ReviewedKeys()
         fixture.app.evaluator.limits.delay = 0
+        // One tool call is signal enough here, so that each review asks its model.
+        fixture.app.evaluator.limits.toolCalls = 1
         fixture.app.evaluator.runner = { job in
             reviewed.add(job.key)
             await gate.wait()
@@ -40,37 +42,50 @@ extension RenderingTests {
         fixture.app.send("REVIEWED_PARENT", to: fixture.target)
         try await fixture.wait { !fixture.app.isRunning(fixture.target) }
 
-        // The handoff came back, the turn ended and its receipt reached Home while the sub-agent's
-        // review was still held.
+        // The handoff came back, the turn ended and its receipt reached Home; their ends only
+        // extended the work each bot's next review covers (#138), and added no review.
         #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("HANDOFF-REVIEWED") == true)
         #expect(fixture.app.delegation.all.map(\.phase) == [.completed])
         #expect(fixture.app.thread(.home(fixture.parent.id)).contains { $0.role == .receipt })
-        // What each review sees is built off the main actor, after the handoff and the receipt.
-        try await fixture.wait { fixture.app.evaluator.records.count == 2 && fixture.app.evaluator.records.values.contains { $0.phase == .running } }
-        let records = fixture.app.evaluator.records.values
+        #expect(fixture.app.evaluator.records.isEmpty)
+        let conversation = ReviewConversation(botID: fixture.parent.id, taskID: fixture.target.taskID)
+        try await fixture.wait { fixture.app.reviewStates[fixture.parent.id]?.unreviewed().isEmpty == false }
+        let worker = fixture.app.reviewStates[fixture.worker.id]?.unreviewed() ?? []
+        #expect(worker.map(\.conversation) == [conversation])
+        #expect(worker.first?.subagents.count == 1 && worker.first?.hasTurns == false, "The sub-agent joins the review of the bot it ran as")
+        let parent = fixture.app.reviewStates[fixture.parent.id]?.unreviewed() ?? []
+        #expect(parent.map(\.conversation) == [conversation])
+        #expect(parent.first?.subagents.isEmpty == true && parent.first?.hasTurns == true, "The caller's review covers its own turn")
+
+        // Asked for now, each is about its own bot, on that bot's own account, one at a time.
+        #expect(fixture.app.canReviewNow(.home(fixture.worker.id)) && fixture.app.canReviewNow(fixture.target))
+        fixture.app.reviewNow(.home(fixture.worker.id))
+        fixture.app.reviewNow(fixture.target)
+        try await fixture.wait { fixture.app.evaluator.records.values.contains { $0.phase == .running && $0.snapshot != nil } }
+        let records = Array(fixture.app.evaluator.records.values)
         #expect(records.count == 2)
-        let subagent = try #require(records.first { $0.subject.kind == .subagent })
-        #expect(subagent.phase == .running)
-        #expect(subagent.botID == fixture.worker.id && subagent.accountID == "codex-work", "About the bot the sub-agent ran as, on its account")
-        #expect(subagent.subject.taskID == fixture.target.taskID)
-        let turn = try #require(records.first { $0.subject.kind == .taskTurn })
-        #expect(turn.phase == .pending, "One review at a time")
-        #expect(turn.botID == fixture.parent.id && turn.accountID == "codex-dev")
+        let workerReview = try #require(records.first { $0.botID == fixture.worker.id })
+        #expect(workerReview.subject.kind == .day && workerReview.accountID == "codex-work")
+        let taskReview = try #require(records.first { $0.botID == fixture.parent.id })
+        #expect(taskReview.subject.kind == .task && taskReview.subject.taskID == fixture.target.taskID && taskReview.accountID == "codex-dev")
+        #expect(records.filter { $0.phase == .running }.count == 1, "One at a time")
 
         await gate.release()
         try await fixture.wait { fixture.app.evaluator.records.values.allSatisfy { $0.phase == .done } }
         // Nothing reviews a review, and a review that changed nothing says nothing in Home.
-        #expect(reviewed.keys.sorted() == [subagent.id, turn.id].sorted())
+        #expect(reviewed.keys.sorted() == [workerReview.id, taskReview.id].sorted())
         #expect(fixture.app.evaluator.records.count == 2)
         #expect(!fixture.app.thread(.home(fixture.parent.id)).contains { $0.role == .note && $0.text.hasPrefix("Reviewed") })
         #expect(!fixture.app.thread(.home(fixture.worker.id)).contains { $0.role == .note && $0.text.hasPrefix("Reviewed") })
-        #expect(fixture.app.evaluations(for: fixture.target).map(\.id).sorted() == [subagent.id, turn.id].sorted())
-        #expect(fixture.app.evaluations(for: .home(fixture.worker.id)).map(\.id) == [subagent.id])
+        // The task's Activity lists the reviews that covered it; the worker's Home, its own.
+        #expect(fixture.app.evaluations(for: fixture.target).map(\.id).sorted() == [workerReview.id, taskReview.id].sorted())
+        #expect(fixture.app.evaluations(for: .home(fixture.worker.id)).map(\.id) == [workerReview.id])
+        #expect(fixture.app.reviewStatus(for: fixture.target) == .upToDate)
 
         // After a relaunch, the status sidebar lists them again, from the bots' folders.
         let relaunched = AppModel(store: fixture.store, settings: fixture.settings)
         defer { relaunched.stopAll() }
-        #expect(relaunched.evaluations(for: fixture.target).map(\.id).sorted() == [subagent.id, turn.id].sorted())
+        #expect(relaunched.evaluations(for: fixture.target).map(\.id).sorted() == [workerReview.id, taskReview.id].sorted())
         #expect(relaunched.evaluations(for: fixture.target).allSatisfy { $0.phase == .done && $0.outcome == .noChange })
     }
 
