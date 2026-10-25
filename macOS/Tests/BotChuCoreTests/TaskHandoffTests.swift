@@ -225,7 +225,7 @@ private final class HandoffFixture {
         let roster = [BotRosterEntry(bot: Bot(name: "Worker", title: "Builds things", workspace: "/tmp/worker"))]
         let section = BotContext.subagentsSection(availableBots: roster)
         for text in ["### Task: `botchu-task create`", "### Sub-agent run: `botchu-subagent`", "new task @bot", "new subagent @bot",
-                     "left", "Sub-agents inspector", "botchu-task create --agent", "botchu-subagent call --agent",
+                     "a tab beside its chat", "Sub-agents inspector", "botchu-task create --agent", "botchu-subagent call --agent",
                      "never a second one", "spawns a sub-agent run per issue", "outstanding children stop"] {
             #expect(section.contains(text), "Missing \(text)")
         }
