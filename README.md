@@ -4,14 +4,18 @@ A minimal, open-source, native macOS app for persistent AI bots, in the spirit o
 [rakazo](https://github.com/elie222/rakazo). Bots are listed down the left; the selected bot's chat
 fills the window. Each bot is driven by a coding-agent CLI that is already installed and signed in on
 the Mac, and runs in its own workspace folder on this Mac. A bot can also work on tasks in your
-GitHub repositories, in parallel, each in its own git worktree and nested under its bot in the left
-sidebar: on this Mac, or on another computer it reaches over SSH. A task can also review a pull request.
+GitHub repositories, in parallel, each in its own git worktree and a tab beside its bot's chat: on
+this Mac, or on another computer it reaches over SSH. A task can also review a pull request.
 
 ## Scope
 - Does:
   - **Workspace:** the left sidebar has **Projects**, **Agents**, **Providers**, **Skills** and **Jobs**, followed by
-    the bots’ conversations, in sections (below). Opening a gallery keeps the selected conversation and unsent draft;
-    turns that finish while a gallery is shown still get an unread badge. In dark mode the sidebar
+    the bots, one row each, in sections (below); a bot's Home and tasks are the tabs beside its chat
+    (**Tasks**). A bot's row says on its second line what it is doing ("Working on #113", "2 tasks
+    running", its Home's activity, "4 tasks", or its account), with a small dot at its end for each of
+    its conversations that isn't idle, in the tabs' colours, at most four, then +N. Selecting a bot
+    shows the conversation it showed last. Opening a gallery keeps the selected conversation and unsent draft;
+    turns that finish while a gallery is shown still show as news (a blue dot). In dark mode the sidebar
     takes the status sidebar's darker shade, with a hairline along its edge, so it stands apart from
     the chat; light mode keeps the standard sidebar.
   - **Sections:** bots can be grouped into sections you name, each a heading of its own in the
@@ -255,13 +259,35 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     (BotChu refuses a second), and a branch named from a brief gets a number when the name is
     taken, so tasks never share a worktree. The main checkout stays on its branch, and BotChu writes
     nothing into the repository: a task's first message opens with the bot's identity, instructions
-    and memory (which stays in the bot's folder), where the task is and what it is. Open tasks nest below their bot's row in the left sidebar
-    (⌃Tab moves between Home and its open tasks). Each row shows activity, elapsed time while running, failure or unread state;
-    the bot row counts running tasks. Only a bot with open tasks has a disclosure arrow, which expands
-    without changing the conversation; a bot without any is a single row, whose first task comes from
-    **New Task** (⌘T or the row's menu). The bot row opens Home, and **+ New task** after its tasks
-    starts another. Task context menus keep workspace,
-    browser, new-session and close actions. Closing a task keeps its record, conversation and worktree;
+    and memory (which stays in the bot's folder), where the task is and what it is. While a bot has
+    an open task, its conversations are tabs in a column between the bot list and the chat: Home
+    pinned at the top, then a **Tasks** heading with their count, **+** (New Task, ⌘T) and **«**
+    (collapse), then the open tasks in the order they were opened, which scroll. A tab's first line
+    is its issue's or pull request's number and title (a review's with an eye; a brief's words
+    without an issue), on up to two lines; its second, its repository and its state, with a time
+    on the right that is never cut off: idle (a faint ring, and its last activity: 2m, 1h, 1d),
+    making the worktree or starting (a violet ring), working (violet, what it is doing and its
+    elapsed time, ticking each second), finished since it was last shown (blue, with its pull
+    request), or its last turn failed (red, until its next turn starts). Home's tab names its
+    account, or its own turn's state. The selected tab takes the chat's background and runs into
+    it. Dots hold still; when a turn ends, its dot pops once (with Reduce Motion, it only
+    crossfades). A click, **⌘1** (Home) to **⌘9** (the first eight tasks, in the Bot menu), ⌃Tab,
+    and ↑ and ↓ while a tab has keyboard focus switch conversations. Hovering a task's tab turns its
+    dot into a close button, unless its turn is running, and its tooltip names the repository, the
+    issue, the machine and the shortcut; its context menu keeps the issue, pull request, branch,
+    folder, Terminal, new-session and close actions. Closing the shown task shows the tab above it.
+    The column is 240 points wide; drag its edge to make it 200 to 320, which is remembered. **«**
+    or **View ▸ Collapse Tasks** folds it into a 56-point rail of tiles (a house for Home, each
+    task's number, or a checklist for a brief, then **+**), with a dot in the corner of each tile
+    that isn't idle and the tab's two lines on hover; **»** or **View ▸ Expand Tasks** brings it
+    back, and the choice survives a relaunch. The column also becomes the rail by itself while the
+    chat beside it would be less than 600 points wide to read, and comes back when the window
+    widens; as the chat's text never grows past 760 points, on windows of 1,680 points and wider
+    the column takes only space the chat wasn't using. A bot without an open task has no column,
+    and its chat is as before, with **New Task** in the toolbar (also ⌘T and the bot's menu); once
+    it has one, New Task is the column's **+**. A task's chat opens with its repository and issue
+    or pull request (`asieke/BotChu · Issue #113`) above the title as its headline, and its message
+    box reads "Message 10x Engineer Bot about #113". Closing a task keeps its record, conversation and worktree;
     Home's status lists closed tasks to open again. Once its pull request merges, the agent removes
     its worktree (`git worktree remove`); if it is gone, the task's next message makes it again.
   - **Pull request reviews:** a pull request's menu in Projects ▸ Pull Requests, or its **Review** in
@@ -288,11 +314,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `.botchu/dispatch/` in its folder (`{"repo": "owner/name", "issue": 48, "task": "…"}`, or
     `"review": 12` with `"comment": true` to post it, and `"machine"` for a host), as its
     `AGENTS.md` explains. While any turn runs, of any bot, BotChu takes requests within seconds,
-    whichever conversation wrote them, and starts each in its own sidebar row; `"agent"` hands the
+    whichever conversation wrote them, and starts each in its own tab; `"agent"` hands the
     task to another bot (below). Home gets a receipt when a task starts, ends a turn or fails (with an Open
     link to its conversation), or can't start, and its next turn opens with a report on those tasks: their
     state, pull request and the start of their last reply. A new Home session also lists the open
-    tasks. The sidebar row counts the bot's conversations with news.
+    tasks. The bot's row shows a blue dot for each of its conversations with news.
   - **Sub-agents:** Home, tasks and delegated runs can call another configured bot with
     `botchu-subagent call`, or launch several with `spawn` and collect their handoffs with `wait`.
     `list` shows the available bots. Each child uses the called bot's identity, soul, memory, account,
@@ -303,7 +329,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     Copy and Stop. Runs under way come first; finished ones fold into one **Finished** row, newest
     first, which counts any failures. A run that finishes while the tab shows it stays in view until
     the tab is shown again, as does one opened from the chat. Home also groups delegations
-    belonging to its tasks. These runs never add left sidebar rows. Stop cascades through
+    belonging to its tasks. These runs never add tabs. Stop cascades through
     descendants; callers must wait before finishing their turn.
     Three nesting levels, twelve concurrent children and sixty-four delegations per root turn bound
     runaway fan-out. Interrupted records become stopped on relaunch. The helper needs Python 3 on
@@ -313,8 +339,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     with its own command, and an `@bot` mention only names the bot. "New task @bot" (or "hand this
     off to @bot as a new task") makes a **Task**: `botchu-task create --agent <bot> --repo
     owner/name --brief …` (or `--issue`, `--pr`, `--review`, with `--title` and `--machine`), from
-    Home, a task (also on a host) or a sub-agent run. The Task is the named bot's own, in the left
-    sidebar under it, on its account, model and effort, in its own worktree, as if its Home had
+    Home, a task (also on a host) or a sub-agent run. The Task is the named bot's own, a tab beside
+    its chat, on its account, model and effort, in its own worktree, as if its Home had
     asked, and goes on after the asking turn ends or stops; nothing reaches that bot's Home but the
     usual receipts. It records which conversation asked (shown to the bot in its first message).
     The asking conversation gets a receipt that opens the Task, and the command prints the bot, the
@@ -322,8 +348,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     start failed, or failed (with nothing made, so it can be run again). The same command run again
     from the same conversation, also in a later turn or after a relaunch, returns the same Task
     rather than a second. "New subagent @bot" (or "delegate this to @bot as a sub-agent") is a
-    **sub-agent run** (above): child work of the turn, in its Sub-agents inspector, with no sidebar
-    row. A batch goes to one bot as one Task, whose turn spawns a sub-agent run per issue.
+    **sub-agent run** (above): child work of the turn, in its Sub-agents inspector, with no tab of
+    its own. A batch goes to one bot as one Task, whose turn spawns a sub-agent run per issue.
   - **Jobs:** an agent can own scheduled jobs, saved instructions it runs on a schedule, such as a
     morning issue triage on weekdays at 9:00. **Jobs** in the sidebar is one table of every agent's
     jobs: the job, its agent, its schedule and time zone, its next run, its state (on, paused,
@@ -660,13 +686,15 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     or error. The character and ring convey status
     without a dot or status pill. The card and pet animation reflect only the shown Home or task;
     the bot list still shows activity across its tasks. Five icon tabs sit below the character,
-    in a rounded bar with a raised selected segment: **Activity** (tasks, run reviews and conversation stats), **Sub-agents** (delegated work),
+    in a rounded bar with a raised selected segment: **Activity** (Home's closed tasks, run reviews and conversation stats), **Sub-agents** (delegated work),
     **Model & Usage** (account, agent, model, reasoning and allowance), **Session** (the CLI session
     and workspace controls), and **Memory** (instructions, personality, memory, the team
     playbook and skills). Hover for tab names, or
     focus the bar and use Left/Right arrows. The selected area is remembered across conversations
     and launches; its data always belongs to the shown Home or task. The character, tabs and bottom
-    actions stay visible while the selected area's content scrolls. Home keeps Edit and New Session;
+    actions stay visible while the selected area's content scrolls. Home's Activity lists only its
+    **Closed tasks** (collapsed at first, with their count), each to open again with a click: the
+    open ones are the tabs beside the chat. Home keeps Edit and New Session;
     tasks keep Close Task and New Session. Task Activity includes the repository, computer and
     linked issue, then the repository's open issues, from the saved Projects catalog: **Issues · N**,
     GitHub's count of its open issues (pull requests aside), which stays in the heading when the
@@ -791,7 +819,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `Store.swift`), how tall the message box is for its draft and how far its text may scroll
     (`ComposerLayout.swift`), what
     the status sidebar shows about a bot, from a summary of its thread kept as the thread grows, and
-    its `MEMORY.md` (`BotStatus.swift`), replies' parsed Markdown, cached by their text within a
+    its `MEMORY.md` (`BotStatus.swift`), what a conversation's tab and its bot's row say: its state,
+    the tab's two lines, the row's dots and subtitle, and when the column folds into the rail
+    (`ConversationTabs.swift`), replies' parsed Markdown, cached by their text within a
     budget of bytes (`MarkdownCache.swift`), and parsed off the main thread as they are written, one
     revision at a time for each reply (`MarkdownPreparation.swift`), pets: the activity a tool call means
     and the clips that show it (`Pet.swift`), making a pet: its poses and clips, the Codex prompt
@@ -858,7 +888,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished runs to run reviews, `Evaluations.swift`),
-    `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
+    `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
     status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
     the hosts and Telegram), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -960,8 +990,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
     saves, a follow-up taken while the transcript can't be saved (back in it after a relaunch), model-picker keyboard interaction and persisted choices,
     the message box's text staying put while it is typed (narrow and wide, past its maximum and back),
-    Markdown editor sizing and Save/Cancel, collapsing status sections, the sidebar's sections of
-    bots (their menus, the alert that names them, collapsing and revealing, and changes that can't
+    Markdown editor sizing and Save/Cancel, collapsing status sections, a bot's tabs beside its
+    chat (a click, the close button on hover, **+**, « and », the arrow keys, ⌘1 to ⌘9, the rail at
+    the narrowest window and by the owner's choice, light and dark) and its row in the bot list,
+    the sidebar's sections of bots (their menus, the alert that names them, collapsing and revealing, and changes that can't
     be saved, shown until Try Again or quitting saves them), Agents grouped under them and editing
     them with the same menus and alert, inspector tab navigation and
     restored selection, conversation-scoped allowance reads, automatic task branch creation, the
@@ -1012,8 +1044,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
     `activityChatRendersGroupsCardsAndLiveWork`, `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`,
-    `jobsBelongToTheirAgentAndReachHomeOnlyAsReceipts`, or `taskActivityShowsItsRepositorysOpenIssues`)
-    to render isolated gallery/table (sidebar, chat, or Agents' sections, wide and narrow) screenshots
+    `jobsBelongToTheirAgentAndReachHomeOnlyAsReceipts`, `taskActivityShowsItsRepositorysOpenIssues`, or
+    `conversationColumnFollowsTheWindowAndTheOwnersChoice`)
+    to render isolated gallery/table (sidebar, chat, tasks' column and rail, or Agents' sections, wide and narrow) screenshots
     with sample data. These
     share a serialized suite because AppKit
     window focus is global; all use isolated windows and no real bot data. Providers and OpenRouter
@@ -1079,7 +1112,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   with full Xcode. The rendering tests need window focus, so when other agents test on the same Mac,
   run it through the shared test gate (`/tmp/botchu-coord/gate.sh start scripts/test.sh`).
 - `macOS/test.sh` requires every test bundle to finish and rejects explicit failure summaries,
-  even if SwiftPM returns success. The native-click sidebar test runs in its own process because
+  even if SwiftPM returns success. The native-click test of the tasks' column runs in its own process because
   AppKit's window-animation callbacks can stop the Swift test runner's event loop during later
   tests; all its assertions still run. The script also runs the project-loading regression tests in Release. They check every
   repository result, the four-request limit, and that a sync finishes when the view that asked for
@@ -1142,7 +1175,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   opens the composer's picker, and `inspector-model` or `inspector-effort` opens the sidebar's.
   `BOTCHU_INSPECTOR=activity`, `subagents`, `model`, `session` or `memory` selects a status sidebar tab;
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
-  `BOTCHU_WINDOW=compact` checks the minimum window width. `BOTCHU_DRAFT=<text>` puts that draft in
+  `BOTCHU_WINDOW=compact` checks the minimum window width, where a bot's tasks show as the rail,
+  and `wide` (1,700 points) the column. `BOTCHU_DEMO=tasks` gives the first bot six more open
+  tasks in memory, so its tabs show every state at once (working, starting, making the worktree,
+  news with a pull request, idle, beside the seeded finished and failed ones), with no real turn;
+  `BOTCHU_TAB=3` then shows the one working on #113. `BOTCHU_DRAFT=<text>` puts that draft in
   the message box (`\n` for a new line), to check how it grows and scrolls.
   `BOTCHU_OPEN=report` opens Report a Bug or Feature, and `BOTCHU_REPORT="<report>"` files one,
   two seconds after launch, each with the window's screenshot (`BOTCHU_SCREENSHOT_FAIL=1` shows a

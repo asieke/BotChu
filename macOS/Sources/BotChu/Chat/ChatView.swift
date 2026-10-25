@@ -12,6 +12,7 @@ struct ChatView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(ChatDensity.storageKey) private var density: ChatDensity = .detailed
+    @Environment(\.composerTakesFocus) private var composerTakesFocus
     let target: ChatTarget
     @State private var composerFocused = false
     @State private var transcript: TranscriptModel
@@ -157,7 +158,7 @@ struct ChatView: View {
                          references: Binding(get: { model.draftReferences[target] ?? [] },
                                              set: { model.draftReferences[target] = $0.isEmpty ? nil : $0 }),
                          mentions: model.mentionSources(for: target),
-                         placeholder: task.map { "Message \(bot.name) about \($0.title)" } ?? "Message \(bot.name)",
+                         placeholder: Self.placeholder(bot: bot, task: task),
                          running: running, midTurn: model.takesFollowUpsMidTurn(target), onSend: send, onStop: { model.stop(target) }) {
                         ModelMenu(settings: current, disabled: running,
                                   onModel: { model.setModel($0, for: target) },
@@ -181,9 +182,10 @@ struct ChatView: View {
             .environment(transcript)
             // Keep room for the model, effort and send controls when the columns are narrowed.
             .frame(minWidth: 300)
+            // The tab beside the chat says which conversation it is (#128).
             .navigationTitle(bot.name)
-            .navigationSubtitle(task?.title ?? "")
-            .onAppear { composerFocused = true }
+            // Not while the tabs beside the chat have keyboard focus, so ↑ and ↓ go on moving between them.
+            .onAppear { if composerTakesFocus { composerFocused = true } }
             // Opening the conversation again starts from its newest items.
             .onDisappear { transcript.windowStart = nil }
             // Notes left waiting by an earlier launch.
@@ -208,6 +210,12 @@ struct ChatView: View {
             // Sending takes the reader to their message and what follows it.
             following = true
         }
+    }
+
+    /// "Message 10x Engineer Bot about #113": a task's issue or pull request, else its repository.
+    static func placeholder(bot: Bot, task: BotTask?) -> String {
+        guard let task else { return "Message \(bot.name)" }
+        return "Message \(bot.name) about " + (task.work.map { "#\($0.number)" } ?? task.repoName)
     }
 
     /// How an item is laid out, and what else its height depends on: an exploration group as one
@@ -263,10 +271,13 @@ struct ChatToolbar: ViewModifier {
                     Label("Chat Density", systemImage: density.symbol)
                 }
                 .help("How much tool work the chat shows: Compact (headers), Detailed (files and errors) or Raw (every call)")
-                Button { if let id = model.visibleBotID { model.newTask(for: id) } } label: {
-                    Label("New Task", systemImage: "plus.rectangle.on.rectangle")
+                // Once the bot has a task, New Task is the + in the tasks' column (#128).
+                if let id = model.visibleBotID, model.openTasks(of: id).isEmpty {
+                    Button { model.newTask(for: id) } label: {
+                        Label("New Task", systemImage: "plus.rectangle.on.rectangle")
+                    }
+                    .help("Start a task for this bot in a repository (⌘T)")
                 }
-                .help("Start a task for this bot in a repository (⌘T)")
                 Button { showsStatus.toggle() } label: {
                     Label(showsStatus ? "Hide Status" : "Show Status", systemImage: "sidebar.right")
                 }
@@ -422,7 +433,8 @@ struct BotIntro: View {
     }
 }
 
-/// The top of a task's chat: the bot, and what and where the task is.
+/// The top of a task's chat: the bot, where the task is (its repository, issue or pull request,
+/// and host), and what it is about as its headline (#128).
 struct TaskIntro: View {
     let bot: Bot
     let task: BotTask
@@ -430,33 +442,39 @@ struct TaskIntro: View {
     let machine: String?
 
     var body: some View {
-        VStack(spacing: 6) {
-            BotAvatar(bot: bot, size: 44)
-            Text(task.title).font(.title2.weight(.semibold))
-                .multilineTextAlignment(.center)
+        VStack(spacing: 4) {
+            BotAvatar(bot: bot, size: 40)
+                .padding(.bottom, 6)
             HStack(spacing: 4) {
                 Text(task.repo)
+                if let work = task.work {
+                    Text("·")
+                    Link("\(work.isPullRequest ? "Pull request" : "Issue") #\(work.number)", destination: work.url)
+                        .help("Open the \(work.isPullRequest ? "pull request" : "issue") on GitHub")
+                }
+                if let review = task.review {
+                    Text("·")
+                    Label(review == .comment ? "Review, posted on GitHub" : "Review", systemImage: "eye")
+                }
                 if let machine {
                     Text("·")
                     Label("on \(machine)", systemImage: "network")
                         .help("Works on \(machine) over SSH, with \(bot.name)'s context from this Mac")
                 }
-                if let work = task.work, !work.isPullRequest {
-                    Text("·")
-                    Link(work.title.isEmpty ? "#\(work.number)" : "#\(work.number) \(work.title)", destination: work.url)
-                        .lineLimit(1)
-                        .help("Open the issue on GitHub")
-                }
             }
+            .font(.system(size: 12))
+            .monospacedDigit()
             .foregroundStyle(.secondary)
-            if task.review != nil {
-                Label(task.review == .comment ? "Review, posted on GitHub" : "Review, here only", systemImage: "eye")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            .lineLimit(1)
+            Text(ConversationTab.subject(of: task))
+                .font(.system(size: 20, weight: .semibold))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .frame(maxWidth: 560)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 8)
+        .padding(.top, 4)
         .padding(.bottom, 12)
     }
 }

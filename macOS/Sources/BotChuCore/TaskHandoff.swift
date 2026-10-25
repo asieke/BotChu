@@ -2,7 +2,7 @@ import Foundation
 
 /// A Task one conversation hands to a bot with `botchu-task create` (#111), as it reaches BotChu
 /// through the conversation's mailbox, beside its sub-agent requests. Unlike a sub-agent run
-/// (`SubagentRequest`), it makes an independent Task under that bot, in the left sidebar, which goes
+/// (`SubagentRequest`), it makes an independent Task of that bot's, a tab beside its chat, which goes
 /// on whatever becomes of the conversation that asked for it.
 public struct TaskHandoff: Equatable, Sendable {
     /// The `kind` that tells a handoff from a sub-agent request in the mailbox.

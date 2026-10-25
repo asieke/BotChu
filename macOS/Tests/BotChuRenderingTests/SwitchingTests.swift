@@ -35,7 +35,8 @@ extension RenderingTests {
         }
         let before = buttons()
         #expect(before.contains { $0.hasPrefix("Report a Bug or Feature ") })
-        #expect(before.contains { $0.hasPrefix("New Task ") })
+        // The bot has a task, so New Task is the + in the tasks' column, not a toolbar button (#128).
+        #expect(!before.contains { $0.hasPrefix("New Task ") })
         #expect(before.contains { $0.hasPrefix("Chat Density ") })
 
         app.show(fixture.task)

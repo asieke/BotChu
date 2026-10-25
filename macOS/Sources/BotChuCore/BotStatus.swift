@@ -131,7 +131,7 @@ public struct BotStatus: Equatable, Sendable {
             : String(format: "%d:%02d", minutes, seconds)
     }
 
-    /// The bot as its sidebar row shows it: its Home's status, but while Home is idle and
+    /// The bot as its row's face shows it: its Home's status, but while Home is idle and
     /// tasks work, working on them, with the newest turn's activity.
     public func working(on tasks: [(title: String, run: RunState)]) -> BotStatus {
         guard !phase.isActive, let newest = tasks.max(by: { $0.run.startedAt < $1.run.startedAt }) else { return self }
@@ -148,6 +148,22 @@ public struct BotStatus: Equatable, Sendable {
 extension BotStatus.Phase {
     /// A turn is under way, or about to start.
     public var isActive: Bool { self == .preparing || self == .starting || self == .working }
+}
+
+extension BotActivity {
+    /// What the bot is doing, as the status card's line and a conversation's tab say it.
+    public var doing: String {
+        switch self {
+        case .idle, .greeting, .done: "Wrapping up…"
+        case .thinking: "Thinking…"
+        case .researching: "Reading files…"
+        case .browsing: "Searching the web…"
+        case .coding: "Editing code…"
+        case .testing: "Running checks…"
+        case .working: "Running a tool…"
+        case .failed: "Hit a problem…"
+        }
+    }
 }
 
 /// What a status reads from a thread: how many messages and tool calls it has, and its last word

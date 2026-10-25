@@ -371,9 +371,6 @@ final class AppModel {
         return home.working(on: working)
     }
 
-    /// How many of the bot's conversations finished a turn while they weren't shown.
-    func unreadCount(of botID: UUID) -> Int { unread.filter { $0.botID == botID }.count }
-
     // MARK: Bots
 
     func newBot() {
@@ -584,12 +581,17 @@ final class AppModel {
     /// makes a new one at the pull request's head.
     func closeTask(_ target: ChatTarget) {
         guard target.taskID != nil, !isRunning(target), delegation.activeCount(target) == 0, let i = taskIndex(target) else { return }
+        // The tab above it shows in its place: the task opened before it, or Home (#128).
+        let above = openTasks(of: target.botID).prefix { $0.id != target.taskID }.last.map { ChatTarget.task($0.id, of: target.botID) }
+            ?? .home(target.botID)
         tasks[target.botID]?[i].archivedAt = Date()
         let task = tasks[target.botID]![i]
         saveTask(task, of: target.botID)
         unread.remove(target)
         TranscriptCache.forget(target)
-        if openTask[target.botID] == target.taskID { openTask[target.botID] = nil }
+        if openTask[target.botID] == target.taskID {
+            if visibleBotID == target.botID { show(above) } else { openTask[target.botID] = above.taskID }
+        }
         trimHistories()
         if task.review != nil, let folder = task.folder, case .success(let machine) = machine(of: task) {
             Task {

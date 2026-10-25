@@ -334,8 +334,8 @@ public enum BotContext {
             ambiguous.
 
             ### Task: `botchu-task create`
-            A Task is an independent, parent-level conversation that the named bot owns, under it in BotChu's left \
-            sidebar, in its own worktree of the repository, on its account. It goes on by itself after your turn ends \
+            A Task is an independent, parent-level conversation that the named bot owns, a tab beside its chat in \
+            BotChu, in its own worktree of the repository, on its account. It goes on by itself after your turn ends \
             or stops, so don't wait for it:
             `botchu-task create --agent "<bot>" --repo owner/name --brief "<what to do>"`
             Instead of (or with) `--brief`: `--issue <n>`, `--pr <n>` to continue a pull request, or `--review <n>` \

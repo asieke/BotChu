@@ -13,7 +13,8 @@ import BotChuCore
 /// - `BOTCHU_OPEN=model|effort|inspector-model|inspector-effort`: open a generation picker.
 /// - `BOTCHU_INSPECTOR=activity|model|session|memory`: select an inspector area on throwaway data.
 /// - `BOTCHU_DEFAULT_MODEL`: an OpenRouter default for a throwaway run only.
-/// - `BOTCHU_WINDOW=compact`: review the main window at its minimum width, on throwaway data.
+/// - `BOTCHU_WINDOW=compact`: review the main window at its minimum width, on throwaway data;
+///   `wide`, 1,700 points wide, where a bot's tasks show as a column beside its chat.
 /// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review;
 ///   `mixed` gives each kind of profile a different state (`mixedUsage`).
 /// - `BOTCHU_PROFILE`: with `BOTCHU_DATA_DIR`, CLI profiles to add, from `name|family|command`
@@ -31,6 +32,8 @@ import BotChuCore
 ///   `{down}`, `{up}`, `{tab}`, `{return}` and `{escape}` press those keys.
 /// - `BOTCHU_DEMO=activity`: with `BOTCHU_DATA_DIR`, make the shown conversation a long agent run
 ///   in memory (`DemoActivity`), to review the chat's activity cards without a real turn.
+/// - `BOTCHU_DEMO=tasks`: with `BOTCHU_DATA_DIR`, give the selected bot six more open tasks in memory,
+///   one in each state (`DemoTabs`), to review its tabs beside the chat without real turns.
 /// - `BOTCHU_DENSITY`: with `BOTCHU_DATA_DIR`, the chat density (`compact`, `detailed` or `raw`).
 /// - `BOTCHU_HOST`: with `BOTCHU_DATA_DIR`, the hosts in Settings ▸ Hosts, from
 ///   `nickname|ssh destination|repositories folder|machine name|account=command,…`, several
@@ -174,6 +177,11 @@ enum DevHooks {
                                              height: max(600, window.contentMinSize.height)))
             }
         }
+        if dataDir != nil, env["BOTCHU_WINDOW"] == "wide" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                NSApp.windows.first(where: { $0.styleMask.contains(.titled) })?.setContentSize(NSSize(width: 1700, height: 920))
+            }
+        }
         if dataDir != nil, let density = env["BOTCHU_DENSITY"].flatMap(ChatDensity.init(rawValue:)) {
             // Registered, not saved: review copies share the installed app's preferences.
             UserDefaults.standard.register(defaults: [ChatDensity.storageKey: density.rawValue])
@@ -227,6 +235,10 @@ enum DevHooks {
         if let appearance = env["BOTCHU_DRAW_PET"], let id = model.selection {
             model.setAppearance(appearance, for: id)
             model.makePet(id)
+        }
+        // Before BOTCHU_TAB, which may show one of its tasks.
+        if dataDir != nil, env["BOTCHU_DEMO"] == "tasks", let id = model.selection {
+            DemoTabs.install(in: model, botID: id)
         }
         if let tab = env["BOTCHU_TAB"].flatMap(Int.init), tab > 0, let id = model.selection {
             model.showTab(offset: tab, of: id)
@@ -371,17 +383,10 @@ enum DevHooks {
                 Text(group.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.vertical, 6)
                 if !collapsed.titles.contains(group.title) {
                     ForEach(group.botIDs.compactMap(model.bot)) { bot in
-                        let tasks = model.openTasks(of: bot.id)
-                        BotRow(bot: bot, status: model.status(of: bot), selected: model.visibleBotID == bot.id,
-                               unread: model.unreadCount(of: bot.id), runningTasks: model.runningTaskCount(for: bot.id),
-                               openTasks: tasks.count, isExpanded: !tasks.isEmpty)
-                        if !tasks.isEmpty {
-                            ForEach(tasks) { task in
-                                SidebarTaskRow(botID: bot.id, task: task)
-                                    .modifier(SidebarTreeBranch())
-                            }
-                            SidebarNewTaskRow(botID: bot.id).modifier(SidebarTreeBranch(isLast: true))
-                        }
+                        BotRow(bot: bot, status: model.status(of: bot), summary: model.botRowSummary(of: bot),
+                               selected: model.visibleBotID == bot.id)
+                            .padding(.horizontal, 6)
+                            .background(model.visibleBotID == bot.id ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 8))
                     }
                 }
             }

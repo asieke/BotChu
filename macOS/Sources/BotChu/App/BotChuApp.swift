@@ -6,6 +6,7 @@ struct BotChuApp: App {
     @State private var model = AppModel()
     @AppStorage("showsStatus") private var showsStatus = true
     @AppStorage(ChatDensity.storageKey) private var chatDensity: ChatDensity = .detailed
+    @AppStorage(ConversationColumnSettings.collapsedKey) private var tasksCollapsed = false
 
     var body: some Scene {
         WindowGroup("BotChu", id: "main") {
@@ -26,6 +27,9 @@ struct BotChuApp: App {
                 Picker("Chat Density", selection: $chatDensity) {
                     ForEach(ChatDensity.allCases) { Text($0.title).tag($0) }
                 }
+                // The column of a bot's tabs beside its chat, or its rail (#128).
+                Button(tasksCollapsed ? "Expand Tasks" : "Collapse Tasks") { tasksCollapsed.toggle() }
+                    .disabled(model.visibleBotID.map { model.openTasks(of: $0).isEmpty } ?? true)
             }
             CommandMenu("Bot") {
                 // The shown conversation, the selected bot's Home or its open task tab, as the menu
@@ -50,6 +54,13 @@ struct BotChuApp: App {
                 Button("Show Previous Tab") { if let id = model.visibleBotID { model.showTab(offset: -1, of: id) } }
                     .keyboardShortcut(.tab, modifiers: [.control, .shift])
                     .disabled(model.visibleBotID.map { model.openTasks(of: $0).isEmpty } ?? true)
+                // ⌘1 shows Home and ⌘2 to ⌘9 the first eight tasks, also from a gallery (#128).
+                if let id = model.selection {
+                    ForEach(Array(model.tabs(of: id).prefix(9).enumerated()), id: \.element) { index, target in
+                        Button(model.task(target)?.title ?? "Show Home") { model.showTab(at: index, of: id) }
+                            .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                    }
+                }
                 Button("Close Task") { if let id = model.visibleBotID { model.closeTask(model.tab(of: id)) } }
                     .disabled(tab.map { $0.taskID == nil || model.isRunning($0) } ?? true)
                 Divider()
