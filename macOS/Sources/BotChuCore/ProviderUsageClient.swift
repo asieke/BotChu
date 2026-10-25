@@ -1,7 +1,7 @@
 import Foundation
 
 /// A query follows the same configured profile command as the bot. No credentials are cache keys.
-public struct UsageRequest: Hashable, Sendable {
+public struct UsageRequest: Hashable, Sendable, Codable {
     public var account: Account
     public var command: String
     public var credentialRevision: Int
@@ -13,6 +13,9 @@ public struct UsageRequest: Hashable, Sendable {
     }
 
     public var refreshInterval: TimeInterval { account.kind == .muse ? 3_600 : 300 }
+    /// How often the app checks while Providers isn't showing, so it opens on current numbers;
+    /// a reading older than this is stale there.
+    public var backgroundInterval: TimeInterval { account.kind == .muse ? 3_600 : 900 }
     public var manualInterval: TimeInterval { account.kind == .muse ? 300 : 30 }
 }
 
