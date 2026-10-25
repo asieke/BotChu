@@ -579,7 +579,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     sub-agent or scheduled job running: at most 12 model calls a day per account, retries included, each review
     stopped after 5 minutes (its CLI interrupted, then terminated, then killed), with one automatic
     retry; an account out of allowance waits an hour, and a review still waiting 48 hours after its
-    run is skipped. A review is neither a task turn nor a sub-agent, so it is never reviewed itself,
+    run (or after its **Retry**) is skipped. A review is neither a task turn nor a sub-agent, so it is never reviewed itself,
     and BotChu's turn log records it as a "run review", without lines that look like secrets. It sees
     a snapshot of up to 24,000 characters: how the run ended (a finished turn isn't proof the work
     succeeded; a stopped run is neither a failure nor finished work, and isn't continued), the brief,
@@ -608,7 +608,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     so a lesson isn't saved to every bot that took part. Each review is saved at every step in
     `.botchu/evaluations/<run>.json` in that bot's folder, without lines that look like secrets, so a
     relaunch neither repeats one nor applies one twice (quitting stops a running review, which runs
-    again after the next launch); the newest 50 a bot are kept. A change that couldn't be saved stays
+    again after the next launch); the newest 50 a bot are kept, and any that called the model in
+    the last 24 hours, which the daily limit still counts. A change that couldn't be saved stays
     with its review, whose **Retry** saves it, rather than waiting with the conversations' notes, and
     conversations' notes still waiting for the file are saved first, on their own. **Activity ▸ Run
     reviews** in the status sidebar lists them (Home: those about the bot; a task: those of its turns
