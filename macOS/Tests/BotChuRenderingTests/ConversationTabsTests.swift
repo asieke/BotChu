@@ -251,7 +251,7 @@ extension RenderingTests {
         #expect(task.items.map(\.title) == ["Open Issue #41", "Copy Branch Name", "Show Task Folder in Finder", "Open Task in Terminal", "",
                                             "New Session", "Close Task"])
         // Its worktree isn't made yet.
-        #expect(task.items.filter { !$0.isEnabled }.map(\.title) == ["Show Task Folder in Finder", "Open Task in Terminal"])
+        #expect(task.items.filter { !$0.isEnabled && !$0.isSeparatorItem }.map(\.title) == ["Show Task Folder in Finder", "Open Task in Terminal"])
         let home = try tabMenu(at: NSPoint(x: 120, y: 33), in: host)
         #expect(home.items.map(\.title) == ["New Session"])
         task.performActionForItem(at: task.indexOfItem(withTitle: "Close Task"))
