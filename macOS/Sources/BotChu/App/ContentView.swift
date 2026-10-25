@@ -94,6 +94,8 @@ private struct DetailColumn: View {
             VStack(spacing: 0) {
                 ChatView(target: tab)
                     .id(tab)
+                    // Its history is read when it shows, if it isn't in memory (#109).
+                    .onAppear { model.hydrate(tab) }
             }
             .modifier(ChatToolbar())
             .inspector(isPresented: $showsStatus) {

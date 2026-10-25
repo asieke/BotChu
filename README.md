@@ -163,8 +163,14 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     Wherever an account or a CLI family is shown, so is the family's logo, as in GitChu: Claude's
     spark, OpenAI's knot for Codex, Google's G for Antigravity, Facebook's f for Muse, and π for Pi.
   - **Chat:** one continuous thread per bot (its **Home**), and one per task. Replies stream in, rendered as Markdown (each reply
-    is parsed once, and recent ones ahead of time, so showing a conversation again doesn't parse it again); the
-    agent's tool work shows as activity (below). Headings, nested lists, quotes,
+    is parsed once, and recent ones ahead of time, so showing a conversation again doesn't parse it again; parsed replies are
+    kept within about 64 MB, and none once macOS reports memory pressure); the
+    agent's tool work shows as activity (below). A reply being written is parsed off the main thread, two replies at a time
+    across every conversation and only the newest revision of each, so a long reply never holds up typing, switching or
+    Stop: its last rendering shows meanwhile, and once the reply is over 16 KB the text written since shows as it is until
+    the rendering catches up. A reply of 256 blocks or more is laid out in chunks of 128, each apart from the rest of
+    the chat and only at the width it is shown at, so typing, another row or the next delta doesn't lay out the chunks
+    already written again. Headings, nested lists, quotes,
     tables and fenced code use native block layouts; code has a Copy button. A table's cells stay on
     one line, each row ruled straight across whatever its cells hold (empty, or inline code), and a
     table wider than the chat scrolls sideways. Replies have soft rounded
@@ -172,7 +178,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     source/copy and fit/actual-size controls. Both render offline in system WebKit, including inside
     tables and lists; a reply's web view is made as it nears the visible part of the chat, with only
     the renderer it uses, and shows once the reply has rendered, at its final height, so neither a
-    blank page nor the source flashes first. Rendered replies' web views are kept, hidden, when
+    blank page nor the source flashes first. It renders one revision of its reply at a time (the
+    newest written meanwhile follows), keeping the blocks that haven't changed, with their math and
+    diagrams. Rendered replies' web views are kept, hidden, when
     their conversation closes, so opening it again shows them at once: up to about 200 MB of them
     (a reply with a diagram takes about 85, one with math alone about 20), each for ten minutes,
     and none once macOS reports memory pressure. Unsupported or incomplete expressions and diagrams stay
@@ -419,9 +427,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     keep their accounts. Switching CLI families resets model and effort choices. For known
     Antigravity models, effort also selects the matching model-ID suffix.
   - **The bot's folder is the bot:** BotChu keeps each bot's settings (`bot.json`), its whole
-    conversation (`thread.jsonl`, one message per line), its tasks (`tasks/<id>/`: `task.json` with
+    conversation (`thread.jsonl`, one message per line, with its index beside it,
+    `thread.index.json`: see **Loading**), its tasks (`tasks/<id>/`: `task.json` with
     the repository, computer, branch, worktree, session and pull request, and the task's
-    `thread.jsonl`), the
+    `thread.jsonl` and index), the
     task requests it writes (`dispatch/`), its scheduled jobs (`jobs/<id>/`: `job.json` with the
     job, where its schedule is up to and its runs, and each run's transcript in `runs/<run>.jsonl`),
     a log of every turn and job run (`logs/<date>.log`:
@@ -457,6 +466,35 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     Deleting a bot drops what waits to be written in its folder and waits for what is being written;
     moving one waits for its writes, so neither leaves the old folder behind. A job's run is still
     reserved in its `job.json` before it starts, at once, and never twice.
+  - **Loading:** a launch reads the bots' and tasks' settings and puts the window up; conversations
+    are read when they are needed, off the main thread, in order with their writes. Each Home's and
+    open task's queue is recovered first: its transcript is read then only when messages wait in it
+    (or the CLI took one the transcript lacks), and what waits goes out once its own conversation is
+    recovered, never before, even when it is never opened. The conversation shown is read first;
+    another is read when it is shown, with a spinner where its messages go (never an empty
+    conversation), while typing and switching go on. Sidebar rows and Home's reports on its tasks
+    come from each conversation's index (`thread.index.json`): its counts, last activity and error,
+    and the start of its last reply, with the size, dates and inode of the transcript it was made from
+    and a hash of its end and of all of it. A transcript changed since, by BotChu or anything else,
+    even to the same size with its dates kept, is never described by an old index: it is read again,
+    and its index made again; a missing one (a folder from before) is made in the background, one
+    conversation at a time. What changes a conversation not read yet (a task's or job's receipt, a
+    note, a Telegram message, which is checked against its whole history) or its queue before its
+    recovery (a send, Stop, an edit of the queue) waits until it is, in the order asked, so nothing is
+    lost, sent twice or saved over the full transcript, and a read that ends after its bot was deleted
+    or moved, or after a newer read, is dropped (a moved one is read again where it is). Stop
+    withdraws a turn waiting for its conversation to be read. A closed task's history and queue are
+    read when it opens again, and only then does what waits in it go out. Finished sub-agents'
+    transcripts are read when something shows them (a handoff goes back from its run's record); one a
+    relaunch interrupted is read, then closed, once. Inactive conversations' histories beyond 48 MB,
+    and finished sub-agents' transcripts beyond 16 MB, leave memory, the least recently shown first,
+    never the one shown, one with a turn or a sub-agent under way, or one not saved; drafts, queues,
+    sessions and summaries stay, and the history is read again when it is shown. The replies parsed
+    ahead are the shown conversation's latest 60, up to 256 KB of them. This Mac's name (`scutil`) is
+    looked up off the main thread, and a task request naming this Mac waits for it. With eight bots,
+    forty open tasks and a hundred finished sub-agents (101 MB) on an M4 Max, the window is up in
+    about 220 ms (it was 800) and the shown conversation in about 330, having read one transcript
+    (it read all 148).
   - **Memory and personality:** each bot's workspace has a `MEMORY.md` for facts and notes it keeps
     itself, and an editable `SOUL.md` for its personality and voice. New bots get a starter soul based
     on their name and title; existing files are preserved, including intentionally empty ones.
@@ -716,8 +754,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `Store.swift`), how tall the message box is for its draft and how far its text may scroll
     (`ComposerLayout.swift`), what
     the status sidebar shows about a bot, from a summary of its thread kept as the thread grows, and
-    its `MEMORY.md` (`BotStatus.swift`), replies' parsed Markdown, cached by their text
-    (`MarkdownCache.swift`), pets: the activity a tool call means
+    its `MEMORY.md` (`BotStatus.swift`), replies' parsed Markdown, cached by their text within a
+    budget of bytes (`MarkdownCache.swift`), and parsed off the main thread as they are written, one
+    revision at a time for each reply (`MarkdownPreparation.swift`), pets: the activity a tool call means
     and the clips that show it (`Pet.swift`), making a pet: its poses and clips, the Codex prompt
     for the stills, the OpenRouter request and job, the cost estimate, the manifest and install
     (`PetVideo.swift`), scheduled jobs: their schedules in their own time zones, runs, history and
@@ -743,6 +782,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     target's in its own lane and in order, newer states of a file taking the place of waiting ones
     (`StorageQueue.swift`), and a conversation's transcript and queue saved through it, with the
     messages a written transcript holds taken out of the queue as it is then (`ConversationStorage.swift`),
+    what a conversation not in memory is known by, its index and how it is checked against its
+    transcript, reading one and recovering its queue after a launch, where its history is and which
+    read is taken, and which inactive histories leave memory (`ConversationHistory.swift`), what was
+    read, decoded, written and copied, per file (`HistoryCounters.swift`),
     and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
@@ -768,7 +811,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     about them.
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
     in standard system materials: `App/` (the app, window, model, each conversation's state, observed
-    on its own (`Conversations.swift`), settings, Keychain, dev hooks, making
+    on its own, with whether its history is in memory and what waits for it (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, the
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
@@ -799,7 +842,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     corrections and forgets, concurrent saves, and saves that fail, wait (also across a relaunch)
     and are tried again; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
-    and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
+    within its budget (ten 128 KB replies written in revisions, then memory pressure), replies being
+    written parsed off the main thread (100 rapid deltas coalesced, the worker's limit shared, a slow
+    earlier revision never shown over a newer one, the last always settling as a full parse), one
+    parse for replies without math (shell code with `$HOME`, prices, the word Mermaid) and hundreds
+    of expressions put back in one pass, and sub-agent checkpoints; and the chat's activity: how each CLI's tool calls (and shell
     commands) are described and grouped, failures, repeated reads, sub-agent cards, and that an
     update does work only for what changed (counted for live groups of 400, 1,000 and 5,000 calls),
     shows what grouping the thread afresh shows through random turns (calls finishing out of order,
@@ -847,9 +894,15 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     failed save and its retry, failures told apart, the account limits counting every model call,
     reading replies, recall by a fresh session, the tool-free command lines, runs on CLIs without
     them, a review that reports a tool call, and the review's own session through a stand-in CLI,
-    killed at its timeout.
+    killed at its timeout; and loading histories: a digest and its report, an index saved with its
+    transcript and read without it, one made stale by a change of the same size with the dates kept,
+    or by its end, version or contents, made again from an older folder without repairing or copying
+    a damaged transcript, recovery that reads a transcript only when messages wait or were taken,
+    which read is taken, the history budget and counters kept per folder.
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
-    across every column, streaming updates, source
+    across every column, streaming updates (a long reply being written never parsed on the main
+    thread, its chunks laid out only at the width it is shown at, also when the window asks for its
+    ideal size, and a rich reply's web view rendering one revision at a time, ignoring late heights), source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
     saves, a follow-up taken while the transcript can't be saved (back in it after a relaunch), model-picker keyboard interaction and persisted choices,
@@ -883,12 +936,19 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     queue alone, and deleted with its agent, a sub-agent's handoff and a task's receipt that
     don't wait for their run reviews, and a task's Activity listing its repository's open issues:
     one or all opened in Projects and back to the task with its draft, switching tasks, a failed
-    refresh keeping what was read, and no GitHub request from showing or updating it; and, with
-    writes slowed to 250 ms each or failing: a turn that starts only once its message is saved,
-    sending and Stop that never wait for a write, a message that can't be queued coming back to
-    the composer, typing and switching while four conversations save, quitting through the real
-    notification waiting for writes and saying which it couldn't, deleting and moving a bot with
-    writes under way, and a handoff that goes back only once saved. Set
+    refresh keeping what was read, and no GitHub request from showing or updating it; and, with writes slowed to 250 ms each or failing: a turn that
+    starts only once its message is saved, sending and Stop that never wait for a write, a message
+    that can't be queued coming back to the composer, typing and switching while four conversations
+    save, quitting through the real notification waiting for writes and saying which it couldn't,
+    deleting and moving a bot with writes under way, and a handoff that goes back only once saved;
+    and, with reads held back: a launch that decodes only the shown conversation and an interrupted
+    sub-agent, also with ten times the closed tasks' history, a conversation shown with a spinner
+    while typing and switching go on, a receipt and a note to a conversation not read yet that wait
+    for it and keep its history, sends, Stop and queue edits before recovery that keep their order
+    and start nothing stopped, an unopened task's queued message that goes out after its own
+    recovery, reads dropped after a deletion and made again after a move, histories leaving memory
+    with their draft, queue and session kept, Home's report on its tasks from their digests, and
+    Telegram recognizing a repeated message in a Home not read yet. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
@@ -1047,10 +1107,29 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   streamed delta, a new call in a live exploration, a sub-agent's update, and opening a large group
   or output; and, in Core alone, a call joining and finishing in a live group of 400, 1,000 and
   5,000 calls, apart from comparing the group before and after, grouping each afresh, and the memory
-  a 5,000-call projection keeps; and writes the table to the file. `BOTCHU_BENCHMARK_SCOPE=chat` times the
+  a 5,000-call projection keeps; and writes the table to the file. It also streams 100 rapid deltas into a 128 KB
+  reply, until the last delta's rendering is drawn, with the worker's counts; then 30 more at 5 a second
+  while a key is pressed in the message box every 40 ms, with how long from each delta's time and each
+  key press until it is drawn, and how long the main thread keeps other work waiting meanwhile (and with
+  nothing streaming), and how long the main thread is held to show each revision the worker prepares;
+  then 60 deltas into a 32 KB reply with 282 equations, until WebKit has drawn the last, with WebKit's
+  counts. `BOTCHU_BENCHMARK_SCOPE=chat` times the
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.
+- Launching: `BOTCHU_LAUNCH_BENCHMARK=<file> swift test --configuration release --package-path macOS
+  --filter launchBenchmark` builds eight bots, forty open tasks, sixteen closed ones and a hundred
+  finished sub-agents (101 MB), opens each Home and open task once and reads the process's memory,
+  then launches 30 times (`BOTCHU_LAUNCH_SAMPLES`), timing the model, the first window, the first
+  keystroke, the shown conversation's messages and opening a conversation not shown yet, and five
+  more without indexes, as a first launch after the upgrade, with what each read, decoded, wrote and
+  copied; and writes the table to the file. It asserts nothing about time and isn't part of `check`.
+- Markdown: `BOTCHU_MARKDOWN_BENCHMARK=<file> swift test --configuration release --package-path macOS
+  --filter markdownBenchmark` times converting the next revision of prose, code, shell code with
+  `$HOME`, equation-heavy, and table-and-diagram replies of 2 to 128 KB, gives a 128 KB reply 100
+  rapid deltas (with the worker's counts and the main thread's time for each), and measures what
+  ten 128 KB replies keep, then release under memory pressure. It needs no window, asserts nothing
+  about time and isn't part of `check`.
 - Saving: `BOTCHU_PERSISTENCE_BENCHMARK=<file> swift test --configuration release --package-path macOS
   --filter persistenceBenchmark` times, for 1,500- and 5,000-message conversations and 12 MB of tool
   output, what a save costs the main thread (now, and as it was when it wrote there), how long it takes

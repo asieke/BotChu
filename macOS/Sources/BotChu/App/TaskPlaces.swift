@@ -44,9 +44,10 @@ extension AppModel {
     }
 
     /// The host a request names, by nickname, machine name or SSH destination; This Mac is nil.
-    func host(named name: String) -> Result<SSHHost?, TaskRequest.Problem> {
+    func host(named name: String) async -> Result<SSHHost?, TaskRequest.Problem> {
         let wanted = name.trimmingCharacters(in: .whitespaces)
-        if ["this mac", "mac", "local", "here", settings.thisMacName.lowercased()].contains(wanted.lowercased()) { return .success(nil) }
+        let thisMac = await settings.resolvedMacName()
+        if ["this mac", "mac", "local", "here", thisMac.lowercased()].contains(wanted.lowercased()) { return .success(nil) }
         if let host = settings.hosts.first(where: { [$0.nickname, $0.machine, $0.destination].contains { $0.caseInsensitiveCompare(wanted) == .orderedSame } }) {
             return .success(host)
         }
