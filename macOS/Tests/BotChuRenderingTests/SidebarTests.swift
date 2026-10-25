@@ -15,62 +15,44 @@ extension RenderingTests {
         model.drafts[home] = "Home draft"
         model.drafts[target] = "Task draft"
         model.show(target)
-        #expect(model.sidebarSelection == .botTask(botID: bot.id, taskID: task.id))
+        // One row per bot (#128): the bot is selected whichever of its conversations shows.
+        #expect(model.sidebarSelection == .bot(bot.id))
         model.selectSidebar(.library(.projects))
         model.unread = [target, other, home]
         #expect(model.sidebarSelection == .library(.projects))
         #expect(model.tab(of: bot.id) == target)
         #expect(model.visibleBotID == nil)
-        model.selectSidebar(.botHome(bot.id))
-        #expect(model.sidebarSelection == .botHome(bot.id))
-        #expect(model.unread == [target, other])
+        // Selecting the bot again shows the conversation it showed last, which is read.
+        model.selectSidebar(.bot(bot.id))
+        #expect(model.sidebarSelection == .bot(bot.id))
+        #expect(model.tab(of: bot.id) == target)
+        #expect(model.unread == [other, home])
         model.showTab(offset: 1, of: bot.id)
-        #expect(model.sidebarSelection == .botTask(botID: bot.id, taskID: task.id))
-        #expect(model.unread == [other])
-        model.selectSidebar(.botTask(botID: bot.id, taskID: second.id))
+        #expect(model.tab(of: bot.id) == other)
+        #expect(model.unread == [home])
+        model.showTab(offset: -2, of: bot.id)
+        #expect(model.tab(of: bot.id) == home)
         #expect(model.unread.isEmpty)
-        model.showTab(offset: -1, of: bot.id)
+        model.showTab(offset: 1, of: bot.id)
         #expect(model.tab(of: bot.id) == target)
         #expect(model.drafts[home] == "Home draft")
         #expect(model.drafts[target] == "Task draft")
+        // Another bot's selection keeps this one's tab for when it comes back.
+        model.selectSidebar(.bot(fixture.quiet.id))
+        #expect(model.tab(of: fixture.quiet.id) == .home(fixture.quiet.id))
+        model.selectSidebar(.bot(bot.id))
+        #expect(model.tab(of: bot.id) == target)
         model.closeTask(target)
-        #expect(model.sidebarSelection == .botHome(bot.id))
-        #expect(!model.sidebarStructure.taskIDs[bot.id, default: []].contains(task.id))
+        #expect(model.tab(of: bot.id) == home)
+        #expect(!model.tabs(of: bot.id).contains(target))
         model.reopenTask(target)
-        #expect(model.sidebarSelection == .botTask(botID: bot.id, taskID: task.id))
+        #expect(model.tab(of: bot.id) == target)
     }
 
-    @Test func sidebarExpansionRevealsNewTasksAndSelectionsButRespectsCollapse() throws {
-        let fixture = try SidebarFixture()
-        defer { fixture.cleanUp() }
-        let model = fixture.model, botID = fixture.bot.id
-        var expansion = SidebarExpansion()
-        expansion.update(model.sidebarStructure)
-        #expect(expansion.botIDs.contains(botID))
-        expansion.toggle(botID)
-        // Output/status changes leave structure unchanged and do not undo the owner's collapse.
-        model.runStates[.task(fixture.tasks[0].id, of: botID)] = RunState()
-        expansion.update(model.sidebarStructure)
-        #expect(!expansion.botIDs.contains(botID))
-        #expect(model.runningTaskCount(for: botID) == 1)
-        model.showTab(offset: 1, of: botID)
-        expansion.update(model.sidebarStructure)
-        #expect(expansion.botIDs.contains(botID))
-        expansion.toggle(botID)
-        let created = BotTask(repo: "fixture/new", checkout: fixture.root.path)
-        model.tasks[botID, default: []].append(created)
-        expansion.update(model.sidebarStructure)
-        #expect(expansion.botIDs.contains(botID))
-        expansion.toggle(botID)
-        // Clicking an already-selected Home row must still reopen its group.
-        expansion.reveal(.botHome(botID))
-        #expect(expansion.botIDs.contains(botID))
-        model.bots.removeAll()
-        expansion.update(model.sidebarStructure)
-        #expect(expansion.botIDs.isEmpty)
-    }
-
-    @Test func nestedSidebarShowsThreeRunningTasksAtCompactWidths() async throws {
+    /// One row per bot (#128): no task rows or disclosure arrow, at the sidebar's narrowest and
+    /// widest, light and dark, with the bot's busy conversations as dots on its second line.
+    // Selection and model changes only: no native clicks, so it can share the test process.
+    @Test func botRowsAreOneRowPerBotWithDotsAtCompactWidths() async throws {
         _ = NSApplication.shared
         let oldAppearance = NSApp.appearance
         defer { NSApp.appearance = oldAppearance }
@@ -81,13 +63,13 @@ extension RenderingTests {
             model.runStates[.task(task.id, of: bot.id)] = RunState(startedAt: now.addingTimeInterval(-335),
                                                                hasOutput: true, activity: index == 0 ? .thinking : .coding)
         }
+        model.unread.insert(.home(bot.id))
         model.show(.task(fixture.tasks[0].id, of: bot.id))
-        #expect(model.runningTaskCount(for: bot.id) == 3)
-        let status = try #require(model.status(of: model.tab(of: bot.id)))
-        #expect(SidebarTaskRow.subtitle(task: fixture.tasks[0], status: status, now: now) == "#41 · Thinking… · 5:35")
-        let row = BotRow(bot: bot, status: model.status(of: bot), selected: true,
-                         runningTasks: model.runningTaskCount(for: bot.id), openTasks: 3, isExpanded: true)
-        #expect(row.subtitle == "3 tasks running")
+        let summary = model.botRowSummary(of: bot)
+        #expect(summary.subtitle == "3 tasks running")
+        #expect(summary.dots == [.news, .working, .working, .working])
+        #expect(summary.more == 0)
+        #expect(summary.spokenDots == "3 working, 1 finished")
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 640),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -104,8 +86,11 @@ extension RenderingTests {
             window.layoutIfNeeded()
             #expect(host.bounds.width >= 210)
             let table = try #require(sidebarTable(in: host))
-            // Headers, galleries, Home, three tasks and New task all remain separate List rows.
-            #expect(table.numberOfRows >= 10)
+            // Headers, galleries and one row for each bot: none for its tasks.
+            #expect(table.numberOfRows == firstBotRow + 2)
+            // No disclosure arrow, or any other button, in the bot's row.
+            let botCell = try #require(table.view(atColumn: 0, row: firstBotRow, makeIfNecessary: false))
+            #expect(sidebarButtons(in: botCell).isEmpty)
             if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
                 let folder = URL(fileURLWithPath: path).appendingPathComponent(appearance == .aqua ? "sidebar-light" : "sidebar-dark")
                 DevHooks.snapshot(into: folder)
@@ -113,30 +98,19 @@ extension RenderingTests {
             }
         }
         let table = try #require(sidebarTable(in: host))
-        let expandedRowCount = table.numberOfRows
-        // Programmatic native selection exercises List's binding without requiring the test
-        // runner to become the active application (synthetic row clicks are ignored otherwise).
+        // Selecting a bot's row, as a click does, shows the conversation it showed last.
+        table.selectRowIndexes(IndexSet(integer: firstBotRow + 1), byExtendingSelection: false)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.sidebarSelection == .bot(fixture.quiet.id))
         table.selectRowIndexes(IndexSet(integer: firstBotRow), byExtendingSelection: false)
         try await Task.sleep(for: .milliseconds(100))
-        #expect(model.sidebarSelection == .botHome(bot.id))
-        table.selectRowIndexes(IndexSet(integer: firstBotRow + 2), byExtendingSelection: false)
+        #expect(model.sidebarSelection == .bot(bot.id))
+        #expect(model.tab(of: bot.id) == .task(fixture.tasks[0].id, of: bot.id))
+        // Switching between its conversations leaves the rows as they are.
+        model.showTab(offset: 1, of: bot.id)
         try await Task.sleep(for: .milliseconds(100))
-        #expect(model.sidebarSelection == .botTask(botID: bot.id, taskID: fixture.tasks[1].id))
-        let botCell = try #require(table.view(atColumn: 0, row: firstBotRow, makeIfNecessary: false))
-        let disclosure = try #require(sidebarButtons(in: botCell).first)
-        disclosure.performClick(nil)
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(model.sidebarSelection == .botTask(botID: bot.id, taskID: fixture.tasks[1].id))
-        #expect(table.numberOfRows == expandedRowCount - 4)
-        model.showTab(offset: -1, of: bot.id)
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(table.numberOfRows == expandedRowCount)
-        #expect(model.sidebarSelection == .botTask(botID: bot.id, taskID: fixture.tasks[0].id))
-        let newTaskCell = try #require(table.view(atColumn: 0, row: firstBotRow + 4, makeIfNecessary: false))
-        let newTask = try #require(sidebarButtons(in: newTaskCell).first)
-        newTask.performClick(nil)
-        #expect(model.taskSheet?.botID == bot.id)
-        #expect(model.sidebarSelection == .botTask(botID: bot.id, taskID: fixture.tasks[0].id))
+        #expect(table.numberOfRows == firstBotRow + 2)
+        #expect(table.selectedRow == firstBotRow)
     }
 
     // Selection and model changes only: no native clicks, so it can share the test process.
@@ -155,31 +129,26 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(250))
         let table = try #require(sidebarTable(in: host))
         let rowCount = table.numberOfRows, quietRow = rowCount - 1
-        func quietButtons() throws -> [NSButton] {
-            try sidebarButtons(in: #require(table.view(atColumn: 0, row: quietRow, makeIfNecessary: false)))
-        }
-        // No arrow, and opening its Home, as a click on the row does, reveals nothing beneath it.
-        #expect(try quietButtons().isEmpty)
+        #expect(model.botRowSummary(of: quiet).subtitle == quiet.account.name)
         table.selectRowIndexes(IndexSet(integer: quietRow), byExtendingSelection: false)
         try await Task.sleep(for: .milliseconds(100))
-        #expect(model.sidebarSelection == .botHome(quiet.id))
-        #expect(table.numberOfRows == rowCount)
-        // New Task stays one command away (⌘T and the row's menu both ask for it).
+        #expect(model.sidebarSelection == .bot(quiet.id))
+        #expect(model.tab(of: quiet.id) == .home(quiet.id))
+        // New Task stays one command away (⌘T, the toolbar and the row's menu all ask for it).
         model.newTask(for: quiet.id)
         #expect(model.taskSheet?.botID == quiet.id)
         model.taskSheet = nil
-        // Its first task brings the arrow, with the task revealed and New task beneath it.
+        // Its first task is a tab beside the chat, not a row: the row says how many it has.
         let first = BotTask(repo: "fixture/quiet", checkout: fixture.root.path)
         model.tasks[quiet.id, default: []].append(first)
         try await Task.sleep(for: .milliseconds(150))
-        #expect(table.numberOfRows == rowCount + 2)
-        #expect(try quietButtons().count == 1)
-        // Closing its last task takes the arrow and the nested rows away again.
+        #expect(table.numberOfRows == rowCount)
+        #expect(model.botRowSummary(of: quiet).subtitle == "1 task")
         model.closeTask(.task(first.id, of: quiet.id))
         try await Task.sleep(for: .milliseconds(150))
         #expect(model.openTasks(of: quiet.id).isEmpty)
         #expect(table.numberOfRows == rowCount)
-        #expect(try quietButtons().isEmpty)
+        #expect(model.botRowSummary(of: quiet).subtitle == quiet.account.name)
     }
 
     @Test func sectionsGroupBotsAndAreKeptInTheIndex() throws {
@@ -315,7 +284,7 @@ extension RenderingTests {
         // So does selecting another of a bot's conversations, as ⌃Tab does, in collapsed Conversations.
         fixture.defaults.set(BotSections.unsectioned, forKey: CollapsedSections.storageKey)
         try await Task.sleep(for: .milliseconds(150))
-        #expect(table.numberOfRows == flat - 4)
+        #expect(table.numberOfRows == flat)
         model.showTab(offset: 1, of: fixture.bot.id)
         try await Task.sleep(for: .milliseconds(150))
         #expect(table.numberOfRows == flat + 1)
@@ -367,8 +336,8 @@ extension RenderingTests {
         }
         try await name(row: table.numberOfRows - 1, item: "New Section…", in: "Move to Section", as: "  Research ")
         #expect(model.sections == [quiet.id: "Research"])
-        // Below the first bot, its three tasks and New task: Research's heading, then Scout.
-        let heading = firstBotRow + 5
+        // Below the first bot (its tasks are tabs beside the chat): Research's heading, then Scout.
+        let heading = firstBotRow + 1
         #expect(table.numberOfRows == heading + 2)
         // Rename Section… starts from its name; Escape keeps it.
         try await name(row: heading, item: "Rename Section…", from: "Research", as: "Ignored", key: ("\u{1B}", 53))

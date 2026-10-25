@@ -123,3 +123,49 @@ enum DemoActivity {
         model.runStates[target] = RunState(startedAt: now.addingTimeInterval(-620), hasOutput: true, activity: .researching)
     }
 }
+
+/// `BOTCHU_DEMO=tasks` on throwaway data (`macOS/ui-review.sh`): the selected bot gets six more
+/// open tasks, in memory only, so its tabs show every state at once (#128): two working, one
+/// starting, one making its worktree, one with news and its pull request, and one idle since
+/// yesterday, beside the seeded tasks (one finished with a pull request, one failed). Nothing is
+/// saved and no CLI runs.
+@MainActor
+enum DemoTabs {
+    static func install(in model: AppModel, botID: UUID) {
+        guard let bot = model.bot(botID) else { return }
+        let now = Date()
+        let checkout = model.openTasks(of: botID).first?.checkout ?? bot.workspace
+        func issue(_ number: Int, _ title: String, repo: String = "asieke/BotChu", pullRequest: Bool = false) -> BotTask.Work {
+            BotTask.Work(number: number, title: title, url: URL(string: "https://github.com/\(repo)/\(pullRequest ? "pull" : "issues")/\(number)")!,
+                         isPullRequest: pullRequest)
+        }
+        let samples: [(BotTask, RunState?, [ChatMessage], Bool)] = [
+            (BotTask(for: bot, repo: "asieke/BotChu", checkout: checkout,
+                     work: issue(113, "Show repository issues and their count in the Task Activity sidebar"), brief: ""),
+             RunState(startedAt: now.addingTimeInterval(-252), hasOutput: true, activity: .coding), [], false),
+            (BotTask(for: bot, repo: "asieke/GitChu", checkout: checkout, work: nil, brief: "Speed up the sync"),
+             RunState(startedAt: now.addingTimeInterval(-107), hasOutput: true, activity: .testing), [], false),
+            (BotTask(for: bot, repo: "asieke/BotChu", checkout: checkout, work: issue(109, "Load conversation history lazily at startup"), brief: ""),
+             RunState(startedAt: now.addingTimeInterval(-4)), [], false),
+            (BotTask(for: bot, repo: "asieke/BotChu", checkout: checkout,
+                     work: issue(112, "Automatically attach the current BotChu screen to bug reports"), brief: ""),
+             RunState(startedAt: now, preparing: true), [], false),
+            (BotTask(for: bot, repo: "asieke/BotChu", checkout: checkout,
+                     work: issue(105, "Please make the providers > allowance column aligned"), brief: ""),
+             nil, [ChatMessage(role: .assistant, text: "Done: the allowance windows share one column grid. Opened PR #122.", date: now.addingTimeInterval(-360))], true),
+            (BotTask(for: bot, repo: "octocat/Spoon-Knife", checkout: checkout, work: nil, brief: "Tidy the fork instructions"),
+             nil, [ChatMessage(role: .assistant, text: "Read the instructions. Ready when you are.", date: now.addingTimeInterval(-90_000))], false),
+        ]
+        for (index, sample) in samples.enumerated() {
+            var task = sample.0
+            if index == 4 { task.pullRequest = 122 }
+            let target = ChatTarget.task(task.id, of: botID)
+            model.tasks[botID, default: []].append(task)
+            model.conversation(target).replace(sample.2)
+            if let run = sample.1 { model.runStates[target] = run }
+            if sample.3 { model.unread.insert(target) }
+        }
+        // The seeded task that opened a pull request has news too.
+        if let first = model.openTasks(of: botID).first { model.unread.insert(.task(first.id, of: botID)) }
+    }
+}

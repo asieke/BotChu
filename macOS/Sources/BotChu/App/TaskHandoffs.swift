@@ -2,7 +2,7 @@ import Foundation
 import BotChuCore
 
 /// Tasks one conversation hands to a bot with `botchu-task create` (#111): an independent Task under
-/// that bot, in the left sidebar, on its identity and account, which goes on whatever becomes of
+/// that bot, a tab beside its chat, on its identity and account, which goes on whatever becomes of
 /// the conversation that asked. A sub-agent run (`SubagentRuntime`) is the other kind of handoff.
 extension AppModel {
     struct Handoff {

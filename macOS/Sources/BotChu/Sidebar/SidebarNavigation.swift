@@ -1,78 +1,64 @@
 import Foundation
 import BotChuCore
 
-/// Sidebar navigation points at conversations, while galleries preserve the remembered one.
+/// Sidebar navigation points at a gallery or a bot, one row per bot (#128); galleries keep the
+/// conversation shown, and a bot shows the one of its conversations it showed last.
 enum SidebarDestination: Hashable {
     case library(LibraryDestination)
-    case botHome(UUID)
-    case botTask(botID: UUID, taskID: UUID)
+    case bot(UUID)
 
     var botID: UUID? {
         switch self {
         case .library: nil
-        case .botHome(let id), .botTask(let id, _): id
+        case .bot(let id): id
         }
-    }
-}
-
-/// Only structural changes affect expansion; streaming output never reopens a collapsed group.
-struct SidebarStructure: Equatable {
-    var botIDs: [UUID]
-    var taskIDs: [UUID: [UUID]]
-    var selection: SidebarDestination?
-}
-
-struct SidebarExpansion {
-    private(set) var botIDs: Set<UUID> = []
-    private var previous: SidebarStructure?
-
-    mutating func update(_ structure: SidebarStructure) {
-        botIDs.formIntersection(structure.botIDs)
-        for id in structure.botIDs {
-            let tasks = structure.taskIDs[id, default: []]
-            if previous == nil || !Set(tasks).isSubset(of: Set(previous?.taskIDs[id] ?? [])) {
-                if !tasks.isEmpty { botIDs.insert(id) }
-            }
-        }
-        if previous == nil || previous?.selection != structure.selection,
-           let id = structure.selection?.botID, structure.botIDs.contains(id) {
-            botIDs.insert(id)
-        }
-        previous = structure
-    }
-
-    mutating func toggle(_ id: UUID) {
-        if !botIDs.insert(id).inserted { botIDs.remove(id) }
-    }
-
-    mutating func reveal(_ destination: SidebarDestination) {
-        if let id = destination.botID { botIDs.insert(id) }
     }
 }
 
 extension AppModel {
     var sidebarSelection: SidebarDestination? {
         if let destination { return .library(destination) }
-        guard let selection else { return nil }
-        let target = tab(of: selection)
-        return target.taskID.map { .botTask(botID: selection, taskID: $0) } ?? .botHome(selection)
-    }
-
-    var sidebarStructure: SidebarStructure {
-        SidebarStructure(botIDs: bots.map(\.id),
-                         taskIDs: Dictionary(uniqueKeysWithValues: bots.map { ($0.id, openTasks(of: $0.id).map(\.id)) }),
-                         selection: sidebarSelection)
+        return selection.map { .bot($0) }
     }
 
     func selectSidebar(_ destination: SidebarDestination) {
         switch destination {
         case .library(let library): self.destination = library
-        case .botHome(let id): show(.home(id))
-        case .botTask(let botID, let taskID): show(.task(taskID, of: botID))
+        case .bot(let id): show(tab(of: id))
         }
     }
 
-    func runningTaskCount(for botID: UUID) -> Int {
-        openTasks(of: botID).filter { isRunning(.task($0.id, of: botID)) }.count
+    /// The bot's conversations in their tabs' order: Home, then its open tasks, as they were opened.
+    func tabs(of botID: UUID) -> [ChatTarget] {
+        [.home(botID)] + openTasks(of: botID).map { .task($0.id, of: botID) }
+    }
+
+    /// How a conversation is doing, as its tab's dot and second line say it (#128).
+    func tabState(of target: ChatTarget) -> TabState {
+        guard let status = status(of: target) else { return .idle(since: nil) }
+        return TabState(status: status, unread: unread.contains(target), pullRequest: task(target)?.pullRequest)
+    }
+
+    /// What a conversation's tab says.
+    func conversationTab(of target: ChatTarget) -> ConversationTab? {
+        if let task = task(target) {
+            return ConversationTab(task: task, machine: task.isRemote ? machineName(task.hostID, fallback: task.hostName) : nil,
+                                   state: tabState(of: target))
+        }
+        guard target.taskID == nil, let bot = bot(target.botID) else { return nil }
+        return .home(account: bot.account.name, state: tabState(of: target))
+    }
+
+    /// The bot's row in the bot list: a dot for each conversation that isn't idle, and what it does.
+    func botRowSummary(of bot: Bot) -> BotRowSummary {
+        BotRowSummary(account: bot.account.name, home: tabState(of: .home(bot.id)),
+                      tasks: openTasks(of: bot.id).map { ($0, tabState(of: .task($0.id, of: bot.id))) })
+    }
+
+    /// Shows the bot's conversation at `index` in its tabs (⌘1 for Home, ⌘2 to ⌘9 for its tasks).
+    func showTab(at index: Int, of botID: UUID) {
+        let tabs = tabs(of: botID)
+        guard tabs.indices.contains(index) else { return }
+        show(tabs[index])
     }
 }

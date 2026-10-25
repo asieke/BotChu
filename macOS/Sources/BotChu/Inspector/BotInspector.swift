@@ -17,7 +17,7 @@ struct BotInspector: View {
             } content: { tab in
                 switch tab {
                 case .activity:
-                    TasksSection(botID: botID)
+                    ClosedTasksSection(botID: botID)
                     RunReviewsSection(target: .home(botID))
                     JobsSection(botID: botID)
                     InspectorSection("Conversation") {
@@ -275,70 +275,50 @@ struct CopyButton: View {
     }
 }
 
-/// Home's list of the bot's tasks: each open one, to show its tab, and the closed ones to reopen.
-struct TasksSection: View {
+/// Home's closed tasks, to open again: the open ones are the tabs beside the chat (#128). Collapsed
+/// at first, with their count; nothing while none is closed.
+struct ClosedTasksSection: View {
     @Environment(AppModel.self) private var model
     let botID: UUID
 
     var body: some View {
-        let open = model.openTasks(of: botID)
-        let closed = model.closedTasks(of: botID)
-        InspectorSection("Tasks", trailing: open.isEmpty ? nil : "\(open.count) open") {
-            if !open.isEmpty {
+        let closed = model.closedTasks(of: botID).reversed()
+        if !closed.isEmpty {
+            InspectorSection("Closed tasks", trailing: "\(closed.count)", expandedByDefault: false) {
                 InspectorCard {
-                    ForEach(Array(open.enumerated()), id: \.element.id) { index, task in
-                        TaskRow(target: .task(task.id, of: botID), task: task, last: index == open.count - 1)
-                    }
-                }
-            }
-            HStack(spacing: 8) {
-                Button { model.newTask(for: botID) } label: {
-                    Label("New Task…", systemImage: "plus")
-                }
-                .help("Start a task in a repository, in its own workspace and tab (⌘T)")
-                if !closed.isEmpty {
-                    Menu {
-                        ForEach(closed.reversed()) { task in
-                            Button(task.title) { model.reopenTask(.task(task.id, of: botID)) }
+                    ForEach(Array(closed.enumerated()), id: \.element.id) { index, task in
+                        ClosedTaskRow(task: task, last: index == closed.count - 1) {
+                            model.reopenTask(.task(task.id, of: botID))
                         }
-                    } label: {
-                        Label("Closed (\(closed.count))", systemImage: "archivebox")
                     }
-                    .menuIndicator(.hidden)
-                    .help("Open a closed task again")
                 }
             }
-            .buttonStyle(InspectorButtonStyle(fill: true))
         }
     }
 }
 
-/// An open task in Home's list: its light, title and repository.
-struct TaskRow: View {
-    @Environment(AppModel.self) private var model
-    let target: ChatTarget
+/// A closed task in Home's list: its repository and number, and what it was about; a click opens
+/// it again.
+struct ClosedTaskRow: View {
     let task: BotTask
     let last: Bool
+    let reopen: () -> Void
 
     var body: some View {
-        let status = model.status(of: target)
-        Button { model.show(target) } label: {
+        let tab = ConversationTab(task: task, machine: nil, state: .idle(since: nil))
+        Button(action: reopen) {
             HStack(spacing: 10) {
-                Circle()
-                    .fill(color(status))
-                    .frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(task.title)
+                    Text(tab.title)
                         .font(.system(size: 13, weight: .medium))
                         .lineLimit(1)
-                    Text(detail(status))
+                    Text(tab.subject)
                         .font(.system(size: 11))
                         .foregroundStyle(Palette.secondaryText)
                         .lineLimit(1)
-                        .truncationMode(.middle)
                 }
                 Spacer(minLength: 4)
-                Image(systemName: "chevron.right")
+                Image(systemName: "arrow.uturn.backward")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Palette.secondaryText)
             }
@@ -350,21 +330,7 @@ struct TaskRow: View {
         .overlay(alignment: .bottom) {
             if !last { Rectangle().fill(Palette.rowDivider).frame(height: 1) }
         }
-        .help("Show \(task.title)")
-    }
-
-    private func color(_ status: BotStatus?) -> Color {
-        if status?.phase.isActive == true { return StatusLook.working.dot }
-        if status?.phase == .failed { return StatusLook.error.dot }
-        if model.unread.contains(target) { return .accentColor }
-        return StatusLook.idle.dot
-    }
-
-    /// The repository (and its host), and how the task is doing.
-    private func detail(_ status: BotStatus?) -> String {
-        let repo = task.repoName + (task.isRemote ? " on \(model.machineName(task.hostID, fallback: task.hostName))" : "")
-        if let status, status.phase != .idle { return "\(repo) · \(status.label)" }
-        return repo
+        .help("Open \(task.title) again")
     }
 }
 
@@ -477,12 +443,13 @@ struct InspectorSection<Content: View>: View {
     @ViewBuilder let content: Content
     @AppStorage private var expanded: Bool
 
-    init(_ title: String, trailing: String? = nil, preferenceKey: String? = nil, spoken: String? = nil, @ViewBuilder content: () -> Content) {
+    init(_ title: String, trailing: String? = nil, preferenceKey: String? = nil, spoken: String? = nil, expandedByDefault: Bool = true,
+         @ViewBuilder content: () -> Content) {
         self.title = title
         self.trailing = trailing
         self.spoken = spoken
         self.content = content()
-        _expanded = AppStorage(wrappedValue: true, "inspector.expanded.\(preferenceKey ?? title)")
+        _expanded = AppStorage(wrappedValue: expandedByDefault, "inspector.expanded.\(preferenceKey ?? title)")
     }
 
     var body: some View {
@@ -675,21 +642,5 @@ enum Palette {
             return NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
                            blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
         })
-    }
-}
-
-extension BotActivity {
-    /// What the bot is doing, as the status card's line says it.
-    var doing: String {
-        switch self {
-        case .idle, .greeting, .done: "Wrapping up…"
-        case .thinking: "Thinking…"
-        case .researching: "Reading files…"
-        case .browsing: "Searching the web…"
-        case .coding: "Editing code…"
-        case .testing: "Running checks…"
-        case .working: "Running a tool…"
-        case .failed: "Hit a problem…"
-        }
     }
 }

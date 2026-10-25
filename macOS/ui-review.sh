@@ -16,6 +16,9 @@
 #                                          # ({down}, {up}, {tab}, {return}, {escape} press those)
 #   BOTCHU_OPEN=agents BOTCHU_SEARCH=res macOS/ui-review.sh  # open Agents with that search
 #   BOTCHU_DEMO=activity BOTCHU_TAB=1 macOS/ui-review.sh  # that tab as a long agent run (in memory)
+#   BOTCHU_DEMO=tasks BOTCHU_WINDOW=wide BOTCHU_TAB=3 macOS/ui-review.sh
+#                                          # six more tasks in memory, a tab in every state, in the
+#                                          # column beside the chat (BOTCHU_WINDOW=compact: the rail)
 #   BOTCHU_FAKE_HOST=1 BOTCHU_TASK="hello-world|<task>|Far Mac" macOS/ui-review.sh
 #                                          # a task on a host, "Far Mac", whose ssh is a stand-in that
 #                                          # runs the command here, in $data/far (a real turn)
