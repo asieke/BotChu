@@ -472,12 +472,15 @@ struct BotFace: View {
 struct InspectorSection<Content: View>: View {
     let title: String
     var trailing: String?
+    /// What VoiceOver reads for the heading, when the title and note don't say it well.
+    var spoken: String?
     @ViewBuilder let content: Content
     @AppStorage private var expanded: Bool
 
-    init(_ title: String, trailing: String? = nil, preferenceKey: String? = nil, @ViewBuilder content: () -> Content) {
+    init(_ title: String, trailing: String? = nil, preferenceKey: String? = nil, spoken: String? = nil, @ViewBuilder content: () -> Content) {
         self.title = title
         self.trailing = trailing
+        self.spoken = spoken
         self.content = content()
         _expanded = AppStorage(wrappedValue: true, "inspector.expanded.\(preferenceKey ?? title)")
     }
@@ -498,8 +501,21 @@ struct InspectorSection<Content: View>: View {
             }
             .foregroundStyle(Palette.secondaryText)
             .padding(.horizontal, 4)
+            .modifier(SpokenHeading(text: spoken))
         }
         .disclosureGroupStyle(InspectorDisclosureStyle())
+    }
+}
+
+private struct SpokenHeading: ViewModifier {
+    let text: String?
+
+    func body(content: Content) -> some View {
+        if let text {
+            content.accessibilityElement(children: .ignore).accessibilityLabel(text)
+        } else {
+            content
+        }
     }
 }
 

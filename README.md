@@ -641,7 +641,16 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and launches; its data always belongs to the shown Home or task. The character, tabs and bottom
     actions stay visible while the selected area's content scrolls. Home keeps Edit and New Session;
     tasks keep Close Task and New Session. Task Activity includes the repository, computer and
-    linked issue. Home and task accounts can change in Model & Usage; Session keeps Finder, Terminal and
+    linked issue, then the repository's open issues, from the saved Projects catalog: **Issues · N**,
+    GitHub's count of its open issues (pull requests aside), which stays in the heading when the
+    section is collapsed, then the five most recently updated, each a number and title that opens it
+    in the Projects sidebar, **View All Issues** (with the count when there are more), which opens
+    the repository's Issues there, and Refresh, which syncs Projects. Going to Projects keeps the task
+    and its draft to come back to. Until the count is read, the heading says why instead (reading,
+    not read, couldn't read, or unavailable for a repository `gh` doesn't list), never zero; an empty
+    repository shows **No open issues**, and a sync that fails keeps what was read, marked not
+    updated, with why, and Refresh tries again. Showing it checks the catalog is current, at most
+    every two minutes, like Projects. Home and task accounts can change in Model & Usage; Session keeps Finder, Terminal and
     remote SSH controls. Branch names, review commits, generated pull request metadata and task
     authorship are managed internally and omitted from the task form, cards, headers, sidebar tooltips
     and new automatic progress notes. Explicitly choosing a pull request to continue or review is
@@ -765,7 +774,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     the saved Projects catalog, what a sync reads again and how it takes the answers, GitHub's REST
     answers, and the projects offline readers such as completion see (`ProjectCatalog.swift`), and the
     sync that keeps it on disk and in step with GitHub, with its ETags, probes, bounded requests and
-    coalesced refreshes (`ProjectSync.swift`),
+    coalesced refreshes (`ProjectSync.swift`), a repository's open issues at a glance as a task's
+    Activity shows them, from that catalog (`IssuePreview.swift`),
     an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store, with
     the index saved whole or a failure to show (`Store.swift`), with conversations' files read without losing
     what can't be read (`Transcript.swift`), the writer that saves files off the main thread, each
@@ -808,7 +818,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished runs to run reviews, `Evaluations.swift`),
     `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
-    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
+    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
     the hosts and Telegram), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
@@ -870,7 +880,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     itself, pausing, resuming and editing that never make up time, Run Now while paused, failures
     that pause a job, the history's bounds, crash recovery, jobs moving with their agent, a run's
     context (its agent, when it was meant for, how late, no Home), its fresh session, and quiet,
-    empty and failed results; and run reviews, with stand-in reviewers (no test
+    empty and failed results; a task's glance at its repository's open issues: GitHub's count
+    whatever the preview and the read list hold, pull requests left out, loading, not read,
+    unavailable, zero and kept after a failed read, and another repository's answer never showing
+    under the one switched to; and run reviews, with stand-in reviewers (no test
     runs a real review): the bounded snapshot of finished, failed and stopped runs, and labels and
     tags in a run's text that can't pass for its own, handing a run over without waiting, one review
     despite repeated ends and relaunches, a review cut short by quitting, no-change outcomes, which
@@ -920,8 +933,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     text that opens nothing, links kept through copy and paste, a message's
     links and their context through sending, and the report and New Task boxes without it, a job
     made for its agent, shown in Jobs, delivered to Home as a receipt that leaves Home's draft and
-    queue alone, and deleted with its agent, and a sub-agent's handoff and a task's receipt that
-    don't wait for their run reviews; and, with writes slowed to 250 ms each or failing: a turn that
+    queue alone, and deleted with its agent, a sub-agent's handoff and a task's receipt that
+    don't wait for their run reviews, and a task's Activity listing its repository's open issues:
+    one or all opened in Projects and back to the task with its draft, switching tasks, a failed
+    refresh keeping what was read, and no GitHub request from showing or updating it; and, with writes slowed to 250 ms each or failing: a turn that
     starts only once its message is saved, sending and Stop that never wait for a write, a message
     that can't be queued coming back to the composer, typing and switching while four conversations
     save, quitting through the real notification waiting for writes and saying which it couldn't,
@@ -937,8 +952,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
-    `activityChatRendersGroupsCardsAndLiveWork`, `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`, or
-    `jobsBelongToTheirAgentAndReachHomeOnlyAsReceipts`)
+    `activityChatRendersGroupsCardsAndLiveWork`, `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`,
+    `jobsBelongToTheirAgentAndReachHomeOnlyAsReceipts`, or `taskActivityShowsItsRepositorysOpenIssues`)
     to render isolated gallery/table (sidebar, chat, or Agents' sections, wide and narrow) screenshots
     with sample data. These
     share a serialized suite because AppKit
