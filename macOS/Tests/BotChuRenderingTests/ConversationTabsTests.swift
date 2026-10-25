@@ -232,6 +232,33 @@ extension RenderingTests {
         #expect(model.destination == .agents && model.tab(of: bot.id) == home)
     }
 
+    /// A task's tab keeps the task's menu: its issue, branch, folder and Terminal, New Session and
+    /// Close Task; Home's has New Session. Menus need no clicks (`menu(for:)`).
+    @Test func conversationTabsKeepTheTaskMenu() async throws {
+        _ = NSApplication.shared
+        let fixture = try TabsFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let host = NSHostingView(rootView: ConversationSplit(botID: bot.id) { Color.clear }
+            .environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(300))
+        let task = try tabMenu(at: NSPoint(x: 120, y: 124), in: host)
+        #expect(task.items.map(\.title) == ["Open Issue #41", "Copy Branch Name", "Show Task Folder in Finder", "Open Task in Terminal", "",
+                                            "New Session", "Close Task"])
+        // Its worktree isn't made yet.
+        #expect(task.items.filter { !$0.isEnabled }.map(\.title) == ["Show Task Folder in Finder", "Open Task in Terminal"])
+        let home = try tabMenu(at: NSPoint(x: 120, y: 33), in: host)
+        #expect(home.items.map(\.title) == ["New Session"])
+        task.performActionForItem(at: task.indexOfItem(withTitle: "Close Task"))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(model.openTasks(of: bot.id).map(\.id) == [fixture.tasks[1].id, fixture.tasks[2].id])
+    }
+
     /// Home's status sidebar lists only closed tasks, to open again: none while none is closed.
     @Test func homeStatusListsOnlyClosedTasks() async throws {
         _ = NSApplication.shared
@@ -266,6 +293,19 @@ extension RenderingTests {
         visit(content)
         let chat = try #require(widest)
         return max(0, chat.convert(chat.bounds, to: nil).minX - sidebar.convert(sidebar.bounds, to: nil).maxX)
+    }
+
+    /// The context menu a right click at a point (from the host's top-left corner) shows, as AppKit
+    /// asks the views under the pointer for it.
+    private func tabMenu(at point: NSPoint, in host: NSView) throws -> NSMenu {
+        let event = mouseEvent(.rightMouseDown, at: point, in: host)
+        var view = host.hitTest(host.convert(event.locationInWindow, from: nil))
+        var menu: NSMenu?
+        while let current = view, menu == nil {
+            menu = current.menu(for: event)
+            view = current.superview
+        }
+        return try #require(menu)
     }
 
     private func settle(_ window: NSWindow) async throws {
