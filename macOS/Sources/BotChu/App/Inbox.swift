@@ -14,6 +14,8 @@ final class InboxModel {
     /// Every delivery, by ID.
     private(set) var deliveries: [UUID: Delivery] = [:]
     private(set) var state = InboxState()
+    /// Whether the deliveries have been read from the bots' folders.
+    private(set) var isLoaded = false
     /// The delivery chosen in the Inbox's list, kept while other pages show.
     var selected: UUID?
     /// Whether the Inbox's page is showing, so the selected delivery is being read.
@@ -60,6 +62,8 @@ final class InboxModel {
     private func loaded(_ found: [UUID: Delivery]) {
         // What arrived meanwhile is newer than what was read.
         deliveries = found.merging(deliveries) { _, new in new }
+        isLoaded = true
+        model?.notifier?.inboxLoaded()
     }
 
     // MARK: Arriving
@@ -99,6 +103,7 @@ final class InboxModel {
         state[delivery.id] = entry
         saveState()
         if existing == nil {
+            model.notifier?.arrived(delivery)
             if model.isRunning(target) {
                 cards[target, default: []].append(delivery.id)
             } else {

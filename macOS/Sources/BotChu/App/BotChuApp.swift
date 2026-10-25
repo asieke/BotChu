@@ -12,6 +12,7 @@ struct BotChuApp: App {
         WindowGroup("BotChu", id: "main") {
             ContentView()
                 .environment(model)
+                .inboxNotifications(model)
                 // The saved Projects catalog shows at once; this syncs it with GitHub behind it.
                 .task { await model.loadProjects() }
         }
