@@ -165,7 +165,12 @@ final class AppModel {
     @ObservationIgnored var windowCapture = DevHooks.windowCapture
     var openingReport = false
     let settings: AppSettings
+    /// Every profile's allowance, saved between launches (`usage.json`).
     let usage: UsageCache
+    /// What Providers shows of it, kept current in the background in the app itself, so the table
+    /// opens on numbers instead of checking.
+    let usageBoard = ProviderUsageBoard()
+    @ObservationIgnored private var usageWatch: Task<Void, Never>?
     /// Usage views inject this lookup in tests so they never read the owner's Keychain.
     let openRouterKey: @MainActor () -> String?
     let modelCatalog = ModelCatalog()
@@ -251,7 +256,8 @@ final class AppModel {
         projectSync = ProjectSync(file: self.store.root.appendingPathComponent("projects.json"), client: ProjectSync.Client(
             gh: { await projectGitHub.gh($0) }, record: { try await projectGitHub.record(repo: $0) }, openWork: openWorkLookup))
         self.settings = settings ?? AppSettings()
-        self.usage = usage ?? DevHooks.usageFetch.map { UsageCache(fetch: $0) } ?? UsageCache()
+        self.usage = usage ?? UsageCache(fetch: DevHooks.usageFetch ?? { try await ProviderUsageClient.read($0, openRouterKey: $1) },
+                                         file: self.store.root.appendingPathComponent("usage.json"))
         self.openRouterKey = openRouterKey
         self.store.migrateIfNeeded()
         let loaded = self.store.loadBots()
@@ -281,6 +287,15 @@ final class AppModel {
         }
         // Reviews spend the accounts' allowance: only the real app runs them by itself.
         evaluator = makeEvaluator(runner: store == nil && DevHooks.dataDir == nil ? evaluationRunner ?? liveEvaluationRunner() : evaluationRunner)
+        // Usage checks run the profiles' CLIs: only the real app, or a review copy with sample usage, checks by itself.
+        if store == nil && (DevHooks.dataDir == nil || DevHooks.usageFetch != nil) {
+            usageWatch = Task { [weak self] in
+                while !Task.isCancelled {
+                    self?.refreshUsageInBackground()
+                    do { try await Task.sleep(for: .seconds(60)) } catch { break }
+                }
+            }
+        }
         delegation = SubagentRuntime(model: self, root: (store != nil || DevHooks.dataDir != nil)
             ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot, archive: SubagentArchive(storage: storage))
         telegram = TelegramBridge(model: self, stateURL: self.store.root.appendingPathComponent("telegram.json"))
@@ -296,6 +311,19 @@ final class AppModel {
         evaluationRecords = evaluator.records
         // Follow-ups left queued when BotChu quit go out on their own, unless Stop or a failure
         // paused them, once their own conversation is recovered (`recovered`), after the window is up.
+    }
+
+    /// Every profile's usage request, as Providers and the background checks make them.
+    var usageRequests: [UsageRequest] {
+        settings.accounts.map { UsageRequest(account: $0, command: settings.command(for: $0), credentialRevision: settings.usageCredentialRevision) }
+    }
+
+    /// Checks each profile whose reading is older than its background interval, each on its own,
+    /// so a slow CLI holds up no other.
+    private func refreshUsageInBackground() {
+        for request in usageRequests {
+            Task { await usageBoard.refresh(request, usage: usage, openRouterKey: openRouterKey, background: true) }
+        }
     }
 
     func bot(_ id: UUID) -> Bot? { bots.first { $0.id == id } }
@@ -1083,9 +1111,9 @@ final class AppModel {
     }
 
     /// `send`, returning once the message's save is done: whether a saved queue holds it.
-    func sendAccepted(_ text: String, to target: ChatTarget, id: UUID = UUID()) async -> Bool {
+    func sendAccepted(_ text: String, to target: ChatTarget, id: UUID = UUID(), references: [MessageReference] = []) async -> Bool {
         await withCheckedContinuation { continuation in
-            let started = send(text, to: target, id: id) { continuation.resume(returning: $0) }
+            let started = send(text, to: target, id: id, references: references) { continuation.resume(returning: $0) }
             if !started { continuation.resume(returning: false) }
         }
     }

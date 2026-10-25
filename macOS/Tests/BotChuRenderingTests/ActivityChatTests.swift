@@ -35,13 +35,11 @@ extension RenderingTests {
                 DevHooks.snapshot(into: snapshots.appendingPathComponent(name))
                 // And the start of the run, above the window.
                 if let scroll = Self.chatScrollView(in: window.contentView!) {
-                    let bottom = scroll.contentView.bounds.origin
-                    scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
-                    scroll.reflectScrolledClipView(scroll.contentView)
+                    let bottom = scroll.contentView.bounds.minY
+                    Self.dragScroller(scroll, to: 0)
                     try await Task.sleep(for: .milliseconds(200))
                     DevHooks.snapshot(into: snapshots.appendingPathComponent(name + "-top"))
-                    scroll.contentView.scroll(to: bottom)
-                    scroll.reflectScrolledClipView(scroll.contentView)
+                    Self.dragScroller(scroll, to: bottom)
                     try await Task.sleep(for: .milliseconds(100))
                 }
             }
@@ -93,8 +91,7 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(200))
         #expect(below() < 40)
         // Reading earlier content: the place stays as the reply goes on.
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: 300))
-        scroll.reflectScrolledClipView(scroll.contentView)
+        Self.dragScroller(scroll, to: 300)
         try await Task.sleep(for: .milliseconds(200))
         let held = scroll.contentView.bounds.minY
         for i in 0..<12 {
@@ -243,13 +240,20 @@ extension RenderingTests {
     let app: AppModel
     let task: ChatTarget
 
-    init() throws {
+    /// `script`: a stand-in CLI, in Python, that the bot's turns run (on Codex Dev).
+    init(script: String? = nil) throws {
         let store = Store(root: root.appendingPathComponent("index"))
         let settings = AppSettings(defaults: UserDefaults(suiteName: domain)!)
         settings.botsRoot = root.appendingPathComponent("bots").path
-        let bot = Bot(name: "Scout", emoji: "🔭", accountID: "claude-dev", workspace: root.appendingPathComponent("bot").path)
+        let bot = Bot(name: "Scout", emoji: "🔭", accountID: script == nil ? "claude-dev" : "codex-dev", workspace: root.appendingPathComponent("bot").path)
         let home = BotHome(workspace: bot.workspace)
         try home.save(bot)
+        if let script {
+            let file = root.appendingPathComponent("cli.py")
+            try FileManager.default.createDirectory(at: root.appendingPathComponent("repo"), withIntermediateDirectories: true)
+            try script.write(to: file, atomically: true, encoding: .utf8)
+            settings.commands[bot.accountID] = "/usr/bin/python3 \(Shell.quote(file.path))"
+        }
         var task = BotTask(for: bot, repo: "octocat/hello-world", checkout: root.path, work: nil, brief: "Find why switching is slow")
         task.folder = root.appendingPathComponent("repo").path
         try home.save(task)

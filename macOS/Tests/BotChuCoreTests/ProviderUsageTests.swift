@@ -82,14 +82,19 @@ import Testing
         #expect(four.shown.map(\.percentText) == ["24%", "—", "0%", "—"])
         #expect(four.shown.map(\.reset) == [resetsAt.formatted(.dateTime.weekday(.abbreviated).hour().minute()),
                                             "Reset passed", "No scheduled reset", "—"])
+        // A reset at a known time also comes as its weekday and time apart, so times line up.
+        #expect(four.shown.map(\.resetDay) == [resetsAt.formatted(.dateTime.weekday(.abbreviated)), nil, nil, nil])
+        #expect(four.shown.map(\.resetTime) == [resetsAt.formatted(.dateTime.hour().minute()), nil, nil, nil])
         let five = ProviderUsage(windows: windows + [UsageWindow(id: "e", title: "Extra", usedPercent: 1)]).lines(at: now)
         #expect(five.shown.map(\.id) == ["a", "b", "c"]) // the fourth line says how many more
         #expect(five.more == 2)
     }
 
     @Test func lineWidthsAreTheWidestOfEveryRow() {
+        let resetsAt = now.addingTimeInterval(7_200)
         let claude = ProviderUsage(windows: [UsageWindow(id: "a", title: "5-hour", usedPercent: 0, resetDescription: "Sat"),
-                                             UsageWindow(id: "b", title: "Weekly", usedPercent: 54, resetsAt: now)]).lines(at: now).shown
+                                             UsageWindow(id: "b", title: "Weekly", usedPercent: 54, resetsAt: now),
+                                             UsageWindow(id: "d", title: "Weekly", usedPercent: 54, resetsAt: resetsAt)]).lines(at: now).shown
         let google = ProviderUsage(windows: [UsageWindow(id: "c", title: "Claude & GPT · 5-hour", usedPercent: 100)]).lines(at: now).shown
         var parts: [UsageLine.Part: Set<String>] = [:]
         let widths = UsageLineWidths(claude + google) { text, part in
@@ -97,11 +102,101 @@ import Testing
             return Double(text.count) * (part == .title ? 6.5 : 6)
         }
         // Each part is measured in its own font, and rounded up to whole points.
-        #expect(parts == [.title: ["5-hour", "Weekly", "Claude & GPT · 5-hour"], .percent: ["0%", "—", "100%"], .reset: ["Sat", "Reset passed", "—"]])
-        #expect(widths == UsageLineWidths(title: 137, percent: 24, reset: 72))
+        let day = resetsAt.formatted(.dateTime.weekday(.abbreviated)), time = resetsAt.formatted(.dateTime.hour().minute())
+        #expect(parts == [.title: ["5-hour", "Weekly", "Claude & GPT · 5-hour"], .percent: ["0%", "54%", "—", "100%"],
+                          .day: [day], .time: [time], .reset: ["Sat", "Reset passed", "—"]])
+        #expect(widths == UsageLineWidths(title: 137, percent: 24, day: Double(day.count * 6), time: Double(time.count * 6), resetText: 72))
+        // A reset is as wide as the widest weekday and time, or words, whichever is wider.
+        #expect(widths.reset == max(Double((day.count + time.count) * 6) + UsageLineWidths.dayGap, 72))
+        #expect(UsageLineWidths(title: 10, resetText: 30).reset == 30)
         #expect(UsageLineWidths([], measure: { _, _ in 10 }) == UsageLineWidths())
         let long = ProviderUsage(windows: [UsageWindow(id: "x", title: String(repeating: "Long ", count: 60), usedPercent: 1)]).lines(at: now).shown
         #expect(UsageLineWidths(long, measure: { text, _ in Double(text.count) * 6 }).title == UsageLineWidths.maxTitle)
+    }
+
+    @Test func linesGiveTheirBarsTheWidthLeft() {
+        let widths = UsageLineWidths(title: 120, percent: 30, day: 26, time: 60, resetText: 0)
+        let spacing = UsageLineLayout.spacing
+        // Wide: the title, the share used, the bar in all that is left, and the reset at the end.
+        let wide = UsageLineLayout(width: 900, widths: widths)
+        #expect(wide.title == .init(x: 0, width: 120))
+        #expect(wide.percent == .init(x: 120 + spacing, width: 30))
+        #expect(wide.reset == .init(x: 900 - 90, width: 90))
+        #expect(wide.bar == .init(x: 150 + 2 * spacing, width: 900 - 90 - spacing - (150 + 2 * spacing)))
+        // Every extra point goes to the bar.
+        #expect(UsageLineLayout(width: 1_200, widths: widths).bar.width == wide.bar.width + 300)
+        // Just enough for the reset beside a shortest bar, then not: the reset goes first.
+        let fits = 120 + 30 + UsageLineLayout.minimumBar + 90 + 3 * spacing
+        #expect(UsageLineLayout(width: fits, widths: widths).bar.width == UsageLineLayout.minimumBar)
+        let narrow = UsageLineLayout(width: fits - 1, widths: widths)
+        #expect(narrow.reset == nil)
+        #expect(narrow.title.width == 120)
+        #expect(narrow.bar.x + narrow.bar.width == fits - 1)
+        // Narrower still, the title is cut short, never the bar below its shortest.
+        let tight = UsageLineLayout(width: 200, widths: widths)
+        #expect(tight.title.width == 200 - 30 - UsageLineLayout.minimumBar - 2 * spacing)
+        #expect(tight.bar.width == UsageLineLayout.minimumBar)
+        #expect(UsageLineLayout(width: 0, widths: widths).title.width == 0)
+        #expect(UsageLineLayout.idealWidth(widths) == 120 + 30 + UsageLineLayout.idealBar + 90 + 3 * spacing)
+    }
+
+    @Test func providersColumnsGiveTheAllowanceTheRest() {
+        // The compact window, the default one, and the 1,908-point one #134 was filed from.
+        let compact = ProvidersColumns(width: 580), regular = ProvidersColumns(width: 946), wide = ProvidersColumns(width: 1_614)
+        #expect([compact.size, regular.size, wide.size] == [.compact, .regular, .wide])
+        for (columns, width) in [(compact, 580.0), (regular, 946), (wide, 1_614)] {
+            #expect(columns.allowance(in: width) > max(columns.provider, columns.command, columns.updated))
+        }
+        // Never wider than the table, at any width: each size's columns leave the allowance its
+        // shortest where that size begins.
+        for width in stride(from: ProvidersColumns.minimumWidth, through: 2_400, by: 1) {
+            let columns = ProvidersColumns(width: width)
+            #expect(columns.provider + columns.command + columns.updated + ProvidersColumns.minimumAllowance + ProvidersColumns.chrome <= width)
+        }
+        // Within a size, every extra point is the allowance's.
+        #expect(wide.allowance(in: 1_614) == 1_614 - ProvidersColumns.chrome - 590)
+        #expect(ProvidersColumns(width: 2_000) == wide)
+        #expect(wide.allowance(in: 2_000) - wide.allowance(in: 1_614) == 386)
+        // Wider tables give the name and command more room.
+        #expect(compact.provider < regular.provider && regular.provider < wide.provider)
+        #expect(compact.command < regular.command && regular.command < wide.command)
+    }
+
+    @Test func creditsAndFreeResets() throws {
+        let codex = try UsageParser.codex(UsageSamples.codexCredits, now: now)
+        #expect(codex.windows.map(\.title) == ["Weekly"])
+        #expect(codex.credits == UsageCredits(available: true, balance: 1_234.56789))
+        #expect(codex.resets == UsageResets(available: 2, expiries: [Date(timeIntervalSince1970: 1_793_299_644), Date(timeIntervalSince1970: 1_794_007_201)]))
+        let badges = codex.badges(at: now)
+        #expect(badges.map(\.kind) == [.credits, .resets])
+        #expect(badges.map(\.text) == ["\(1_234.0.formatted(.number.precision(.fractionLength(0)))) credits", "2 free resets"])
+        #expect(badges.allSatisfy { $0.available })
+        #expect(badges[1].help.contains(Date(timeIntervalSince1970: 1_793_299_644).formatted(date: .abbreviated, time: .shortened)))
+        #expect(codex.details(at: now).contains("2 free resets of the usage limits"))
+        // An older answer says nothing of either; none, and the chips say so.
+        #expect(try UsageParser.codex(UsageSamples.codex, now: now).badges(at: now).isEmpty)
+        let none = Data(#"{"rateLimits":{"primary":{"usedPercent":1,"windowDurationMins":300},"credits":{"hasCredits":false,"unlimited":false,"balance":"0"}},"rateLimitResetCredits":{"availableCount":0,"credits":[{"status":"redeemed","expiresAt":1793299644}]}}"#.utf8)
+        let empty = try UsageParser.codex(none, now: now)
+        #expect(empty.badges(at: now).map(\.text) == ["No credits", "No free resets"])
+        #expect(empty.badges(at: now).allSatisfy { !$0.available })
+        #expect(empty.resets?.expiries == []) // only available resets' expiries
+        let unlimited = Data(#"{"rateLimits":{"primary":{"usedPercent":1,"windowDurationMins":300},"credits":{"hasCredits":false,"unlimited":true,"balance":null}}}"#.utf8)
+        #expect(try UsageParser.codex(unlimited, now: now).badges(at: now).map(\.text) == ["Unlimited credits"])
+        #expect(ProviderUsage(windows: [], resets: UsageResets(available: 1)).badges(at: now).map(\.text) == ["1 free reset"])
+    }
+
+    @Test func spendingLimitsShowTheMoneyLeft() throws {
+        let key = try UsageParser.openRouter(Data(#"{"data":{"limit":25,"limit_remaining":18.4,"limit_reset":"weekly"}}"#.utf8), now: now)
+        #expect(key.badges(at: now).map(\.text) == ["$18.40 of $25.00 left"])
+        #expect(key.badges(at: now)[0].help == "Key allowance: $18.40 of $25.00 left")
+        #expect(key.badges(at: now)[0].available)
+        // Spent, or past its reset: none to use, or nothing to say until the next reading.
+        let spent = try UsageParser.openRouter(Data(#"{"data":{"limit":25,"limit_remaining":0,"limit_reset":null}}"#.utf8), now: now)
+        #expect(spent.badges(at: now).map(\.available) == [false])
+        #expect(key.badges(at: key.windows[0].resetsAt!).isEmpty)
+        // With more than one, each says which it is.
+        let two = try UsageParser.openRouter(Data(#"{"data":{"limit":25,"limit_remaining":18.4,"budgets":[{"scope":"member","limit_usd":50,"remaining_usd":17.5}]}}"#.utf8), now: now)
+        #expect(two.badges(at: now).map(\.text) == ["Key $18.40 of $25.00 left", "Member $17.50 of $50.00 left"])
     }
 
     @Test func openRouterLimitsAndUTCResets() throws {
@@ -119,6 +214,12 @@ import Testing
         #expect(budget.windows[0].title == "Member allowance")
         #expect(budget.windows[0].usedPercent == 65)
         #expect(budget.windows[0].resetsAt != nil)
+        // The key's own limit, which OpenRouter lists again as a budget, shows once.
+        let keyLimit = #"{"scope":"key_limit","limit_usd":25,"remaining_usd":18.4,"reset_interval":"weekly","resets_at":"2026-10-26T00:00:00.000Z"}"#
+        let both = try UsageParser.openRouter(Data(#"{"data":{"limit":25,"limit_remaining":18.4,"limit_reset":"weekly","budgets":[\#(keyLimit),{"scope":"organization_member","limit_usd":50,"remaining_usd":17.5}]}}"#.utf8))
+        #expect(both.windows.map(\.title) == ["Key allowance", "Organization Member allowance"])
+        let budgetOnly = try UsageParser.openRouter(Data(#"{"data":{"limit":null,"budgets":[\#(keyLimit)]}}"#.utf8))
+        #expect(budgetOnly.windows.map(\.title) == ["Key allowance"])
     }
 
     @Test func museReadAnswerAndAClockAhead() throws {
@@ -208,6 +309,34 @@ private actor UsageFetchProbe {
         #expect(await probe.count() == 2)
         _ = await cache.read(request, manual: true, now: now.addingTimeInterval(1_201))
         #expect(await probe.count() == 3)
+    }
+
+    @Test func readingsAreSavedAndShownAfterARelaunch() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-usage-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("usage.json")
+        let probe = UsageFetchProbe()
+        let now = Date()
+        let first = UsageCache(fetch: { request, _ in try await probe.read(request) }, file: file)
+        #expect(await first.saved(request) == nil)
+        let read = await first.read(request, now: now)
+        #expect(read.reading != nil)
+        // Only usage fields, by profile; no raw output.
+        let saved = try String(contentsOf: file, encoding: .utf8)
+        #expect(saved.contains("claude-dev") && !saved.contains("Bearer"))
+
+        // After a relaunch: the reading shows without a check, and isn't checked again until due.
+        let again = UsageCache(fetch: { request, _ in try await probe.read(request) }, file: file)
+        #expect(await again.saved(request) == read)
+        #expect(await again.isDue(request, now: now.addingTimeInterval(60)) == false)
+        #expect(await again.read(request, now: now.addingTimeInterval(60)) == read)
+        #expect(await probe.count() == 1)
+        // The background's longer interval, and the request's own.
+        #expect(await again.isDue(request, maxAge: request.backgroundInterval, now: now.addingTimeInterval(600)) == false)
+        #expect(await again.isDue(request, now: now.addingTimeInterval(600)))
+        // A file from elsewhere, or none, starts empty.
+        try Data("not json".utf8).write(to: file)
+        #expect(await UsageCache(file: file).saved(request) == nil)
     }
 
     @Test func museDoesNotSpendAllowanceOnEverySelectionOrTurn() async {

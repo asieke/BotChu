@@ -67,6 +67,8 @@ struct JobHistorySheet: View {
                     Text(problem).font(.callout).foregroundStyle(.red)
                 } else if let reason = job.pauseReason, !job.enabled {
                     Text(reason).font(.callout).foregroundStyle(.orange)
+                } else if let fallback = model.jobs.fallback(of: job) {
+                    Text(fallback).font(.callout).foregroundStyle(.orange)
                 }
             }
             Spacer()
@@ -151,7 +153,7 @@ private struct JobRunDetail: View {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
                             MessageRow(message: message, bot: bot, kind: run.accountID == nil || run.accountID == bot.accountID ? bot.account.kind
-                                            : Accounts.account(id: run.accountID ?? bot.accountID).kind,
+                                            : model.settings.account(run.accountID ?? bot.accountID).kind,
                                        startsBotTurn: message.role != .note && (index == 0 || messages[index - 1].role == .note || messages[index - 1].role == .user))
                         }
                         if let state = model.jobs.live(run.id)?.state {

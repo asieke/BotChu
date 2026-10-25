@@ -542,3 +542,166 @@ import Testing
 extension JobSchedule {
     static func plainText(_ text: String) -> String { JobScheduleTests.plain(text) }
 }
+
+/// A job's own account, model and effort (#132): none runs it on its agent's, as before; the choice
+/// is saved with it, older jobs read as none, and a choice BotChu can't run falls back to the agent's,
+/// saying why, never to another provider.
+@Suite struct JobRunsOnTests {
+    static let research = Account(id: "custom-research", name: "Research", kind: .codex, defaultCommand: "codex-research", symbol: "terminal")
+
+    func agent() -> Bot {
+        Bot(name: "QA Duck", accountID: "claude-dev", model: "opus", reasoningEffort: .high, workspace: "/tmp/duck")
+    }
+
+    @Test func aJobWithoutItsOwnRunsOnItsAgentsAsTheyAreThen() {
+        var agent = agent()
+        let job = Job(botID: agent.id, title: "Triage", prompt: "Triage")
+        #expect(job.runsOn == nil)
+        #expect(job.runSettings(agent: agent, accounts: Accounts.all).settings == agent)
+        #expect(job.runSettings(agent: agent, accounts: Accounts.all).unavailable == nil)
+        // It follows the agent's later changes.
+        agent.selectAccount(Accounts.account(id: "codex-work"))
+        agent.selectModel("gpt-6-astra")
+        let settings = job.runSettings(agent: agent, accounts: Accounts.all).settings
+        #expect(settings.accountID == "codex-work")
+        #expect(settings.model == "gpt-6-astra")
+        #expect(JobLaunch.invocation(for: settings, prompt: "Run", openRouterDefault: "", openRouterKey: nil).arguments
+            == JobLaunch.invocation(for: agent, prompt: "Run", openRouterDefault: "", openRouterKey: nil).arguments)
+    }
+
+    @Test func aRunUsesTheJobsAccountModelAndEffort() {
+        let agent = agent()
+        var job = Job(botID: agent.id, title: "Triage", prompt: "Triage")
+        job.selectAccount(Accounts.account(id: "codex-work"), agent: agent)
+        job.selectModel("gpt-6-astra", agent: agent)
+        job.selectReasoningEffort(.ultra, agent: agent, openRouterDefault: "")
+        #expect(job.runsOn == JobRunsOn(accountID: "codex-work", model: "gpt-6-astra", reasoningEffort: .ultra))
+        let (settings, unavailable) = job.runSettings(agent: agent, accounts: Accounts.all)
+        #expect(unavailable == nil)
+        #expect(settings.account.id == "codex-work")
+        // Still the agent, apart from what it runs on.
+        #expect(settings.id == agent.id)
+        #expect(settings.workspace == agent.workspace)
+        let arguments = JobLaunch.invocation(for: settings, prompt: "Run the job", openRouterDefault: "", openRouterKey: nil).arguments
+        #expect(arguments.starts(with: ["exec", "--json"]))
+        #expect(arguments.contains("-m"))
+        #expect(arguments.contains("gpt-6-astra"))
+        #expect(arguments.contains("model_reasoning_effort=\"ultra\""))
+        #expect(!arguments.contains("opus"))
+        #expect(JobLaunch.startNote(account: settings.account, agent: agent.name, unavailable: unavailable) == "Started on Codex Work")
+    }
+
+    @Test func effortsFollowTheChosenAccountAndModel() {
+        let agent = agent()
+        var job = Job(botID: agent.id, title: "Triage", prompt: "Triage")
+        // Changing the model alone keeps the agent's account, and an effort the model takes.
+        job.selectModel("sonnet", agent: agent)
+        #expect(job.runsOn == JobRunsOn(accountID: "claude-dev", model: "sonnet", reasoningEffort: .high))
+        // Haiku takes no effort: the effort goes, and none can be chosen.
+        job.selectModel("haiku", agent: agent)
+        #expect(job.runsOn?.reasoningEffort == nil)
+        job.selectReasoningEffort(.high, agent: agent, openRouterDefault: "")
+        #expect(job.runsOn?.reasoningEffort == nil)
+        // Ultra is Codex's, not Claude Code's.
+        job.selectModel("opus", agent: agent)
+        job.selectReasoningEffort(.ultra, agent: agent, openRouterDefault: "")
+        #expect(job.runsOn?.reasoningEffort == nil)
+        job.selectReasoningEffort(.max, agent: agent, openRouterDefault: "")
+        #expect(job.runsOn?.reasoningEffort == .max)
+        // Another account of the same CLI keeps the model and effort; another CLI clears them.
+        job.selectAccount(Accounts.account(id: "claude-work"), agent: agent)
+        #expect(job.runsOn == JobRunsOn(accountID: "claude-work", model: "opus", reasoningEffort: .max))
+        job.selectAccount(Accounts.account(id: "openrouter"), agent: agent)
+        #expect(job.runsOn == JobRunsOn(accountID: "openrouter", model: "", reasoningEffort: nil))
+        // OpenRouter's effort applies to the default model from Settings.
+        job.selectReasoningEffort(.off, agent: agent, openRouterDefault: "anthropic/claude-sonnet-4.5")
+        #expect(job.runsOn?.reasoningEffort == .off)
+        // Choosing the agent's again drops the job's own choice.
+        job.selectAccount(nil, agent: agent)
+        #expect(job.runsOn == nil)
+    }
+
+    @Test func theChoiceIsSavedWithTheJobAndOlderJobsReadAsTheAgents() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-jobs-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let agent = agent()
+        let home = BotHome(workspace: root.path)
+        let made = JobScheduleTests.at("2026-10-23T14:00:00Z")
+        var job = Job(botID: agent.id, title: "Research digest", prompt: "Summarize", schedule: JobSchedule(anchor: made, timeZone: "UTC"),
+                      createdAt: made)
+        job.selectAccount(Self.research, agent: agent)
+        job.selectModel("gpt-6-luna", agent: agent)
+        job.selectReasoningEffort(.medium, agent: agent, openRouterDefault: "")
+        #expect(job.runsOn == JobRunsOn(accountID: Self.research.id, accountProfile: Self.research, model: "gpt-6-luna", reasoningEffort: .medium))
+        try home.save(job)
+        #expect(home.loadJobs(of: agent.id) == [job])
+        // A job with none saves none, so its file is as it was before jobs had their own.
+        var plain = job
+        plain.runsOn = nil
+        let text = String(decoding: try Store.encoder.encode(plain), as: UTF8.self)
+        #expect(!text.contains("runsOn"))
+
+        // job.json as BotChu saved it before #132.
+        let old = """
+        {"botID":"\(agent.id.uuidString)","catchUpWindow":604800,"createdAt":"2026-10-23T14:00:00Z","enabled":true,
+         "failureStreak":0,"handledThrough":"2026-10-23T14:00:00Z","id":"5A1B2C3D-0000-4000-8000-0000000000AA",
+         "missedRuns":"runOnce","prompt":"Triage","runs":[],"schedule":{"anchor":"2026-10-23T14:00:00Z","days":[],"every":1,
+         "hour":9,"kind":"daily","minute":0,"timeZone":"America/New_York","unit":"hours"},"timeLimit":1800,"title":"Triage",
+         "updatedAt":"2026-10-23T14:00:00Z"}
+        """
+        let decoded = try Store.decoder.decode(Job.self, from: Data(old.utf8))
+        #expect(decoded.title == "Triage")
+        #expect(decoded.runsOn == nil)
+        #expect(decoded.runSettings(agent: agent, accounts: Accounts.all).settings == agent)
+    }
+
+    @Test func aGoneAccountFallsBackToTheAgentsSayingSo() {
+        let agent = agent()
+        var job = Job(botID: agent.id, title: "Research digest", prompt: "Summarize")
+        job.selectAccount(Self.research, agent: agent)
+        job.selectModel("gpt-6-luna", agent: agent)
+        // While the profile is in Providers, runs use it, with its current details.
+        let renamed = Account(id: Self.research.id, name: "Research (new login)", kind: .codex, defaultCommand: "codex-research-2", symbol: "terminal")
+        let present = job.runSettings(agent: agent, accounts: Accounts.all + [renamed])
+        #expect(present.unavailable == nil)
+        #expect(present.settings.account == renamed)
+        #expect(present.settings.model == "gpt-6-luna")
+        // Once it's gone, runs use the agent's: its account, model and effort, never the first
+        // account BotChu offers (Claude Personal) or the job's model on another CLI.
+        let gone = job.runSettings(agent: agent, accounts: Accounts.all)
+        #expect(gone.unavailable == .account(name: "Research"))
+        #expect(gone.settings == agent)
+        #expect(gone.settings.account.id == "claude-dev")
+        #expect(job.runsOn?.accountID == Self.research.id, "The choice stays, so it works again if the profile comes back")
+        #expect(JobLaunch.startNote(account: gone.settings.account, agent: agent.name, unavailable: gone.unavailable)
+            == "Started on Claude Dev. Research is no longer in Providers, so this job runs on QA Duck's account, model and effort.")
+        // A choice saved without its profile still names what it was.
+        let bare = JobRunsOn(accountID: "custom-gone")
+        #expect(bare.unavailable(accounts: Accounts.all) == .account(name: "custom-gone"))
+    }
+
+    @Test func aModelOpenRouterNoLongerListsFallsBackToTheAgents() {
+        let agent = agent()
+        let catalog = [CatalogModel(id: "anthropic/claude-sonnet-4.5", name: "Anthropic: Claude Sonnet 4.5"),
+                       CatalogModel(id: "openai/gpt-6", name: "OpenAI: GPT-6")]
+        var job = Job(botID: agent.id, title: "Digest", prompt: "Summarize")
+        job.selectAccount(Accounts.account(id: "openrouter"), agent: agent)
+        job.selectModel("retired/model-1", agent: agent)
+        let gone = job.runSettings(agent: agent, accounts: Accounts.all, catalog: catalog)
+        #expect(gone.unavailable == .model("retired/model-1"))
+        #expect(gone.settings == agent)
+        #expect(gone.unavailable?.explanation(agent: agent.name)
+            == "OpenRouter no longer lists retired/model-1, so this job runs on QA Duck's account, model and effort.")
+        // While the catalog isn't known, the model is used as chosen.
+        #expect(job.runSettings(agent: agent, accounts: Accounts.all).settings.model == "retired/model-1")
+        job.selectModel("openai/gpt-6", agent: agent)
+        #expect(job.runSettings(agent: agent, accounts: Accounts.all, catalog: catalog).unavailable == nil)
+        // The default from Settings is the agent's too, so it's never the job's to lose.
+        job.selectModel("", agent: agent)
+        #expect(job.runSettings(agent: agent, accounts: Accounts.all, catalog: catalog).unavailable == nil)
+        // A CLI's own models and custom IDs aren't in any catalog: they run as chosen.
+        job.selectAccount(Accounts.account(id: "codex-dev"), agent: agent)
+        job.selectModel("gpt-custom-preview", agent: agent)
+        #expect(job.runSettings(agent: agent, accounts: Accounts.all, catalog: catalog).unavailable == nil)
+    }
+}

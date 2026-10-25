@@ -102,6 +102,9 @@ public struct TelegramMessage: Decodable, Equatable, Sendable {
     /// interpret third-party forwarded or inline-bot content as the owner's instruction.
     public let isForwarded: Bool
     public let isViaBot: Bool
+    /// The bot an inline result was sent through, when Telegram says which: the gateway's own bot
+    /// for a choice from its `@`/`#` list (#114).
+    public let viaBotID: Int64?
 
     enum CodingKeys: String, CodingKey {
         case from, chat, text
@@ -122,6 +125,23 @@ public struct TelegramMessage: Decodable, Equatable, Sendable {
         isForwarded = [CodingKeys.forwardOrigin, .forwardFrom, .forwardFromChat, .forwardFromMessageID,
                        .forwardSignature, .forwardSenderName, .forwardDate, .isAutomaticForward].contains { container.contains($0) }
         isViaBot = container.contains(.viaBot)
+        viaBotID = (try? container.decodeIfPresent(TelegramUser.self, forKey: .viaBot))?.id
+    }
+}
+
+/// What someone types after the bot's username in a message box (inline mode), sent while they
+/// type when the bot has inline mode on in BotFather.
+public struct TelegramInlineQuery: Decodable, Equatable, Sendable {
+    public let id: String
+    public let from: TelegramUser
+    /// Up to 256 characters.
+    public let query: String
+    /// "sender" for the private chat between its sender and this bot; nil when Telegram doesn't say.
+    public let chatType: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, from, query
+        case chatType = "chat_type"
     }
 }
 
@@ -131,11 +151,13 @@ public struct TelegramUpdate: Decodable, Equatable, Sendable {
     public let updateID: Int64
     public let message: TelegramMessage?
     public let editedMessage: TelegramMessage?
+    public let inlineQuery: TelegramInlineQuery?
 
     enum CodingKeys: String, CodingKey {
         case message
         case updateID = "update_id"
         case editedMessage = "edited_message"
+        case inlineQuery = "inline_query"
     }
 
     public init(from decoder: Decoder) throws {
@@ -143,6 +165,7 @@ public struct TelegramUpdate: Decodable, Equatable, Sendable {
         updateID = try container.decode(Int64.self, forKey: .updateID)
         message = try? container.decodeIfPresent(TelegramMessage.self, forKey: .message)
         editedMessage = try? container.decodeIfPresent(TelegramMessage.self, forKey: .editedMessage)
+        inlineQuery = try? container.decodeIfPresent(TelegramInlineQuery.self, forKey: .inlineQuery)
     }
 }
 
@@ -171,7 +194,7 @@ public struct TelegramClient: Sendable {
 
     /// The updates from `offset` on, waiting up to `timeout` seconds for one (long polling).
     public func updates(offset: Int64?, timeout: Int) async throws -> [TelegramUpdate] {
-        var parameters: [String: Any] = ["timeout": timeout, "allowed_updates": ["message", "edited_message"]]
+        var parameters: [String: Any] = ["timeout": timeout, "allowed_updates": ["message", "edited_message", "inline_query"]]
         if let offset { parameters["offset"] = offset }
         return try await call("getUpdates", parameters, timeout: TimeInterval(timeout + 15))
     }
@@ -182,6 +205,20 @@ public struct TelegramClient: Sendable {
         var parameters: [String: Any] = ["chat_id": chat, "text": text, "link_preview_options": ["is_disabled": true]]
         if let message { parameters["reply_parameters"] = ["message_id": message, "allow_sending_without_reply": true] }
         let _: Sent = try await call("sendMessage", parameters, timeout: 30)
+    }
+
+    /// Answers an inline query with `suggestions`, as articles whose message is plain text, for its
+    /// sender alone and never cached, and a note above them (pressing it sends `/start help`).
+    public func answer(_ query: String, with suggestions: TelegramSuggestions) async throws {
+        let results: [[String: Any]] = suggestions.items.enumerated().map { index, item in
+            var result: [String: Any] = ["type": "article", "id": String(index), "title": item.title,
+                                         "input_message_content": ["message_text": item.message, "link_preview_options": ["is_disabled": true]]]
+            if !item.description.isEmpty { result["description"] = item.description }
+            return result
+        }
+        var parameters: [String: Any] = ["inline_query_id": query, "results": results, "cache_time": 0, "is_personal": true]
+        if let note = suggestions.note { parameters["button"] = ["text": note, "start_parameter": "help"] }
+        let _: Bool = try await call("answerInlineQuery", parameters, timeout: 15)
     }
 
     /// Telegram's "typing…" in the chat, for about five seconds.

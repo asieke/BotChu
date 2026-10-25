@@ -844,6 +844,9 @@ public struct EvaluationRecord: Codable, Equatable, Identifiable, Sendable {
     /// When each model call for it started, retries included: the account's daily limit counts these.
     public var attemptTimes: [Date] = []
     public var notBefore: Date?
+    /// When the owner last asked for it again (Retry): it may wait `Limits.expiry` from then,
+    /// however old its run.
+    public var retriedAt: Date?
     public var startedAt: Date?
     public var finishedAt: Date?
     /// What is reviewed; dropped once the review is done.
@@ -1132,9 +1135,10 @@ public final class RunEvaluator {
         public var retryDelay: TimeInterval = 300
         /// How long a review waits after its account reports its allowance used up.
         public var allowanceDelay: TimeInterval = 3_600
-        /// A review not done this long after its run is skipped.
+        /// A review not done this long after its run, or after its last Retry, is skipped.
         public var expiry: TimeInterval = 48 * 3_600
-        /// Records kept per bot, newest first.
+        /// Finished records kept per bot, newest first, besides those whose model calls the daily
+        /// limit still counts.
         public var kept = 50
         /// How often waiting reviews are looked at again, in seconds.
         public var wake: TimeInterval = 60
@@ -1283,8 +1287,9 @@ public final class RunEvaluator {
         wakeTask = nil
         guard !stopping else { return }
         let date = now()
-        for record in records.values where record.phase == .pending && date.timeIntervalSince(record.createdAt) > limits.expiry {
-            skip(record.id, "Not reviewed within \(Int(limits.expiry / 3_600)) hours of the run: its account was busy or at its daily limit")
+        for record in records.values where record.phase == .pending && date.timeIntervalSince(record.retriedAt ?? record.createdAt) > limits.expiry {
+            let since = record.retriedAt == nil ? "the run" : "its Retry"
+            skip(record.id, "Not reviewed within \(Int(limits.expiry / 3_600)) hours of \(since): its account was busy or at its daily limit")
         }
         guard runner != nil, isEnabled() else { return }
         for record in records.values where record.phase == .applying && running[record.id] == nil { applyOnceSaved(record.id) }
@@ -1308,6 +1313,7 @@ public final class RunEvaluator {
             record.phase = .pending
             record.attempts = 0
             record.notBefore = nil
+            record.retriedAt = now()
         } else { return }
         record.failure = nil
         record.skipReason = nil
@@ -1389,8 +1395,11 @@ public final class RunEvaluator {
     /// The model calls made on the account in the 24 hours before `date`, of every review and retry.
     func attemptsToday(on accountID: String, at date: Date) -> Int {
         records.values.filter { $0.accountID == accountID }
-            .reduce(0) { count, record in count + record.attemptTimes.filter { date.timeIntervalSince($0) < 86_400 }.count }
+            .reduce(0) { count, record in count + record.attemptTimes.filter { date.timeIntervalSince($0) < Self.day }.count }
     }
+
+    /// The window `Limits.perAccountPerDay` counts model calls in.
+    private static let day: TimeInterval = 86_400
 
     private func start(_ id: String) {
         guard var record = records[id], let runner else { return }
@@ -1660,12 +1669,14 @@ public final class RunEvaluator {
         }
     }
 
-    /// Keeps the newest `limits.kept` finished reviews of a bot.
+    /// Keeps the newest `limits.kept` finished reviews of a bot, and any that called the model in
+    /// the last 24 hours, which its account's daily limit still counts (also after a relaunch).
     private func prune(_ botID: UUID) {
         guard let workspace = workspace(botID) else { return }
+        let date = now()
         let finished = records(aboutBot: botID).filter { !$0.phase.isWaiting }
         let home = BotHome(workspace: workspace)
-        for record in finished.dropFirst(limits.kept) {
+        for record in finished.dropFirst(limits.kept) where !record.attemptTimes.contains(where: { date.timeIntervalSince($0) < Self.day }) {
             records[record.id] = nil
             let lane = home.evaluationURL(record.id).path, id = record.id
             storage.cancel(lane, slot: "record")

@@ -52,6 +52,78 @@ enum UsageSamples {
   }
 }
 """#.utf8)
+    /// `account/rateLimits/read` from Codex on 2026-10-24, with usage credits and two free resets;
+    /// limit, account and credit IDs removed and the balance replaced.
+    static let codexCredits = Data(#"""
+{
+  "id": 2,
+  "result": {
+    "ordinaryUsageAllowed": true,
+    "rateLimits": {
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {
+        "usedPercent": 0,
+        "windowDurationMins": 10080,
+        "resetsAt": 1793413951
+      },
+      "secondary": null,
+      "credits": {
+        "hasCredits": true,
+        "unlimited": false,
+        "balance": "1234.5678900000"
+      },
+      "individualLimit": null,
+      "spendControlReached": false,
+      "planType": "prolite",
+      "rateLimitReachedType": null
+    },
+    "rateLimitsByLimitId": {
+      "codex": {
+        "limitName": null,
+        "normalModelSlug": null,
+        "primary": {
+          "usedPercent": 0,
+          "windowDurationMins": 10080,
+          "resetsAt": 1793413951
+        },
+        "secondary": null,
+        "credits": {
+          "hasCredits": true,
+          "unlimited": false,
+          "balance": "1234.5678900000"
+        },
+        "individualLimit": null,
+        "spendControlReached": false,
+        "planType": "prolite",
+        "rateLimitReachedType": null
+      }
+    },
+    "rateLimitResetCredits": {
+      "availableCount": 2,
+      "credits": [
+        {
+          "resetType": "codexRateLimits",
+          "status": "available",
+          "grantedAt": 1790707644,
+          "expiresAt": 1793299644,
+          "title": "Full reset",
+          "description": "Thanks for using Codex! You've been granted one free rate limit reset."
+        },
+        {
+          "resetType": "codexRateLimits",
+          "status": "available",
+          "grantedAt": 1791415201,
+          "expiresAt": 1794007201,
+          "title": "Full reset",
+          "description": "Thanks for using Codex! You've been granted one free rate limit reset."
+        }
+      ]
+    },
+    "rateLimitUpsell": null
+  }
+}
+"""#.utf8)
     static let antigravity = Data(#"""
 {
   "command": {

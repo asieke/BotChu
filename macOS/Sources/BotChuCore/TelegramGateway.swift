@@ -1,12 +1,12 @@
 import Foundation
 
-/// A private Telegram chat allowed to reach BotChu, and the bot whose Home it reaches. Nothing
-/// else can: a chat that isn't listed, a group, or a sender who isn't the chat's own user is
-/// refused before BotChu reads, says or starts anything.
+/// A private Telegram chat allowed to reach BotChu, and the bot whose Home it reaches unless it
+/// chooses another with `@` (#114). Nothing else can: a chat that isn't listed, a group, or a sender
+/// who isn't the chat's own user is refused before BotChu reads, says or starts anything.
 public struct TelegramChat: Codable, Hashable, Identifiable, Sendable {
     /// The private chat's ID, which is its user's Telegram ID.
     public var id: Int64
-    /// The bot whose Home the chat reaches; nil until one is chosen.
+    /// The bot whose Home the chat reaches until it chooses another; nil until one is chosen.
     public var botID: UUID?
     /// Who it is, as Telegram named them when the chat was allowed.
     public var label: String
@@ -52,9 +52,15 @@ public struct TelegramRefusal: Equatable, Identifiable, Sendable {
 
 /// What the gateway does with one update.
 public enum TelegramInbound: Equatable, Sendable {
-    /// Text from an allowed chat for its bot's Home (none chosen when nil), under a BotChu message
-    /// ID that is the same each time Telegram sends it.
+    /// Text from an allowed chat whose bot in Settings is `botID` (none chosen when nil), under a
+    /// BotChu message ID that is the same each time Telegram sends it. It goes to that bot's Home,
+    /// or where its address words and the chat's choices send it (`TelegramAddress`).
     case message(chat: Int64, botID: UUID?, text: String, replyTo: Int64, id: UUID)
+    /// A choice from the gateway's own `@`/`#` list, sent through it by the chat (inline mode): it
+    /// may only choose a bot or a repository.
+    case chosen(chat: Int64, botID: UUID?, text: String, replyTo: Int64)
+    /// What an allowed chat's user types after the bot's username in their chat with it.
+    case suggest(chat: Int64, botID: UUID?, query: String, id: String)
     /// /start or /help: the gateway says where messages go.
     case help(chat: Int64, botID: UUID?, replyTo: Int64)
     /// From an allowed chat, but not something the gateway passes on: it says so.
@@ -65,6 +71,14 @@ public enum TelegramInbound: Equatable, Sendable {
     case ignored
 
     public static func classify(_ update: TelegramUpdate, chats: [TelegramChat], bot: Int64) -> TelegramInbound {
+        if let query = update.inlineQuery {
+            // Typed anywhere else, or by anyone else, it is offered nothing: the lists name the
+            // owner's bots and repositories.
+            guard query.chatType == "sender", !query.from.isBot, let allowed = chats.first(where: { $0.id == query.from.id }) else {
+                return .ignored
+            }
+            return .suggest(chat: allowed.id, botID: allowed.botID, query: query.query, id: query.id)
+        }
         guard let message = update.message ?? update.editedMessage else { return .ignored }
         let chat = message.chat
         guard chat.type == "private", let sender = message.from, !sender.isBot, sender.id == chat.id,
@@ -72,11 +86,13 @@ public enum TelegramInbound: Equatable, Sendable {
             return .refused(TelegramRefusal(message))
         }
         let replyTo = message.messageID
-        guard !message.isForwarded, !message.isViaBot else { return .forwarded(chat: chat.id, replyTo: replyTo) }
+        let chosen = message.isViaBot && message.viaBotID == bot
+        guard !message.isForwarded, !message.isViaBot || chosen else { return .forwarded(chat: chat.id, replyTo: replyTo) }
         guard update.message != nil else { return .unsupported(chat: chat.id, replyTo: replyTo, edited: true) }
         guard let text = message.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .unsupported(chat: chat.id, replyTo: replyTo, edited: false)
         }
+        if chosen { return .chosen(chat: chat.id, botID: allowed.botID, text: text, replyTo: replyTo) }
         if let word = text.split(whereSeparator: \.isWhitespace).first?.split(separator: "@").first,
            ["/start", "/help"].contains(word.lowercased()) {
             return .help(chat: chat.id, botID: allowed.botID, replyTo: replyTo)
@@ -186,13 +202,17 @@ public enum TelegramReply {
         return String(text)
     }
 
-    static func help(botName: String?, chosen: Bool) -> String {
+    static func help(botName: String?, chosen: Bool, repo: String? = nil) -> String {
         guard chosen else { return unrouted }
         guard let botName else { return unavailable }
-        return "Messages here go to \(botName)'s Home conversation in BotChu, on your Mac, and its replies come back here. Text only. BotChu has to be running (and the Mac awake) for \(botName) to answer; messages sent meanwhile wait up to a day."
+        let next = repo.map { " #\($0) goes with your next message." } ?? ""
+        return "Messages here go to \(botName)'s Home conversation in BotChu, on your Mac, and its replies come back here. Text only. BotChu has to be running (and the Mac awake) for \(botName) to answer; messages sent meanwhile wait up to a day.\(next)\n\n" + choosing
     }
 
-    public static let unrouted = "This chat isn't connected to a bot yet. Choose one in BotChu ▸ Settings ▸ Telegram."
+    /// How a chat chooses (#114).
+    static let choosing = "To talk to another bot, start a message with @ and its name: it stays chosen until you choose another. Start with #owner/repo to name a repository for that message, and with /task to make it a task of its own there. With inline mode on, type the bot's @username, then @ or #, to choose from a list."
+
+    public static let unrouted = "This chat isn't connected to a bot yet. Start a message with @ and a bot's name, or choose one in BotChu ▸ Settings ▸ Telegram."
     public static let unavailable = "The bot this chat was connected to isn't in BotChu any more. Choose another in BotChu ▸ Settings ▸ Telegram."
     static let forwarded = "Forwarded messages and messages sent via another bot aren't taken. Write your own text message instead."
     static let tooManyWaiting = "Too many messages are waiting for replies. Wait for a reply, then send this message again."
@@ -263,14 +283,33 @@ public enum TelegramProgress: Equatable, Sendable {
     }
 }
 
+/// How BotChu took a task asked for from Telegram with `/task` (#114).
+public enum TelegramTaskStart: Equatable, Sendable {
+    /// Recorded under its bot and starting; `unsaved` says why its record couldn't be saved.
+    case started(title: String, unsaved: String?)
+    /// Telegram sent the request again: the task it made before.
+    case duplicate(title: String)
+    case unavailable
+    case discarded
+    case failed(String)
+}
+
 /// What the gateway needs from BotChu, which answers from its conversations.
 public protocol TelegramApp: Sendable {
-    /// Current settings and gateway generation, checked again at each delivery/send boundary.
+    /// Current settings and gateway generation, checked again at each delivery/send boundary:
+    /// whether the chat is still allowed with `botID` as its bot in Settings (`mapped` for work
+    /// another bot took).
     func authorization(for chat: Int64, botID: UUID?) async -> TelegramAuthorization
     /// The bot's name, or nil when it isn't there any more.
     func name(of botID: UUID) async -> String?
-    /// Hands the owner's message to the bot's Home through its queue, under `id`.
-    func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64) async -> TelegramDelivery
+    /// The bots and repositories `@` and `#` choose from.
+    func directory() async -> TelegramDirectory
+    /// Hands the owner's message to the bot's Home through its queue, under `id`, with the
+    /// repository it names (`references`). `mapped` is the chat's bot in Settings.
+    func deliver(_ text: String, references: [MessageReference], id: UUID, to botID: UUID, from chat: Int64,
+                 mapped: UUID?) async -> TelegramDelivery
+    /// Makes a task of its own for `botID` in `repo`, under the ID `id`, and starts it.
+    func startTask(_ brief: String, in repo: String, id: UUID, for botID: UUID, from chat: Int64, mapped: UUID?) async -> TelegramTaskStart
     func progress(of id: UUID, for botID: UUID) async -> TelegramProgress
     /// A reply couldn't be sent to Telegram: BotChu says so in the conversation.
     func replyFailed(_ id: UUID, for botID: UUID, reason: String) async
@@ -282,35 +321,80 @@ public protocol TelegramApp: Sendable {
 public struct TelegramPendingReply: Codable, Equatable, Sendable {
     /// The BotChu message.
     public var id: UUID
+    /// The bot that took it, whose reply it is.
     public var botID: UUID
     public var chat: Int64
     /// The Telegram message it answers.
     public var replyTo: Int64
     /// How many of the reply's messages Telegram has taken: after a relaunch it goes on from the next.
     public var sent: Int
+    /// The chat's bot in Settings when the message was taken: the reply is owed only while Settings
+    /// still gives the chat that bot. The same as `botID` unless the chat chose another with `@`.
+    public var mapped: UUID?
 
     public init(id: UUID, botID: UUID, chat: Int64, replyTo: Int64, sent: Int = 0) {
+        self.init(id: id, botID: botID, chat: chat, replyTo: replyTo, sent: sent, mapped: botID)
+    }
+
+    public init(id: UUID, botID: UUID, chat: Int64, replyTo: Int64, sent: Int = 0, mapped: UUID?) {
         self.id = id
         self.botID = botID
         self.chat = chat
         self.replyTo = replyTo
         self.sent = sent
+        self.mapped = mapped
+    }
+
+    enum CodingKeys: String, CodingKey { case id, botID, chat, replyTo, sent, mapped }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        botID = try container.decode(UUID.self, forKey: .botID)
+        chat = try container.decode(Int64.self, forKey: .chat)
+        replyTo = try container.decode(Int64.self, forKey: .replyTo)
+        sent = try container.decode(Int.self, forKey: .sent)
+        // Saved before #114, a reply's bot was always the chat's bot in Settings.
+        mapped = container.contains(.mapped) ? try container.decodeIfPresent(UUID.self, forKey: .mapped) : botID
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(botID, forKey: .botID)
+        try container.encode(chat, forKey: .chat)
+        try container.encode(replyTo, forKey: .replyTo)
+        try container.encode(sent, forKey: .sent)
+        try container.encode(mapped, forKey: .mapped)
     }
 }
 
 /// What the gateway keeps across relaunches (`telegram.json`, beside `index.json`): where its
-/// updates are up to, and the replies it owes. No message text and no token.
+/// updates are up to, the replies it owes, and what each chat chose with `@` and `#`. No message
+/// text and no token.
 public struct TelegramState: Codable, Equatable, Sendable {
-    /// The Telegram bot the offset and pending replies belong to.
+    /// The Telegram bot the offset, pending replies and choices belong to.
     public var botUserID: Int64?
     /// The next update to ask for: one past the last handled.
     public var offset: Int64?
     public var pending: [TelegramPendingReply]
+    public var selections: [TelegramSelection]
 
-    public init(botUserID: Int64? = nil, offset: Int64? = nil, pending: [TelegramPendingReply] = []) {
+    public init(botUserID: Int64? = nil, offset: Int64? = nil, pending: [TelegramPendingReply] = [], selections: [TelegramSelection] = []) {
         self.botUserID = botUserID
         self.offset = offset
         self.pending = pending
+        self.selections = selections
+    }
+
+    enum CodingKeys: String, CodingKey { case botUserID, offset, pending, selections }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        botUserID = try container.decodeIfPresent(Int64.self, forKey: .botUserID)
+        offset = try container.decodeIfPresent(Int64.self, forKey: .offset)
+        pending = try container.decode([TelegramPendingReply].self, forKey: .pending)
+        selections = try container.decodeIfPresent([TelegramSelection].self, forKey: .selections) ?? []
     }
 
     public static func load(from url: URL) -> TelegramState {
@@ -324,7 +408,9 @@ public struct TelegramState: Codable, Equatable, Sendable {
 }
 
 /// The Telegram gateway: it long-polls Telegram (`getUpdates`, so no server or webhook), hands
-/// allowed chats' text to their bots' Homes, and sends back what each turn said.
+/// allowed chats' text to their bots' Homes, and sends back what each turn said. A chat can choose
+/// another bot with `@`, a repository with `#`, and ask for a task of its own with `/task` (#114),
+/// typed or chosen from the lists it answers inline queries with.
 ///
 /// An update counts as handled once what it started is saved: its message in the conversation's
 /// queue (under an ID made from it, so a copy Telegram sends again is recognized), the reply it is
@@ -481,6 +567,11 @@ public actor TelegramGateway {
             toldPaused.removeAll()
             typedAt.removeAll()
         }
+        // A chat removed, or given another bot in Settings, sets aside what it chose.
+        let chats = chats
+        if state.selections.contains(where: { choice in !chats.contains { $0.id == choice.chat && $0.botID == choice.mapped } }) {
+            state.selections.removeAll { choice in !chats.contains { $0.id == choice.chat && $0.botID == choice.mapped } }
+        }
         try save()
         self.me = me
         return me
@@ -498,15 +589,16 @@ public actor TelegramGateway {
         let updates = try await client.updates(offset: state.offset, timeout: timeout ?? timing.pollSeconds)
         for update in updates.sorted(by: { $0.updateID < $1.updateID }) where update.updateID >= state.offset ?? .min {
             try Task.checkCancellation()
-            try await handle(update, bot: me.id)
+            try await handle(update, me: me)
         }
     }
 
-    private func handle(_ update: TelegramUpdate, bot: Int64) async throws {
+    private func handle(_ update: TelegramUpdate, me: TelegramUser) async throws {
         try Task.checkCancellation()
         try save()
         var answer: (chat: Int64, text: String, replyTo: Int64)?
-        switch TelegramInbound.classify(update, chats: chats, bot: bot) {
+        var suggestions: (query: String, chat: Int64, items: TelegramSuggestions)?
+        switch TelegramInbound.classify(update, chats: chats, bot: me.id) {
         case .ignored:
             break
         case .refused(let refusal):
@@ -517,38 +609,28 @@ public actor TelegramGateway {
             answer = (chat, TelegramReply.forwarded, replyTo)
         case let .help(chat, botID, replyTo):
             guard try await authorized(chat, botID: botID) else { break }
+            let choice = selection(for: chat, mapped: botID)
             var name: String?
-            if let botID { name = await app.name(of: botID) }
-            answer = (chat, TelegramReply.help(botName: name, chosen: botID != nil), replyTo)
+            if let recipient = choice.recipient { name = await app.name(of: recipient) }
+            answer = (chat, choice.botID != nil && name == nil ? TelegramReply.chosenGone(choice.botName)
+                : TelegramReply.help(botName: name, chosen: choice.recipient != nil, repo: choice.repo), replyTo)
+        case let .suggest(chat, botID, query, id):
+            guard try await authorized(chat, botID: botID) else { break }
+            let directory = await app.directory()
+            try Task.checkCancellation()
+            suggestions = (id, chat, TelegramSuggestions.answer(query, in: directory, username: me.username,
+                                                                current: selection(for: chat, mapped: botID).recipient))
+        case let .chosen(chat, botID, text, replyTo):
+            guard try await authorized(chat, botID: botID) else { break }
+            // An ID no message of the chat's can have: a choice never reaches a conversation.
+            let routed = try await route(text, chat: chat, mapped: botID, replyTo: replyTo, id: UUID(), chosen: true, username: me.username)
+            if let choice = routed.selection { choose(choice) }
+            answer = routed.answer.map { (chat, $0, replyTo) }
         case let .message(chat, botID, text, replyTo, id):
             guard try await authorized(chat, botID: botID) else { break }
-            guard let botID else {
-                answer = (chat, TelegramReply.unrouted, replyTo)
-                break
-            }
-            if !state.pending.contains(where: { $0.id == id }),
-               state.pending.count >= Self.pendingLimit || state.pending.filter({ $0.chat == chat }).count >= Self.pendingLimitPerChat {
-                if overflowAt[chat].map({ now().timeIntervalSince($0) >= Self.overflowNoticeInterval }) ?? true {
-                    overflowAt[chat] = now()
-                    answer = (chat, TelegramReply.tooManyWaiting, replyTo)
-                }
-                break
-            }
-            try Task.checkCancellation()
-            switch await app.deliver(text, id: id, to: botID, from: chat) {
-            case .queued(let busy):
-                expect(TelegramPendingReply(id: id, botID: botID, chat: chat, replyTo: replyTo))
-                if busy, let name = await app.name(of: botID) { answer = (chat, TelegramReply.busy(name), replyTo) }
-            case .duplicate:
-                // Taken before a crash saved the offset: the reply may still be owed.
-                expect(TelegramPendingReply(id: id, botID: botID, chat: chat, replyTo: replyTo))
-            case .unavailable:
-                answer = (chat, TelegramReply.unavailable, replyTo)
-            case .failed(let reason):
-                answer = (chat, TelegramReply.notTaken(reason), replyTo)
-            case .discarded:
-                throw CancellationError()
-            }
+            let routed = try await route(text, chat: chat, mapped: botID, replyTo: replyTo, id: id, chosen: false, username: me.username)
+            if let choice = routed.selection { choose(choice) }
+            answer = routed.answer.map { (chat, $0, replyTo) }
         }
         // A delivery already accepted before cancellation must still be checkpointed; the next
         // update and any outgoing notice below must not run after cancellation.
@@ -560,6 +642,112 @@ public actor TelegramGateway {
             _ = try await notice(answer.text, chat: answer.chat, botID: chats.first { $0.id == answer.chat }?.botID,
                                  replyTo: answer.replyTo)
         }
+        if let suggestions {
+            try await suggest(suggestions.items, for: suggestions.query, chat: suggestions.chat,
+                              botID: chats.first { $0.id == suggestions.chat }?.botID)
+        }
+    }
+
+    /// Where an allowed chat's text goes (#114), and what the chat chooses with it: the answer for
+    /// the chat, and the chat's choices to keep once the update is checkpointed (nil when they don't
+    /// change). Address words that name no bot or repository send nothing, and a message for a
+    /// chosen bot that isn't there any more goes nowhere else. A `chosen` message, from the
+    /// gateway's own list, may only choose.
+    private func route(_ text: String, chat: Int64, mapped: UUID?, replyTo: Int64, id: UUID, chosen: Bool,
+                       username: String?) async throws -> (answer: String?, selection: TelegramSelection?) {
+        var choice = selection(for: chat, mapped: mapped)
+        var address = TelegramAddress(body: text)
+        var directory = TelegramDirectory()
+        if chosen || choice.repo != nil || TelegramAddress.mayAddress(text) {
+            directory = await app.directory()
+            try Task.checkCancellation()
+            switch TelegramAddress.parse(text, in: directory, username: username) {
+            case .success(let parsed): address = parsed
+            case .failure(let problem): return (problem.message, nil)
+            }
+        }
+        if chosen, !address.isSelection { return (TelegramReply.forwarded, nil) }
+        if let bot = address.bot {
+            choice.botID = bot.id
+            choice.botName = bot.name
+        }
+        if address.isSelection {
+            if let repo = address.repo { choice.repo = repo }
+            var recipient: String?
+            if let botID = choice.recipient { recipient = await app.name(of: botID) }
+            let bot = address.bot.map { bot in
+                String(directory.word(for: bot).dropFirst()) + (bot.title.isEmpty ? "" : " (\(bot.title))")
+            }
+            return (TelegramReply.selected(bot: bot, repo: address.repo, recipient: recipient), choice)
+        }
+        guard let botID = choice.recipient else { return (TelegramReply.unrouted, nil) }
+        let unavailable = choice.botID == nil ? TelegramReply.unavailable : TelegramReply.chosenUnavailable(choice.botName)
+        // A repository goes with one message: this one's, else the one the chat chose for it.
+        let repo = address.repo ?? choice.repo
+        choice.repo = nil
+        if address.isTask {
+            guard let repo else { return (TelegramReply.taskNeedsRepository, nil) }
+            guard !address.body.isEmpty else { return (TelegramReply.taskNeedsBrief, nil) }
+            try Task.checkCancellation()
+            switch await app.startTask(address.body, in: repo, id: id, for: botID, from: chat, mapped: mapped) {
+            case .started(let title, let unsaved):
+                let name = await app.name(of: botID) ?? choice.botName ?? "its bot"
+                return ([TelegramReply.taskStarted(title, bot: name, repo: repo), unsaved].compactMap { $0 }.joined(separator: " "), choice)
+            case .duplicate(let title):
+                return (TelegramReply.taskAlreadyStarted(title), choice)
+            case .unavailable:
+                return (unavailable, nil)
+            case .failed(let reason):
+                return (TelegramReply.taskNotStarted(reason), nil)
+            case .discarded:
+                throw CancellationError()
+            }
+        }
+        guard !address.body.isEmpty else { return (TelegramReply.nothingToSend, nil) }
+        if !state.pending.contains(where: { $0.id == id }),
+           state.pending.count >= Self.pendingLimit || state.pending.filter({ $0.chat == chat }).count >= Self.pendingLimitPerChat {
+            if overflowAt[chat].map({ now().timeIntervalSince($0) >= Self.overflowNoticeInterval }) ?? true {
+                overflowAt[chat] = now()
+                return (TelegramReply.tooManyWaiting, nil)
+            }
+            return (nil, nil)
+        }
+        var body = address.body
+        var references: [MessageReference] = []
+        if let repo {
+            let reference = directory.reference(to: repo)
+            body = reference.label + " " + body
+            references = [reference]
+        }
+        try Task.checkCancellation()
+        switch await app.deliver(body, references: references, id: id, to: botID, from: chat, mapped: mapped) {
+        case .queued(let busy):
+            expect(TelegramPendingReply(id: id, botID: botID, chat: chat, replyTo: replyTo, mapped: mapped))
+            var answer: String?
+            if busy, let name = await app.name(of: botID) { answer = TelegramReply.busy(name) }
+            return (answer, choice)
+        case .duplicate:
+            // Taken before a crash saved the offset: the reply may still be owed.
+            expect(TelegramPendingReply(id: id, botID: botID, chat: chat, replyTo: replyTo, mapped: mapped))
+            return (nil, choice)
+        case .unavailable:
+            return (unavailable, nil)
+        case .failed(let reason):
+            return (TelegramReply.notTaken(reason), nil)
+        case .discarded:
+            throw CancellationError()
+        }
+    }
+
+    /// What the chat chose, while Settings gives it the bot it had then.
+    private func selection(for chat: Int64, mapped: UUID?) -> TelegramSelection {
+        state.selections.first { $0.chat == chat && $0.mapped == mapped } ?? TelegramSelection(chat: chat, mapped: mapped)
+    }
+
+    private func choose(_ choice: TelegramSelection) {
+        var selections = state.selections.filter { $0.chat != choice.chat }
+        if !choice.isEmpty { selections.append(choice) }
+        if selections != state.selections { state.selections = selections }
     }
 
     /// Sends the replies whose turns have ended, and shows "typing…" while a turn is under way.
@@ -569,13 +757,13 @@ public actor TelegramGateway {
         guard me != nil else { return }
         try save()
         for pending in state.pending {
-            guard try await authorized(pending.chat, botID: pending.botID) else {
+            guard try await authorized(pending.chat, botID: pending.mapped) else {
                 try finish(pending.id)
                 continue
             }
             if let retry = retries[pending.id], retry.at > now() { continue }
             let progress = await app.progress(of: pending.id, for: pending.botID)
-            guard try await authorized(pending.chat, botID: pending.botID) else {
+            guard try await authorized(pending.chat, botID: pending.mapped) else {
                 try finish(pending.id)
                 continue
             }
@@ -586,13 +774,18 @@ public actor TelegramGateway {
                     continue
                 }
                 if !toldPaused.contains(pending.id), let name = await app.name(of: pending.botID) {
-                    if try await notice(TelegramReply.paused(name), chat: pending.chat, botID: pending.botID, replyTo: pending.replyTo) {
+                    if try await notice(TelegramReply.paused(name), chat: pending.chat, botID: pending.mapped, replyTo: pending.replyTo) {
                         toldPaused.insert(pending.id)
                     }
                 }
             case .working:
                 try await showTyping(for: pending)
-            case .answered(let text), .gone(let text):
+            case .answered(let text):
+                // A bot the chat chose with @ says who it is: the chat's own bot in Settings doesn't.
+                var reply = text
+                if pending.botID != pending.mapped, let name = await app.name(of: pending.botID) { reply = "\(name):\n" + text }
+                try await send(reply, for: pending)
+            case .gone(let text):
                 try await send(text, for: pending)
             }
         }
@@ -601,7 +794,7 @@ public actor TelegramGateway {
     private func showTyping(for pending: TelegramPendingReply) async throws {
         if let last = typedAt[pending.chat], now().timeIntervalSince(last) < timing.typingInterval { return }
         do {
-            if try await outgoing(nil, chat: pending.chat, botID: pending.botID) { typedAt[pending.chat] = now() }
+            if try await outgoing(nil, chat: pending.chat, botID: pending.mapped) { typedAt[pending.chat] = now() }
         } catch let error as TelegramError where !error.stopsGateway {}
     }
 
@@ -609,14 +802,14 @@ public actor TelegramGateway {
         let messages = TelegramReply.messages(text)
         var sent = pending.sent
         while sent < messages.count {
-            guard try await authorized(pending.chat, botID: pending.botID) else {
+            guard try await authorized(pending.chat, botID: pending.mapped) else {
                 try finish(pending.id)
                 return
             }
             try save()
             do {
                 // The first message replies to the owner's, so it's clear what it answers.
-                guard try await outgoing(messages[sent], chat: pending.chat, botID: pending.botID,
+                guard try await outgoing(messages[sent], chat: pending.chat, botID: pending.mapped,
                                          replyTo: sent == 0 ? pending.replyTo : nil) else { return }
             } catch let error as TelegramError {
                 if error.stopsGateway { throw error }
@@ -674,6 +867,21 @@ public actor TelegramGateway {
         } catch let error as TelegramError {
             coolDown(after: error)
             throw error
+        }
+    }
+
+    /// The answer to an inline query: best effort, like a notice, since the owner's next keystroke
+    /// asks again.
+    private func suggest(_ suggestions: TelegramSuggestions, for query: String, chat: Int64, botID: UUID?) async throws {
+        guard try await authorized(chat, botID: botID), !sending, now() >= outgoingAfter else { return }
+        try save()
+        sending = true
+        defer { sending = false }
+        do {
+            try await client.answer(query, with: suggestions)
+        } catch let error as TelegramError {
+            coolDown(after: error)
+            if error.stopsGateway { throw error }
         }
     }
 

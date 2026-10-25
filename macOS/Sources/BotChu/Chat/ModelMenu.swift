@@ -1,7 +1,7 @@
 import SwiftUI
 import BotChuCore
 
-/// Two visible controls, scoped to this conversation's account. Neither changes its provider.
+/// Two visible controls, scoped to this conversation's (or job's) account. Neither changes its provider.
 struct ModelMenu: View {
     @Environment(AppModel.self) private var app
     let settings: any RunSettings
@@ -9,6 +9,8 @@ struct ModelMenu: View {
     let onModel: (String) -> Void
     let onEffort: (ReasoningEffort?) -> Void
     var inInspector = false
+    /// As rows of a form, such as the job editor's.
+    var inForm = false
     @State private var showsModels = false
     @State private var showsEffort = false
 
@@ -25,6 +27,9 @@ struct ModelMenu: View {
             if inInspector {
                 InspectorRow("Model") { modelButton }
                 InspectorRow("Reasoning", last: true) { effortButton }
+            } else if inForm {
+                LabeledContent("Model") { modelButton }
+                LabeledContent("Reasoning") { effortButton }
             } else {
                 HStack(spacing: 6) {
                     modelButton
@@ -39,8 +44,9 @@ struct ModelMenu: View {
                 // Let the review window finish opening/resizing before anchoring its popover.
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { return }
-                showsModels = DevHooks.env["BOTCHU_OPEN"] == (inInspector ? "inspector-model" : "model")
-                showsEffort = DevHooks.env["BOTCHU_OPEN"] == (inInspector ? "inspector-effort" : "effort")
+                let place = inInspector ? "inspector-" : inForm ? "job-" : ""
+                showsModels = DevHooks.env["BOTCHU_OPEN"] == place + "model"
+                showsEffort = DevHooks.env["BOTCHU_OPEN"] == place + "effort"
             }
         }
         .onChange(of: disabled) { _, running in
@@ -54,7 +60,9 @@ struct ModelMenu: View {
 
     private var modelButton: some View {
         Button { showsModels.toggle() } label: {
-            if inInspector {
+            if inForm {
+                FormChoiceLabel(title: data.title)
+            } else if inInspector {
                 InspectorChoiceLabel(title: data.title)
             } else {
                 HStack(spacing: 7) {
@@ -66,7 +74,7 @@ struct ModelMenu: View {
                 }
             }
         }
-        .buttonStyle(GenerationButtonStyle(active: showsModels, compact: inInspector))
+        .buttonStyle(GenerationButtonStyle(active: showsModels, compact: inInspector, form: inForm))
         .accessibilityLabel("Model: \(data.title)")
         .help(disabled ? "Model can change when this turn ends" : modelHelp)
         .popover(isPresented: $showsModels, arrowEdge: .top) {
@@ -78,7 +86,9 @@ struct ModelMenu: View {
 
     private var effortButton: some View {
         Button { showsEffort.toggle() } label: {
-            if inInspector {
+            if inForm {
+                FormChoiceLabel(title: efforts.isEmpty ? "Not supported" : settings.reasoningEffort?.title ?? "Auto")
+            } else if inInspector {
                 InspectorChoiceLabel(title: efforts.isEmpty ? "Not supported" : settings.reasoningEffort?.title ?? "Auto")
             } else {
                 HStack(spacing: 6) {
@@ -90,7 +100,7 @@ struct ModelMenu: View {
                 }
             }
         }
-        .buttonStyle(GenerationButtonStyle(active: showsEffort, compact: inInspector))
+        .buttonStyle(GenerationButtonStyle(active: showsEffort, compact: inInspector, form: inForm))
         .fixedSize()
         .disabled(efforts.isEmpty)
         .accessibilityLabel(efforts.isEmpty ? "Reasoning effort is not supported by this model"
@@ -114,13 +124,41 @@ struct ModelMenu: View {
     }
 }
 
+/// A value with the up and down chevrons of a form's own pop-up buttons, as the job editor's other rows have.
+private struct FormChoiceLabel: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title).lineLimit(1).truncationMode(.middle)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 10, weight: .bold))
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(Palette.text.opacity(0.1)))
+        }
+        .padding(.trailing, 4)
+        .contentShape(Rectangle())
+    }
+}
+
 private struct GenerationButtonStyle: ButtonStyle {
     var active = false
     var compact = false
+    var form = false
     @Environment(\.isEnabled) private var enabled
     @State private var hovered = false
 
     func makeBody(configuration: Configuration) -> some View {
+        if form {
+            configuration.label
+                .foregroundStyle(Palette.text)
+                .opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
+        } else {
+            pill(configuration)
+        }
+    }
+
+    private func pill(_ configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(Palette.text)
             .padding(.horizontal, compact ? 0 : 10)

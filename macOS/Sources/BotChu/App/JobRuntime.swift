@@ -60,6 +60,7 @@ final class JobRuntime {
         refresh()
         for launch in interrupted { deliver(launch.job, run: launch.run) }
         guard runs else { return }
+        loadCatalog(for: jobs)
         // Nothing starts before every job is loaded; then due jobs, at once and on each tick.
         DispatchQueue.main.async { [weak self] in self?.tick() }
         timer = Timer.scheduledTimer(withTimeInterval: Self.tickInterval, repeats: true) { [weak self] _ in
@@ -78,6 +79,28 @@ final class JobRuntime {
     /// Whether one of the agent's jobs is running, in its workspace.
     func isRunning(botID: UUID) -> Bool { jobs.contains { $0.botID == botID && $0.activeRun?.outcome == .running } }
     func live(_ runID: UUID) -> JobLive? { lives[runID] }
+
+    /// What a job's runs use: its own account, model and effort, or its agent's, with why.
+    func runSettings(of job: Job, agent: Bot) -> (settings: Bot, unavailable: JobRunsOn.Unavailable?) {
+        job.runSettings(agent: agent, accounts: model?.settings.accounts ?? Accounts.all, catalog: model?.modelCatalog.models ?? [])
+    }
+
+    /// Why a job's runs are on its agent's when it has a choice of its own, as its row and history say.
+    func fallback(of job: Job) -> String? {
+        guard let bot = model?.bot(job.botID), let unavailable = runSettings(of: job, agent: bot).unavailable else { return nil }
+        return unavailable.explanation(agent: bot.name)
+    }
+
+    /// OpenRouter's catalog, when a job runs on a model of its own there: what tells a run that its
+    /// model is gone.
+    private func loadCatalog(for jobs: [Job]) {
+        guard runs, let model else { return }
+        let accounts = model.settings.accounts
+        guard jobs.contains(where: { job in
+            job.runsOn.map { runsOn in !runsOn.model.isEmpty && accounts.first { $0.id == runsOn.accountID }?.kind == .pi } ?? false
+        }) else { return }
+        Task { await model.modelCatalog.load() }
+    }
 
     /// A run's transcript: as it streams, or as saved.
     func thread(of run: UUID, in job: Job) -> [ChatMessage] {
@@ -115,6 +138,7 @@ final class JobRuntime {
         if let old = self.job(job.id), old.botID != job.botID { throw JobEngine.Problem.invalid("A job stays with its agent.") }
         try engine.save(job)
         notes[job.id] = nil
+        loadCatalog(for: [job])
         tick()
     }
 
@@ -201,7 +225,9 @@ final class JobRuntime {
         guard let model, let bot = model.bot(job.botID), BotHome(workspace: bot.workspace).exists else {
             return finish(runID, outcome: .failed, summary: "The agent's folder is missing, so the run didn't start.")
         }
-        let account = bot.account
+        // The job's own account, model and effort, or its agent's.
+        let (agent, unavailable) = runSettings(of: job, agent: bot)
+        let account = agent.account
         let key = account.kind == .pi ? model.openRouterKey() : nil
         if account.kind == .pi, key?.isEmpty ?? true {
             return finish(runID, outcome: .failed, summary: "Add your OpenRouter API key in BotChu ▸ Settings first.")
@@ -213,18 +239,18 @@ final class JobRuntime {
             instructions: Workspace.read(BotDocument.instructions.url(for: bot).path), team: Workspace.read(model.settings.teamPath),
             skills: model.activeSkills(of: bot), locale: .current)
         let prompt = BotContext.prompt(for: job.prompt, preamble: preamble)
-        let invocation = JobLaunch.invocation(for: bot, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key)
+        let invocation = JobLaunch.invocation(for: agent, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key)
         let command = model.settings.command(for: account)
         let runner = AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: bot.workspace, isDirectory: true))
-        let modelChoice = GenerationOptions.effectiveModel(bot.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel)
+        let modelChoice = GenerationOptions.effectiveModel(agent.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel)
         engine.amend(runID) {
             $0.accountID = account.id
             $0.accountName = account.name
             $0.model = modelChoice
-            $0.reasoningEffort = bot.reasoningEffort
+            $0.reasoningEffort = agent.reasoningEffort
         }
         let live = JobLive()
-        live.messages = [ChatMessage(role: .note, text: "Started on \(account.name)")]
+        live.messages = [ChatMessage(role: .note, text: JobLaunch.startNote(account: account, agent: bot.name, unavailable: unavailable))]
         live.state = RunState()
         lives[runID] = live
         var assembler = ThreadAssembler()

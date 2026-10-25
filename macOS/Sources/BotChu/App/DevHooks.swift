@@ -10,10 +10,12 @@ import BotChuCore
 ///   rows (`sidebar.png`), which the window's picture leaves out.
 /// - `BOTCHU_OPEN`: open `editor` (a new bot), `task` (New Task), `memory`, `soul`, or `settings` at launch.
 /// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
-/// - `BOTCHU_OPEN=model|effort|inspector-model|inspector-effort`: open a generation picker.
+/// - `BOTCHU_OPEN=model|effort|inspector-model|inspector-effort`: open a generation picker;
+///   `job-model|job-effort` opens a new job's editor with its picker open.
 /// - `BOTCHU_INSPECTOR=activity|model|session|memory`: select an inspector area on throwaway data.
 /// - `BOTCHU_DEFAULT_MODEL`: an OpenRouter default for a throwaway run only.
 /// - `BOTCHU_WINDOW=compact`: review the main window at its minimum width, on throwaway data;
+///   `BOTCHU_WINDOW=<width>x<height>` (such as `1908x960`) at that frame size, as a report gives it;
 ///   `wide`, 1,700 points wide, where a bot's tasks show as a column beside its chat.
 /// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review;
 ///   `mixed` gives each kind of profile a different state (`mixedUsage`).
@@ -57,7 +59,8 @@ import BotChuCore
 ///   with this report and file it, with the stand-in `gh`.
 /// - `BOTCHU_JOBS=sample`: with `BOTCHU_DATA_DIR`, give the bots sample scheduled jobs with a history
 ///   of every kind of run (`sampleJobs`), and run no job, so nothing starts a CLI. `BOTCHU_OPEN=jobs`
-///   opens Jobs, `job-editor` the editor for a new job, and `job-history` the first job's history.
+///   opens Jobs, `job-editor` the editor for a new job, `job-edit` the editor for the job titled
+///   `BOTCHU_JOB` (else the first), and `job-history` the first job's history.
 @MainActor
 enum DevHooks {
     static let env = ProcessInfo.processInfo.environment
@@ -125,19 +128,37 @@ enum DevHooks {
             if fixture == "unavailable" { throw UsageFailure("Check the account’s sign-in, then refresh.") }
             let now = Date()
             if fixture == "mixed", let reading = try mixedUsage(request.account, now: now, started: started) { return reading }
-            return ProviderUsage(windows: [
-                UsageWindow(id: "session", title: "5-hour", usedPercent: 24,
-                            resetsAt: now.addingTimeInterval(fixture == "expired" ? -60 : 7_200)),
-                UsageWindow(id: "week", title: "Weekly", usedPercent: 83, resetsAt: now.addingTimeInterval(259_200)),
-            ], readAt: now.addingTimeInterval(fixture == "stale" ? -7_200 : 0))
+            let readAt = now.addingTimeInterval(fixture == "stale" ? -7_200 : 0)
+            switch request.account.kind {
+            case .pi:
+                // A key with a weekly spending limit.
+                return ProviderUsage(windows: [UsageWindow(id: "key", title: "Key allowance", usedPercent: 26.4,
+                    resetsAt: now.addingTimeInterval(fixture == "expired" ? -60 : 302_400), detail: "$18.40 of $25.00 left")], readAt: readAt)
+            case .codex:
+                // Codex says whether the account has usage credits and free resets.
+                return ProviderUsage(windows: [UsageWindow(id: "week", title: "Weekly", usedPercent: 41, resetsAt: now.addingTimeInterval(fixture == "expired" ? -60 : 388_800))],
+                                     readAt: readAt, credits: UsageCredits(available: true, balance: 65_292.36),
+                                     resets: UsageResets(available: 2, expiries: [now.addingTimeInterval(432_000), now.addingTimeInterval(1_123_200)]))
+            default:
+                return ProviderUsage(windows: [
+                    UsageWindow(id: "session", title: "5-hour", usedPercent: 24,
+                                resetsAt: now.addingTimeInterval(fixture == "expired" ? -60 : 7_200)),
+                    UsageWindow(id: "week", title: "Weekly", usedPercent: 83, resetsAt: now.addingTimeInterval(259_200)),
+                ], readAt: readAt)
+            }
         }
     }
 
     /// `BOTCHU_USAGE=mixed`: Antigravity with more windows than a row shows, Muse stale, Pi's key
-    /// without a limit, Codex Work unavailable, and Claude Work whose first reading is followed by
-    /// a failed check (`start` makes it); the others get the sample.
+    /// without a limit, Codex Personal with no credits and one free reset, Codex Work unavailable,
+    /// and Claude Work whose first reading is followed by a failed check (`start` makes it); the
+    /// others get the sample.
     nonisolated private static func mixedUsage(_ account: Account, now: Date, started: Date) throws -> ProviderUsage? {
         switch account.id {
+        case "codex-personal":
+            return ProviderUsage(windows: [UsageWindow(id: "week", title: "Weekly", usedPercent: 100, resetsAt: now.addingTimeInterval(97_200))],
+                                 readAt: now, credits: UsageCredits(available: false, balance: 0),
+                                 resets: UsageResets(available: 1, expiries: [now.addingTimeInterval(259_200)]))
         case "google":
             return ProviderUsage(windows: ["Gemini · Weekly", "Gemini · 5-hour", "Claude & GPT · Weekly", "Claude & GPT · 5-hour", "Images · Daily"].enumerated().map {
                 UsageWindow(id: $1, title: $1, usedPercent: Double([22, 4, 97, 0, 61][$0]), resetsAt: now.addingTimeInterval(Double($0 + 1) * 9_000))
@@ -167,6 +188,7 @@ enum DevHooks {
             Task {
                 try? await Task.sleep(for: .seconds(3))
                 _ = await model.usage.read(request, manual: true, now: .now.addingTimeInterval(31))
+                await model.usageBoard.sync(request, usage: model.usage)
             }
         }
         if dataDir != nil, env["BOTCHU_WINDOW"] == "compact" {
@@ -180,6 +202,15 @@ enum DevHooks {
         if dataDir != nil, env["BOTCHU_WINDOW"] == "wide" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 NSApp.windows.first(where: { $0.styleMask.contains(.titled) })?.setContentSize(NSSize(width: 1700, height: 920))
+            }
+        }
+        if dataDir != nil, let size = env["BOTCHU_WINDOW"]?.split(separator: "x").compactMap({ Double($0) }), size.count == 2 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                guard let window = NSApp.windows.first(where: { $0.styleMask.contains(.titled) }) else { return }
+                let visible = window.screen?.visibleFrame ?? .infinite
+                let frame = NSRect(x: window.frame.minX, y: window.frame.maxY - size[1], width: size[0], height: size[1])
+                // On screen, so the window isn't moved back and resized there.
+                window.setFrame(frame.offsetBy(dx: min(0, visible.maxX - frame.maxX), dy: max(0, visible.minY - frame.minY)), display: true)
             }
         }
         if dataDir != nil, let density = env["BOTCHU_DENSITY"].flatMap(ChatDensity.init(rawValue:)) {
@@ -207,7 +238,9 @@ enum DevHooks {
                                     item: env["BOTCHU_PROJECT_ITEM"].flatMap(Int.init))
             }
         case "editor": model.newBot()
-        case "job-editor": model.jobs.newJob(for: model.selection)
+        case "job-editor", "job-model", "job-effort": model.jobs.newJob(for: model.selection)
+        case "job-edit":
+            if let job = model.jobs.jobs.first(where: { $0.title == env["BOTCHU_JOB"] }) ?? model.jobs.jobs.first { model.jobs.edit(job.id) }
         case "job-history": if let job = model.jobs.jobs.first { model.jobs.showHistory(job.id) }
         case "task": if let id = model.selection { model.newTask(for: id) }
         case "memory": if let id = model.selection { model.editDocument(.memory, for: id) }
@@ -337,12 +370,15 @@ enum DevHooks {
                          createdAt: now.addingTimeInterval(-30 * 86_400))
         weekly.pauseReason = "Paused after 3 failed runs in a row. Fix what failed, then Resume."
         weekly.runs = [run(.failed, hoursAgo: 170, summary: "Invalid API key · Please run /login — Sign in to \(first.account.name) in Terminal, then Run Now.")]
+        // On a CLI profile that is gone, so its runs are on its agent's.
+        weekly.runsOn = JobRunsOn(accountID: "custom-review-gone", accountProfile: Account(id: "custom-review-gone", name: "Codex Research", kind: .codex,
+                                  defaultCommand: "codex-research", symbol: "terminal"), model: "gpt-6-luna", reasoningEffort: .high)
         var jobs = [triage, weekly]
         if model.bots.count > 1 {
             let second = model.bots[1]
             var check = Job(botID: second.id, title: "Check the deploy", prompt: "Check that the site responds and the last deploy succeeded.",
                             schedule: JobSchedule(kind: .interval, every: 90, unit: .minutes, anchor: now.addingTimeInterval(-6 * 3600), timeZone: zone),
-                            createdAt: now.addingTimeInterval(-86_400))
+                            createdAt: now.addingTimeInterval(-86_400), runsOn: JobRunsOn(accountID: "claude-work", model: "sonnet", reasoningEffort: .low))
             check.handledThrough = now.addingTimeInterval(-600)
             var waiting = JobRun(trigger: .scheduled, scheduledFor: now.addingTimeInterval(-600), timeZone: zone, reservedAt: now.addingTimeInterval(-600))
             waiting.outcome = .waiting

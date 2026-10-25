@@ -135,14 +135,18 @@ struct UsageWindowView: View {
 struct UsageBar: View {
     let title: String
     let percent: Double
+    var track = Palette.rowDivider
+    /// A stale reading's bar, faded.
+    var dimmed = false
 
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                Capsule().fill(Palette.rowDivider)
+                Capsule().fill(track)
                 Capsule().fill(percent >= 100 ? Palette.dynamic(0xD93A2F, 0xFF6B60)
                                : percent >= 80 ? Palette.dynamic(0xB96D00, 0xF5A623) : Palette.violet)
                     .frame(width: geometry.size.width * min(100, max(0, percent)) / 100)
+                    .opacity(dimmed ? 0.45 : 1)
             }
         }
         .accessibilityElement(children: .ignore)

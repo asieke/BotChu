@@ -1,8 +1,9 @@
 import SwiftUI
 import BotChuCore
 
-/// A job's owner, title, instructions, schedule and time zone, what to do about missed times, its
-/// time limit and whether it is on, with the schedule in words and its next times.
+/// A job's owner and the account, model and effort its runs use (its owner's, unless chosen here),
+/// title, instructions, schedule and time zone, what to do about missed times, its time limit and
+/// whether it is on, with the schedule in words and its next times.
 struct JobEditor: View {
     /// How often it repeats, as the editor offers it.
     enum Repeat: String, CaseIterable, Identifiable {
@@ -78,6 +79,9 @@ struct JobEditor: View {
                     }
                     .disabled(!request.isNew)
                     .help(request.isNew ? "The agent that runs the job, as itself" : "A job stays with the agent that owns it.")
+                    if let agent { RunsOnRows(job: $job, agent: agent) }
+                }
+                Section {
                     TextField("Title", text: $job.title, prompt: Text("Morning issue triage"))
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Instructions")
@@ -137,7 +141,7 @@ struct JobEditor: View {
                         ForEach(Self.options(Self.timeLimits, including: job.timeLimit), id: \.1) { Text($0.0).tag($0.1) }
                     }
                     Toggle("Enabled", isOn: $job.enabled)
-                    Text("Each run is a fresh session of \(agent?.name ?? "the agent")'s on its account\(agent.map { " (\($0.account.name))" } ?? ""), with its identity, instructions and memory, in its workspace. It never uses its Home conversation. Findings and failures appear in Home with Open Run; a run that ends with nothing to report stays in the job's history.")
+                    Text("Each run is a fresh session of \(agent?.name ?? "the agent")'s\(agent.map { " on \(model.jobs.runSettings(of: job, agent: $0).settings.account.name)" } ?? ""), with its identity, instructions and memory, in its workspace. It never uses its Home conversation. Findings and failures appear in Home with Open Run; a run that ends with nothing to report stays in the job's history.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -176,6 +180,74 @@ struct JobEditor: View {
 
     static func options(_ options: [(String, TimeInterval)], including value: TimeInterval) -> [(String, TimeInterval)] {
         options.contains { $0.1 == value } ? options : options + [(JobWords.duration(value), value)]
+    }
+}
+
+/// The account, model and effort the job's runs use: its agent's, as they are when each run starts,
+/// until others are chosen here, from the accounts and pickers a conversation has. A choice BotChu
+/// can't run any more shows as unavailable, and why the runs use the agent's instead.
+private struct RunsOnRows: View {
+    @Environment(AppModel.self) private var model
+    @Binding var job: Job
+    let agent: Bot
+
+    var body: some View {
+        let unavailable = model.jobs.runSettings(of: job, agent: agent).unavailable
+        // The job's own choice, also one that can't run, else the agent's.
+        let shown = job.runsOn?.applied(to: agent, accounts: model.settings.accounts) ?? agent
+        Picker("Account", selection: account) {
+            ProviderMenuLabel(title: "Same as \(agent.name) · \(agent.account.name)", kind: agent.account.kind).tag(String?.none)
+            Divider()
+            if case .account(let name) = unavailable, let runsOn = job.runsOn {
+                ProviderMenuLabel(title: "\(name) · unavailable", kind: shown.account.kind).tag(String?.some(runsOn.accountID))
+            }
+            ForEach(model.settings.accounts) { account in
+                ProviderMenuLabel(account).tag(String?.some(account.id))
+            }
+        }
+        .help("The account each run starts on")
+        ModelMenu(settings: shown, disabled: false, onModel: { job.selectModel($0, agent: agent) },
+                  onEffort: { job.selectReasoningEffort($0, agent: agent, openRouterDefault: model.settings.openRouterModel) }, inForm: true)
+            // There's no choosing a model for an account BotChu can't run.
+            .disabled(unavailable?.isAccount ?? false)
+        Group {
+            if let unavailable {
+                Label {
+                    Text(unavailable.explanation(agent: agent.name) + " Choose another \(unavailable.isAccount ? "account" : "model"), or Same as \(agent.name).")
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                }
+                .foregroundStyle(.orange)
+            } else if job.runsOn == nil {
+                Text("Runs use \(agent.name)'s account, model and effort, as they are when each starts. Choose others here for this job alone.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Runs use these, whatever \(agent.name) uses. Same as \(agent.name) goes back to the agent's.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// The job's account, nil for its agent's. Only an account BotChu offers can be chosen: choosing
+    /// the unavailable one again leaves it as it is.
+    private var account: Binding<String?> {
+        Binding(get: { job.runsOn?.accountID }, set: { id in
+            if let id {
+                guard let account = model.settings.accounts.first(where: { $0.id == id }) else { return }
+                job.selectAccount(account, agent: agent)
+            } else {
+                job.selectAccount(nil, agent: agent)
+            }
+        })
+    }
+}
+
+private extension JobRunsOn.Unavailable {
+    var isAccount: Bool {
+        if case .account = self { return true }
+        return false
     }
 }
 

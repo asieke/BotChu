@@ -6,8 +6,8 @@ import BotChuCore
 /// (`ActivityTranscript`), regrouped only where a turn writes as it streams in. The newest items
 /// show at first, earlier ones on request (and, in a long conversation opened anew, once they're
 /// grouped). Only the rows near the visible part are laid out, however much of the history is
-/// open (`TranscriptViewport`). A reader at the bottom follows new content; one reading earlier
-/// content keeps their place, by the row they're reading, while it arrives.
+/// open (`TranscriptViewport`). A reader pinned at the end follows new content; one reading earlier
+/// content keeps their place, by the row they're reading, while it arrives (`ChatPin`).
 struct ChatView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
@@ -16,8 +16,6 @@ struct ChatView: View {
     let target: ChatTarget
     @State private var composerFocused = false
     @State private var transcript: TranscriptModel
-    /// The reader is at the newest content, and the chat keeps them there.
-    @State private var following = true
 
     init(target: ChatTarget) {
         self.target = target
@@ -38,102 +36,88 @@ struct ChatView: View {
             let kind = current.account.kind
             let density = density, transcript = transcript
             let plan = transcript.plan(items, from: start,
-                                       inputs: .init(width: 0, density: density.layoutValue, dark: colorScheme == .dark, epoch: epoch),
-                                       pinned: following) { index, item in
+                                       inputs: .init(width: 0, density: density.layoutValue, dark: colorScheme == .dark, epoch: epoch)) { index, item in
                 Self.style(of: item, at: index, count: items.count, density: density, turnRunning: turnRunning, transcript: transcript, cards: cards)
             }
             VStack(spacing: 0) {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            VStack(spacing: 0) {
-                                if start > 0 {
-                                    Button {
-                                        // The rows shown stay put as earlier ones go in above them.
-                                        transcript.showEarlier(items: items)
-                                    } label: {
-                                        Label("Show \(min(start, TranscriptModel.page)) earlier", systemImage: "arrow.up")
-                                            .font(.callout)
-                                    }
-                                    .buttonStyle(.link)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.bottom, 4)
-                                    .help("\(start) earlier \(start == 1 ? "item" : "items") in this conversation")
-                                } else if transcript.isLoadingEarlier || !model.conversation(target).isLoaded {
-                                    ProgressView().controlSize(.small)
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 8)
-                                        .accessibilityLabel("Loading earlier messages")
-                                } else if let task {
-                                    TaskIntro(bot: bot, task: task, machine: task.isRemote ? model.machineName(task.hostID, fallback: task.hostName) : nil)
-                                } else {
-                                    BotIntro(bot: bot)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        VStack(spacing: 0) {
+                            if start > 0 {
+                                Button {
+                                    // The rows shown stay put as earlier ones go in above them.
+                                    transcript.showEarlier(items: items)
+                                } label: {
+                                    Label("Show \(min(start, TranscriptModel.page)) earlier", systemImage: "arrow.up")
+                                        .font(.callout)
                                 }
+                                .buttonStyle(.link)
+                                .frame(maxWidth: .infinity)
+                                .padding(.bottom, 4)
+                                .help("\(start) earlier \(start == 1 ? "item" : "items") in this conversation")
+                            } else if transcript.isLoadingEarlier || !model.conversation(target).isLoaded {
+                                ProgressView().controlSize(.small)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                                    .accessibilityLabel("Loading earlier messages")
+                            } else if let task {
+                                TaskIntro(bot: bot, task: task, machine: task.isRemote ? model.machineName(task.hostID, fallback: task.hostName) : nil)
+                            } else {
+                                BotIntro(bot: bot)
                             }
-                            .padding(.bottom, 12)
-                            // Where the rows start: it tells the transcript where the reader is.
-                            ChatScrollProbe(transcript: transcript)
-                            Color.clear.frame(height: plan.above)
-                            ForEach(plan.rows) { row in
-                                let item = items[row.index]
-                                TranscriptRow(row: row, item: item, bot: bot, kind: kind,
-                                              startsBotTurn: !(row.index > 0 && items[row.index - 1].isBotTurn),
-                                              density: density, live: turnRunning && row.index == items.count - 1,
-                                              open: transcript.isOpen(item.id, default: false),
-                                              runs: cards.runs(for: item), after: cards.unplaced(after: item.id))
-                                    .equatable()
-                            }
-                            Color.clear.frame(height: plan.below)
-                            if model.runStates[target]?.preparing == true {
-                                PreparingRow(bot: bot, place: task.flatMap { $0.isRemote ? model.machineName($0.hostID, fallback: $0.hostName) : nil })
-                                    .padding(.bottom, 12)
-                            } else if running, messages.last?.role != .assistant, !(items.last.map { Self.showsProgress($0) } ?? false) {
-                                TypingIndicator(bot: bot, showsAvatar: !(items.last?.isBotTurn ?? false))
-                                    .padding(.bottom, 12)
-                            }
-                            // The chat's bottom margin, so scrolling to it lands at the very end, where
-                            // the chat opens, rather than the margin short of it.
-                            Color.clear.frame(height: 21).id("bottom")
                         }
-                        .padding(.horizontal, 24)
-                        .padding(.top, 20)
-                        .frame(maxWidth: Theme.chatWidth)
-                        .frame(maxWidth: .infinity)
-                    }
-                    .followsNewestMessage(following)
-                    .tracksFollowing($following) { proxy.scrollTo("bottom", anchor: .bottom) }
-                    // Opening a conversation shows its newest message, also when the first layout
-                    // didn't land there.
-                    .onAppear { DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) } }
-                    // A card the reader opens stays where they clicked it, growing downward.
-                    .onChange(of: transcript.overrides) { old, new in
-                        if new.count(where: { $0.value }) > old.count(where: { $0.value }) { following = false }
-                    }
-                    // A reply streams in by growing its text in place, so the follow watches the last
-                    // message, not the count, and keeps up with every delta.
-                    .onChange(of: messages.last) { if following { proxy.scrollTo("bottom", anchor: .bottom) } }
-                    .onChange(of: following) { _, now in
-                        transcript.follow(now, items: items)
-                        if now { proxy.scrollTo("bottom", anchor: .bottom) }
-                    }
-                    .overlay(alignment: .bottom) {
-                        if !following {
-                            Button {
-                                following = true
-                                proxy.scrollTo("bottom", anchor: .bottom)
-                            } label: {
-                                Label(running ? "Follow Live" : "Jump to Latest", systemImage: "arrow.down")
-                                    .font(.callout.weight(.medium))
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(Capsule().fill(.regularMaterial))
-                                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
-                                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.bottom, 10)
-                            .help("Scroll to the newest messages and follow them")
+                        .padding(.bottom, 12)
+                        // Where the rows start: it tells the transcript where the reader is.
+                        ChatScrollProbe(transcript: transcript)
+                        Color.clear.frame(height: plan.above)
+                        ForEach(plan.rows) { row in
+                            let item = items[row.index]
+                            TranscriptRow(row: row, item: item, bot: bot, kind: kind,
+                                          startsBotTurn: !(row.index > 0 && items[row.index - 1].isBotTurn),
+                                          density: density, live: turnRunning && row.index == items.count - 1,
+                                          open: transcript.isOpen(item.id, default: false),
+                                          runs: cards.runs(for: item), after: cards.unplaced(after: item.id))
+                                .equatable()
                         }
+                        Color.clear.frame(height: plan.below)
+                        if model.runStates[target]?.preparing == true {
+                            PreparingRow(bot: bot, place: task.flatMap { $0.isRemote ? model.machineName($0.hostID, fallback: $0.hostName) : nil })
+                                .padding(.bottom, 12)
+                        } else if running, messages.last?.role != .assistant, !(items.last.map { Self.showsProgress($0) } ?? false) {
+                            TypingIndicator(bot: bot, showsAvatar: !(items.last?.isBotTurn ?? false))
+                                .padding(.bottom, 12)
+                        }
+                        // The chat's bottom margin, part of the end a pinned chat keeps in view.
+                        Color.clear.frame(height: 21)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 20)
+                    .frame(maxWidth: Theme.chatWidth)
+                    .frame(maxWidth: .infinity)
+                }
+                .scrollsOnlyWithTheProbe()
+                // Opening a conversation, or switching to it, shows its newest message.
+                .onAppear { transcript.follow(.opened) }
+                // A card the reader opens stays where they clicked it, growing downward.
+                .onChange(of: transcript.overrides) { old, new in
+                    if new.count(where: { $0.value }) > old.count(where: { $0.value }) { transcript.follow(.openedCard) }
+                }
+                .overlay(alignment: .bottom) {
+                    if !transcript.isPinned {
+                        Button {
+                            transcript.follow(.jumped)
+                        } label: {
+                            Label(running ? "Follow Live" : "Jump to Latest", systemImage: "arrow.down")
+                                .font(.callout.weight(.medium))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(.regularMaterial))
+                                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
+                                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.bottom, 10)
+                        .help("Scroll to the newest messages and follow them")
                     }
                 }
                 VStack(spacing: 8) {
@@ -207,8 +191,8 @@ struct ChatView: View {
             model.draftReferences[target] = nil
             model.draftImages[target] = nil
             model.attachmentErrors[target] = nil
-            // Sending takes the reader to their message and what follows it.
-            following = true
+            // Sending takes the reader to their message and what follows it, wherever they were.
+            transcript.follow(.sent)
         }
     }
 
@@ -500,47 +484,18 @@ struct PreparingRow: View {
 }
 
 extension View {
-    /// Opens a chat at its newest message and, while the reader follows it, keeps it there as
-    /// content grows; otherwise growing content leaves the reader's place alone. On macOS 15 and
-    /// later a chat shorter than the window starts at the top rather than sinking to the bottom.
-    @ViewBuilder func followsNewestMessage(_ following: Bool = true) -> some View {
+    /// The chat's scroll view moves only as the reader scrolls it and as `ChatScrollProbe` moves
+    /// it: to the end while the reader is pinned there, from the first layout on. On macOS 15 and
+    /// later SwiftUI keeps the top where it is as content and size change, and a chat shorter than
+    /// the window starts at the top. Anchored at the bottom instead, for size changes or for the
+    /// initial offset (which SwiftUI goes on applying until it sees a scroll of its own), it took a
+    /// reader who had scrolled up back down to the end.
+    @ViewBuilder func scrollsOnlyWithTheProbe() -> some View {
         if #available(macOS 15, *) {
-            defaultScrollAnchor(.bottom, for: .initialOffset)
-                .defaultScrollAnchor(following ? .bottom : .top, for: .sizeChanges)
+            defaultScrollAnchor(.top, for: .sizeChanges)
                 .defaultScrollAnchor(.top, for: .alignment)
-        } else {
-            defaultScrollAnchor(.bottom)
-        }
-    }
-
-    /// Whether the reader is at the newest content. Only their own scrolling changes it: content
-    /// that grows, or a window that resizes, leaves it as it was, and while they follow,
-    /// `keepAtBottom` takes them back to the newest content after any such change (a reply's web
-    /// view or an image that grows after the first layout). Before macOS 15 the chat always follows.
-    @ViewBuilder func tracksFollowing(_ following: Binding<Bool>, keepAtBottom: @escaping () -> Void) -> some View {
-        if #available(macOS 15, *) {
-            onScrollGeometryChange(for: ChatScrollPosition.self) { geometry in
-                ChatScrollPosition(content: geometry.contentSize.height, viewport: geometry.containerSize.height,
-                                   below: geometry.contentSize.height - geometry.visibleRect.maxY)
-            } action: { old, new in
-                // While the window lays out, the scroll view briefly reports no height at all.
-                guard new.viewport > 120 else { return }
-                if abs(old.content - new.content) >= 0.5 || abs(old.viewport - new.viewport) >= 0.5 {
-                    if following.wrappedValue, new.below > 1 { keepAtBottom() }
-                    return
-                }
-                let atBottom = new.below < 40
-                if following.wrappedValue != atBottom { following.wrappedValue = atBottom }
-            }
         } else {
             self
         }
     }
-}
-
-struct ChatScrollPosition: Equatable {
-    var content: CGFloat
-    var viewport: CGFloat
-    /// How far the content goes on below what's visible.
-    var below: CGFloat
 }

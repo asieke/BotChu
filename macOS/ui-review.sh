@@ -26,12 +26,15 @@
 #   BOTCHU_OPEN=report macOS/ui-review.sh  # open Report a Bug or Feature
 #   BOTCHU_OPEN=providers BOTCHU_USAGE=mixed BOTCHU_PROFILE="A long profile name|claude|claude-long" macOS/ui-review.sh
 #                                          # Providers with a row in each usage state, and an added profile
+#   BOTCHU_WINDOW=1908x960 macOS/ui-review.sh  # at that window size (compact: its minimum width)
 #   BOTCHU_OPEN=projects BOTCHU_PROJECT=<owner/name> BOTCHU_PROJECT_TAB=issues BOTCHU_PROJECT_ITEM=<number> macOS/ui-review.sh
 #                                          # open Projects with that repository's sidebar, on a tab and an
 #                                          # issue or pull request there (read with your gh login)
 #   BOTCHU_JOBS=sample BOTCHU_OPEN=jobs macOS/ui-review.sh  # Jobs, with sample jobs in every state and
 #                                          # history (none ever runs); BOTCHU_OPEN=job-editor or job-history
-#                                          # opens a new job's editor or the first job's history instead
+#                                          # opens a new job's editor or the first job's history instead,
+#                                          # job-model or job-effort a new job's picker, and job-edit with
+#                                          # BOTCHU_JOB="Check the deploy" that job's editor
 #   BOTCHU_REPORT="It crashed" macOS/ui-review.sh  # and file this report, with a stand-in gh that
 #                                          # keeps it in $data/reports (BOTCHU_REPORT_FAIL=1: it fails),
 #                                          # with the window's screenshot (BOTCHU_SCREENSHOT_FAIL=1: none)
@@ -174,6 +177,7 @@ fi
 [ -n "${BOTCHU_TYPE:-}" ] && args+=(--env "BOTCHU_TYPE=$BOTCHU_TYPE")
 [ -n "${BOTCHU_SEARCH:-}" ] && args+=(--env "BOTCHU_SEARCH=$BOTCHU_SEARCH")
 [ -n "${BOTCHU_JOBS:-}" ] && args+=(--env "BOTCHU_JOBS=$BOTCHU_JOBS")
+[ -n "${BOTCHU_JOB:-}" ] && args+=(--env "BOTCHU_JOB=$BOTCHU_JOB")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
 # Without restoring windows: after any copy of BotChu crashed, macOS would otherwise stop at a
 # dialog asking whether to reopen them.

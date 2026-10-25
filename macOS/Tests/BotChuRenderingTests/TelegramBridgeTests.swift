@@ -41,11 +41,11 @@ extension RenderingTests {
         // Delivery was already fetched, but has not yet reached AppModel.send. This exercises
         // the real main-actor boundary even if the settings observer hasn't restarted it yet.
         if change == "cancelled" {
-            let delivery = Task { await connection.deliver("must not run", id: UUID(), to: bot.id, from: 42) }
+            let delivery = Task { await connection.deliver("must not run", references: [], id: UUID(), to: bot.id, from: 42, mapped: bot.id) }
             delivery.cancel()
             #expect(await delivery.value == .discarded)
         } else {
-            #expect(await connection.deliver("must not run", id: UUID(), to: bot.id, from: 42) == .discarded)
+            #expect(await connection.deliver("must not run", references: [], id: UUID(), to: bot.id, from: 42, mapped: bot.id) == .discarded)
         }
         #expect(app.thread(.home(bot.id)).allSatisfy { $0.role != .user })
         #expect(app.messageQueues[.home(bot.id)]?.messages.isEmpty != false)
@@ -135,6 +135,84 @@ extension RenderingTests {
         #expect(offsets.count > polled && offsets[polled] == 12)
         #expect(await telegram.sent.count == 1)
         reopened.telegramEnabled = false
+    }
+}
+
+extension RenderingTests {
+    /// #114: from the chat Settings gives Danny (a COO), `/task @Worker #fixture/project …` makes a
+    /// Task of Worker's own, in the left sidebar under Worker, with its own conversation and session:
+    /// not a sub-agent run of Danny's, nor anything under Danny. `@Worker #… text` reaches Worker's
+    /// Home with the repository as a `#` mention.
+    @Test func telegramTaskRequestMakesATopLevelTaskForTheChosenBot() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-telegram-task-\(UUID().uuidString)")
+        let domain = "local.BotChu.TelegramTaskTests.\(UUID().uuidString)"
+        defer {
+            UserDefaults(suiteName: domain)?.removePersistentDomain(forName: domain)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let store = Store(root: root.appendingPathComponent("index"))
+        let settings = AppSettings(defaults: UserDefaults(suiteName: domain)!)
+        settings.botsRoot = root.appendingPathComponent("bots").path
+        settings.reposRoot = root.appendingPathComponent("repos").path
+        let danny = Bot(name: "Danny", title: "COO", accountID: "codex-dev", workspace: root.appendingPathComponent("danny").path)
+        let worker = Bot(name: "Worker", accountID: "codex-work", workspace: root.appendingPathComponent("worker").path)
+        for bot in [danny, worker] { try BotHome(workspace: bot.workspace).save(bot) }
+        let checkout = root.appendingPathComponent("repos/project").path
+        for arguments in [["git", "init", "-q", "-b", "main", checkout],
+                          ["git", "-C", checkout, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+                           "commit", "-q", "--allow-empty", "-m", "Initial"]] {
+            let git = Process()
+            git.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            git.arguments = arguments
+            try git.run()
+            git.waitUntilExit()
+        }
+        let script = root.appendingPathComponent("cli.py")
+        try #"""
+        import json, sys
+        def emit(value):
+            print(json.dumps(value), flush=True)
+        emit({"type": "thread.started", "thread_id": "telegram-task-session"})
+        emit({"type": "item.completed", "item": {"type": "agent_message", "text": "done:" + sys.argv[-1].splitlines()[-1]}})
+        emit({"type": "turn.completed"})
+        """#.write(to: script, atomically: true, encoding: .utf8)
+        for account in [danny.accountID, worker.accountID] { settings.commands[account] = "/usr/bin/python3 \(Shell.quote(script.path))" }
+        try store.saveIndex([Store.Entry(id: danny.id, workspace: danny.workspace), Store.Entry(id: worker.id, workspace: worker.workspace)])
+        let app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
+        defer { app.stopAll() }
+        app.repositories = [GitHubLookup.Repo(nameWithOwner: "fixture/project")]
+        app.repositoriesReadAt = Date()
+
+        let telegram = BridgeTelegramStandIn([[
+            #"{"update_id":10,"message":{"message_id":7,"date":0,"chat":{"id":42,"type":"private","first_name":"Alex"},"from":{"id":42,"is_bot":false,"first_name":"Alex"},"text":"/task @Worker #fixture/project Ship the fix"}}"#,
+            ##"{"update_id":11,"message":{"message_id":8,"date":0,"chat":{"id":42,"type":"private","first_name":"Alex"},"from":{"id":42,"is_bot":false,"first_name":"Alex"},"text":"#fixture/project how is it going?"}}"##,
+        ]])
+        app.telegram.readToken = { "123:AAFakeTokenForTestsOnly" }
+        app.telegram.transport = telegram
+        settings.telegramChats = [TelegramChat(id: 42, botID: danny.id, label: "Alex")]
+        settings.telegramEnabled = true
+        defer { settings.telegramEnabled = false }
+        let workerHome = ChatTarget.home(worker.id)
+        for _ in 0..<500 {
+            if await telegram.sent.count >= 2, app.tasks[worker.id]?.isEmpty == false, !app.isRunning(workerHome) { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let task = try #require(app.tasks[worker.id]?.first)
+        let target = ChatTarget.task(task.id, of: worker.id)
+        #expect(task.id == TelegramInbound.messageID(bot: 123, chat: 42, message: 7))
+        #expect(task.repo == "fixture/project" && task.checkout == checkout && task.brief == "Ship the fix")
+        #expect(task.origin == .owner && task.requestedBy == nil && task.accountID == worker.accountID)
+        #expect(app.openTasks(of: worker.id).map(\.id) == [task.id])
+        #expect(app.tasks[danny.id]?.isEmpty != false)
+        #expect((app.delegation.records[.home(danny.id)] ?? []).isEmpty)
+        #expect(app.thread(target).first { $0.role == .user }?.text == "Ship the fix")
+        // Danny's Home never got either message: Worker is who the chat talks to now.
+        #expect(!app.thread(.home(danny.id)).contains { $0.role == .user })
+        let asked = try #require(app.thread(workerHome).first { $0.role == .user })
+        #expect(asked.text == "#fixture/project how is it going?" && asked.mentions.map(\.target) == ["fixture/project"])
+        let sent = await telegram.sent
+        #expect(sent.first?.text == TelegramReply.taskStarted(task.title, bot: "Worker", repo: "fixture/project"))
+        #expect(sent.contains { $0.replyTo == 8 && $0.text == "Worker:\ndone:#fixture/project how is it going?" })
     }
 }
 

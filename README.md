@@ -109,18 +109,25 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     project.
   - **Providers:** one compact table of CLI profiles, a row each, under 100 points high whatever
     its state: the logo, name and CLI family; the command, and whether the login shell finds it;
-    a line per allowance window, with its use and reset (the reset when the column has room, and
-    at most four lines, the rest in the tooltip), whose bars, percentages and resets line up from
-    row to row; when it was read, marked stale or failed (with
-    the error in a tooltip and a popover); and Refresh. It shares the conversation inspector's
-    allowance cache and refresh limits, and searches by name or family. **Add CLI**
+    a line per allowance window, with its use, a bar and its reset (the reset when the column has
+    room, and at most four lines, the rest in the tooltip), whose bars, percentages and resets
+    line up from row to row, reset times on their colons; chips for what the account has besides:
+    the money left under an OpenRouter key's spending limit, and Codex's usage credits and free
+    resets of its limits (or that it has none); when it was read, marked stale or failed (with
+    the error in a tooltip and a popover); and Refresh. The name, command and freshness columns
+    have fixed widths for a compact, regular or wide table, and the allowance column takes the
+    rest, so its bars grow with the window. Readings are saved between launches (`usage.json`
+    beside the bot index; usage fields only) and kept current in the background, every 15
+    minutes for a CLI profile and hourly for Muse, and every 5 minutes while Providers shows,
+    so it opens on the last numbers and updates them in place. It shares the conversation
+    inspector's allowance cache and refresh limits, and searches by name or family. **Add CLI**
     adds a named profile of Claude Code, Codex, Antigravity, Muse or Pi, with an installed command or
     wrapper and **Test Command**. Sign in through that CLI in Terminal; BotChu does not create its
     login. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
     Codex profiles can also draw pets. Bots and tasks retain a copy of their custom profile’s CLI
     family and command across relaunches. Command overrides remain editable in Settings. Pi profiles
-    use the shared OpenRouter key. Provider usage refreshes while visible, with Muse’s existing
-    brief request and hourly automatic limit.
+    use the shared OpenRouter key. Muse is checked with its existing brief request, at most
+    hourly by itself.
   - **Bots:** create, edit and delete bots. A bot has a name, an emoji, a one-line title, private
     instructions, an account, an optional model and a workspace folder (default `~/BotChu/<name>`).
     A new bot introduces itself in one reply, so a misread role shows up at once. Instructions are
@@ -237,9 +244,12 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     summary and put back, so a call costs the same in an exploration of 5,000 calls as in one of 5,
     and so do its sub-agents' card placement and tool counts. A conversation shown again keeps its
     grouping and opened cards; a long one opened anew shows its newest items at once, with a spinner
-    where earlier ones go while they are grouped off the main thread. A reader at the bottom follows
-    new content; one reading earlier content keeps their place while a turn goes on, and **Follow
-    Live** takes them back.
+    where earlier ones go while they are grouped off the main thread. A reader at the end stays
+    there as a reply streams, calls and groups grow, sub-agents report and the window or message box
+    resize. Scrolling up by their own hand leaves it: then nothing that arrives moves them, until they
+    scroll back to the end or click **Jump to Latest** (**Follow Live** while the bot works). Sending a
+    message, and opening or switching to a conversation, takes them to the newest content from
+    wherever they were.
   - **Tasks:** besides its Home, a bot can work on tasks, several at once: each in one of your
     GitHub repositories, with its own conversation and CLI session, in its own git worktree, so
     tasks never share files. BotChu does all of this itself, with no other app. **New Task** (⌘T)
@@ -362,7 +372,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     Opening Jobs or a history never runs anything. An agent's card in **Agents** counts its jobs
     (opening Jobs filtered to it) and its menu has **New Job…**; its status sidebar's **Activity**
     lists them under its tasks, with **New Job…** and **All Jobs**. The editor sets the agent (chosen
-    already from an agent's own places, and fixed once the job exists), title, instructions, how often
+    already from an agent's own places, and fixed once the job exists), the account, model and
+    reasoning effort its runs use (**Same as** the agent, as they are when each run starts, until
+    others are chosen, from the same accounts and model and effort pickers as a conversation's; the
+    efforts offered are those the chosen account and model take, and another CLI family clears the
+    model and effort), title, instructions, how often
     it runs (every day, weekdays or chosen days at a time; every so many minutes, from 5, or hours,
     from a start time), its time zone (the Mac's at first, shown with the job everywhere), missed
     times, the time limit and whether it is on, with the schedule in words and its next three times.
@@ -377,9 +391,15 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     skipped. Earlier missed times are never made up, nor are times while a job was paused, or before
     its schedule changed. Each run is a fresh CLI session of its agent's, with its identity,
     instructions, team playbook, personality, memory and skills, then the job's instructions, but not
-    its Home conversation, on the agent's account, model and effort (recorded with the run), in its
-    workspace; it never resumes Home's session or touches Home's queue, draft or receipts, and gets
-    nothing written to it while it runs. A job never overlaps itself (a time due while its run waits
+    its Home conversation, on the job's account, model and effort, else the agent's (recorded with
+    the run), in its workspace; it never resumes Home's session or touches Home's queue, draft or
+    receipts, and gets nothing written to it while it runs. A job's own choice is saved with it, and a
+    job saved before jobs had one runs on its agent's. When its account is gone from Providers, or
+    OpenRouter's catalog no longer lists its OpenRouter model, its runs use the agent's account,
+    model and effort instead, never another provider, and the editor (which shows the choice as
+    unavailable), the job's row, its history and the run's first line say so; it keeps the choice for
+    when the account is back. A CLI's own models and custom IDs run as chosen: one the CLI rejects
+    fails the run with its reason. A job never overlaps itself (a time due while its run waits
     or runs is recorded skipped, once however many); one agent's runs go one at a time, and wait
     (**Waiting**) for its Home turn or a sub-agent in its workspace to finish; at most two run at
     once. A run is stopped at its time limit (30 minutes by default) and counts as failed; three
@@ -606,7 +626,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     sub-agent or scheduled job running: at most 12 model calls a day per account, retries included, each review
     stopped after 5 minutes (its CLI interrupted, then terminated, then killed), with one automatic
     retry; an account out of allowance waits an hour, and a review still waiting 48 hours after its
-    run is skipped. A review is neither a task turn nor a sub-agent, so it is never reviewed itself,
+    run (or after its **Retry**) is skipped. A review is neither a task turn nor a sub-agent, so it is never reviewed itself,
     and BotChu's turn log records it as a "run review", without lines that look like secrets. It sees
     a snapshot of up to 24,000 characters: how the run ended (a finished turn isn't proof the work
     succeeded; a stopped run is neither a failure nor finished work, and isn't continued), the brief,
@@ -635,7 +655,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     so a lesson isn't saved to every bot that took part. Each review is saved at every step in
     `.botchu/evaluations/<run>.json` in that bot's folder, without lines that look like secrets, so a
     relaunch neither repeats one nor applies one twice (quitting stops a running review, which runs
-    again after the next launch); the newest 50 a bot are kept. A change that couldn't be saved stays
+    again after the next launch); the newest 50 a bot are kept, and any that called the model in
+    the last 24 hours, which the daily limit still counts. A change that couldn't be saved stays
     with its review, whose **Retry** saves it, rather than waiting with the conversations' notes, and
     conversations' notes still waiting for the file are saved first, on their own. **Activity ▸ Run
     reviews** in the status sidebar lists them (Home: those about the bot; a task: those of its turns
@@ -811,11 +832,13 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     change, and sub-agents' tool counts kept as they stream (`ActivityTranscript.swift`, in chunked
     storage that copies a chunk, not every element, when shared: `ChunkedArray.swift`), which of its
     rows the chat lays out, their heights kept by what they showed and how, and the reader's row and
-    offset into it (`TranscriptViewport.swift`), the identity, instructions,
+    offset into it (`TranscriptViewport.swift`), when the chat keeps its reader at the newest content
+    (`ChatPin.swift`), the identity, instructions,
     team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries,
-    and the lines Providers shows, lined up across its rows (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
-    (`UsageCache.swift`), per-conversation pending-message delivery, keeping a follow-up the CLI
+    and the lines Providers shows, lined up across its rows and laid out across a column's width, its
+    chips, and how its columns share the table's width (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled cache,
+    saved between launches (`UsageCache.swift`), per-conversation pending-message delivery, keeping a follow-up the CLI
     took until a saved transcript holds it (`MessageQueue.swift`, saved in that order by
     `Store.swift`), how tall the message box is for its draft and how far its text may scroll
     (`ComposerLayout.swift`), what
@@ -889,7 +912,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished runs to run reviews, `Evaluations.swift`),
-    `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
+    `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
     status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
     the hosts and Telegram), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -929,7 +952,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     5,000 messages, 1,000 items arriving and a group of 5,000 calls in Raw and opened again and again,
     every row reached scrolling down and up again, heights never reused for other content, layout
     inputs or an edited thread, measurements of rows gone dropped, and the reader's row (or the end)
-    kept as rows above it change, are forgotten or move; the sidebar's sections of bots, and searching them; follow-ups the CLI
+    kept as rows above it change, are forgotten or move; when the chat keeps its reader at its end
+    (only their own scrolling up leaves it, not a bounce; back within 40 points, or sending, opening
+    or Jump to Latest from anywhere, pins it again); the sidebar's sections of bots, and searching them; follow-ups the CLI
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
     before the next save, also in a queue going through a relaunch; saving off the main thread: each
@@ -1008,7 +1033,12 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     and New Task (through a stand-in for the general pasteboard, so no test touches the clipboard)
     and what pastes as text instead, New Task starting a task from a project and a brief with an
     image, the activity chat at every density, light and dark and at its
-    narrowest, a chat that follows new content only for a reader at the bottom, a long
+    narrowest, a chat that follows new content only for a reader at the bottom; a message sent from the
+    end or from far up that lands in view and stays there through the queue, the turn's preparation
+    and its reply; a chat at its end that stays there as a reply streams, calls group live, a command
+    and a sub-agent's card arrive and the message box and window resize; a reader who scrolled up
+    with the wheel keeping what they see as a turn goes on and the window resizes, until they scroll
+    back down or click Jump to Latest, and back at the end after switching away and back; a long
     conversation opened anew that shows its newest items at once and groups its history off the
     main thread, then regroups only a streaming reply, a Sub-agents
     tab that folds finished runs and scrolls to one the chat opens, and switching without a flash:
@@ -1146,7 +1176,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
   `BOTCHU_JOBS=sample` gives the demo bots sample jobs, with a history of every kind of run and a
   receipt in the first bot's Home, and runs no job (Run Now records a failed run), so nothing starts a CLI; `BOTCHU_OPEN=job-editor`
-  or `job-history` opens a new job's editor or the first job's history.
+  or `job-history` opens a new job's editor or the first job's history, `job-model` or `job-effort` a
+  new job's model or effort picker, and `job-edit` the editor of the job `BOTCHU_JOB` names (else the
+  first): `Check the deploy` has its own account, model and effort, and `Friday release notes` one on
+  a CLI profile that is gone.
   `BOTCHU_SECTION=<name>` moves the first bot into a sidebar section of that name, and
   `BOTCHU_SEARCH=<text>` opens Agents (`BOTCHU_OPEN=agents`) with that search.
   `BOTCHU_TAB=<n>` shows the first bot's nth conversation (and the message goes there), and
@@ -1166,8 +1199,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `pets.txt` lists each pet player's clip, state and time.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
-  querying any account; `mixed` gives Providers a row in each state (more windows than a row
-  shows, stale, failed, stale after a failed check, and a key without a limit). Usage fixtures
+  querying any account (`sample` gives Codex profiles credits and free resets, and the Pi
+  profile a key with a spending limit); `mixed` gives Providers a row in each state (more
+  windows than a row shows, stale, failed, stale after a failed check, no credits, and a key
+  without a limit). Usage fixtures
   are ignored outside throwaway data runs. `BOTCHU_PROFILE="<name>|<family>|<command>"` (several
   separated by `;`, `family` one of `claude`, `codex`, `antigravity`, `muse`, `pi`) adds CLI
   profiles to the run, such as one with a long name or a command that isn't installed.
@@ -1177,7 +1212,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `BOTCHU_INSPECTOR=activity`, `subagents`, `model`, `session` or `memory` selects a status sidebar tab;
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
   `BOTCHU_WINDOW=compact` checks the minimum window width, where a bot's tasks show as the rail,
-  and `wide` (1,700 points) the column. `BOTCHU_DEMO=tasks` gives the first bot six more open
+  `wide` (1,700 points) the column, and `BOTCHU_WINDOW=1908x960` a window of that size, as a
+  report gives it. `BOTCHU_DEMO=tasks` gives the first bot six more open
   tasks in memory, so its tabs show every state at once (working, starting, making the worktree,
   news with a pull request, idle, beside the seeded finished and failed ones), with no real turn;
   `BOTCHU_TAB=3` then shows the one working on #113. `BOTCHU_DRAFT=<text>` puts that draft in

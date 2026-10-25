@@ -1273,3 +1273,84 @@ extension RunEvaluationTests {
     }
 }
 
+
+/// #136: the waiting time and the daily limit hold as documented when a backlog builds.
+extension RunEvaluationTests {
+    @Test func retryReviewsARunThatWaitedTooLongAndItMayWaitAgainFromThen() async throws {
+        let fixture = try ReviewFixture()
+        defer { fixture.remove() }
+        var busy = true
+        fixture.evaluator.isAccountBusy = { _ in busy }
+        fixture.answer(ReviewFixture.reply())
+        let first = fixture.request()
+        fixture.evaluator.enqueue(first)
+        fixture.clock = fixture.clock.addingTimeInterval(49 * 3_600)
+        fixture.evaluator.pump()
+        let skipped = try #require(fixture.evaluator.records[first.subject.key])
+        #expect(skipped.phase == .skipped)
+        #expect(skipped.canRetry)
+
+        // Retried while its account is busy, it waits again, from the Retry, not from its run.
+        fixture.evaluator.retry(first.subject.key)
+        #expect(fixture.evaluator.records[first.subject.key]?.phase == .pending)
+        fixture.clock = fixture.clock.addingTimeInterval(47 * 3_600)
+        fixture.evaluator.pump()
+        #expect(fixture.evaluator.records[first.subject.key]?.phase == .pending)
+        busy = false
+        fixture.evaluator.pump()
+        await fixture.evaluator.settle()
+        #expect(fixture.evaluator.records[first.subject.key]?.phase == .done, "Retry reviews it, however old its run")
+        #expect(fixture.calls.count == 1)
+
+        // One retried and still waiting 48 hours later is skipped again, saying so.
+        busy = true
+        let second = fixture.request(task: BotTask(repo: "asieke/BotChu", checkout: "/tmp/BotChu", folder: "/tmp/wt", brief: "second", accountID: "codex-dev"))
+        fixture.evaluator.enqueue(second)
+        fixture.clock = fixture.clock.addingTimeInterval(49 * 3_600)
+        fixture.evaluator.pump()
+        fixture.evaluator.retry(second.subject.key)
+        fixture.clock = fixture.clock.addingTimeInterval(49 * 3_600)
+        fixture.evaluator.pump()
+        let again = try #require(fixture.evaluator.records[second.subject.key])
+        #expect(again.phase == .skipped)
+        #expect(again.skipReason?.hasPrefix("Not reviewed within 48 hours of its Retry") == true)
+        #expect(fixture.calls.count == 1)
+    }
+
+    @Test func keepingOnlyTheNewestReviewsNeverForgetsTheDaysModelCalls() async throws {
+        let fixture = try ReviewFixture()
+        defer { fixture.remove() }
+        fixture.evaluator.limits.kept = 1
+        fixture.evaluator.limits.perAccountPerDay = 2
+        fixture.answer(ReviewFixture.reply())
+        var keys: [String] = []
+        for brief in ["first", "second", "third"] {
+            let request = fixture.request(task: BotTask(repo: "asieke/BotChu", checkout: "/tmp/BotChu", folder: "/tmp/wt", brief: brief, accountID: "codex-dev"))
+            keys.append(request.subject.key)
+            fixture.evaluator.enqueue(request)
+            await fixture.evaluator.settle()
+            fixture.clock = fixture.clock.addingTimeInterval(60)
+        }
+        #expect(fixture.calls.count == 2, "Two model calls a day on the account, however few reviews a bot keeps")
+        #expect(fixture.evaluator.records[keys[0]]?.phase == .done, "Kept while the daily limit counts its call")
+        #expect(fixture.evaluator.records[keys[2]]?.phase == .pending)
+
+        // The same after a relaunch, which reads the records kept.
+        fixture.evaluator = fixture.makeEvaluator()
+        fixture.evaluator.limits.kept = 1
+        fixture.evaluator.limits.perAccountPerDay = 2
+        fixture.answer(ReviewFixture.reply())
+        fixture.evaluator.load(bots: [(fixture.bot.id, fixture.bot.workspace)])
+        await fixture.evaluator.settle()
+        #expect(fixture.evaluator.attemptsToday(on: "codex-dev", at: fixture.clock) == 2)
+        #expect(fixture.calls.count == 2)
+
+        // A day later the third is reviewed, and only the newest is kept.
+        fixture.clock = fixture.clock.addingTimeInterval(86_400)
+        fixture.evaluator.pump()
+        await fixture.evaluator.settle()
+        #expect(fixture.evaluator.records[keys[2]]?.phase == .done)
+        #expect(fixture.evaluator.records.keys.sorted() == [keys[2]])
+        #expect(fixture.calls.count == 3)
+    }
+}
