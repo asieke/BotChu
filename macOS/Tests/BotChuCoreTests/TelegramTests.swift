@@ -826,6 +826,261 @@ import Testing
         #expect(pieces.joined().contains("before") && pieces.joined().contains("after"))
         #expect(TelegramReply.messages(enormous) == ["�"])
     }
+
+    // MARK: Choosing with @, # and /task (#114)
+
+    static let botchu = ProjectCatalogEntry(name: "BotChu", repo: "asieke/BotChu", status: .active)
+    static let throughGateway: [String: Any] = ["via_bot": ["id": 123, "is_bot": true, "first_name": "Chu", "username": "chu_bot"]]
+
+    static func messageID(_ message: Int64, chat: Int64 = 42) -> UUID { TelegramInbound.messageID(bot: 123, chat: chat, message: message) }
+
+    @Test func choosingABotSendsLaterMessagesToItsHomeAndItsRepliesSayWhoAnswers() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let fixture = UUID(), danny = UUID()
+        let app = FakeBotChu(bots: [fixture: "Fixture", danny: "Danny"])
+        await app.title(danny, "COO")
+        let telegram = TelegramStandIn(updates: [[update(10, chat: 42, text: "@Danny", message: 1), update(11, chat: 42, text: "hello", message: 2)]])
+        let chats = [TelegramChat(id: 42, botID: fixture)]
+        let gateway = TelegramGateway(token: Self.token, chats: chats, app: app, stateURL: folder.state, transport: telegram, timing: Self.fast)
+        try await gateway.poll()
+        // Choosing starts nothing and says who the chat talks to now; the next message goes to Danny's Home.
+        #expect(await telegram.sent == [Sent(chat: 42, text: TelegramReply.selected(bot: "Danny (COO)", repo: nil, recipient: "Danny"), replyTo: 1)])
+        #expect(await app.delivered == [.init(id: Self.messageID(2), text: "hello", bot: danny)])
+        #expect(await gateway.savedState.pending == [TelegramPendingReply(id: Self.messageID(2), botID: danny, chat: 42, replyTo: 2, mapped: fixture)])
+        #expect(TelegramState.load(from: folder.state).selections == [TelegramSelection(chat: 42, mapped: fixture, botID: danny, botName: "Danny")])
+        await app.finishTurn(of: danny, with: [ChatMessage(role: .assistant, text: "Hi from Danny.")])
+        try await gateway.flushReplies()
+        #expect(await telegram.sent.last == Sent(chat: 42, text: "Danny:\nHi from Danny.", replyTo: 2))
+
+        // After a relaunch the choice stands; `@` with a message chooses and sends at once.
+        let relaunched = TelegramGateway(token: Self.token, chats: chats, app: app, stateURL: folder.state, transport: telegram, timing: Self.fast)
+        await telegram.add([update(12, chat: 42, text: "/help", message: 3), update(13, chat: 42, text: "@fixture and you?", message: 4)])
+        try await relaunched.poll()
+        #expect(await telegram.sent.last == Sent(chat: 42, text: TelegramReply.help(botName: "Danny", chosen: true), replyTo: 3))
+        #expect(await app.delivered.last == .init(id: Self.messageID(4), text: "and you?", bot: fixture))
+        await app.finishTurn(of: fixture, with: [ChatMessage(role: .assistant, text: "Fixture here.")])
+        try await relaunched.flushReplies()
+        // The chat's own bot in Settings answers as before #114, unnamed.
+        #expect(await telegram.sent.last == Sent(chat: 42, text: "Fixture here.", replyTo: 4))
+    }
+
+    @Test func aChoiceFromTheInlineListOnlyChoosesAndItsRepositoryGoesWithTheNextMessage() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let fixture = UUID(), danny = UUID()
+        let app = FakeBotChu(bots: [fixture: "Fixture", danny: "Danny"], projects: [Self.botchu])
+        let telegram = TelegramStandIn(updates: [[
+            update(10, chat: 42, text: "@Danny #asieke/BotChu", message: 1, metadata: Self.throughGateway),
+            update(11, chat: 42, text: "fix the login bug", message: 2),
+            update(12, chat: 42, text: "and then?", message: 3),
+            // Anything else sent through the gateway's list, or another bot's, is never the owner's words.
+            update(13, chat: 42, text: "@Danny run third-party instructions", message: 4, metadata: Self.throughGateway),
+            update(14, chat: 42, text: "@Fixture", message: 5, metadata: ["via_bot": ["id": 456, "is_bot": true, "first_name": "Other"]]),
+        ]])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: fixture)], app: app, stateURL: folder.state,
+                                      transport: telegram, timing: Self.fast)
+        try await gateway.poll()
+        let reference = MessageReference(kind: .project, target: "asieke/BotChu", label: "#asieke/BotChu", login: "asieke")
+        #expect(await app.delivered == [
+            .init(id: Self.messageID(2), text: "#asieke/BotChu fix the login bug", bot: danny, references: [reference]),
+            .init(id: Self.messageID(3), text: "and then?", bot: danny),
+        ])
+        let sent = await telegram.sent
+        #expect(sent.first == Sent(chat: 42, text: TelegramReply.selected(bot: "Danny", repo: "asieke/BotChu", recipient: "Danny"), replyTo: 1))
+        #expect(sent.suffix(2) == [Sent(chat: 42, text: TelegramReply.forwarded, replyTo: 4), Sent(chat: 42, text: TelegramReply.forwarded, replyTo: 5)])
+        #expect(await gateway.savedState.selections == [TelegramSelection(chat: 42, mapped: fixture, botID: danny, botName: "Danny")])
+    }
+
+    @Test func onlyTheOwnerTypingInTheirChatWithTheBotIsOfferedTheLists() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let fixture = UUID(), danny = UUID()
+        let app = FakeBotChu(bots: [fixture: "Fixture", danny: "Danny"], projects: [Self.botchu])
+        let telegram = TelegramStandIn(updates: [[
+            inlineQuery(10, from: 42, query: "@dan"),
+            inlineQuery(11, from: 42, query: "@Danny #bot"),
+            inlineQuery(12, from: 99, query: "@"),
+            inlineQuery(13, from: 42, query: "@", chatType: "private"),
+            inlineQuery(14, from: 42, query: "@", chatType: nil),
+            inlineQuery(15, from: 42, query: "@", isBot: true),
+        ]])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: fixture)], app: app, stateURL: folder.state,
+                                      transport: telegram, timing: Self.fast)
+        try await gateway.poll()
+        let answers = await telegram.inlineAnswers
+        #expect(answers.map { $0["inline_query_id"] as? String } == ["10", "11"])
+        #expect(answers.allSatisfy { $0["is_personal"] as? Bool == true && ($0["cache_time"] as? NSNumber)?.intValue == 0 })
+        func messages(_ answer: [String: Any]) -> [String] {
+            (answer["results"] as? [[String: Any]] ?? []).compactMap { ($0["input_message_content"] as? [String: Any])?["message_text"] as? String }
+        }
+        #expect(messages(answers[0]) == ["@Danny"])
+        #expect(messages(answers[1]) == ["@Danny #asieke/BotChu"])
+        #expect((answers[0]["results"] as? [[String: Any]])?.first?["type"] as? String == "article")
+        #expect(await telegram.sent.isEmpty)
+        #expect(await app.delivered.isEmpty)
+        #expect(await app.refusals.isEmpty)
+        #expect(await gateway.savedState.offset == 16)
+
+        // Removed from Settings: offered nothing.
+        await app.authorize([])
+        await telegram.add([inlineQuery(16, from: 42, query: "@")])
+        try await gateway.poll()
+        #expect(await telegram.inlineAnswers.count == 2)
+    }
+
+    @Test func aTaskRequestMakesATaskOfItsOwnForTheChosenBotInTheChosenRepository() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let fixture = UUID(), danny = UUID()
+        let app = FakeBotChu(bots: [fixture: "Fixture", danny: "Danny"], projects: [Self.botchu])
+        let request = update(10, chat: 42, text: "/task @Danny #asieke/BotChu Fix the login bug", message: 1)
+        let telegram = TelegramStandIn(updates: [[
+            request,
+            update(11, chat: 42, text: "/task fix it", message: 2),
+            update(12, chat: 42, text: "#BotChu", message: 3),
+            update(13, chat: 42, text: "/task Update the docs", message: 4),
+            update(14, chat: 42, text: "/task #BotChu", message: 5),
+        ]])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: fixture)], app: app, stateURL: folder.state,
+                                      transport: telegram, timing: Self.fast)
+        try await gateway.poll()
+        #expect(await app.tasks == [
+            .init(id: Self.messageID(1), brief: "Fix the login bug", repo: "asieke/BotChu", bot: danny),
+            .init(id: Self.messageID(4), brief: "Update the docs", repo: "asieke/BotChu", bot: danny),
+        ])
+        // A task isn't a Home message, and no Telegram reply is owed for it: its conversation is its own.
+        #expect(await app.delivered.isEmpty)
+        #expect(await gateway.savedState.pending.isEmpty)
+        let first = TaskNaming.title(repo: "asieke/BotChu", work: nil, brief: "Fix the login bug")
+        let second = TaskNaming.title(repo: "asieke/BotChu", work: nil, brief: "Update the docs")
+        #expect(await telegram.sent.map(\.text) == [
+            TelegramReply.taskStarted(first, bot: "Danny", repo: "asieke/BotChu"),
+            TelegramReply.taskNeedsRepository,
+            TelegramReply.selected(bot: nil, repo: "asieke/BotChu", recipient: "Danny"),
+            TelegramReply.taskStarted(second, bot: "Danny", repo: "asieke/BotChu"),
+            TelegramReply.taskNeedsBrief,
+        ])
+        #expect(await gateway.savedState.selections == [TelegramSelection(chat: 42, mapped: fixture, botID: danny, botName: "Danny")])
+
+        // Telegram sending the request again (its offset lost in a crash) finds the same task.
+        let again = try TemporaryFolder()
+        defer { again.remove() }
+        await telegram.add([request])
+        let relaunched = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: fixture)], app: app, stateURL: again.state,
+                                         transport: telegram, timing: Self.fast)
+        try await relaunched.poll()
+        #expect(await app.tasks.count == 2)
+        #expect(await telegram.sent.last?.text == TelegramReply.taskAlreadyStarted(first))
+    }
+
+    @Test func changingTheRecipientLeavesQueuedMessagesAndOwedRepliesWithTheirBotAndChat() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let fixture = UUID(), danny = UUID()
+        let app = FakeBotChu(bots: [fixture: "Fixture", danny: "Danny"])
+        let telegram = TelegramStandIn(updates: [[
+            update(10, chat: 42, text: "first", message: 1),
+            update(11, chat: 42, text: "second", message: 2),
+            update(12, chat: 42, text: "@Danny third", message: 3),
+            update(13, chat: 43, text: "from the other chat", message: 4),
+        ]])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: fixture), TelegramChat(id: 43, botID: fixture)],
+                                      app: app, stateURL: folder.state, transport: telegram, timing: Self.fast)
+        try await gateway.poll()
+        // Choosing Danny in one chat moves nothing already queued, and nothing of the other chat's.
+        #expect(await app.delivered.map(\.bot) == [fixture, fixture, danny, fixture])
+        #expect(await app.queuedTexts(fixture) == ["second", "from the other chat"])
+        #expect(await gateway.savedState.pending.map { [$0.chat, $0.replyTo] } == [[42, 1], [42, 2], [42, 3], [43, 4]])
+
+        await app.finishTurn(of: danny, with: [ChatMessage(role: .assistant, text: "Danny's answer")])
+        for answer in ["first answer", "second answer", "other chat's answer"] {
+            await app.finishTurn(of: fixture, with: [ChatMessage(role: .assistant, text: answer)])
+        }
+        try await gateway.flushReplies()
+        let replies = await telegram.sent.filter { !$0.text.hasPrefix("⏳") }
+        #expect(replies == [
+            Sent(chat: 42, text: "first answer", replyTo: 1),
+            Sent(chat: 42, text: "second answer", replyTo: 2),
+            Sent(chat: 42, text: "Danny:\nDanny's answer", replyTo: 3),
+            Sent(chat: 43, text: "other chat's answer", replyTo: 4),
+        ])
+    }
+
+    @Test func aChosenBotThatIsDeletedIsNeverReplacedByAnother() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let fixture = UUID(), danny = UUID()
+        let app = FakeBotChu(bots: [fixture: "Fixture", danny: "Danny"])
+        let telegram = TelegramStandIn(updates: [[update(10, chat: 42, text: "@Danny", message: 1)]])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: fixture)], app: app, stateURL: folder.state,
+                                      transport: telegram, timing: Self.fast)
+        try await gateway.poll()
+        await app.remove(danny)
+        await telegram.add([
+            update(11, chat: 42, text: "hello?", message: 2),
+            update(12, chat: 42, text: "/start", message: 3),
+            update(13, chat: 42, text: "@Danny again", message: 4),
+            update(14, chat: 42, text: "@Fixture", message: 5),
+            update(15, chat: 42, text: "hello", message: 6),
+        ])
+        try await gateway.poll()
+        #expect(await app.delivered == [.init(id: Self.messageID(6), text: "hello", bot: fixture)])
+        let bots = await app.directory().bots
+        #expect(await telegram.sent.dropFirst().map(\.text) == [
+            TelegramReply.chosenUnavailable("Danny"),
+            TelegramReply.chosenGone("Danny"),
+            TelegramReply.unknownBot("Danny", among: bots),
+            TelegramReply.selected(bot: "Fixture", repo: nil, recipient: "Fixture"),
+        ])
+    }
+
+    @Test(arguments: [false, true])
+    func remappingAChatInSettingsSetsItsChoicesAndTheirRepliesAside(remapped: Bool) async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let fixture = UUID(), danny = UUID(), other = UUID()
+        let owed = TelegramPendingReply(id: UUID(), botID: danny, chat: 42, replyTo: 7, mapped: fixture)
+        try TelegramState(botUserID: 123, offset: 11, pending: [owed],
+                          selections: [TelegramSelection(chat: 42, mapped: fixture, botID: danny, botName: "Danny")]).save(to: folder.state)
+        let app = FakeBotChu(bots: [fixture: "Fixture", danny: "Danny", other: "Other"])
+        let chats = [TelegramChat(id: 42, botID: remapped ? other : fixture)]
+        await app.authorize(chats)
+        await app.reportProgress(.answered("Danny's reply"))
+        let telegram = TelegramStandIn(updates: [[update(11, chat: 42, text: "next", message: 8)]])
+        let gateway = TelegramGateway(token: Self.token, chats: chats, app: app, stateURL: folder.state, transport: telegram, timing: Self.fast)
+        try await gateway.poll()
+        #expect(await app.delivered.map(\.bot) == [remapped ? other : danny])
+        #expect(await gateway.savedState.selections.isEmpty == remapped)
+        try await gateway.flushReplies()
+        #expect(await telegram.sent.contains(Sent(chat: 42, text: "Danny:\nDanny's reply", replyTo: 7)) == !remapped)
+        #expect(await gateway.savedState.pending.isEmpty)
+    }
+
+    @Test func addressWordsThatNameNothingSendNothingAndChooseNothing() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let fixture = UUID()
+        let app = FakeBotChu(bots: [fixture: "Fixture"], projects: [Self.botchu])
+        let telegram = TelegramStandIn(updates: [[
+            update(10, chat: 42, text: "@Nobody hi", message: 1),
+            update(11, chat: 42, text: "#asieke/Nope fix it", message: 2),
+            update(12, chat: 42, text: "/task #asieke/Nope fix it", message: 3),
+            update(13, chat: 42, text: "#todo buy milk", message: 4),
+            update(14, chat: 42, text: "hello", message: 5),
+        ]])
+        let gateway = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: fixture)], app: app, stateURL: folder.state,
+                                      transport: telegram, timing: Self.fast)
+        try await gateway.poll()
+        #expect(await app.delivered == [.init(id: Self.messageID(4), text: "#todo buy milk", bot: fixture),
+                                        .init(id: Self.messageID(5), text: "hello", bot: fixture)])
+        #expect(await app.tasks.isEmpty)
+        let bots = await app.directory().bots
+        #expect(await telegram.sent.prefix(3).map(\.text) == [TelegramReply.unknownBot("Nobody", among: bots),
+                                                              TelegramReply.unknownRepository("asieke/Nope"),
+                                                              TelegramReply.unknownRepository("asieke/Nope")])
+        #expect(await gateway.savedState.selections.isEmpty)
+    }
 }
 
 // MARK: Stand-ins
@@ -880,6 +1135,14 @@ private func update(_ id: Int64, chat: Int64, text: String?, message: Int64? = n
     body.merge(metadata) { _, new in new }
     let object: [String: Any] = ["update_id": id, edited ? "edited_message" : "message": body]
     return String(decoding: try! JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+}
+
+/// An inline query as the Bot API sends it: what `from` types after the bot's username, in the chat
+/// `chatType` says ("sender": their own chat with the bot).
+private func inlineQuery(_ id: Int64, from: Int64, query: String, chatType: String? = "sender", isBot: Bool = false) -> String {
+    var body: [String: Any] = ["id": String(id), "from": ["id": from, "is_bot": isBot, "first_name": "Alex"], "query": query, "offset": ""]
+    if let chatType { body["chat_type"] = chatType }
+    return String(decoding: try! JSONSerialization.data(withJSONObject: ["update_id": id, "inline_query": body]), as: UTF8.self)
 }
 
 private struct Sent: Equatable {
@@ -939,7 +1202,7 @@ private actor TelegramStandIn: TelegramTransport {
             sent.append(Sent(chat: number(json["chat_id"]) ?? 0, text: json["text"] as? String ?? "",
                              replyTo: number((json["reply_parameters"] as? [String: Any])?["message_id"])))
             return ok(#"{"message_id":\#(1_000 + requests.count),"date":0,"chat":{"id":1,"type":"private"}}"#)
-        case "sendChatAction": return ok("true")
+        case "sendChatAction", "answerInlineQuery": return ok("true")
         default: return (Data(#"{"ok":false,"error_code":404,"description":"Not Found"}"#.utf8), 404)
         }
     }
@@ -954,6 +1217,7 @@ private actor TelegramStandIn: TelegramTransport {
     var sendAttempts: Int { requests.filter { $0.method == "sendMessage" }.count }
     var typings: [Int64] { requests.filter { $0.method == "sendChatAction" }.compactMap { number($0.json["chat_id"]) } }
     var offsets: [Int64?] { requests.filter { $0.method == "getUpdates" }.map { number($0.json["offset"]) } }
+    var inlineAnswers: [[String: Any]] { requests.filter { $0.method == "answerInlineQuery" }.map(\.json) }
     var timeouts: [Int64] { requests.filter { $0.method == "getUpdates" }.compactMap { number($0.json["timeout"]) } }
 }
 
@@ -963,9 +1227,20 @@ private actor FakeBotChu: TelegramApp {
         let id: UUID
         let text: String
         let bot: UUID
+        var references: [MessageReference] = []
+    }
+
+    struct StartedTask: Equatable {
+        let id: UUID
+        let brief: String
+        let repo: String
+        let bot: UUID
     }
 
     private var names: [UUID: String]
+    private var titles: [UUID: String] = [:]
+    private var projects: [ProjectCatalogEntry]?
+    private(set) var tasks: [StartedTask] = []
     private var threads: [UUID: [ChatMessage]] = [:]
     private var queues: [UUID: MessageQueue] = [:]
     private var running: Set<UUID> = []
@@ -981,9 +1256,22 @@ private actor FakeBotChu: TelegramApp {
     private(set) var refusals: [TelegramRefusal] = []
     private(set) var failures: [(id: UUID, reason: String)] = []
 
-    init(bots: [UUID: String]) { names = bots }
+    init(bots: [UUID: String], projects: [ProjectCatalogEntry]? = nil) {
+        names = bots
+        self.projects = projects
+    }
 
     func name(of botID: UUID) -> String? { names[botID] }
+
+    /// The bots by name, as the sidebar lists them, and the Projects catalog.
+    func directory() -> TelegramDirectory {
+        let bots = names.sorted { ($0.value, $0.key.uuidString) < ($1.value, $1.key.uuidString) }.map {
+            BotRosterEntry(bot: Bot(id: $0.key, name: $0.value, title: titles[$0.key] ?? "", workspace: "/tmp/\($0.key)"))
+        }
+        return TelegramDirectory(bots: bots, projects: projects, login: "asieke")
+    }
+
+    func title(_ botID: UUID, _ title: String) { titles[botID] = title }
 
     func authorize(_ chats: [TelegramChat]) { self.chats = chats }
     func stop() { stopped = true }
@@ -1001,23 +1289,35 @@ private actor FakeBotChu: TelegramApp {
         return .allowed
     }
 
-    func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64) async -> TelegramDelivery {
+    func deliver(_ text: String, references: [MessageReference], id: UUID, to botID: UUID, from chat: Int64,
+                 mapped: UUID?) async -> TelegramDelivery {
         if let hold = beforeDelivery {
             beforeDelivery = nil
             await hold.pause()
         }
-        guard case .allowed = authorization(for: chat, botID: botID) else { return .discarded }
+        guard case .allowed = authorization(for: chat, botID: mapped) else { return .discarded }
         guard names[botID] != nil else { return .unavailable }
         if threads[botID, default: []].contains(where: { $0.id == id }) || queues[botID]?.messages.contains(where: { $0.id == id }) == true {
             return .duplicate
         }
-        delivered.append(Delivered(id: id, text: text, bot: botID))
+        delivered.append(Delivered(id: id, text: text, bot: botID, references: references))
         let result = take(ChatMessage(id: id, role: .user, text: text), in: botID)
         if let hold = afterDelivery {
             afterDelivery = nil
             await hold.pause()
         }
         return result
+    }
+
+    /// A task of its own under the bot, as `AppModel.startTask` records one (`TaskHandoffRuntimeTests`
+    /// and `TelegramBridgeTests` check the real one).
+    func startTask(_ brief: String, in repo: String, id: UUID, for botID: UUID, from chat: Int64, mapped: UUID?) async -> TelegramTaskStart {
+        guard case .allowed = authorization(for: chat, botID: mapped) else { return .discarded }
+        guard names[botID] != nil else { return .unavailable }
+        let title = TaskNaming.title(repo: repo, work: nil, brief: brief)
+        if tasks.contains(where: { $0.id == id }) { return .duplicate(title: title) }
+        tasks.append(StartedTask(id: id, brief: brief, repo: repo, bot: botID))
+        return .started(title: title, unsaved: nil)
     }
 
     func progress(of id: UUID, for botID: UUID) async -> TelegramProgress {

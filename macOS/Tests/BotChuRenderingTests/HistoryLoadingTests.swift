@@ -302,7 +302,7 @@ extension RenderingTests {
         // The settings' own restart, as the gateway observes them.
         try await Task.sleep(for: .milliseconds(100))
         let connection = app.telegram.connection()
-        #expect(await connection.deliver("Question 0", id: id, to: home.botID, from: 42) == .duplicate)
+        #expect(await connection.deliver("Question 0", references: [], id: id, to: home.botID, from: 42, mapped: home.botID) == .duplicate)
         #expect(app.conversation(home).isLoaded)
         #expect(app.messageQueues[home]?.messages.isEmpty ?? true)
         #expect(!fixture.ran(home))

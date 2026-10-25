@@ -1,9 +1,11 @@
 # Telegram gateway
 
 BotChu can take messages from Telegram: your private chat with a Telegram bot of your own reaches
-one of your BotChu bots, in its Home, and the bot's replies come back to that chat. BotChu stays
-the runtime: the turn runs on this Mac with the bot's own CLI, account, memory and conversation,
-and Telegram only carries the messages. It is off until you turn it on.
+one of your BotChu bots, in its Home, and the bot's replies come back to that chat. From the same
+chat you can talk to any other BotChu bot with `@`, name a repository with `#`, and start a task
+of its own with `/task` ([Choosing a bot, a repository or a task](#choosing-a-bot-a-repository-or-a-task)).
+BotChu stays the runtime: the turn runs on this Mac with the bot's own CLI, account, memory and
+conversation, and Telegram only carries the messages. It is off until you turn it on.
 
 There is no server or webhook. While BotChu runs, it asks Telegram for new messages itself (long
 polling, `getUpdates`), so nothing on this Mac has to be reachable from the internet.
@@ -23,14 +25,18 @@ polling, `getUpdates`), so nothing on this Mac has to be reachable from the inte
 4. Choose the bot that chat reaches (it starts as the bot selected in BotChu). Send a message:
    Telegram shows "typing…" while the bot works, and its reply comes back as a reply to your
    message.
+5. Optional, for lists to choose bots and repositories from while you type: in BotFather, send
+   `/setinline`, choose your bot, and give the placeholder `@bot or #repository`. BotChu needs no
+   other change. Without it, typing `@Name` and `#owner/repo` works the same, without the lists.
 
 ## What it does
 
 - **Where messages go:** text from an allowed chat goes into its bot's Home through the Home's
-  queue, as a message typed in BotChu does. The exchange is part of the Home conversation, and the
-  turn resumes the Home's CLI session on its account, model and effort. Several chats can reach the
-  same bot; they share its Home. Tasks can't be reached from Telegram, but Home can still start
-  tasks and hear how they went.
+  queue, as a message typed in BotChu does. That's the bot chosen for the chat in Settings, or the
+  one the chat chose with `@`. The exchange is part of the Home conversation, and the turn resumes
+  the Home's CLI session on its account, model and effort. Several chats can reach the same bot;
+  they share its Home. `/task` starts a task of its own, whose conversation stays in BotChu. An
+  existing task's conversation can't be reached from Telegram.
 - **While a turn works:** a message waits in the queue and the chat is told so. Claude Code on this
   Mac takes it at its next tool call; every other account gets it as the next turn. If the queue
   is paused (after Stop or a failed turn), the chat is told once, and the message waits until you
@@ -50,7 +56,83 @@ polling, `getUpdates`), so nothing on this Mac has to be reachable from the inte
   reaches the bot. Editing a sent message gets a reply saying the bot has it as first sent.
   Forwarded messages, including forwarded channel posts, and messages sent via another bot are
   refused with an explanation, even when they contain text or a command. Write your own message.
-  `/start` and `/help` say which bot the chat reaches when sent directly.
+  A choice from your own bot's `@`/`#` list is the one exception: it's taken as a choice and
+  nothing else. `/start` and `/help` say which bot the chat reaches when sent directly.
+
+## Choosing a bot, a repository or a task
+
+A message can start with these words, in any order, each once. They choose; what follows is the
+message:
+
+| Start a message with | What it does | How long it lasts |
+|---|---|---|
+| `@Danny` (a BotChu bot's whole name) | The message and those after it go to Danny's Home. Danny's replies start with `Danny:`. | Until you choose another bot with `@`, or Settings gives the chat another bot. `@` and the name of the chat's own bot goes back to it. |
+| `#owner/repo` (or `#repo` when only one of your Projects has that name) | Names the repository for that message. It reaches the bot as a `#` mention, as it does from BotChu's message box. | That message only. Sent alone, it goes with your next message. |
+| `/task` | Starts a task of its own for the bot, in the repository named, with the rest of the message as its brief. | That message. |
+
+- **Examples:** `@Danny what's on today?` · `@QA Duck #asieke/BotChu does the login work?` ·
+  `/task @Danny #asieke/BotChu Fix the login bug`. Sent alone, `@Danny` only switches the chat
+  to Danny. `#asieke/BotChu`, then `/task Fix the login bug`, starts that task for the bot the
+  chat talks to.
+- **Bots** are matched by their whole name, ignoring case and accents, never by part of a name.
+  When two bots share a name, the gateway lists them with the start of their IDs: write
+  `@Danny [1a2b3c4d]`. Repositories come from BotChu's Projects, as `#` completes them on the Mac.
+  `#` with a word that names none of them (a hashtag), or with digits alone (an issue), is just
+  text.
+- **Nothing is guessed.** `@` with a name that matches no bot (deleted, renamed or mistyped), or
+  `#owner/repo` that isn't in your Projects, sends nothing, and the chat is told why. A bot you chose
+  that is later deleted isn't replaced by the chat's own bot: messages are refused until you
+  choose another. Before Projects have been loaded, `#owner/repo` can't be checked, so it's
+  refused too.
+- **Tasks** are top-level tasks of the chosen bot, made as New Task makes them. Each runs in its own
+  worktree on the bot's account, has its own conversation and session, and shows under that bot in
+  BotChu's sidebar. It isn't a sub-agent of another bot, and nothing is nested under the chat's own
+  bot. A task needs a repository: `/task` without one starts nothing. The chat is told the task
+  started; what it does stays in BotChu. Telegram sending the request again finds the same task.
+- **Changing who you talk to** moves nothing already sent. Messages queued for a bot stay in its
+  queue, and replies owed go to the chat that asked, from the bot that took the message. Each chat
+  has its own choice.
+
+### Lists while you type (inline mode)
+
+With inline mode on (step 5 above), type `@` in your chat with the bot. Telegram offers your bot,
+once you have used it this way. Choose it, or type `@yourbot ` in full: Telegram then sends what
+you type next to BotChu, and BotChu answers with a list above the message box.
+
+- Nothing more, or `@` and part of a name: your BotChu bots, filtered by name or title, each with
+  its title. Two bots with the same name show the start of their IDs. The bot you talk to now says
+  so.
+- `#` and part of a name: your repositories as `owner/repo`, filtered by name or `owner/repo`,
+  with the project's name, status and where it works.
+- Bots and repositories are never in the same list. `@Danny #bo` lists repositories, and choosing
+  one chooses both.
+
+**Telegram sends a list item as soon as you tap it, and empties the message box.** So choosing
+sends a short message through your bot (`@Danny`, `#asieke/BotChu`, or both), which BotChu takes
+as a choice: it starts no turn and no task, and the chat says what was chosen. Then write your
+message. The list only appears while the box holds `@`/`#` choices. Once you've started writing a
+message, nothing is offered, so a tap can't lose your draft. If you write your message after
+`@yourbot @Danny` and send it without tapping, BotChu leaves out `@yourbot` and takes the rest as
+usual.
+
+### What Telegram can't do
+
+The Bot API (version 10.3, checked October 2026) has no way for a bot to show its own list while
+you type `@` or `#` in an ordinary message, or to put a choice into a draft without sending it:
+
+- **Inline mode** is the only list that follows what you type, and choosing from it sends.
+- **Typing `@`** offers Telegram's recently used inline bots, not entries a bot defines.
+- **Typing `#`** offers hashtags you've used before. A hashtag stops at `/`, so `owner/repo` can't
+  be one.
+- **Typing `/`** offers the bot's commands, from a fixed list of at most 100. Choosing one sends
+  it.
+- **Buttons** on a bot's message can put text into the box without sending it, but only after the
+  bot has sent that message.
+- **A Mini App** could offer real completion in a page of its own. It needs a web page on a server,
+  and BotChu has none.
+
+So `@`/`#` completion inside a draft, with nothing sent until you send it, isn't possible.
+Choose first, then write.
 
 ## Who can reach it
 
@@ -58,12 +140,16 @@ Nobody, until you allow a chat. A message is ignored, before BotChu reads it or 
 unless it comes from a private chat listed in Settings and is sent by that chat's own user, not a
 bot. Groups and channels are never accepted, even if you list their ID. Refused senders get no
 answer. Settings lists the last five chats refused since BotChu started, kept in memory only, so
-you can allow your own. Removing a chat in Settings, changing its chosen bot, or turning the
-gateway off prevents further messages from an already-fetched batch from reaching Home. Every
-reply, typing indicator and gateway notice rechecks the current authorization and mapping.
-Removing or remapping a chat discards its outstanding Telegram replies. Turning the gateway off
-keeps valid pending replies for when it is enabled again. Work already accepted into Home stays
-there, and an outgoing request already in flight may finish.
+you can allow your own. An allowed chat can choose any of your BotChu bots with `@`. The `@`/`#`
+lists answer only that chat's own user, typing in their chat with your bot. Typed in another
+chat, or by anyone else, they get no answer, so your bots' and repositories' names stay private.
+Removing a chat in Settings, changing its bot there, or turning the gateway off prevents further
+messages from an already-fetched batch from reaching a Home or starting a task. Every reply,
+typing indicator and gateway notice rechecks the current authorization and mapping.
+Removing a chat, or giving it another bot in Settings, discards its outstanding Telegram replies,
+including those owed by a bot it chose with `@`, and drops what it chose. Turning the gateway off
+keeps valid pending replies and choices for when it is enabled again. Work already accepted into
+Home stays there, and an outgoing request already in flight may finish.
 
 ## Secrets and what is kept
 
@@ -72,8 +158,9 @@ there, and an outgoing request already in flight may finish.
   message: errors never include the request's address, which holds the token. **Remove** in
   Settings deletes it from the Keychain; `/revoke` in BotFather makes it useless everywhere.
 - **`telegram.json`**, in `~/Library/Application Support/BotChu/`, keeps the Telegram bot's numeric
-  ID, where its updates are up to, and the replies owed: IDs only, no message text. Both the offset
-  and pending replies belong to that Telegram identity. Replacing its token with another token for
+  ID, where its updates are up to, the replies owed (IDs only, no message text), and what each chat
+  chose with `@` and `#`: a bot's ID and name, and a repository's `owner/repo`. The offset, pending
+  replies and choices belong to that Telegram identity. Replacing its token with another token for
   the same bot preserves them; a token for a different bot starts clean. A replacement gateway
   waits for the previous run to finish before loading this file.
 - **Telegram sees the messages.** A chat with a bot is a Telegram cloud chat, not end-to-end
@@ -131,6 +218,18 @@ BotChu quits during a turn, the reply is what the turn wrote before it stopped.
   can keep running in Home while the gateway waits.
 - **"Too many messages are waiting"**: let pending replies finish, or resume a paused Home queue,
   then send the rejected message again.
+- **"No BotChu bot is called …"**: the name after `@` matches no bot as a whole. The answer lists
+  your bots' names.
+- **"More than one bot is called …"**: start the message with one of the `@Name [id]` forms the
+  answer gives.
+- **"… isn't in BotChu any more, so this message wasn't sent"**: the bot the chat chose was
+  deleted. Choose another with `@`.
+- **"… isn't in your Projects in BotChu"** or **"BotChu hasn't loaded your Projects yet"**: check
+  the repository in BotChu's Projects, then send the message again.
+- **"A task works in a repository"**: `/task` needs `#owner/repo`, in the same message or chosen
+  just before it.
+- **No list after `@yourbot`**: inline mode is off for your bot (BotFather `/setinline`), or
+  BotChu isn't running.
 
 ## Checking it end to end
 
@@ -148,3 +247,22 @@ The automated tests use a stand-in for Telegram, so check a real exchange once w
 7. Quit BotChu, send a message, and open BotChu again: it is answered, once.
 8. Turn the gateway off: messages aren't answered until it is on again.
 9. Remove or remap a chat while a reply is pending: its old reply must not arrive there.
+
+Then choosing, with inline mode on (setup step 5), in each Telegram app you use:
+
+10. Type `@`, choose your bot, then type part of a bot's name: the list shows matching BotChu
+    bots with their titles, not Telegram users. Type `#` and part of a repository's name: only
+    repositories, as `owner/repo`.
+11. Tap a bot: the chat sends `@Name` through your bot and says who you're talking to now. No
+    turn starts. Send "hello": that bot's Home answers, as `Name:`, in this chat. Send
+    `@yourbot @Name #bo`, choose a repository, then send a message: it reaches that bot with the
+    repository as a `#` mention.
+12. Send `/task #owner/repo Add a test`: the chat says the task started, and BotChu's sidebar
+    shows it under the chosen bot, with its own conversation, not under the chat's own bot.
+13. Choose a bot, ask it something slow, choose another bot and ask again: each answer comes back
+    from the bot that was asked. Delete a chosen bot in BotChu: the next message is refused, not
+    sent to another bot.
+
+**Clients checked by hand:** none yet. The steps above need checking in Telegram for iOS,
+Android, macOS, Desktop (Windows/Linux) and Web. Write down which ones you checked, and anything
+that differs, such as whether typing `@` offers your bot.
