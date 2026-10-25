@@ -4,9 +4,10 @@ import BotChuCore
 
 /// The Telegram gateway (`TelegramGateway`) as it runs in the app, from Settings ▸ Telegram. It
 /// runs while it is on and the Keychain has a token, and starts again when either, or the allowed
-/// chats, change. A chat's text goes into its bot's Home through that conversation's queue, as the
-/// owner's own messages do, so it resumes the Home's CLI session and waits behind a turn under
-/// way; the gateway sends back what the turn said.
+/// chats, change. A chat's text goes into its bot's Home (or the one it chose with `@`, #114)
+/// through that conversation's queue, as the owner's own messages do, so it resumes the Home's CLI
+/// session and waits behind a turn under way; the gateway sends back what the turn said. `/task`
+/// makes a task of its own for the bot, as New Task and `botchu-task create` do.
 @MainActor @Observable
 final class TelegramBridge {
     enum State: Equatable {
@@ -109,6 +110,15 @@ final class TelegramBridge {
 
     fileprivate func name(of botID: UUID) -> String? { model?.bot(botID)?.name }
 
+    /// What `@` and `#` choose from, as BotChu's message box completes them (#84): every bot, and
+    /// the saved Projects catalog, synced in the background when none is saved yet.
+    fileprivate func directory() -> TelegramDirectory {
+        guard let model else { return TelegramDirectory() }
+        if model.repositories == nil { Task { await model.loadProjects() } }
+        return TelegramDirectory(bots: model.bots.map(BotRosterEntry.init), projects: model.repositories == nil ? nil : model.projectCatalog,
+                                 login: model.projectsLogin)
+    }
+
     fileprivate func authorization(for chat: Int64, botID: UUID?, generation: Int) -> TelegramAuthorization {
         guard !Task.isCancelled, generation == self.generation, let model, model.settings.telegramEnabled else { return .stopped }
         if case .running(.stopped) = state { return .stopped }
@@ -118,21 +128,56 @@ final class TelegramBridge {
 
     /// Into the bot's Home (never a task), through its queue, under the message's own ID, once a
     /// saved queue holds it (so Telegram's offset moves on only past a message that is kept).
-    fileprivate func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64, generation: Int) async -> TelegramDelivery {
+    /// `mapped` is the chat's bot in Settings, which must still be its bot.
+    fileprivate func deliver(_ text: String, references: [MessageReference], id: UUID, to botID: UUID, from chat: Int64, mapped: UUID?,
+                             generation: Int) async -> TelegramDelivery {
         let target = ChatTarget.home(botID)
         // A repeated message is recognized in Home's whole history and recovered queue, read first
         // when Home isn't in memory (#109).
         _ = await model?.loadedThread(target)
         // No suspension between the final authorization check and AppModel.send. Settings may
         // have changed before observation has had a chance to cancel/restart this gateway.
-        guard case .allowed = authorization(for: chat, botID: botID, generation: generation) else { return .discarded }
+        guard case .allowed = authorization(for: chat, botID: mapped, generation: generation) else { return .discarded }
         guard let model, let bot = model.bot(botID) else { return .unavailable }
         let queued = { model.messageQueues[target]?.messages.contains { $0.id == id } == true }
         if queued() || model.thread(target).contains(where: { $0.id == id }) { return .duplicate }
-        guard await model.sendAccepted(text, to: target, id: id) else { return .failed("it couldn't be saved in \(bot.name)'s queue.") }
+        guard await model.sendAccepted(text, to: target, id: id, references: references) else {
+            return .failed("it couldn't be saved in \(bot.name)'s queue.")
+        }
         // Still waiting in the queue, behind a turn: not one starting with it.
         let waiting = model.messageQueues[target]?.pending.contains { $0.id == id } == true
         return .queued(busy: waiting && model.isRunning(target))
+    }
+
+    /// A task of its own for the bot, in the repository's checkout, as New Task makes one: in the
+    /// left sidebar under that bot, with its own conversation and session, never a sub-agent run of
+    /// another conversation. Its ID is the Telegram message's, so a request Telegram sends again
+    /// finds the task it made.
+    fileprivate func startTask(_ brief: String, in repo: String, id: UUID, for botID: UUID, from chat: Int64, mapped: UUID?,
+                               generation: Int) async -> TelegramTaskStart {
+        guard case .allowed = authorization(for: chat, botID: mapped, generation: generation) else { return .discarded }
+        guard let model, model.bot(botID) != nil else { return .unavailable }
+        if let task = model.task(id, of: botID) { return .duplicate(title: task.title) }
+        let root = model.settings.expandedReposRoot
+        // Off the main thread: the first look into ~/Desktop or ~/Documents waits on macOS's question.
+        let checkouts = await Task.detached { Repositories.scan(root: root) }.value
+        await model.loadRepositories()
+        var task: BotTask
+        do {
+            guard let owner = model.bot(botID) else { return .unavailable }
+            task = try await model.plannedTask(TaskRequest(repo: repo, task: brief), for: owner, checkouts: checkouts, origin: .owner)
+        } catch {
+            return .failed((error as? TaskRequest.Problem)?.message ?? error.localizedDescription)
+        }
+        task.id = id
+        // No suspension between the final checks and startTask.
+        guard case .allowed = authorization(for: chat, botID: mapped, generation: generation) else { return .discarded }
+        guard model.bot(botID) != nil else { return .unavailable }
+        if let made = model.task(id, of: botID) { return .duplicate(title: made.title) }
+        let failure: String? = await withCheckedContinuation { continuation in
+            model.startTask(task, for: botID, show: false) { continuation.resume(returning: $0?.localizedDescription) }
+        }
+        return .started(title: task.title, unsaved: failure.map { "Its record couldn't be saved: \($0)" })
     }
 
     fileprivate func progress(of id: UUID, for botID: UUID) async -> TelegramProgress {
@@ -178,8 +223,14 @@ final class TelegramBridge {
         bridge?.authorization(for: chat, botID: botID, generation: generation) ?? .stopped
     }
 
-    func deliver(_ text: String, id: UUID, to botID: UUID, from chat: Int64) async -> TelegramDelivery {
-        await bridge?.deliver(text, id: id, to: botID, from: chat, generation: generation) ?? .discarded
+    func directory() -> TelegramDirectory { bridge?.directory() ?? TelegramDirectory() }
+
+    func deliver(_ text: String, references: [MessageReference], id: UUID, to botID: UUID, from chat: Int64, mapped: UUID?) async -> TelegramDelivery {
+        await bridge?.deliver(text, references: references, id: id, to: botID, from: chat, mapped: mapped, generation: generation) ?? .discarded
+    }
+
+    func startTask(_ brief: String, in repo: String, id: UUID, for botID: UUID, from chat: Int64, mapped: UUID?) async -> TelegramTaskStart {
+        await bridge?.startTask(brief, in: repo, id: id, for: botID, from: chat, mapped: mapped, generation: generation) ?? .discarded
     }
 
     func progress(of id: UUID, for botID: UUID) async -> TelegramProgress {

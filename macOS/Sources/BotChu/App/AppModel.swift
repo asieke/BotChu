@@ -1081,9 +1081,9 @@ final class AppModel {
     }
 
     /// `send`, returning once the message's save is done: whether a saved queue holds it.
-    func sendAccepted(_ text: String, to target: ChatTarget, id: UUID = UUID()) async -> Bool {
+    func sendAccepted(_ text: String, to target: ChatTarget, id: UUID = UUID(), references: [MessageReference] = []) async -> Bool {
         await withCheckedContinuation { continuation in
-            let started = send(text, to: target, id: id) { continuation.resume(returning: $0) }
+            let started = send(text, to: target, id: id, references: references) { continuation.resume(returning: $0) }
             if !started { continuation.resume(returning: false) }
         }
     }
