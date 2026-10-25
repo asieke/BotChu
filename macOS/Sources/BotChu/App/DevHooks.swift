@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WebKit
 import BotChuCore
 
 /// Environment variables for checking the app without touching real data or needing screen-recording
@@ -231,8 +232,9 @@ enum DevHooks {
         }
         if dataDir != nil, env["BOTCHU_JOBS"] == "sample" { sampleJobs(model: model) }
         switch env["BOTCHU_OPEN"] {
-        case "projects", "agents", "providers", "skills", "jobs":
+        case "inbox", "projects", "agents", "providers", "skills", "jobs":
             model.destination = env["BOTCHU_OPEN"].flatMap(LibraryDestination.init(rawValue:))
+            if let item = env["BOTCHU_INBOX_ITEM"].flatMap(UUID.init(uuidString:)) { model.inbox.selected = item }
             if let repo = env["BOTCHU_PROJECT"] {
                 model.selectProject(repo, tab: env["BOTCHU_PROJECT_TAB"].flatMap(ProjectSelection.Tab.init(rawValue:)) ?? .overview,
                                     item: env["BOTCHU_PROJECT_ITEM"].flatMap(Int.init))
@@ -422,7 +424,14 @@ enum DevHooks {
         let rows = VStack(alignment: .leading, spacing: 4) {
             Text("Workspace").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.vertical, 6)
             ForEach(LibraryDestination.allCases, id: \.self) { destination in
-                Label(destination.title, systemImage: destination.symbol)
+                HStack {
+                    Label(destination.title, systemImage: destination.symbol)
+                    Spacer()
+                    // The Inbox's unread count, as the sidebar's badge shows it.
+                    if destination == .inbox, model.inbox.unreadCount > 0 {
+                        Text("\(model.inbox.unreadCount)").font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(10)
                     .background(model.destination == destination ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 8))
             }
@@ -482,16 +491,46 @@ enum DevHooks {
     }
 
     /// The window's picture with the pets' frames drawn in their circles.
+    /// Each web view's latest picture: `cacheDisplay` can't draw a web view, which renders in
+    /// another process, so its picture is asked for at one snapshot and drawn in at the next.
+    @MainActor private static var webPictures: [ObjectIdentifier: CGImage] = [:]
+
+    /// The web views' pictures in `root`, where they show.
+    static func webViewFrames(in root: NSView) -> [(CGImage, CGRect)] {
+        var found: [(CGImage, CGRect)] = []
+        func walk(_ view: NSView) {
+            if let web = view as? WKWebView {
+                let id = ObjectIdentifier(web), visible = web.visibleRect
+                guard !visible.isEmpty else { return }
+                let configuration = WKSnapshotConfiguration()
+                configuration.rect = visible
+                web.takeSnapshot(with: configuration) { image, _ in
+                    if let picture = image?.cgImage(forProposedRect: nil, context: nil, hints: nil) { webPictures[id] = picture }
+                }
+                if let picture = webPictures[id] { found.append((picture, web.convert(visible, to: root))) }
+                return
+            }
+            view.subviews.forEach(walk)
+        }
+        walk(root)
+        return found
+    }
+
     static func composite(_ rep: NSBitmapImageRep, root: NSView) -> Data? {
         let frames = petVideoFrames(in: root)
+        let pages = webViewFrames(in: root)
         guard let base = rep.cgImage else { return nil }
-        if frames.isEmpty { return rep.representation(using: .png, properties: [:]) }
+        if frames.isEmpty && pages.isEmpty { return rep.representation(using: .png, properties: [:]) }
         let width = base.width, height = base.height
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.draw(base, in: CGRect(x: 0, y: 0, width: width, height: height))
         let scale = CGFloat(width) / root.bounds.width
+        for (image, rect) in pages {
+            let y = root.isFlipped ? root.bounds.height - rect.maxY : rect.minY
+            context.draw(image, in: CGRect(x: rect.minX * scale, y: y * scale, width: rect.width * scale, height: rect.height * scale))
+        }
         for (image, rect) in frames {
             let y = root.isFlipped ? root.bounds.height - rect.maxY : rect.minY
             let target = CGRect(x: rect.minX * scale, y: y * scale, width: rect.width * scale, height: rect.height * scale)

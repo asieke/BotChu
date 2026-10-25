@@ -30,6 +30,8 @@
 #   BOTCHU_OPEN=projects BOTCHU_PROJECT=<owner/name> BOTCHU_PROJECT_TAB=issues BOTCHU_PROJECT_ITEM=<number> macOS/ui-review.sh
 #                                          # open Projects with that repository's sidebar, on a tab and an
 #                                          # issue or pull request there (read with your gh login)
+#   BOTCHU_INBOX=sample BOTCHU_OPEN=inbox macOS/ui-review.sh  # the Inbox with sample deliveries (replied: the
+#                                          # first answered from it); BOTCHU_INBOX_ITEM=<id> reads that one
 #   BOTCHU_JOBS=sample BOTCHU_OPEN=jobs macOS/ui-review.sh  # Jobs, with sample jobs in every state and
 #                                          # history (none ever runs); BOTCHU_OPEN=job-editor or job-history
 #                                          # opens a new job's editor or the first job's history instead,
@@ -103,6 +105,107 @@ cat > "$tasks/7a0c2d4e-1b3f-4c5d-8e9f-0a1b2c3d4e60/thread.jsonl" <<'JSON'
 {"date":"2026-10-22T03:03:00Z","id":"00000000-0000-4000-8000-000000000021","role":"user","text":"Work on issue #3 “Fix the typo”."}
 {"date":"2026-10-22T03:03:05Z","id":"00000000-0000-4000-8000-000000000022","role":"error","text":"Couldn't make this task's worktree. Making the worktree for feat/3-fix-typo failed."}
 JSON
+# Sample deliveries in the Inbox (BOTCHU_INBOX=sample; replied: the first one answered from the Inbox
+# and the bot's answer under it; done: every one Done), from Scout's Home (crediting Coder), a task of Scout's, and Coder's Home.
+# BOTCHU_INBOX_ITEM=<delivery id> reads that one; ids are 00000000-0000-4000-9000-00000000000<n>.
+if [ -n "${BOTCHU_INBOX:-}" ]; then
+  python3 - "$data" "$BOTCHU_INBOX" <<'PY'
+import datetime, json, os, sys
+data, mode = sys.argv[1:3]
+now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+def at(minutes): return (now - datetime.timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+scout, coder = "8C1F6A2E-5B7D-4E8A-9C3B-2A1D0F4E6B71", "1D2C3B4A-0000-4000-8000-000000000002"
+task = "7A0C2D4E-1B3F-4C5D-8E9F-0A1B2C3D4E5F"
+def did(n): return "00000000-0000-4000-9000-00000000000%d" % n
+report = """# Should sub-agent work block the Telegram conversation?
+
+## Summary
+A Telegram message joins its bot's Home queue and is answered when that Home turn ends. A turn that spawns sub-agents ends only after `botchu-subagent wait` returns, so the chat shows "typing…" until the slowest sub-agent hands back.
+
+### What each option changes
+
+| | Answer first | Hold, but say so |
+| :--- | :--- | :--- |
+| Telegram reply | When the bot's own work is done | When every handoff is in |
+| Handoffs | One follow-up message each | Inside the one reply |
+| Failure modes | A handoff can arrive after you moved on | A long wait with no word |
+
+### Evidence
+1. `TelegramBridge.swift` answers when the Home turn's run ends.
+2. `SubagentRuntime` keeps a caller's turn open while any child is active.
+3. Three of last week's Telegram turns waited more than ten minutes.
+
+### Recommendation
+Answer first: it is how Home already hears from tasks.
+"""
+page = """<!doctype html><html><head><title>Providers, today and improved</title><style>
+body{font:13px -apple-system,sans-serif;margin:0;background:#fff;color:#1d1d1f}
+header{display:flex;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e6e6e6}
+table{width:100%;border-collapse:collapse}td,th{padding:8px 18px;text-align:left;border-bottom:1px solid #f0f0f0}
+.bar{height:6px;border-radius:3px;background:#e9e7ff;position:relative}.bar i{position:absolute;inset:0 auto 0 0;border-radius:3px;background:#7c5cfa}
+@media (prefers-color-scheme: dark){body{background:#1c1c1e;color:#f2f2f7}header,td,th{border-color:#333}}
+</style></head><body><header><b>Providers</b><span id="when"></span></header>
+<table><tr><th>Provider</th><th>5-hour</th><th>Weekly</th></tr>
+<tr><td>Claude Personal</td><td><div class="bar"><i style="width:30%"></i></div></td><td><div class="bar"><i style="width:68%"></i></div></td></tr>
+<tr><td>Codex Work</td><td><div class="bar"><i style="width:12%"></i></div></td><td><div class="bar"><i style="width:41%"></i></div></td></tr>
+<tr><td>OpenRouter</td><td><div class="bar"><i style="width:4%"></i></div></td><td><div class="bar"><i style="width:9%"></i></div></td></tr></table>
+<script>document.getElementById('when').textContent='Updated just now'</script></body></html>"""
+deliveries = [
+  (scout, None, did(1), "Should sub-agent work block Telegram?",
+   "Coder looked into [#118](https://github.com/asieke/BotChu/issues/118). Today a Telegram message is answered only when everything its turn started is back, sub-agents included, so you can watch “typing…” for as long as the slowest sub-agent takes.\n\n1. **Answer first.** The bot replies when its own work is done; each sub-agent's handoff follows as its own message.\n2. **Hold, but say so.** One reply as today, plus “Waiting on 2 sub-agents” once the wait passes a minute.\n\nI'd file the first: it's how Home already hears from tasks.",
+   [("telegram-subagents.md", "document", report, {"botID": coder, "name": "Coder"})], [("asieke/BotChu", 118, False)],
+   {"text": "Which should I file?", "choices": ["Answer first", "Hold, but say so"]}, [{"botID": coder, "name": "Coder"}], 28),
+  (scout, task, did(2), "Providers, today and improved",
+   "Done: credits, free resets and dollars now share the meter's line, and a free reset that expires within three days says when.",
+   [("index.html", "page", page, None)], [], None, [], 95),
+  (coder, None, did(3), "Merged 4 pull requests",
+   "All four are in main, merged one at a time with the full suite green after each. **#153** is the big one: each bot's work is now reviewed once a day, and only when there's signal. Nothing is deployed.",
+   [], [("asieke/BotChu", 153, True), ("asieke/BotChu", 152, True), ("asieke/BotChu", 151, True), ("asieke/BotChu", 150, True)], None, [], 64),
+  (scout, None, did(4), "Grok Bot, rakazo and cleaning up workers",
+   "What I found comparing the two, and what I'd clean up first.", [("comparison.md", "document", "# Grok Bot and rakazo\n\nBoth keep a bot's memory as Markdown.\n", None)],
+   [], None, [], 60 * 26),
+  (coder, None, did(5), "Weekly dependency check", "Nothing to update this week.", [], [], None, [], 60 * 50),
+]
+state = {"entries": {}}
+for bot, task_id, ident, title, note, files, links, question, credits, minutes in deliveries:
+    workspace = os.path.join(data, "bots", "scout" if bot == scout else "coder")
+    folder = os.path.join(workspace, ".botchu", "inbox", ident.lower())
+    os.makedirs(os.path.join(folder, "files"), exist_ok=True)
+    listed = []
+    for name, kind, text, credit in files:
+        with open(os.path.join(folder, "files", name), "w") as handle: handle.write(text)
+        entry = {"name": name, "kind": kind, "bytes": len(text.encode()), "source": "/tmp/" + name}
+        if credit: entry["credit"] = credit
+        listed.append(entry)
+    record = {"id": ident, "botID": bot, "title": title, "note": note, "files": listed, "credits": credits,
+              "links": [{"repo": r, "number": n, "isPullRequest": p} for r, n, p in links], "sentAt": at(minutes), "updatedAt": at(minutes)}
+    if task_id: record["taskID"] = task_id
+    if question: record["question"] = question
+    with open(os.path.join(folder, "delivery.json"), "w") as handle: json.dump(record, handle, indent=2)
+state["entries"][did(2)] = {"read": True, "done": False}
+state["entries"][did(4)] = {"read": True, "done": False}
+state["entries"][did(5)] = {"read": True, "done": True}
+# The first one's card in Scout's Home, after the reply that announced it, and in `replied`, the
+# owner's answer from the Inbox and the bot's.
+thread_path = os.path.join(data, "threads", scout + ".json")
+thread = json.load(open(thread_path))
+thread += [
+  {"id": "00000000-0000-4000-9000-000000000101", "role": "user", "date": at(40), "text": "Look into #118 with Coder, and tell me what you'd do."},
+  {"id": "00000000-0000-4000-9000-000000000102", "role": "assistant", "date": at(28), "text": "Coder is back. I've put the report and my recommendation in your Inbox, with the one decision I need."},
+  {"id": "00000000-0000-4000-9000-000000000103", "role": "note", "date": at(28), "text": "Delivered to your Inbox: Should sub-agent work block Telegram?", "delivery": did(1)},
+]
+if mode == "replied":
+    thread += [
+      {"id": "00000000-0000-4000-9000-000000000104", "role": "user", "date": at(5), "text": "Answer first.", "delivery": did(1)},
+      {"id": "00000000-0000-4000-9000-000000000105", "role": "assistant", "date": at(4), "text": "Filing it as #156, “Answer Telegram first, then send each handoff”, with the report's table as its outcome."},
+    ]
+    state["entries"][did(1)] = {"read": False, "done": False, "repliedAt": at(5)}
+if mode == "done":
+    for item in deliveries: state["entries"][item[2]] = {"read": True, "done": True}
+json.dump(thread, open(thread_path, "w"))
+json.dump(state, open(os.path.join(data, "inbox.json"), "w"))
+PY
+fi
 # Generation controls can be reviewed on any account, without sending a message or changing live settings.
 python3 - "$data/bots.json" <<'PY'
 import json, os, sys
@@ -178,6 +281,7 @@ fi
 [ -n "${BOTCHU_SEARCH:-}" ] && args+=(--env "BOTCHU_SEARCH=$BOTCHU_SEARCH")
 [ -n "${BOTCHU_JOBS:-}" ] && args+=(--env "BOTCHU_JOBS=$BOTCHU_JOBS")
 [ -n "${BOTCHU_JOB:-}" ] && args+=(--env "BOTCHU_JOB=$BOTCHU_JOB")
+[ -n "${BOTCHU_INBOX_ITEM:-}" ] && args+=(--env "BOTCHU_INBOX_ITEM=$BOTCHU_INBOX_ITEM")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
 # Without restoring windows: after any copy of BotChu crashed, macOS would otherwise stop at a
 # dialog asking whether to reopen them.

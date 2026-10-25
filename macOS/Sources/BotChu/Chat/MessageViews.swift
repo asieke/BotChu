@@ -21,6 +21,8 @@ struct MessageRow: View, Equatable {
     var body: some View {
         switch message.role {
         case .user:
+            VStack(alignment: .trailing, spacing: 6) {
+            if let delivery = message.delivery { InboxReplyLine(delivery: delivery) }
             HStack {
                 Spacer(minLength: 80)
                 VStack(alignment: .trailing, spacing: 8) {
@@ -41,6 +43,7 @@ struct MessageRow: View, Equatable {
                     .padding(.vertical, 9)
                     .foregroundStyle(.white)
                     .background(RoundedRectangle(cornerRadius: Theme.bubbleRadius).fill(Color.accentColor))
+            }
             }
             .padding(.top, 6)
         case .assistant:
@@ -74,6 +77,8 @@ struct MessageRow: View, Equatable {
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Color.red.opacity(0.08)))
+        case .note where message.delivery != nil:
+            BotTurnRow(bot: bot, showsAvatar: false) { DeliveryCard(id: message.delivery!, fallback: message.text) }
         case .note:
             Text(message.text)
                 .font(.caption)

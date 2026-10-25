@@ -84,10 +84,11 @@ struct ChatTarget: Hashable {
 }
 
 enum LibraryDestination: String, CaseIterable {
-    case projects, agents, providers, skills, jobs
+    case inbox, projects, agents, providers, skills, jobs
     var title: String { rawValue.capitalized }
     var symbol: String {
         switch self {
+        case .inbox: "tray"
         case .projects: "square.grid.2x2"; case .agents: "person.2"; case .providers: "terminal"; case .skills: "wand.and.stars"
         case .jobs: "clock.arrow.circlepath"
         }

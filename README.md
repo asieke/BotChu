@@ -9,7 +9,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
 
 ## Scope
 - Does:
-  - **Workspace:** the left sidebar has **Projects**, **Agents**, **Providers**, **Skills** and **Jobs**, followed by
+  - **Workspace:** the left sidebar has **Inbox**, **Projects**, **Agents**, **Providers**, **Skills** and **Jobs**, followed by
     the bots, one row each, in sections (below); a bot's Home and tasks are the tabs beside its chat
     (**Tasks**). A bot's row says on its second line what it is doing ("Working on #113", "2 tasks
     running", its Home's activity, "4 tasks", or its account), with a small dot at the row's end,
@@ -396,6 +396,25 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     and showing the conversation reads what it delivered. What the owner did with each delivery
     (read, done, replied) is in `inbox.json` beside `index.json`. Every session's instructions
     describe the helper.
+  - **Inbox:** first under Workspace (⇧⌘I), with how many deliveries are unread. A 392-point list
+    (320 in a narrower window) in the tasks column's idiom: **Needs you** (questions not answered
+    since they were sent), **Today**, **Yesterday**, then each earlier day, newest first, with
+    **Done** collapsed at the end with its count. A row has the sender's pet (a credited bot's on its
+    corner), the sender, the conversation it came from (Home, a task or a job's run) and the time,
+    the title (semibold while unread, with a blue dot), and chips for what waits on the owner and
+    what came with it. The row being read keeps its place until the owner leaves it; ↑ and ↓ move
+    through the list. The reading pane shows the repository and issue, the title, the sender with
+    whom it credits, where and when; the note in the chat's Markdown; then a card for each file
+    (a document's first 260 points, then **Show all**; an HTML page in a web view with its scripts on
+    and the network off, links opening in the browser; an image; any other file) and for each
+    repository's pull requests or issues, read from GitHub, each opening in Projects; then the
+    exchange under it: the owner's replies, what waits in the queue, the bot's answers and the bot
+    at work. A question's choices sit above a composer that names where a reply goes; a choice is
+    sent as the reply, word for word. The toolbar opens the conversation (**Open Home**, **Open
+    Task** or **Open Run**, ⌘O) and files the delivery as **Done** (⌃⌘A); its menu marks it read or
+    unread and finds the copies and the originals. With nothing left to read it says when the last
+    delivery came, with **Show Done**. In the sending conversation's chat, a delivery is a card with
+    **Show in Inbox**, and a reply from the Inbox shows under a "Reply from your Inbox" line.
   - **Jobs:** an agent can own scheduled jobs, saved instructions it runs on a schedule, such as a
     morning issue triage on weekdays at 9:00. **Jobs** in the sidebar is one table of every agent's
     jobs: the job, its agent, its schedule and time zone, its next run, its state (on, paused,
@@ -1304,6 +1323,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
   tab and an issue or pull request there, read with your `gh` login.
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
+  `BOTCHU_INBOX=sample` gives the Inbox sample deliveries from both demo bots (a report with a
+  question crediting the other bot, a page from a task, pull requests, older and done ones), with the
+  first one's card in the first bot's Home; `replied` has it answered from the Inbox, with the bot's
+  answer; `done` has every one Done. `BOTCHU_OPEN=inbox` opens the Inbox, on the delivery `BOTCHU_INBOX_ITEM` names
+  (`00000000-0000-4000-9000-00000000000<n>`); the window's snapshot draws web views in too.
   `BOTCHU_JOBS=sample` gives the demo bots sample jobs, with a history of every kind of run, the
   latest a task beside the first bot's chat, and a receipt in the first bot's Home, and runs no job (Run Now records a failed run), so nothing starts a CLI; `BOTCHU_OPEN=job-editor`
   or `job-history` opens a new job's editor or the first job's history, `job-model` or `job-effort` a

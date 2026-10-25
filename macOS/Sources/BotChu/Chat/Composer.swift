@@ -11,6 +11,8 @@ struct Composer<Controls: View>: View {
     var onRemoveImage: (UUID) -> Void = { _ in }
     var onAddImages: ([URL]) -> Void = { _ in }
     var onPasteImages: (NSPasteboard) -> Bool = { _ in false }
+    /// Whether it offers to add images (+); the Inbox's replies are text.
+    var addsImages = true
     var attachmentError: String?
     /// The agents and projects chosen in the draft from `@` and `#` completion.
     var references: Binding<[MessageReference]> = .constant([])
@@ -61,7 +63,7 @@ struct Composer<Controls: View>: View {
             }
             if let attachmentError { Text(attachmentError).font(.caption).foregroundStyle(.red) }
             HStack(spacing: 8) {
-                AddImagesButton(add: onAddImages)
+                if addsImages { AddImagesButton(add: onAddImages) }
                 controls
                 if running {
                     button("stop.fill", label: "Stop", help: "Stop (⌘.)", action: onStop)
