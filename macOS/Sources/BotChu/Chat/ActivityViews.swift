@@ -66,34 +66,52 @@ struct ActivityCardBackground: ViewModifier {
     }
 }
 
+/// A part of a card made of several rows, one under another: the top row has the card's top
+/// corners and edge, the bottom row its bottom ones, and those between only its sides.
+struct ActivitySliceBackground: ViewModifier {
+    let top: Bool
+    let bottom: Bool
+
+    func body(content: Content) -> some View {
+        content.background {
+            ZStack {
+                RoundedRectangle(cornerRadius: ActivityStyle.radius, style: .continuous).fill(ActivityStyle.fill)
+                RoundedRectangle(cornerRadius: ActivityStyle.radius, style: .continuous).strokeBorder(ActivityStyle.edge)
+            }
+            // The card goes on beyond an open side, out of sight.
+            .padding(.top, top ? 0 : -(ActivityStyle.radius + 2))
+            .padding(.bottom, bottom ? 0 : -(ActivityStyle.radius + 2))
+            .clipped()
+        }
+    }
+}
+
 extension View {
     func activityCard(tint: Color? = nil) -> some View { modifier(ActivityCardBackground(tint: tint)) }
+    func activitySlice(top: Bool, bottom: Bool) -> some View { modifier(ActivitySliceBackground(top: top, bottom: bottom)) }
 }
 
 // MARK: Exploration
 
 /// Consecutive read-only calls as one card. Live, it shows its last three calls with a spinner on
-/// the current one; settled, its summary: what it explored and where, file chips and failures, and,
-/// opened, every call.
+/// the current one; folded, its summary: what it explored and where, file chips and failures.
+/// Opened, it is a row per call (`ExplorationHead`, `ExplorationEntrySlice`, `ExplorationFoot`), so
+/// only those near the visible part are laid out, however many calls it has.
 struct ExplorationCard: View, Equatable {
     @Environment(TranscriptModel.self) private var transcript
     let group: ExplorationGroup
     /// The conversation's turn is still adding to it.
     let live: Bool
     let density: ChatDensity
-    let open: Bool
     let kind: AgentKind
-    /// An opened group shows its calls a page at a time: a run of hundreds stays quick to open.
-    @State private var shownEntries = ExplorationCard.entryPage
-    static let entryPage = 60
 
     static func == (a: Self, b: Self) -> Bool {
-        a.group == b.group && a.live == b.live && a.density == b.density && a.open == b.open && a.kind == b.kind
+        a.group == b.group && a.live == b.live && a.density == b.density && a.kind == b.kind
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            ExplorationHeader(group: group, live: live, open: false, density: density)
             if live {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(group.entries.suffix(3)) { entry in
@@ -102,26 +120,11 @@ struct ExplorationCard: View, Equatable {
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
-            } else if open {
-                // Opened, its calls name every file: no chips.
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(group.entries.prefix(shownEntries)) { entry in
-                        ExplorationEntryRow(entry: entry, calls: group.calls(of: entry), kind: kind, live: false)
-                    }
-                    if group.entries.count > shownEntries {
-                        let more = group.entries.count - shownEntries
-                        Button("Show \(min(more, Self.entryPage)) more of \(more)") { shownEntries += Self.entryPage }
-                            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Palette.violet)
-                            .padding(.vertical, 4).padding(.leading, 24)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
             } else if density != .compact, !group.files.isEmpty {
                 chips.padding(.horizontal, 12).padding(.bottom, 10)
             }
             // Failures show whenever the group's body does; folded, its header counts them.
-            if !group.failures.isEmpty, live || open || density != .compact {
+            if !group.failures.isEmpty, live || density != .compact {
                 ForEach(group.failures) { failure in
                     FailureRow(failure: failure) { transcript.overrides[group.id] = true }
                 }
@@ -131,7 +134,33 @@ struct ExplorationCard: View, Equatable {
         .accessibilityElement(children: .contain)
     }
 
-    private var header: some View {
+    private var chips: some View {
+        FlowLayout(spacing: 6, lineSpacing: 6) {
+            ForEach(group.files.prefix(ActivityStyle.chipLimit)) { file in
+                FileChipView(chip: file)
+            }
+            if group.files.count > ActivityStyle.chipLimit {
+                Button("+\(group.files.count - ActivityStyle.chipLimit) more") { transcript.overrides[group.id] = true }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.violet)
+                    .padding(.vertical, 3)
+                    .help(group.files.dropFirst(ActivityStyle.chipLimit).map(\.name).joined(separator: "\n"))
+            }
+        }
+    }
+}
+
+/// An exploration group's header: what it explored, where and for how long; a click folds or
+/// opens it.
+struct ExplorationHeader: View {
+    @Environment(TranscriptModel.self) private var transcript
+    let group: ExplorationGroup
+    let live: Bool
+    let open: Bool
+    let density: ChatDensity
+
+    var body: some View {
         Button {
             guard !live else { return }
             transcript.toggle(group.id, default: false)
@@ -176,21 +205,49 @@ struct ExplorationCard: View, Equatable {
         .help(live ? "Exploring" : open ? "Show the summary" : "Show every call")
         .accessibilityLabel(live ? "Exploring, \(group.calls.count) calls so far" : "Explored \(group.summary)" + (group.location.isEmpty ? "" : " in \(group.location)"))
     }
+}
 
-    private var chips: some View {
-        FlowLayout(spacing: 6, lineSpacing: 6) {
-            ForEach(group.files.prefix(ActivityStyle.chipLimit)) { file in
-                FileChipView(chip: file)
-            }
-            if group.files.count > ActivityStyle.chipLimit {
-                Button("+\(group.files.count - ActivityStyle.chipLimit) more") { transcript.overrides[group.id] = true }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.violet)
-                    .padding(.vertical, 3)
-                    .help(group.files.dropFirst(ActivityStyle.chipLimit).map(\.name).joined(separator: "\n"))
+/// An opened group's first row: its header, at the top of the card its rows make.
+struct ExplorationHead: View, Equatable {
+    let group: ExplorationGroup
+    let density: ChatDensity
+
+    var body: some View {
+        ExplorationHeader(group: group, live: false, open: true, density: density)
+            .activitySlice(top: true, bottom: false)
+    }
+}
+
+/// An opened group's call (or the same file read again), a row of its card.
+struct ExplorationEntrySlice: View {
+    let entry: ExplorationEntry
+    let calls: Slice<ChunkedArray<ChatMessage>>
+    let kind: AgentKind
+    let last: Bool
+
+    var body: some View {
+        ExplorationEntryRow(entry: entry, calls: calls, kind: kind, live: false)
+            .padding(.horizontal, 12)
+            .padding(.bottom, last ? 0 : 2)
+            .activitySlice(top: false, bottom: false)
+    }
+}
+
+/// An opened group's last row: its failures, always visible, and the bottom of its card.
+struct ExplorationFoot: View, Equatable {
+    @Environment(TranscriptModel.self) private var transcript
+    let group: ExplorationGroup
+
+    static func == (a: Self, b: Self) -> Bool { a.group == b.group }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Color.clear.frame(height: 8)
+            ForEach(group.failures) { failure in
+                FailureRow(failure: failure) { transcript.overrides[group.id] = true }
             }
         }
+        .activitySlice(top: false, bottom: true)
     }
 }
 
@@ -256,18 +313,19 @@ struct FailureRow: View {
 /// One call of an exploration group (or the same read twice): the file or command, where, and
 /// its range. Clicking it shows the call's input and output.
 struct ExplorationEntryRow: View {
+    @Environment(TranscriptModel.self) private var transcript
     let entry: ExplorationEntry
     let calls: Slice<ChunkedArray<ChatMessage>>
     let kind: AgentKind
     let live: Bool
-    @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Button { expanded.toggle() } label: { row }
+            Button { transcript.toggleExpanded(entry.id) } label: { row }
                 .buttonStyle(.plain)
                 .disabled(entry.state == .running)
-            if expanded {
+            // Kept by the transcript, as the row goes once scrolled far enough away.
+            if transcript.isExpanded(entry.id) {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(calls) { call in ToolDetail(message: call, kind: kind) }
                 }

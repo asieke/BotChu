@@ -5,10 +5,12 @@ import BotChuCore
 /// replies, exploration folded into groups, and commands, edits and sub-agents as cards
 /// (`ActivityTranscript`), regrouped only where a turn writes as it streams in. The newest items
 /// show at first, earlier ones on request (and, in a long conversation opened anew, once they're
-/// grouped). A reader at the bottom follows new content; one reading earlier content keeps their
-/// place while it arrives.
+/// grouped). Only the rows near the visible part are laid out, however much of the history is
+/// open (`TranscriptViewport`). A reader at the bottom follows new content; one reading earlier
+/// content keeps their place, by the row they're reading, while it arrives.
 struct ChatView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage(ChatDensity.storageKey) private var density: ChatDensity = .detailed
     let target: ChatTarget
     @State private var composerFocused = false
@@ -28,51 +30,65 @@ struct ChatView: View {
             let running = model.isRunning(target)
             // Its own turn, not only sub-agents it started, keeps its newest group live.
             let turnRunning = model.runStates[target] != nil
-            let items = transcript.items(for: messages, root: task?.folder ?? bot.workspace, epoch: model.conversation(target).epoch)
+            let epoch = model.conversation(target).epoch
+            let items = transcript.items(for: messages, root: task?.folder ?? bot.workspace, epoch: epoch)
             let start = transcript.start(of: items)
-            let shown = Array(items[start...])
             let cards = transcript.cards(runs: model.delegation.records[target] ?? [])
             let kind = current.account.kind
+            let density = density, transcript = transcript
+            let plan = transcript.plan(items, from: start,
+                                       inputs: .init(width: 0, density: density.layoutValue, dark: colorScheme == .dark, epoch: epoch),
+                                       pinned: following) { index, item in
+                Self.style(of: item, at: index, count: items.count, density: density, turnRunning: turnRunning, transcript: transcript, cards: cards)
+            }
             VStack(spacing: 0) {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            if start > 0 {
-                                Button {
-                                    let first = shown.first?.id
-                                    transcript.showEarlier(items: items)
-                                    DispatchQueue.main.async { if let first { proxy.scrollTo(first, anchor: .top) } }
-                                } label: {
-                                    Label("Show \(min(start, TranscriptModel.page)) earlier", systemImage: "arrow.up")
-                                        .font(.callout)
-                                }
-                                .buttonStyle(.link)
-                                .frame(maxWidth: .infinity)
-                                .padding(.bottom, 4)
-                                .help("\(start) earlier \(start == 1 ? "item" : "items") in this conversation")
-                            } else if transcript.isLoadingEarlier || !model.conversation(target).isLoaded {
-                                ProgressView().controlSize(.small)
+                        VStack(alignment: .leading, spacing: 0) {
+                            VStack(spacing: 0) {
+                                if start > 0 {
+                                    Button {
+                                        // The rows shown stay put as earlier ones go in above them.
+                                        transcript.showEarlier(items: items)
+                                    } label: {
+                                        Label("Show \(min(start, TranscriptModel.page)) earlier", systemImage: "arrow.up")
+                                            .font(.callout)
+                                    }
+                                    .buttonStyle(.link)
                                     .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 8)
-                                    .accessibilityLabel("Loading earlier messages")
-                            } else if let task {
-                                TaskIntro(bot: bot, task: task, machine: task.isRemote ? model.machineName(task.hostID, fallback: task.hostName) : nil)
-                            } else {
-                                BotIntro(bot: bot)
+                                    .padding(.bottom, 4)
+                                    .help("\(start) earlier \(start == 1 ? "item" : "items") in this conversation")
+                                } else if transcript.isLoadingEarlier || !model.conversation(target).isLoaded {
+                                    ProgressView().controlSize(.small)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
+                                        .accessibilityLabel("Loading earlier messages")
+                                } else if let task {
+                                    TaskIntro(bot: bot, task: task, machine: task.isRemote ? model.machineName(task.hostID, fallback: task.hostName) : nil)
+                                } else {
+                                    BotIntro(bot: bot)
+                                }
                             }
-                            ForEach(Array(shown.enumerated()), id: \.element.id) { offset, item in
-                                let previous = offset > 0 ? shown[offset - 1] : start > 0 ? items[start - 1] : nil
-                                ActivityRow(item: item, bot: bot, kind: kind, startsBotTurn: !(previous?.isBotTurn ?? false),
-                                            density: density, live: turnRunning && offset == shown.count - 1,
-                                            open: transcript.isOpen(item.id, default: false),
-                                            runs: cards.runs(for: item), after: cards.unplaced(after: item.id))
+                            .padding(.bottom, 12)
+                            // Where the rows start: it tells the transcript where the reader is.
+                            ChatScrollProbe(transcript: transcript)
+                            Color.clear.frame(height: plan.above)
+                            ForEach(plan.rows) { row in
+                                let item = items[row.index]
+                                TranscriptRow(row: row, item: item, bot: bot, kind: kind,
+                                              startsBotTurn: !(row.index > 0 && items[row.index - 1].isBotTurn),
+                                              density: density, live: turnRunning && row.index == items.count - 1,
+                                              open: transcript.isOpen(item.id, default: false),
+                                              runs: cards.runs(for: item), after: cards.unplaced(after: item.id))
                                     .equatable()
-                                    .id(item.id)
                             }
+                            Color.clear.frame(height: plan.below)
                             if model.runStates[target]?.preparing == true {
                                 PreparingRow(bot: bot, place: task.flatMap { $0.isRemote ? model.machineName($0.hostID, fallback: $0.hostName) : nil })
-                            } else if running, messages.last?.role != .assistant, !(shown.last.map { Self.showsProgress($0) } ?? false) {
-                                TypingIndicator(bot: bot, showsAvatar: !(shown.last?.isBotTurn ?? false))
+                                    .padding(.bottom, 12)
+                            } else if running, messages.last?.role != .assistant, !(items.last.map { Self.showsProgress($0) } ?? false) {
+                                TypingIndicator(bot: bot, showsAvatar: !(items.last?.isBotTurn ?? false))
+                                    .padding(.bottom, 12)
                             }
                             // The chat's bottom margin, so scrolling to it lands at the very end, where
                             // the chat opens, rather than the margin short of it.
@@ -194,6 +210,28 @@ struct ChatView: View {
         }
     }
 
+    /// How an item is laid out, and what else its height depends on: an exploration group as one
+    /// card (folded, or live), opened as a row per entry, or in Raw a card per call.
+    static func style(of item: ActivityItem, at index: Int, count: Int, density: ChatDensity, turnRunning: Bool,
+                      transcript: TranscriptModel, cards: SubagentCards) -> TranscriptViewport.Style {
+        switch item {
+        case .exploration(let group):
+            if density == .raw { return .init(split: .calls) }
+            if turnRunning, index == count - 1, group.isOpen { return .init(split: .whole, extra: 1) }
+            return .init(split: transcript.isOpen(group.id, default: false) ? .opened : .whole)
+        case .tool(let tool):
+            var hasher = Hasher()
+            hasher.combine(transcript.isOpen(tool.id, default: false))
+            if tool.activity.delegation != nil {
+                for run in cards.runs(for: item) { hasher.combine(run.id); hasher.combine(run.phase) }
+            }
+            for run in cards.unplaced(after: tool.id) { hasher.combine(run.id); hasher.combine(run.phase) }
+            return .init(split: .whole, extra: hasher.finalize())
+        case .message:
+            return .init(split: .whole)
+        }
+    }
+
     /// The last item already shows the turn at work: a live group or a running call.
     static func showsProgress(_ item: ActivityItem) -> Bool {
         switch item {
@@ -238,8 +276,72 @@ struct ChatToolbar: ViewModifier {
     }
 }
 
-/// One row of the chat: a message, an exploration group, or a standalone call's card, at the
-/// density chosen (`ChatDensity`); in Raw, every call as its own card with its arguments.
+/// One row the chat lays out (`TranscriptViewport.Row`): a whole item, or a part of an opened
+/// exploration group (its header, an entry, its foot) or of a group in Raw (a call). It reports its
+/// height as laid out, which the transcript keeps for when it goes out of view, and counts itself
+/// while it is there.
+struct TranscriptRow: View, Equatable {
+    @Environment(TranscriptModel.self) private var transcript
+    let row: TranscriptViewport.Row
+    let item: ActivityItem
+    let bot: Bot
+    let kind: AgentKind
+    let startsBotTurn: Bool
+    let density: ChatDensity
+    let live: Bool
+    let open: Bool
+    let runs: [SubagentRun]
+    let after: [SubagentRun]
+
+    /// Where it is among the rows doesn't change what it shows.
+    static func == (a: Self, b: Self) -> Bool {
+        a.row.id == b.row.id && a.row.signature == b.row.signature && a.row.split == b.row.split && a.row.parts == b.row.parts
+            && a.item == b.item && a.bot == b.bot && a.kind == b.kind && a.startsBotTurn == b.startsBotTurn && a.density == b.density
+            && a.live == b.live && a.open == b.open && a.runs == b.runs && a.after == b.after
+    }
+
+    var body: some View {
+        let id = row.id, signature = row.signature, transcript = transcript
+        content
+            .padding(.bottom, row.gap)
+            .onGeometryChange(for: Double.self) { Double($0.size.height) } action: { height in
+                transcript.measured(id, signature: signature, height: height)
+            }
+            .onAppear { transcript.rowAppeared() }
+            .onDisappear { transcript.rowDisappeared() }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch (item, row.split) {
+        case (.exploration(let group), .opened):
+            if row.part == 0 {
+                BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
+                    ExplorationHead(group: group, density: density).equatable()
+                }
+            } else if row.part <= group.entries.count {
+                let entry = group.entries[row.part - 1]
+                BotTurnRow(bot: bot, showsAvatar: false) {
+                    ExplorationEntrySlice(entry: entry, calls: group.calls(of: entry), kind: kind, last: row.part == group.entries.count)
+                }
+            } else {
+                BotTurnRow(bot: bot, showsAvatar: false) {
+                    ExplorationFoot(group: group).equatable()
+                }
+            }
+        case (.exploration(let group), .calls) where row.part < group.calls.count:
+            BotTurnRow(bot: bot, showsAvatar: startsBotTurn && row.part == 0) {
+                ToolCard(message: group.calls[row.part], kind: kind)
+            }
+        default:
+            ActivityRow(item: item, bot: bot, kind: kind, startsBotTurn: startsBotTurn, density: density, live: live, open: open,
+                        runs: runs, after: after).equatable()
+        }
+    }
+}
+
+/// One item of the chat as one row: a message, a folded or live exploration group, or a
+/// standalone call's card, at the density chosen (`ChatDensity`); in Raw, a call's card with its
+/// arguments. Opened groups, and groups in Raw, are a row a part (`TranscriptRow`).
 struct ActivityRow: View, Equatable {
     let item: ActivityItem
     let bot: Bot
@@ -261,13 +363,7 @@ struct ActivityRow: View, Equatable {
             MessageRow(message: message, bot: bot, kind: kind, startsBotTurn: startsBotTurn).equatable()
         case .exploration(let group):
             BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
-                if density == .raw {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(group.calls) { call in ToolCard(message: call, kind: kind) }
-                    }
-                } else {
-                    ExplorationCard(group: group, live: live && group.isOpen, density: density, open: open, kind: kind).equatable()
-                }
+                ExplorationCard(group: group, live: live && group.isOpen, density: density, kind: kind).equatable()
             }
         case .tool(let tool):
             BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {

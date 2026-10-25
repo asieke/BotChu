@@ -217,7 +217,18 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     arguments and output (the first 20 KB, with Copy for all of it). For this, each tool call keeps its
     arguments (long text shortened, an edit's text as the lines it adds and removes), exit code and
     duration; older threads show what they recorded. The chat opens at its newest items, as many as
-    lay out quickly, with **Show earlier** above them. As a turn streams in, only what it changed is
+    lay out quickly, with **Show earlier** above them. However many earlier pages are open and items
+    arrive meanwhile, the chat lays out only the rows near what is visible: those within three
+    quarters of its height (at least 400 points) above and below it, at most 160 unless the visible
+    part itself holds more. A message, a card or a folded group is a row; an opened group is its
+    header, a row per call and its failures, every call there to scroll to (no page of them to ask
+    for), and in Raw every call is a row. The rest is space as tall as its rows were measured at, or
+    estimated, each height kept with what its row showed (its text's length, a group's revision, a
+    call's state and output, whether it is opened) and the width, density and appearance, so it is
+    used only for the same; a call's opened details stay open as its row goes and comes back. A
+    reader paused in earlier content keeps their place by the row they read and how far into it,
+    while rows above it are measured, render math or a diagram late, or reflow at another width, as
+    earlier items go in above it, and after memory pressure. As a turn streams in, only what it changed is
     grouped again: a new call joins a live group, and one that finishes is taken out of the group's
     summary and put back, so a call costs the same in an exploration of 5,000 calls as in one of 5,
     and so do its sub-agents' card placement and tool counts. A conversation shown again keeps its
@@ -770,7 +781,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     updated only for new messages, running calls and the last message (an edit of the thread is
     verified), where delegated runs' cards go, worked out again only when their calls or records
     change, and sub-agents' tool counts kept as they stream (`ActivityTranscript.swift`, in chunked
-    storage that copies a chunk, not every element, when shared: `ChunkedArray.swift`), the identity, instructions,
+    storage that copies a chunk, not every element, when shared: `ChunkedArray.swift`), which of its
+    rows the chat lays out, their heights kept by what they showed and how, and the reader's row and
+    offset into it (`TranscriptViewport.swift`), the identity, instructions,
     team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries,
     and the lines Providers shows, lined up across its rows (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
@@ -846,7 +859,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished runs to run reviews, `Evaluations.swift`),
-    `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (messages, the activity cards and their density, the shown part of the transcript, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
+    `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
     status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
     the hosts and Telegram), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -882,7 +895,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     shows what grouping the thread afresh shows through random turns (calls finishing out of order,
     failing, their kind arriving late, stopped turns, edits of the thread), sees changes of the same
     length, lets go of a settled group's running state, and leaves sub-agent placement and counts
-    alone while a reply streams; the sidebar's sections of bots, and searching them; follow-ups the CLI
+    alone while a reply streams; the rows the chat lays out: within their bound through ten pages of
+    5,000 messages, 1,000 items arriving and a group of 5,000 calls in Raw and opened again and again,
+    every row reached scrolling down and up again, heights never reused for other content, layout
+    inputs or an edited thread, measurements of rows gone dropped, and the reader's row (or the end)
+    kept as rows above it change, are forgotten or move; the sidebar's sections of bots, and searching them; follow-ups the CLI
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
     before the next save, also in a queue going through a relaunch; saving off the main thread: each
@@ -933,7 +950,13 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - `Tests/BotChuRenderingTests/` — actual WebKit math/diagram layout, native tables ruled straight
     across every column, streaming updates (a long reply being written never parsed on the main
     thread, its chunks laid out only at the width it is shown at, also when the window asks for its
-    ideal size, and a rich reply's web view rendering one revision at a time, ignoring late heights), source
+    ideal size, and a rich reply's web view rendering one revision at a time, ignoring late heights),
+    history laid out a screenful at a time (rows counted as they appear and go): ten pages of 5,000
+    messages, a reader paused at an old message while 1,000 items arrive and a reply streams, with what
+    they see unmoved, every row reached scrolling both ways, back at the newest after switching away
+    and back; a group of 5,000 calls in Raw and opened again and again, a call's details kept open; and
+    rich replies rendering above the reader, after memory pressure, narrower and dark, without moving
+    them or leaving blank space, source
     fallback and offline restrictions, web views made only near the visible chat, conversations and
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
     saves, a follow-up taken while the transcript can't be saved (back in it after a relaunch), model-picker keyboard interaction and persisted choices,
@@ -1151,7 +1174,13 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   key press until it is drawn, and how long the main thread keeps other work waiting meanwhile (and with
   nothing streaming), and how long the main thread is held to show each revision the worker prepares;
   then 60 deltas into a 32 KB reply with 282 equations, until WebKit has drawn the last, with WebKit's
-  counts. `BOTCHU_BENCHMARK_SCOPE=chat` times the
+  counts. It opens the 400- and 5,000-call groups in the chat, and shows the 5,000 calls in Raw, with
+  the rows laid out. In a 5,000-message conversation it clicks **Show earlier** ten times, pauses at
+  an old message while 1,000 items arrive and the reply streams (with how far the reader's row moved),
+  scrolls 40 points at a time 300 times (with the steps over a 60 Hz frame), jumps to the newest, and
+  switches away and back 30 times, until drawn, its next update and a key press in the message box,
+  with the process's memory before and after; and the most rows laid out at each step, counted as
+  they appear and go. `BOTCHU_BENCHMARK_SCOPE=chat` times the
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.
