@@ -124,7 +124,9 @@ struct ReceiptRow: View {
     }
 
     private var taskReceipt: some View {
-        let task = message.taskID.flatMap { model.task($0, of: botID) }
+        // A task this conversation handed to another bot is that bot's.
+        let owner = message.taskBotID ?? botID
+        let task = message.taskID.flatMap { model.task($0, of: owner) }
         return HStack(spacing: 6) {
             Image(systemName: task == nil ? "exclamationmark.triangle" : "checklist")
                 .foregroundStyle(task == nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
@@ -133,7 +135,7 @@ struct ReceiptRow: View {
                 .textSelection(.enabled)
             if let task {
                 Button(task.isArchived ? "Reopen" : "Open") {
-                    let target = ChatTarget.task(task.id, of: botID)
+                    let target = ChatTarget.task(task.id, of: owner)
                     task.isArchived ? model.reopenTask(target) : model.show(target)
                 }
                 .buttonStyle(.link)

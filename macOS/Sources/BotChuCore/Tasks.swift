@@ -32,9 +32,36 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
         }
     }
 
-    /// Who started the task: the owner (New Task), or the bot itself, from its Home conversation.
+    /// Who started the task: the owner (New Task), the bot itself, from its Home conversation, or
+    /// another conversation that handed it to the bot (`botchu-task create`, or a dispatch request
+    /// naming the bot), which `requestedBy` records.
     public enum Origin: String, Codable, Sendable {
-        case owner, home
+        case owner, home, agent
+    }
+
+    /// The conversation that asked for a task handed to its bot, kept for traceability. The task is
+    /// its bot's own and goes on whatever becomes of that conversation.
+    public struct Requester: Codable, Hashable, Sendable {
+        /// Who asked: the conversation's bot, or the sub-agent working in it.
+        public var name: String
+        /// The bot whose conversation it was, and its task there (nil for its Home).
+        public var botID: UUID
+        public var taskID: UUID?
+        /// The sub-agent run in that conversation that asked, if one did.
+        public var subagentID: UUID?
+        /// The conversation, as a sentence names it: "Product Fox's Home".
+        public var conversation: String
+        /// What makes the same request from the same conversation, made again, recognizable.
+        public var key: String?
+
+        public init(name: String, botID: UUID, taskID: UUID? = nil, subagentID: UUID? = nil, conversation: String, key: String? = nil) {
+            self.name = name
+            self.botID = botID
+            self.taskID = taskID
+            self.subagentID = subagentID
+            self.conversation = conversation
+            self.key = key
+        }
     }
 
     /// A review of the task's pull request, in a worktree detached at its head: in the
@@ -80,6 +107,8 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var review: Review?
     /// The commit a review's worktree is detached at.
     public var head: String?
+    /// For a task handed to its bot by another conversation, that conversation.
+    public var requestedBy: Requester?
 
     public init(
         id: UUID = UUID(), title: String? = nil, repo: String, checkout: String, branch: String = "", folder: String? = nil,
@@ -255,6 +284,11 @@ public enum TaskReceipt {
     public static func couldNotStart(_ request: String, reason: String) -> String {
         "Couldn't start the task in \(request): \(reason)"
     }
+
+    /// In the conversation that handed a task to another bot.
+    public static func handedOff(_ task: BotTask, to bot: String) -> String {
+        "Handed \(task.title) to \(bot) as a new task"
+    }
 }
 
 /// The brief of one task over many of a repository's open issues or pull requests: its bot hands
@@ -328,8 +362,12 @@ public enum FanOutBrief {
 }
 
 /// A task a bot asks for from its Home conversation, by writing a JSON file into
-/// `.botchu/dispatch/` in its folder: `{"repo": "asieke/GitChu", "issue": 48, "task": "…"}`.
+/// `.botchu/dispatch/` in its folder: `{"repo": "asieke/GitChu", "issue": 48, "task": "…"}`, with
+/// `"agent"` naming another bot to hand it to. `botchu-task create` sends the same fields
+/// (`TaskHandoff`).
 public struct TaskRequest: Equatable, Sendable {
+    /// The bot that gets the task, by name, slug or ID; nil for the bot asking.
+    public var agent: String?
     /// `owner/name`, a repository's name alone, or its checkout's folder.
     public var repo: String
     public var issue: Int?
@@ -346,7 +384,8 @@ public struct TaskRequest: Equatable, Sendable {
     public var review: BotTask.Review?
 
     public init(repo: String, issue: Int? = nil, pullRequest: Int? = nil, task: String = "", branch: String? = nil, title: String? = nil,
-                machine: String? = nil, review: BotTask.Review? = nil) {
+                machine: String? = nil, review: BotTask.Review? = nil, agent: String? = nil) {
+        self.agent = agent
         self.repo = repo
         self.issue = issue
         self.pullRequest = pullRequest
@@ -366,7 +405,8 @@ public struct TaskRequest: Equatable, Sendable {
     }
 
     /// Reads a request file, forgivingly: numbers may be written as `48`, `"48"` or `"#48"`; `pr` and
-    /// `pull_request` name a pull request, `brief` and `description` the task, `host` the machine.
+    /// `pull_request` name a pull request, `brief` and `description` the task, `host` the machine,
+    /// `agent` the bot that gets it.
     /// `"review": 12` asks for a review of pull request 12, and `"comment": true` posts it.
     public static func parse(_ data: Data) throws -> TaskRequest {
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
@@ -402,7 +442,7 @@ public struct TaskRequest: Equatable, Sendable {
         let request = TaskRequest(repo: repo, issue: try number("issue"), pullRequest: reviewed ?? pullRequest,
                                   task: string("task", "brief", "description", "prompt") ?? "",
                                   branch: string("branch"), title: string("title"), machine: string("machine", "host"),
-                                  review: reviewed == nil ? nil : comment ? .comment : .review)
+                                  review: reviewed == nil ? nil : comment ? .comment : .review, agent: string("agent"))
         if request.issue != nil, request.pullRequest != nil {
             throw Problem(message: "give an issue or a pull request, not both")
         }

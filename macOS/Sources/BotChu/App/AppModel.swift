@@ -192,8 +192,11 @@ final class AppModel {
     @ObservationIgnored private var inputs: [ChatTarget: (kind: AgentKind, ledger: InputLedger)] = [:]
     /// BotChu is quitting: the turns it stops weren't stopped by the owner, so queues stay unpaused.
     @ObservationIgnored private(set) var terminating = false
-    /// While a bot's Home turn runs, BotChu looks for the tasks it asks for (`.botchu/dispatch/`).
-    @ObservationIgnored private var dispatchTimers: [UUID: Timer] = [:]
+    /// While any turn runs, BotChu looks for the tasks bots ask for (`.botchu/dispatch/`), whichever
+    /// conversation wrote them (#111).
+    @ObservationIgnored private var dispatchTimer: Timer?
+    /// Who waits to hear that a task's first turn started (nil) or why it couldn't (#111).
+    @ObservationIgnored private var startWatchers: [ChatTarget: [(String?) -> Void]] = [:]
     /// Bots whose dispatch requests are being started.
     @ObservationIgnored private var dispatching: Set<UUID> = []
     /// Worktrees being made, by task: one at a time, so a message sent meanwhile waits for it.
@@ -492,7 +495,6 @@ final class AppModel {
         for (target, run) in runs where target.botID == id { run.stop() }
         petRuns[id]?.stop()
         petTasks.removeValue(forKey: id)?.cancel()
-        dispatchTimers.removeValue(forKey: id)?.invalidate()
         if let bot = bot(id) {
             // What waits to be saved in its folder (its memory too) is dropped, and what is being
             // written finishes first, so nothing makes the folder again once it is in the Trash.
@@ -561,12 +563,17 @@ final class AppModel {
 
     /// Records a task, opens its tab (when `show`), says so in its bot's Home, then makes its
     /// worktree and sends its first message, with `images` (already in the bot's folder).
-    func startTask(_ task: BotTask, for botID: UUID, show: Bool, images: [ImageAttachment] = []) {
-        guard bot(botID) != nil else { return }
+    /// `saved` hears whether its record was saved, with the error when it wasn't.
+    func startTask(_ task: BotTask, for botID: UUID, show: Bool, images: [ImageAttachment] = [],
+                   saved: (@MainActor @Sendable (Error?) -> Void)? = nil) {
+        guard bot(botID) != nil else {
+            saved?(CocoaError(.fileNoSuchFile))
+            return
+        }
         let target = ChatTarget.task(task.id, of: botID)
         tasks[botID, default: []].append(task)
         conversation(target).start()
-        saveTask(task, of: botID)
+        saveTask(task, of: botID, saved: saved)
         postReceipt(TaskReceipt.started(task), task: task.id, for: botID)
         if show { self.show(target) }
         send(task.opening, to: target, images: images)
@@ -638,7 +645,8 @@ final class AppModel {
         Repositories.scan(root: settings.expandedReposRoot)
     }
 
-    /// Starts the tasks a bot asked for from its Home: the requests in its `.botchu/dispatch/`.
+    /// Starts the tasks a bot asked for: the requests in its `.botchu/dispatch/`, from its Home or any
+    /// other conversation that writes there.
     func takeDispatches(for botID: UUID) {
         guard let bot = bot(botID), !dispatching.contains(botID), BotHome(workspace: bot.workspace).hasDispatches() else { return }
         dispatching.insert(botID)
@@ -658,33 +666,23 @@ final class AppModel {
 
     /// Starts the task one request asks for, where its repository lives (or on the machine it
     /// names), or says in Home why it can't. The request is taken just before its task is recorded,
-    /// so it is never lost in between, nor taken twice.
+    /// so it is never lost in between, nor taken twice. A request naming another bot (`agent`) hands
+    /// the task to that bot, and Home gets a receipt that opens it.
     private func startTask(requestedIn file: URL, data: Data, checkouts: [RepoCheckout], for botID: UUID) async {
         let name = "dispatch/\(file.lastPathComponent)"
         do {
             let wanted = try TaskRequest.parse(data)
-            let found = try repository(named: wanted.repo, checkouts: checkouts).get()
-            var location: RepoLocation
-            if let checkout = found.checkout {
-                location = RepoLocation(path: checkout.path)
-            } else if let machine = wanted.machine {
-                let host = try await host(named: machine).get()
-                location = RepoLocation(hostID: host?.id, path: folder(of: found.repo, on: host?.id))
-            } else {
-                location = self.location(of: found.repo)
+            guard let asking = bot(botID) else { return }
+            let owner = try wanted.agent.map { try resolveTaskBot($0) } ?? asking
+            var task = try await plannedTask(wanted, for: owner, checkouts: checkouts, origin: owner.id == botID ? .home : .agent)
+            if owner.id != botID {
+                task.requestedBy = BotTask.Requester(name: asking.name, botID: botID, conversation: "\(asking.name)'s Home")
             }
-            if location.hostID == nil { location.path = (location.path as NSString).expandingTildeInPath }
-            let work = wanted.issue.map { BotTask.Work(number: $0, isPullRequest: false, repo: found.repo) }
-                ?? wanted.pullRequest.map { BotTask.Work(number: $0, isPullRequest: true, repo: found.repo) }
-            // A pull request's task works on the pull request's own branch (or its head, for a review).
-            let branch = work?.isPullRequest == true ? "" : wanted.branch ?? ""
-            if let other = taskAlreadyWorking(on: found.repo, hostID: location.hostID, work: work, review: wanted.review, branch: branch) {
-                throw TaskRequest.Problem(message: "“\(other.title)” already works on it; send it a message instead")
+            guard BotHome(workspace: asking.workspace).take(dispatch: file) else { return }
+            startTask(task, for: owner.id, show: false)
+            if owner.id != botID {
+                postReceipt(TaskReceipt.handedOff(task, to: owner.name), task: task.id, of: owner.id, in: .home(botID))
             }
-            guard let bot = bot(botID), BotHome(workspace: bot.workspace).take(dispatch: file) else { return }
-            let task = BotTask(for: bot, repo: found.repo, checkout: location.path, work: work, brief: wanted.task, branch: branch,
-                               title: wanted.title, origin: .home, host: settings.host(location.hostID), review: wanted.review)
-            startTask(task, for: botID, show: false)
         } catch {
             guard let bot = bot(botID), BotHome(workspace: bot.workspace).take(dispatch: file) else { return }
             let reason = (error as? TaskRequest.Problem)?.message ?? error.localizedDescription
@@ -692,33 +690,93 @@ final class AppModel {
         }
     }
 
-    /// Looks for requests every two seconds while the bot's Home turn runs, and once more after.
-    private func watchDispatches(for botID: UUID, while running: Bool) {
-        dispatchTimers.removeValue(forKey: botID)?.invalidate()
-        if running {
-            dispatchTimers[botID] = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.takeDispatches(for: botID) }
+    /// The bot a request hands its task to, by name, slug or ID.
+    func resolveTaskBot(_ name: String) throws -> Bot {
+        do { return try SubagentResolver.resolve(name, bots: bots, list: "botchu-task list") }
+        catch { throw TaskRequest.Problem(message: error.localizedDescription) }
+    }
+
+    /// The task a request asks `bot` for, where its repository lives (or on the machine it names),
+    /// or why it can't be: a repository BotChu can't find, or another open task already on it.
+    func plannedTask(_ wanted: TaskRequest, for bot: Bot, checkouts: [RepoCheckout], origin: BotTask.Origin) async throws -> BotTask {
+        let found = try repository(named: wanted.repo, checkouts: checkouts).get()
+        var location: RepoLocation
+        if let checkout = found.checkout {
+            location = RepoLocation(path: checkout.path)
+        } else if let machine = wanted.machine {
+            let host = try await host(named: machine).get()
+            location = RepoLocation(hostID: host?.id, path: folder(of: found.repo, on: host?.id))
+        } else {
+            location = self.location(of: found.repo)
+        }
+        if location.hostID == nil { location.path = (location.path as NSString).expandingTildeInPath }
+        let work = wanted.issue.map { BotTask.Work(number: $0, isPullRequest: false, repo: found.repo) }
+            ?? wanted.pullRequest.map { BotTask.Work(number: $0, isPullRequest: true, repo: found.repo) }
+        // A pull request's task works on the pull request's own branch (or its head, for a review).
+        let branch = work?.isPullRequest == true ? "" : wanted.branch ?? ""
+        if let other = taskAlreadyWorking(on: found.repo, hostID: location.hostID, work: work, review: wanted.review, branch: branch) {
+            throw TaskRequest.Problem(message: "“\(other.title)” already works on it; send it a message instead")
+        }
+        return BotTask(for: bot, repo: found.repo, checkout: location.path, work: work, brief: wanted.task, branch: branch,
+                       title: wanted.title, origin: origin, host: settings.host(location.hostID), review: wanted.review)
+    }
+
+    /// Looks for every bot's requests every two seconds while any turn runs, whichever bot's or
+    /// conversation's, so a request one conversation writes into another bot's folder doesn't wait
+    /// for that bot's Home (#111); and once more after the last turn ends.
+    private func watchDispatches() {
+        if !runs.isEmpty {
+            guard dispatchTimer == nil else { return }
+            dispatchTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.takeAllDispatches() }
             }
         } else {
-            takeDispatches(for: botID)
+            dispatchTimer?.invalidate()
+            dispatchTimer = nil
+            takeAllDispatches()
             // A file written just before the turn ended waits until it has settled.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.takeDispatches(for: botID) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.takeAllDispatches() }
         }
+    }
+
+    private func takeAllDispatches() {
+        for bot in bots { takeDispatches(for: bot.id) }
     }
 
     /// Adds a receipt to the bot's Home thread. A newer word on the task the last receipt is about
     /// replaces it, so a task that keeps working doesn't fill Home.
     private func postReceipt(_ text: String, task taskID: UUID?, for botID: UUID) {
-        let home = ChatTarget.home(botID)
-        // Home's thread decides whether it replaces the last receipt: once it is in memory.
-        if later(home, needs: .history, { [weak self] in self?.postReceipt(text, task: taskID, for: botID) }) { return }
-        let receipt = ChatMessage(role: .receipt, text: text, taskID: taskID)
-        if let taskID, let last = thread(home).last, last.role == .receipt, last.taskID == taskID {
-            conversation(home).edit { $0[$0.count - 1] = receipt }
+        postReceipt(text, task: taskID, in: .home(botID))
+    }
+
+    /// Adds a receipt to a conversation, as to Home; `owner` is the task's bot, for a task the
+    /// conversation handed to another bot.
+    func postReceipt(_ text: String, task taskID: UUID?, of owner: UUID? = nil, in place: ChatTarget) {
+        // The conversation's thread decides whether it replaces the last receipt: once it is in memory.
+        if later(place, needs: .history, { [weak self] in self?.postReceipt(text, task: taskID, of: owner, in: place) }) { return }
+        var receipt = ChatMessage(role: .receipt, text: text, taskID: taskID)
+        receipt.taskBotID = owner == place.botID ? nil : owner
+        if let taskID, let last = thread(place).last, last.role == .receipt, last.taskID == taskID, last.taskBotID == receipt.taskBotID {
+            conversation(place).edit { $0[$0.count - 1] = receipt }
         } else {
-            append(receipt, to: home)
+            append(receipt, to: place)
         }
-        saveThread(home)
+        saveThread(place)
+    }
+
+    /// Calls `report` once the task's first turn has started (with nil) or couldn't (with why): at
+    /// once when it already has.
+    func whenTaskStarts(_ target: ChatTarget, _ report: @escaping (String?) -> Void) {
+        if runs[target] != nil || thread(target).contains(where: { $0.role == .assistant || $0.role == .tool }) { return report(nil) }
+        if waiting[target] == nil, makings[target] == nil, let error = thread(target).last(where: { $0.role == .error }) {
+            return report(error.text)
+        }
+        startWatchers[target, default: []].append(report)
+    }
+
+    private func reportTaskStart(_ target: ChatTarget, failure: String?) {
+        guard target.taskID != nil, let watchers = startWatchers.removeValue(forKey: target) else { return }
+        for watcher in watchers { watcher(failure) }
     }
 
     /// A scheduled job's finding or failure, in the bot's Home with Open Run. It touches nothing
@@ -758,7 +816,12 @@ final class AppModel {
         var reports: [String] = []
         for message in history[since...] where message.role == .receipt {
             if let id = message.taskID {
-                if reported.insert(id).inserted, let task = task(id, of: botID) { reports.append(report(on: task, of: botID)) }
+                let owner = message.taskBotID ?? botID
+                if reported.insert(id).inserted, let task = task(id, of: owner) {
+                    // A Task handed to another bot is that bot's own.
+                    let whose = owner == botID ? "" : "Handed to \(bot(owner)?.name ?? "another bot"): "
+                    reports.append(whose + report(on: task, of: owner))
+                }
             } else {
                 reports.append(message.text)
             }
@@ -1196,6 +1259,7 @@ final class AppModel {
                     messages.append(ChatMessage(role: .error, text: "Couldn't save this message. It is still queued."))
                 }
                 self.pauseQueue(target)
+                self.reportTaskStart(target, failure: "Couldn't save its first message. It is still queued.")
                 return
             }
             self.startSavedTurn(text, for: target, history: history, updates: updates, images: message?.images ?? [])
@@ -1222,6 +1286,7 @@ final class AppModel {
                     if let task = self.task(target) {
                         postReceipt(TaskReceipt.failed(task, error: failure.step), task: task.id, for: target.botID)
                     }
+                    reportTaskStart(target, failure: failure.step)
                 } else {
                     startTurn(text, for: target, history: history, updates: nil, images: images)
                     if !isRunning(target) { pauseQueue(target) }
@@ -1457,7 +1522,7 @@ final class AppModel {
                     self.runs[target] = nil
                     self.inputs[target] = nil
                     self.delegation.endCaller(context.id)
-                    if target.taskID == nil { self.watchDispatches(for: id, while: false) }
+                    self.watchDispatches()
                     // The bot (or the task) was deleted while it ran.
                     guard self.runSettings(of: target) != nil else {
                         if self.bot(target.botID) != nil { self.runStates[target] = nil }
@@ -1523,7 +1588,8 @@ final class AppModel {
                     reactions[target] = nil
                     reactionTickets[target] = nil
                     runStates[target] = RunState()
-                    if target.taskID == nil { watchDispatches(for: id, while: true) }
+                    watchDispatches()
+                    reportTaskStart(target, failure: nil)
                     // A CLI that has printed nothing yet is usually blocked on a macOS prompt: as BotChu's
                     // child, it needs BotChu's permission for protected folders (Desktop, Documents) its own
                     // settings point into, and the prompt may be behind other windows.
@@ -1539,6 +1605,7 @@ final class AppModel {
                     pauseQueue(target)
                     append(ChatMessage(role: .error, text: "Couldn't start \(account.name): \(error.localizedDescription)"), to: target)
                     saveThread(target)
+                    reportTaskStart(target, failure: "Couldn't start \(account.name): \(error.localizedDescription)")
                 }
             } catch {
                 guard waiting[target] == ticket else { return }
@@ -1546,6 +1613,7 @@ final class AppModel {
                 runStates[target] = nil
                 pauseQueue(target)
                 append(ChatMessage(role: .error, text: "Couldn't prepare delegation: \(error.localizedDescription)"), to: target)
+                reportTaskStart(target, failure: "Couldn't prepare delegation: \(error.localizedDescription)")
                 saveThread(target)
             }
         }
@@ -2066,10 +2134,16 @@ final class AppModel {
     }
 
     /// Writes the task's `task.json` off the main thread, after its earlier saves.
-    private func saveTask(_ task: BotTask, of botID: UUID) {
-        guard let bot = bot(botID) else { return }
+    private func saveTask(_ task: BotTask, of botID: UUID, saved: (@MainActor @Sendable (Error?) -> Void)? = nil) {
+        guard let bot = bot(botID) else {
+            saved?(CocoaError(.fileNoSuchFile))
+            return
+        }
         let home = BotHome(workspace: bot.workspace), workspace = bot.workspace, target = ChatTarget.task(task.id, of: botID)
         storage.replace(home.taskLane(task.id), slot: "task", value: task, write: { try home.save($0); return 0 }) { [weak self] result in
+            if let saved {
+                if case .failure(let error) = result { saved(error) } else { saved(nil) }
+            }
             guard case .failure(let error) = result, (error as? StorageQueue.Failure) == nil, let self, self.task(target) != nil else { return }
             self.append(ChatMessage(role: .error, text: "Couldn't save this task in \(workspace): \(error.localizedDescription)"), to: target)
         }

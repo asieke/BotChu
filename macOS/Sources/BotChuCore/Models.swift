@@ -138,6 +138,8 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     public var toolState: ToolState?
     /// On a receipt, the task it reports on; nil for a task BotChu couldn't start.
     public var taskID: UUID?
+    /// On a receipt about another bot's task (one this conversation handed to it), that bot.
+    public var taskBotID: UUID?
     /// A tool call's structured arguments, as compact JSON with long strings shortened
     /// (`ToolArguments.digest`), when its CLI reports them. Nil in threads saved before.
     public var toolArguments: String?

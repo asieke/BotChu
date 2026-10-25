@@ -1,7 +1,48 @@
 # Cross-bot delegation
 
-BotChu supplies a `botchu-subagent` command to every Home, task and delegated turn. It works
-through shell tools on all five CLI families. Python 3 is required on the execution machine.
+A conversation hands work to another bot in one of two ways, each with its own command. An `@bot`
+mention only names the bot; what is asked for decides which:
+
+| The owner asks for | What BotChu makes | Where it shows | Lifetime |
+| --- | --- | --- | --- |
+| "New task @bot", "hand this off to @bot as a new task" | a **Task**, with `botchu-task create` | under the bot in the left sidebar | the bot's own; goes on after the asking turn ends or stops |
+| "New subagent @bot", "delegate this to @bot as a sub-agent" | a **sub-agent run**, with `botchu-subagent call` or `spawn` | the asking conversation's Sub-agents inspector | a child of the asking turn; its handoff comes back, and Stop cascades |
+
+BotChu supplies both commands to every Home, task and delegated turn. They work through shell
+tools on all five CLI families. Python 3 is required on the execution machine.
+
+## Tasks
+
+```sh
+botchu-task create --agent '10x Engineer Bot' --repo asieke/BotChu --title 'Speed audit' \
+  --brief 'Fix #106–#110: spawn one sub-agent run per issue, then merge them one at a time.'
+botchu-task create --agent 'QA Bot' --repo asieke/BotChu --review 121 --comment
+botchu-task status <request id>
+```
+
+`create` takes `--brief`, `--issue`, `--pr` (to continue a pull request) or `--review` (with
+`--comment` to post it), and `--title`, `--branch` and `--machine`, the fields of a dispatch file
+(README, **Home coordinates**). The Task is made as the named bot's own: in its repository's usual
+place, with the usual issue, pull request and worktree checks, on the bot's account, model and
+effort, recording which conversation asked (`requestedBy` in its `task.json`). Its first message
+tells the bot who handed it over. The asking conversation gets a receipt that opens the Task, and
+the command prints the bot and Task IDs and one status: `pending`, `created` (its first turn still
+starting when `--wait`, 120 seconds by default, ran out), `started`, `start failed` (the Task is
+there, with why) or `failed` (nothing was made: run the same command again once the reason is
+fixed). It exits nonzero for the last two. Running the same command again from the same
+conversation, in the same turn, a later one or after a relaunch, returns the same Task: BotChu
+recognizes it by the conversation, the bot and what it asks for. A request seen again in the same
+turn gets the same answer. The Task doesn't count against sub-agent limits and never waits for
+the asking turn; it counts as one of the turn's sixty-four delegations.
+
+A batch goes to one bot as one Task, whose own turn runs a sub-agent run per item: the asking
+turn can end while they work, and stopping the Task stops its runs.
+
+A dispatch file with `"agent"` does the same from a bot's folder on this Mac, with a receipt in
+its Home. BotChu looks at every bot's dispatch folder while any turn runs, so a request written
+into another bot's folder no longer waits for that bot's Home.
+
+## Sub-agent runs
 
 ```sh
 botchu-subagent list
@@ -63,12 +104,15 @@ Records and transcripts stay with the owning conversation:
 <owner workspace>/.botchu/tasks/<task id>/subagents/<run id>/{run.json,thread.jsonl}
 ```
 
-The standalone helper is installed in `~/.botchu/bin`. Each turn also receives a private copy in
+The standalone helper is installed in `~/.botchu/bin`, as `botchu-subagent` and `botchu-task`
+(one script that acts by the name it is run as). Each turn also receives private copies in
 its mailbox's `bin` directory, prepended to PATH after login-shell initialization. Local mailboxes
 are under `~/.botchu/ipc/subagents/<invocation id>`. A remote mailbox is under
 `~/.botchu/ipc/subagents/<app namespace>/<invocation id>` on the host. Each contains `roster.json`,
 `heartbeat.json`, `requests/<id>.json`, `status/<id>.status.json` (rewritten only when the child's
-phase or activity changes) and `results/<id>.result.json`.
+phase or activity changes) and `results/<id>.result.json`. A Task request is a request with `"kind":
+"task"`; its result is rewritten as it goes from pending to created to started, and
+`botchu-subagent wait` refuses it, as `botchu-task status` refuses a sub-agent run's.
 The app namespace survives relaunch. Isolated tests and development runs use their own data root.
 
 SSH mailbox polling uses an independent connection through the existing ControlMaster, so a

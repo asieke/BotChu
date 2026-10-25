@@ -30,6 +30,8 @@ final class SubagentRuntime {
     @ObservationIgnored private var deliveries: [UUID: SubagentTransport] = [:]
     @ObservationIgnored private var deliveryTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var rejections: [UUID: [UUID: SubagentResult]] = [:]
+    /// What each Task request (`botchu-task create`) has come to so far, by request (#111).
+    @ObservationIgnored private var handoffs: [UUID: TaskHandoffResult] = [:]
     @ObservationIgnored private var pendingFinishes: [UUID: (SubagentPhase, String?)] = [:]
     @ObservationIgnored private var requestCounts: [ChatTarget: Int] = [:]
     /// Runs whose end is being saved: still active until it is, so their caller waits for them.
@@ -257,6 +259,11 @@ final class SubagentRuntime {
             try? await caller.transport.acknowledge(filename: filename)
             return
         }
+        // A Task for a bot, not a run of this turn's (#111).
+        if TaskHandoff.isHandoff(data) {
+            await receiveHandoff(data, id: fileID, filename: filename, from: caller)
+            return
+        }
         if let rejected = rejections[caller.id]?[fileID] {
             do {
                 try await caller.transport.writeResult(id: fileID, data: SubagentIPC.encode(rejected))
@@ -327,6 +334,75 @@ final class SubagentRuntime {
                 try await caller.transport.acknowledge(filename: filename)
             } catch { self.error = "Couldn't deliver a sub-agent failure: \(error.localizedDescription)" }
         }
+    }
+
+    // MARK: Tasks handed to bots (#111)
+
+    /// Takes a `botchu-task create` request: answers it at once (pending, or why not), then makes
+    /// the Task outside the watcher's loop, so the caller's mailbox and heartbeat go on meanwhile, and
+    /// writes how that went, then how the Task's first turn started, into the caller's mailbox. The
+    /// Task goes on whatever becomes of the caller. A request seen again gets the same answer.
+    private func receiveHandoff(_ data: Data, id: UUID, filename: String, from caller: Caller) async {
+        if let known = handoffs[id] {
+            await deliver(known, to: caller)
+            try? await caller.transport.acknowledge(filename: filename)
+            return
+        }
+        var result = TaskHandoffResult(id: id, phase: .pending)
+        var accepted: TaskHandoff?
+        do {
+            let handoff = try TaskHandoff.parse(data)
+            guard handoff.id == id else { throw TaskRequest.Problem(message: "the request's ID doesn't match its file") }
+            try handoff.validate(SubagentCallerContext(invocationID: caller.id, botID: caller.target.botID, taskID: caller.target.taskID,
+                                                       parentSubagentID: caller.parent, depth: caller.depth,
+                                                       workingDirectory: caller.directory, hostID: caller.hostID))
+            guard contexts[caller.id] != nil else { throw TaskRequest.Problem(message: "the calling turn has ended") }
+            guard requestCounts[caller.target, default: 0] < 64 else {
+                throw TaskRequest.Problem(message: "this turn has reached its limit of 64 delegations")
+            }
+            requestCounts[caller.target, default: 0] += 1
+            accepted = handoff
+        } catch {
+            result.phase = .failed
+            result.errorMessage = Self.reason(error)
+        }
+        handoffs[id] = result
+        await deliver(result, to: caller)
+        try? await caller.transport.acknowledge(filename: filename)
+        guard let handoff = accepted else { return }
+        Task { [weak self] in await self?.handOff(handoff, from: caller) }
+    }
+
+    private func handOff(_ handoff: TaskHandoff, from caller: Caller) async {
+        guard let model else { return }
+        var result = TaskHandoffResult(id: handoff.id, phase: .failed)
+        do {
+            let made = try await model.handOffTask(handoff, from: caller.target, subagent: caller.parent.flatMap { run($0) })
+            result = TaskHandoffResult(id: handoff.id, phase: made.unsaved == nil ? .created : .failed, targetBotID: made.bot.id,
+                                       targetBotName: made.bot.name, taskID: made.task.id, taskTitle: made.task.title,
+                                       existing: made.existing, errorMessage: made.unsaved)
+        } catch {
+            result.errorMessage = Self.reason(error)
+        }
+        handoffs[handoff.id] = result
+        await deliver(result, to: caller)
+        guard result.phase == .created, let taskID = result.taskID, let botID = result.targetBotID else { return }
+        model.whenTaskStarts(.task(taskID, of: botID)) { [weak self] failure in
+            guard let self, let created = self.handoffs[handoff.id] else { return }
+            let started = created.starting(failure: failure)
+            self.handoffs[handoff.id] = started
+            Task { await self.deliver(started, to: caller) }
+        }
+    }
+
+    /// Writes a Task request's answer; after the caller's turn has ended, quietly, as nothing waits.
+    private func deliver(_ result: TaskHandoffResult, to caller: Caller) async {
+        do { try await caller.transport.writeResult(id: result.id, data: SubagentIPC.encode(result)) }
+        catch { if isWatching(caller.id) { report("Couldn't answer a task request: \(error.localizedDescription)") } }
+    }
+
+    private static func reason(_ error: Error) -> String {
+        (error as? TaskRequest.Problem)?.message ?? error.localizedDescription
     }
 
     private func launch(_ id: UUID, targetBot: Bot, caller: Caller) async {

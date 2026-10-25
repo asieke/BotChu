@@ -475,7 +475,7 @@ public struct ShellFacts: Equatable, Sendable {
 
     static let subcommandDepth: [String: Int] = [
         "git": 1, "gh": 2, "swift": 1, "npm": 1, "pnpm": 1, "yarn": 1, "brew": 1, "xcrun": 1, "defaults": 1,
-        "botchu-subagent": 1, "launchctl": 1, "pip": 1, "pip3": 1, "go": 1, "cargo": 1, "docker": 1, "kubectl": 1,
+        "botchu-subagent": 1, "botchu-task": 1, "launchctl": 1, "pip": 1, "pip3": 1, "go": 1, "cargo": 1, "docker": 1, "kubectl": 1,
     ]
 
     // MARK: Classification
