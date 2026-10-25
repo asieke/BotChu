@@ -330,7 +330,12 @@ final class AppModel {
     func task(_ id: UUID, of botID: UUID) -> BotTask? { tasks[botID]?.first { $0.id == id } }
     func task(_ target: ChatTarget) -> BotTask? { target.taskID.flatMap { task($0, of: target.botID) } }
     func openTasks(of botID: UUID) -> [BotTask] { tasks[botID, default: []].filter { !$0.isArchived } }
-    func closedTasks(of botID: UUID) -> [BotTask] { tasks[botID, default: []].filter(\.isArchived) }
+    /// The closed tasks to open again from Home's status; a job's run whose history keeps it is
+    /// found there instead (#146).
+    func closedTasks(of botID: UUID) -> [BotTask] {
+        let jobs = jobs?.jobs(of: botID) ?? []
+        return tasks[botID, default: []].filter { $0.isArchived && !JobTasks.inHistory($0, jobs: jobs) }
+    }
 
     /// The conversation's live state, made when first asked for.
     func conversation(_ target: ChatTarget) -> ConversationState {
@@ -492,7 +497,16 @@ final class AppModel {
         bots[i] = bot
         save(bot)
         prepareWorkspace(bot)
-        if moved { reloadPet(bot.id) }
+        if moved {
+            reloadPet(bot.id)
+            // Its jobs' runs work in its workspace, wherever it is now (#146).
+            for task in tasks[bot.id, default: []] where task.jobRun != nil {
+                guard let t = taskIndex(.task(task.id, of: bot.id)) else { continue }
+                tasks[bot.id]?[t].folder = bot.workspace
+                tasks[bot.id]?[t].checkout = bot.workspace
+                saveTask(tasks[bot.id]![t], of: bot.id)
+            }
+        }
     }
 
     func setModel(_ selected: String, for target: ChatTarget) {
@@ -602,6 +616,73 @@ final class AppModel {
         postReceipt(TaskReceipt.started(task), task: task.id, for: botID)
         if show { self.show(target) }
         send(task.opening, to: target, images: images)
+    }
+
+    /// Records a scheduled job's run as a new task of its agent (#146), whose conversation the job's
+    /// runtime writes the run into: Home gets no receipt of it (only the job's, for a finding or a
+    /// failure), and nothing is sent. The job's earlier runs' tasks close, so the job keeps one open
+    /// task beside the chat, unless the owner took one over or it is busy or shown.
+    func startJobTask(_ task: BotTask, for botID: UUID) -> ChatTarget? {
+        guard bot(botID) != nil, task.jobRun != nil else { return nil }
+        let target = ChatTarget.task(task.id, of: botID)
+        tasks[botID, default: []].append(task)
+        conversation(target).start()
+        saveTask(task, of: botID)
+        let superseded = JobTasks.superseded(by: task, among: tasks[botID, default: []]) { [self] other in
+            let shown = ChatTarget.task(other.id, of: botID)
+            return isRunning(shown) || tab(of: botID) == shown || !(drafts[shown] ?? "").isEmpty
+                || conversations[shown]?.queue?.messages.isEmpty == false
+        }
+        for id in superseded { closeTask(.task(id, of: botID)) }
+        return target
+    }
+
+    /// A job's run in its task ended: it is news when the agent's Home hears of the run too (a
+    /// finding or a failure), and what the owner queued in the task meanwhile goes out, in the run's
+    /// session.
+    func endJobRun(in target: ChatTarget, news: Bool) {
+        guard task(target) != nil else { return }
+        if news, visibleBotID != target.botID || tab(of: target.botID) != target { unread.insert(target) }
+        sendNextQueued(to: target)
+    }
+
+    /// Opens a task, closed or open: a closed one goes back beside the chat.
+    func openTask(_ target: ChatTarget) {
+        guard let task = task(target) else { return }
+        if task.isArchived { reopenTask(target) } else { show(target) }
+    }
+
+    /// Takes away the closed runs' tasks a job's history let go with their runs
+    /// (`JobTasks.expired`): each task's record and conversation, its folder in the bot's
+    /// `.botchu/tasks/` and nothing else (never the workspace it ran in), once what is being
+    /// written there is done.
+    func removeJobTasks(_ ids: [UUID], of botID: UUID) {
+        guard let bot = bot(botID) else { return }
+        let home = BotHome(workspace: bot.workspace)
+        for id in ids {
+            let target = ChatTarget.task(id, of: botID)
+            guard let task = task(id, of: botID), task.jobRun != nil, task.isArchived, !isRunning(target) else { continue }
+            tasks[botID]?.removeAll { $0.id == id }
+            if let conversation = conversations.removeValue(forKey: target) {
+                historyBudget.remove(target)
+                let waited = conversation.waiting
+                conversation.waiting = []
+                for waiting in waited { waiting.cancel?() }
+            }
+            TranscriptCache.forget(target)
+            unread.remove(target)
+            drafts[target] = nil
+            draftReferences[target] = nil
+            draftImages[target] = nil
+            attachmentErrors[target] = nil
+            // After the writes asked for in its conversation's lane and then its settings' lane.
+            let folder = home.taskURL(id), taskLane = home.taskLane(id), storage = storage
+            storage.submit(home.conversationLane(task: id), label: "remove", work: {
+                try storage.sync(taskLane, label: "remove") {
+                    if FileManager.default.fileExists(atPath: folder.path) { try FileManager.default.removeItem(at: folder) }
+                }
+            })
+        }
     }
 
     /// Closes a task's tab. Its record, conversation and worktree stay, and it can be opened again;
@@ -903,6 +984,12 @@ final class AppModel {
         if let underway = makings[target] { return await underway.value }
         guard let task = task(target) else { return TaskWorktree.Failure(step: "The task is gone", output: "") }
         if hasWorktree(task) { return nil }
+        // A job's run works in its agent's workspace, which BotChu doesn't make (#146).
+        if task.jobRun != nil {
+            append(ChatMessage(role: .error, text: "\(bot(target.botID)?.name ?? "The agent")'s workspace is missing."), to: target)
+            saveThread(target)
+            return TaskWorktree.Failure(step: "The agent's workspace is missing", output: "")
+        }
         let making = Task { await makeWorktree(for: task, of: target.botID) }
         makings[target] = making
         let failure = await making.value
@@ -1069,6 +1156,11 @@ final class AppModel {
         guard (!text.isEmpty || !images.isEmpty), runSettings(of: target) != nil else { return false }
         if !visible {
             return beginTurn(text, for: target, message: nil)
+        }
+        // A job's run the owner writes in is theirs from now on (#146).
+        if let i = taskIndex(target), tasks[target.botID]?[i].jobRun?.continued == false {
+            tasks[target.botID]?[i].jobRun?.continued = true
+            saveTask(tasks[target.botID]![i], of: target.botID)
         }
         // An idle conversation is busy from now on, so nothing else starts in it before this message
         // does, and Stop withdraws it.
@@ -1740,6 +1832,9 @@ final class AppModel {
         inputs[target]?.ledger.close()
         if let run = runs[target] {
             run.stop()
+        } else if let jobRun = jobs?.runID(in: target) {
+            // A job's run in its task stops as Stop in Jobs stops it (#146).
+            jobs.stop(run: jobRun)
         } else if runStates[target]?.preparing == true || waiting[target] != nil {
             // Workspace setup or image transfer may finish, but this turn must not start.
             waiting[target] = nil
@@ -1781,7 +1876,7 @@ final class AppModel {
     /// Saves a turn still running as it stands, with its running tool calls marked interrupted,
     /// after the conversation's other writes; the thread in memory is left as it is, for the
     /// turn's end.
-    private func saveUnfinishedTurn(_ target: ChatTarget) {
+    func saveUnfinishedTurn(_ target: ChatTarget) {
         guard let bot = bot(target.botID), runSettings(of: target) != nil else { return }
         var closed = thread(target)
         ThreadAssembler.closeRunningTools(&closed)
@@ -1790,13 +1885,13 @@ final class AppModel {
     }
 
     /// The model the CLI said it ran, for the model choice the turn ran with. Changes no choice.
-    private func recordReportedModel(_ id: String, requested: String, accountID: String, for target: ChatTarget) {
+    func recordReportedModel(_ id: String, requested: String, accountID: String, for target: ChatTarget) {
         guard var current = runSettings(of: target), current.accountID == accountID,
               current.recordReportedModel(id, requested: requested) else { return }
         change(target) { $0.recordReportedModel(id, requested: requested) }
     }
 
-    private func recordSession(_ sessionID: String, accountID: String, for target: ChatTarget) {
+    func recordSession(_ sessionID: String, accountID: String, for target: ChatTarget) {
         guard let current = runSettings(of: target),
               current.sessionID != sessionID || current.sessionAccountID != accountID else { return }
         change(target) {

@@ -108,6 +108,9 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var head: String?
     /// For a task handed to its bot by another conversation, that conversation.
     public var requestedBy: Requester?
+    /// For a run of one of its bot's scheduled jobs, which works in the bot's workspace rather than
+    /// a repository's worktree: the job, the run and the time it was for (`JobTasks`).
+    public var jobRun: JobTaskOrigin?
 
     public init(
         id: UUID = UUID(), title: String? = nil, repo: String, checkout: String, branch: String = "", folder: String? = nil,

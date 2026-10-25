@@ -303,8 +303,8 @@ struct ConversationRow: View {
     }
 }
 
-/// A tab's first, prominent line: a review's eye, the repository it works in, then its issue's
-/// number (and its host) in the secondary colour.
+/// A tab's first, prominent line: a review's eye or a job's clock, the repository it works in (a
+/// job's run: its job), then its issue's number (and its host) in the secondary colour.
 struct ConversationTitle: View {
     let tab: ConversationTab
     let selected: Bool
@@ -315,8 +315,8 @@ struct ConversationTitle: View {
 
     private var text: Text {
         var text = Text("")
-        if tab.isReview {
-            text = text + Text(Image(systemName: "eye")).foregroundStyle(Palette.secondaryText) + Text(" ")
+        if tab.isReview || tab.isJob {
+            text = text + Text(Image(systemName: tab.isJob ? "clock.arrow.circlepath" : "eye")).foregroundStyle(Palette.secondaryText) + Text(" ")
         }
         text = text + Text(tab.name)
         if let number = tab.numberText {
@@ -492,6 +492,8 @@ private struct RailTile: View {
                 Group {
                     if tab.isHome {
                         Image(systemName: "house").font(.system(size: 14))
+                    } else if tab.isJob {
+                        Image(systemName: "clock.arrow.circlepath").font(.system(size: 14))
                     } else if let number = tab.numberText {
                         Text(number).font(.system(size: 11.5, weight: .semibold)).monospacedDigit()
                             .lineLimit(1).minimumScaleFactor(0.7)
@@ -544,14 +546,18 @@ private struct RailTile: View {
     }
 }
 
-/// A task's menu, in its tab and its tile: its issue or pull request, branch, folder and Terminal,
-/// then New Session and Close Task.
+/// A task's menu, in its tab and its tile: its issue or pull request (a job's run: the run in its
+/// job's history), branch, folder and Terminal, then New Session and Close Task.
 struct TaskMenu: View {
     @Environment(AppModel.self) private var model
     let target: ChatTarget
     let task: BotTask
 
     var body: some View {
+        if let origin = task.jobRun {
+            Button("Show Run in Job History") { model.jobs.showHistory(origin.jobID, run: origin.runID) }
+                .disabled(model.jobs.job(origin.jobID) == nil)
+        }
         if let work = task.work {
             Link("Open \(work.isPullRequest ? "Pull Request" : "Issue") #\(work.number)", destination: work.url)
         }
