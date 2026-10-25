@@ -396,6 +396,13 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     and showing the conversation reads what it delivered. What the owner did with each delivery
     (read, done, replied) is in `inbox.json` beside `index.json`. Every session's instructions
     describe the helper.
+    While BotChu isn't the active app, each new delivery (not one updated in the turn) shows a macOS
+    banner: the sender (with the bots it credits), the title, and the question or the start of the
+    note as plain text, with the sender's pet still when it has a pet. It has a button per choice,
+    which sends that choice as the reply word for word, and Reply, whose placeholder names the bot;
+    clicking it brings BotChu forward on the delivery in the Inbox. An answer from a banner that
+    launched BotChu is sent once the deliveries are read. BotChu asks for notifications the first
+    time a delivery arrives, not at launch. The Dock tile's badge shows the unread deliveries.
   - **Inbox:** first under Workspace (⇧⌘I), with how many deliveries are unread. A 392-point list
     (320 in a narrower window) in the tasks column's idiom: **Needs you** (questions not answered
     since they were sent), **Today**, **Yesterday**, then each earlier day, newest first, with
@@ -1009,6 +1016,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     it too: `Inbox.swift` reads and checks the request, keeps deliveries and their copies in a bot's
     folder, what the owner did with them (`InboxState`), the list's groups (`InboxList`) and a reply's
     prompt and thread (`InboxReply`); the app's `InboxModel` takes them in and sends the replies.
+    `DeliveryBanner.swift` makes a delivery's banner (its text, buttons and category, the newest 20
+    categories kept registered) and reads a click back into a reply or "show it"; the app's
+    `InboxNotifications.swift` (`InboxNotifier`) posts banners, answers clicks and keeps the Dock
+    badge through a `BannerSystem`: the notification center in BotChu.app only, a stand-in in tests.
     What replies ask to remember (`MemoryNotes`, in `BotContext.swift`) is saved to memory files
     by `MemoryWriter.swift`: one save at a time, read back to check it held, with notes that wait
     and are tried again. Run reviews are in `ReviewStretch.swift` and `RunEvaluation.swift`: each

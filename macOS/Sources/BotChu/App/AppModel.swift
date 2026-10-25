@@ -108,6 +108,8 @@ final class AppModel {
     var jobs: JobRuntime!
     /// What the bots deliver to the owner with `botchu-inbox send` (Inbox).
     var inbox: InboxModel!
+    /// The Inbox's banners and Dock badge; their system only in BotChu.app.
+    var notifier: InboxNotifier?
     /// Each bot's tasks, open and closed, oldest first.
     var tasks: [UUID: [BotTask]] = [:]
     /// Every conversation (each bot's Home, and each task), observed one by one: see
@@ -311,6 +313,7 @@ final class AppModel {
         jobs = JobRuntime(model: self, runs: DevHooks.runsJobs)
         inbox = InboxModel(model: self, root: self.store.root, storage: storage)
         inbox.load(bots: bots)
+        notifier = InboxNotifier(model: self, system: store == nil ? LiveBannerSystem.make() : nil)
         selection = bots.first?.id
         showSavedProjects()
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
