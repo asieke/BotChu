@@ -153,7 +153,7 @@ extension BotStatus.Phase {
 /// What a status reads from a thread: how many messages and tool calls it has, and its last word
 /// (BotChu's notes aside). Kept up to date as the thread grows (`extend`), so the sidebar and the
 /// status sidebar don't scan a long thread each time they draw.
-public struct ThreadSummary: Equatable, Sendable {
+public struct ThreadSummary: Codable, Equatable, Sendable {
     /// Messages from the owner and the bot.
     public private(set) var messageCount = 0
     public private(set) var toolCallCount = 0

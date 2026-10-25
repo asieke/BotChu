@@ -33,8 +33,9 @@ public struct TranscriptRead: Equatable, Sendable {
 
     public var isDamaged: Bool { malformed + unsupported > 0 || failure != nil }
 
-    /// Reads `url`, keeping its original first when anything in it can't be read.
-    public static func read(_ url: URL, now: Date = Date()) -> TranscriptRead {
+    /// Reads `url`, keeping its original first when anything in it can't be read (unless `keeping`
+    /// is false: a look that changes nothing). `content` sees the file's bytes before they're decoded.
+    public static func read(_ url: URL, now: Date = Date(), keeping: Bool = true, content: ((Data) -> Void)? = nil) -> TranscriptRead {
         var read = TranscriptRead()
         guard FileManager.default.fileExists(atPath: url.path) else { return read }
         let data: Data
@@ -42,9 +43,10 @@ public struct TranscriptRead: Equatable, Sendable {
             data = try Data(contentsOf: url)
         } catch {
             read.failure = error.localizedDescription
-            read.keep(url, now: now)
+            if keeping { read.keep(url, now: now) }
             return read
         }
+        content?(data)
         let blank: Set<UInt8> = [0x20, 0x09, 0x0D]
         for line in data.split(separator: 0x0A) where !line.allSatisfy(blank.contains) {
             let line = Data(line)
@@ -56,7 +58,13 @@ public struct TranscriptRead: Equatable, Sendable {
                 read.malformed += 1
             }
         }
-        if read.isDamaged { read.keep(url, now: now) }
+        let decoded = read.messages.count
+        HistoryCounters.shared.record(url) {
+            $0.reads += 1
+            $0.bytesRead += data.count
+            $0.decoded += decoded
+        }
+        if read.isDamaged, keeping { read.keep(url, now: now) }
         return read
     }
 
@@ -111,6 +119,7 @@ public struct TranscriptRead: Equatable, Sendable {
                 try files.moveItem(at: url, to: target)
             }
             kept = target
+            HistoryCounters.shared.record(url) { $0.copies += 1 }
         } catch {
             keepFailure = error.localizedDescription
         }

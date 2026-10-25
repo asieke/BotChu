@@ -32,7 +32,9 @@ extension AppModel {
         guard let owner = bot(named.id), let asking = bot(caller.botID) else {
             throw TaskRequest.Problem(message: "the bot was deleted meanwhile")
         }
-        var task = try plannedTask(handoff.request, for: owner, checkouts: checkouts, origin: .agent)
+        var task = try await plannedTask(handoff.request, for: owner, checkouts: checkouts, origin: .agent)
+        // Looking up a host's name can wait, and the same request may have made it meanwhile.
+        if let task = made() { return Handoff(bot: named, task: task, existing: true) }
         let place = caller.taskID.flatMap { self.task($0, of: caller.botID) }.map { "\(asking.name)'s task \($0.title)" }
             ?? "\(asking.name)'s Home"
         task.requestedBy = BotTask.Requester(name: subagent?.targetBotName ?? asking.name, botID: asking.id, taskID: caller.taskID,

@@ -2,18 +2,158 @@ import SwiftUI
 import BotChuCore
 
 /// A reply's Markdown, parsed once per text (`MarkdownCache`): drawing a conversation again, or a
-/// reply that didn't change, doesn't parse it again.
+/// reply that didn't change, doesn't parse it again. A reply being written is parsed off the main
+/// thread (`MarkdownPreparation`): it shows its latest rendering meanwhile and, once it is long,
+/// the text written since as it is. The rendering keeps its place in the view as it is replaced,
+/// so a rich reply keeps its web view.
 struct MarkdownText: View {
     let text: String
+    @State private var preparation = PreparedMarkdown()
+    /// How many times a long reply's chunk was laid out, for tests.
+    @MainActor static var chunkLayouts = 0
 
     var body: some View {
-        switch MarkdownCache.shared.rendering(for: text) {
-        case .rich(let html):
-            RichMarkdownText(html: html)
-        case .blocks(let blocks):
-            MarkdownBlocks(blocks: blocks)
-                .textSelection(.enabled)
+        let _ = preparation.revision
+        let display = preparation.core.display(for: text)
+        ReplyStack(spacing: 10) {
+            switch display.rendering {
+            case .rich(let html):
+                RichMarkdownText(html: html)
+            case .blocks(let blocks) where blocks.count >= SeparateBlocks.threshold:
+                // Chunks that are written, each laid out apart, then the one being written.
+                let settled = (blocks.count - 1) / SeparateBlocks.chunk * SeparateBlocks.chunk
+                ForEach(Array(stride(from: 0, to: settled, by: SeparateBlocks.chunk)), id: \.self) { start in
+                    SeparateBlocks(blocks: Array(blocks[start..<start + SeparateBlocks.chunk]))
+                }
+                MarkdownBlocks(blocks: Array(blocks[settled...]))
+                    .textSelection(.enabled)
+            case .blocks(let blocks):
+                MarkdownBlocks(blocks: blocks)
+                    .textSelection(.enabled)
+            case nil:
+                EmptyView()
+            }
+            if let pending = display.pending {
+                Text(pending)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+        .onChange(of: text, initial: true) { preparation.core.update(text) }
+    }
+}
+
+/// A reply's parts, one under another, as a leading-aligned `VStack` lays them out, but asked for
+/// its ideal size (as the window asks its content, whenever a reply changes), it answers with the
+/// width it was last laid out at. A `VStack` measures its parts at the width of its widest line
+/// instead, which grows with the line being written, so every revision of a long reply laid each
+/// of its chunks out again at a width it is never shown at (about 80 ms for 128 KB).
+private struct ReplyStack: Layout {
+    var spacing: CGFloat
+
+    struct Cache {
+        var width: CGFloat?
+    }
+
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    // The width it was laid out at holds while its parts change.
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {}
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? cache.width
+        var height: CGFloat = 0
+        var widest: CGFloat = 0
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+            height += size.height + (index > 0 ? spacing : 0)
+            widest = max(widest, size.width)
+        }
+        return CGSize(width: width ?? widest, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        cache.width = bounds.width
+        var y = bounds.minY
+        for subview in subviews {
+            let size = subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+            subview.place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading,
+                          proposal: ProposedViewSize(width: bounds.width, height: size.height))
+            y += size.height + spacing
+        }
+    }
+}
+
+/// A `MarkdownText`'s preparation, drawn again each time the worker's rendering is shown.
+@MainActor @Observable private final class PreparedMarkdown {
+    @ObservationIgnored let core = MarkdownPreparation()
+    private(set) var revision = 0
+
+    init() {
+        core.onPublish = { [weak self] in self?.revision += 1 }
+    }
+}
+
+/// A long reply's blocks, a chunk of them in a hosting view of its own, measured once for each
+/// width: the chat's layout passes, for a key press, a delta or another row, see one view for each
+/// chunk rather than every block and its selectable text (beside a reply of 1,500 blocks, about
+/// 0.1 ms rather than 7). A chunk is laid out again only when its blocks, the appearance or the font
+/// change; as a reply is written, its revisions keep the blocks they don't change (`reusing`), so
+/// comparing them takes microseconds.
+private struct SeparateBlocks: NSViewRepresentable {
+    /// From about 20 KB of prose; shorter replies cost little to lay out with the rest.
+    static let threshold = 256
+    static let chunk = 128
+    let blocks: [MarkdownBlock]
+
+    final class Coordinator {
+        var controller: NSHostingController<AnyView>?
+        var shown: Shown?
+        var heights: [CGFloat: CGFloat] = [:]
+    }
+
+    struct Shown: Equatable {
+        let blocks: [MarkdownBlock]
+        let colorScheme: ColorScheme
+        let font: Font?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let controller = NSHostingController(rootView: content(context))
+        controller.sizingOptions = []
+        context.coordinator.controller = controller
+        context.coordinator.shown = shown(context)
+        return controller.view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        let shown = shown(context)
+        guard shown != context.coordinator.shown else { return }
+        context.coordinator.shown = shown
+        context.coordinator.heights.removeAll()
+        context.coordinator.controller?.rootView = content(context)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, let controller = context.coordinator.controller else { return nil }
+        if let height = context.coordinator.heights[width] { return CGSize(width: width, height: height) }
+        MarkdownText.chunkLayouts += 1
+        let height = ceil(controller.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height)
+        // A few widths, as a window being resized goes through many.
+        if context.coordinator.heights.count >= 8 { context.coordinator.heights.removeAll() }
+        context.coordinator.heights[width] = height
+        return CGSize(width: width, height: height)
+    }
+
+    private func shown(_ context: Context) -> Shown {
+        Shown(blocks: blocks, colorScheme: context.environment.colorScheme, font: context.environment.font)
+    }
+
+    private func content(_ context: Context) -> AnyView {
+        AnyView(MarkdownBlocks(blocks: blocks).textSelection(.enabled).environment(\.self, context.environment))
     }
 }
 

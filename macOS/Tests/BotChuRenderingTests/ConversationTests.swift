@@ -112,7 +112,14 @@ extension RenderingTests {
         #expect(app.draftImages[target] == nil)
         #expect((app.drafts[target] ?? "").isEmpty)
         #expect(scroll.frame.height == initialHeight)
+        // Paused, so the relaunch below keeps it queued rather than sending it as soon as its
+        // queue is recovered, off the main thread (#109).
+        app.stop(target)
+        await app.storage.settle()
         let recovered = AppModel(store: fixture.store, settings: fixture.settings)
+        defer { recovered.stopAll() }
+        // Each conversation's queue is recovered off the main thread after a launch (#109).
+        await recovered.storage.settle()
         let queued = try #require(recovered.messageQueues[target]?.messages.first)
         recovered.editQueuedMessage(queued.id, in: target)
         #expect(recovered.draftImages[target] == [attachment])
@@ -188,6 +195,7 @@ extension RenderingTests {
         #expect(try fixture.calls(target).count == 1)
         #expect(app.messageQueues[target]?.isPaused == true)
         let recovered = AppModel(store: fixture.store, settings: fixture.settings)
+        await recovered.storage.settle()
         #expect(recovered.messageQueues[target]?.messages.map(\.text) == ["keep this"])
         #expect(recovered.messageQueues[target]?.isPaused == true)
         #expect(!recovered.isRunning(target))
@@ -215,6 +223,7 @@ extension RenderingTests {
         #expect(try fixture.calls(target).count == 1)
         let relaunched = AppModel(store: fixture.store, settings: fixture.settings)
         defer { relaunched.stopAll() }
+        try await fixture.wait { relaunched.messageQueues[target] != nil }
         #expect(relaunched.messageQueues[target]?.isPaused == false)
         try await fixture.wait { relaunched.thread(target).last?.text == "reply:after relaunch" }
         #expect(relaunched.messageQueues[target]?.messages.isEmpty == true)
@@ -318,6 +327,8 @@ extension RenderingTests {
         try lock(false)
         let relaunched = AppModel(store: fixture.store, settings: fixture.settings)
         defer { relaunched.stopAll() }
+        // Recovery reads the task's transcript, off the main thread, to put the taken message back (#109).
+        await relaunched.storage.settle()
         #expect(relaunched.thread(target).filter { $0.role == .user }.map(\.text) == ["WAIT", "steer me"])
         #expect(relaunched.thread(target).last?.role == .note)
         #expect(relaunched.messageQueues[target]?.messages.isEmpty == true)
@@ -383,7 +394,8 @@ extension RenderingTests {
         #expect(!accepted)
         #expect(app.messageQueues[target]?.messages.isEmpty == true)
         #expect(app.drafts[target] == "Keep my draft")
-        #expect(app.thread(target).last?.role == .error)
+        // Said in the conversation once its history is read (#109).
+        #expect(await app.loadedThread(target)?.last?.role == .error)
         app.runStates.removeAll()
         // Idle, the send is refused the same way, and nothing starts.
         #expect(!(await app.sendAccepted("Still not saved", to: target)))

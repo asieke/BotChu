@@ -46,7 +46,8 @@ extension RenderingTests {
         // A finding reaches Home as one receipt with its run; Home's draft and queue stay as they were.
         let home = ChatTarget.home(bot.id)
         app.drafts[home] = "Keep this draft"
-        let before = app.thread(home).count
+        // Home is read off the main thread after the launch (#109); a receipt to it in memory shows at once.
+        let before = await app.loadedThread(home)?.count ?? 0
         let run = UUID()
         app.postJobReceipt("Job “Morning issue triage” · 9:00 AM: One new issue needs you.", job: job.id, run: run, to: bot.id)
         #expect(app.thread(home).count == before + 1)

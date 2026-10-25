@@ -36,8 +36,14 @@ final class SubagentRuntime {
     @ObservationIgnored private var requestCounts: [ChatTarget: Int] = [:]
     /// Runs whose end is being saved: still active until it is, so their caller waits for them.
     @ObservationIgnored private var finalizing: Set<UUID> = []
-    /// Runs found unfinished after a relaunch are being closed, which aren't reviewed.
-    @ObservationIgnored private var restoring = false
+    /// Runs found unfinished after a relaunch, which are closed (once their transcript is read, off
+    /// the main thread) and aren't reviewed, and those whose transcript is still being read.
+    @ObservationIgnored private var restored: Set<UUID> = []
+    @ObservationIgnored private var reading: Set<UUID> = []
+    /// Finished runs' transcripts are read when shown (#109), and at most this many bytes of those
+    /// not in the conversation shown stay in memory, the least recently read going first.
+    nonisolated static let finishedThreadBytes = 16 << 20
+    @ObservationIgnored private var budget = HistoryBudget<UUID>(limit: SubagentRuntime.finishedThreadBytes)
 
     /// How often a caller's mailbox is looked at, on this Mac and on a host.
     nonisolated static let localPoll: Duration = .milliseconds(250)
@@ -563,6 +569,12 @@ final class SubagentRuntime {
             for child in working { stop(child.id) }
             return
         }
+        // A run found unfinished after a relaunch is closed once its transcript is read, so an empty
+        // one is never saved over it.
+        if reading.contains(id) {
+            pendingFinishes[id] = (phase, error)
+            return
+        }
         pendingFinishes[id] = nil
         finalizing.insert(id)
         record.phase = phase
@@ -576,7 +588,7 @@ final class SubagentRuntime {
         live.messages = messages
         live.state = nil
         preparations[id] = nil
-        let reviewed = !restoring
+        let reviewed = !restored.contains(id)
         // What the run asked to remember goes into the called bot's memory, which its Home hears
         // about; a save that fails waits to be tried again, and doesn't fail the handoff.
         if phase == .completed, let model, let targetBot = model.bot(record.targetBotID) {
@@ -601,6 +613,7 @@ final class SubagentRuntime {
                 self.error = record.errorMessage
             }
             self.finalizing.remove(id)
+            self.restored.remove(id)
             self.replace(record)
             self.queueDelivery(record)
             // A review of the attempt, in the background; the handoff doesn't wait for it.
@@ -666,10 +679,11 @@ final class SubagentRuntime {
     }
 
 
+    /// Every conversation's runs, from their records (also under closed tasks), without their
+    /// transcripts: a finished run's handoff goes back from its record, and its transcript is read
+    /// when it is shown. A run found unfinished is read off the main thread, then closed, once.
     private func restore() {
         guard let model else { return }
-        restoring = true
-        defer { restoring = false }
         for bot in model.bots {
             let home = BotHome(workspace: bot.workspace)
             for taskID in [nil] + (model.tasks[bot.id] ?? []).map({ Optional($0.id) }) {
@@ -678,7 +692,6 @@ final class SubagentRuntime {
                 guard !runs.isEmpty else { continue }
                 setRuns(runs, for: target)
                 for record in runs {
-                    live(record.id).messages = home.loadSubagentThread(id: record.id, taskID: taskID)
                     if let invocationID = record.callerInvocationID {
                         let destination = model.settings.host(record.callerHostID)?.destination
                         if record.callerHostID == nil || destination != nil {
@@ -687,10 +700,52 @@ final class SubagentRuntime {
                         }
                     }
                     if record.phase.isActive {
-                        finish(record.id, phase: .stopped, error: "BotChu restarted before this sub-agent finished.")
+                        restored.insert(record.id)
+                        reading.insert(record.id)
+                        let id = record.id
+                        archive.storage.submit(home.subagentURL(id: id, taskID: taskID).path, label: "read",
+                                               work: { home.loadSubagentThread(id: id, taskID: taskID) }) { [weak self] result in
+                            guard let self, self.reading.remove(id) != nil, self.run(id)?.phase.isActive == true else { return }
+                            let live = self.live(id)
+                            if !live.isLoaded { live.messages = (try? result.get()) ?? [] }
+                            self.pendingFinishes[id] = nil
+                            self.finish(id, phase: .stopped, error: "BotChu restarted before this sub-agent finished.")
+                        }
                     } else { queueDelivery(record) }
                 }
             }
+        }
+    }
+
+    /// A finished run's transcript, read when something shows it, off the main thread, after the
+    /// writes asked for before in its folder.
+    fileprivate func readThread(_ id: UUID) {
+        let live = live(id)
+        guard !live.isLoaded, !live.isReading, let record = run(id), !record.phase.isActive,
+              let owner = model?.bot(record.rootBotID) else { return }
+        live.isReading = true
+        let home = BotHome(workspace: owner.workspace), taskID = record.rootTaskID
+        archive.storage.submit(home.subagentURL(id: id, taskID: taskID).path, label: "read",
+                               work: { home.loadSubagentThread(id: id, taskID: taskID) }) { [weak self, weak live] result in
+            guard let self, let live, self.lives[id] === live else { return }
+            live.isReading = false
+            guard !live.isLoaded, case .success(let messages) = result else { return }
+            live.messages = messages
+            self.budget.use(id, bytes: HistoryBudget<UUID>.estimate(messages))
+            self.trimThreads()
+        }
+    }
+
+    /// Drops finished runs' transcripts read for showing, beyond `finishedThreadBytes`, except
+    /// those of the conversation shown and runs under way; their counts stay.
+    func trimThreads() {
+        let shown = model?.selection.flatMap { model?.tab(of: $0) }
+        for id in budget.overflow(pinned: { id in
+            guard let record = self.run(id) else { return false }
+            return record.phase.isActive || ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID) == shown
+        }) {
+            budget.remove(id)
+            lives[id]?.unload()
         }
     }
 
@@ -711,6 +766,7 @@ final class SubagentRuntime {
             self.root(ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID)).runs.removeAll { $0.id == id }
             self.locations[id] = nil
             self.lives[id] = nil
+            self.budget.remove(id)
         }
     }
 }
@@ -749,9 +805,24 @@ final class SubagentRoot {
 final class SubagentLive {
     var messages: [ChatMessage] = [] {
         didSet {
+            isLoaded = true
             tally.update(messages)
             if tally.counts != counts { counts = tally.counts }
         }
+    }
+    /// Whether the transcript is in memory: a finished run's, restored after a relaunch, is read
+    /// when shown (`SubagentRuntime.readThread`); one dropped again keeps its counts.
+    @ObservationIgnored private(set) var isLoaded = false
+    @ObservationIgnored private(set) var wasCounted = false
+    @ObservationIgnored var isReading = false
+
+    fileprivate func unload() {
+        let kept = counts
+        tally = ToolCallTally()
+        messages = []
+        counts = kept
+        isLoaded = false
+        wasCounted = true
     }
     /// Its tool calls, counted as they stream in (`ToolCallTally`), and observed apart from the
     /// transcript: a card showing only the counts isn't redrawn by every delta.
@@ -779,15 +850,27 @@ final class SubagentLive {
 @MainActor struct SubagentThreads {
     let runtime: SubagentRuntime
 
+    /// A finished run's transcript not in memory is read for whoever asks (empty meanwhile).
     subscript(id: UUID) -> [ChatMessage]? {
-        get { runtime.live(id).messages }
+        get {
+            let live = runtime.live(id)
+            if !live.isLoaded { runtime.readThread(id) }
+            return live.messages
+        }
         nonmutating set {
             if let newValue { runtime.live(id).messages = newValue } else { runtime.dropLive(id) }
         }
     }
 
-    /// How many tool calls a run's transcript holds.
-    func counts(_ id: UUID) -> ToolCounts { runtime.live(id).counts }
+    /// Whether a run's transcript is in memory.
+    func isLoaded(_ id: UUID) -> Bool { runtime.live(id).isLoaded }
+
+    /// How many tool calls a run's transcript holds (read, the first time, when it isn't in memory).
+    func counts(_ id: UUID) -> ToolCounts {
+        let live = runtime.live(id)
+        if !live.isLoaded, !live.wasCounted { runtime.readThread(id) }
+        return live.counts
+    }
 }
 
 /// `states[id]`: a run's turn, while it runs.

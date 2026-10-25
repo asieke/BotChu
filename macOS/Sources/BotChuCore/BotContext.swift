@@ -590,7 +590,8 @@ public enum BotContext {
 
     /// A task as its bot's Home conversation hears of it: what and where it is, how it is doing, its
     /// pull request, and the start of its last reply (up to `replyLimit` characters).
-    public static func taskReport(_ task: BotTask, status: BotStatus, pullRequest: Int?, lastReply: String?,
+    /// `replyCut` says `lastReply` is the start of a longer reply (`ThreadDigest`).
+    public static func taskReport(_ task: BotTask, status: BotStatus, pullRequest: Int?, lastReply: String?, replyCut: Bool = false,
                                   replyLimit: Int = maxReportReply) -> String {
         var line = "“\(task.title)” (task \(task.id.uuidString.lowercased().prefix(8))) in \(task.repo)"
         if let work = task.work { line += ", on \(work.reference)" }
@@ -604,7 +605,7 @@ public enum BotContext {
         if let pullRequest { line += "; pull request #\(pullRequest)" }
         let reply = (lastReply ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !reply.isEmpty {
-            line += ". Its last reply: “\(reply.count > replyLimit ? String(reply.prefix(replyLimit)) + " […]" : reply)”"
+            line += ". Its last reply: “\(reply.count > replyLimit || replyCut ? String(reply.prefix(replyLimit)) + " […]" : reply)”"
         }
         return line
     }
