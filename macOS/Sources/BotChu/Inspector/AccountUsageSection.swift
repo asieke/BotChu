@@ -45,6 +45,22 @@ struct AccountUsageSection: View {
                             if let note = reading.note {
                                 Text(note).font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
                             }
+                            let facts = reading.facts
+                            if !facts.isEmpty {
+                                // The account's credits and free resets, under a hairline.
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ForEach(facts) { fact in
+                                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                            Text(fact.label).foregroundStyle(Palette.secondaryText)
+                                            Spacer(minLength: 4)
+                                            Text(fact.value).monospacedDigit().multilineTextAlignment(.trailing)
+                                        }
+                                    }
+                                }
+                                .font(.system(size: 12))
+                                .padding(.top, 12)
+                                .overlay(alignment: .top) { Rectangle().fill(Palette.rowDivider).frame(height: 1) }
+                            }
                         }
                         freshness(state, checking: checking, now: now)
                         if request.account.kind == .muse {
@@ -115,12 +131,14 @@ struct AccountUsageSection: View {
     }
 }
 
+/// A window's use and its reset as the time left and when: "Resets in 1d 10h, Monday at 5:00 PM".
 struct UsageWindowView: View {
     let window: UsageWindow
     let now: Date
 
     var body: some View {
         let percent = window.currentPercent(at: now)
+        let line = UsageLine(window, at: now)
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
                 Text(window.title).fontWeight(.medium)
@@ -137,34 +155,31 @@ struct UsageWindowView: View {
             if let detail = window.detail, !window.hasReset(at: now) {
                 Text(detail).font(.system(size: 11)).foregroundStyle(Palette.secondaryText)
             }
-            Text(resetText)
+            Text(line.resetSentence)
                 .font(.system(size: 11))
+                .monospacedDigit()
                 .foregroundStyle(Palette.secondaryText)
-                .help(window.resetsAt?.formatted(date: .complete, time: .standard) ?? resetText)
+                .help(window.resetsAt?.formatted(date: .complete, time: .standard) ?? line.resetSentence)
         }
-    }
-
-    private var resetText: String {
-        if window.hasReset(at: now) { return "Reset passed · awaiting update" }
-        if let date = window.resetsAt { return "Resets \(date.formatted(.dateTime.weekday(.abbreviated).hour().minute()))" }
-        if let text = window.resetDescription { return text == "No scheduled reset" ? text : "Resets \(text)" }
-        return "Reset time not reported"
     }
 }
 
-/// How much of an allowance window is used, here and in the Providers table.
+/// How much of an allowance window is used, here and in the Providers table; in a selected table
+/// row, white on a lighter track.
 struct UsageBar: View {
     let title: String
     let percent: Double
     var track = Palette.rowDivider
     /// A stale reading's bar, faded.
     var dimmed = false
+    @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
+        let selected = prominence == .increased
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                Capsule().fill(track)
-                Capsule().fill(percent >= 100 ? Palette.dynamic(0xD93A2F, 0xFF6B60)
+                Capsule().fill(selected ? AnyShapeStyle(.white.opacity(0.3)) : AnyShapeStyle(track))
+                Capsule().fill(selected ? .white : percent >= 100 ? Palette.dynamic(0xD93A2F, 0xFF6B60)
                                : percent >= 80 ? Palette.warning : Palette.violet)
                     .frame(width: geometry.size.width * min(100, max(0, percent)) / 100)
                     .opacity(dimmed ? 0.45 : 1)

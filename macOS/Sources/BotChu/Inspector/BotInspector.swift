@@ -634,8 +634,9 @@ enum Palette {
     static let text = buttonText
     static let accent = dynamic(0x5B3FD0, 0x6E52E0)
     static let violet = dynamic(0x7C5CFA, 0x9D84FF)
-    /// An allowance nearly used, or a reading that is stale or failed.
-    static let warning = dynamic(0xB96D00, 0xF5A623)
+    /// An allowance nearly used, or a reading that is stale or failed: 5.2:1 on white, 4.7:1 on an
+    /// alternate table row.
+    static let warning = dynamic(0xB25000, 0xFF9F0A)
 
     static func dynamic(_ light: UInt32, _ dark: UInt32) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in

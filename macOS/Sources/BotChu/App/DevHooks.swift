@@ -20,6 +20,8 @@ import BotChuCore
 ///   `wide`, 1,700 points wide, where a bot's tasks show as a column beside its chat.
 /// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review;
 ///   `mixed` gives each kind of profile a different state (`mixedUsage`).
+/// - `BOTCHU_PROVIDER`: with `BOTCHU_OPEN=providers`, select this profile (an account id), showing
+///   it in the sidebar.
 /// - `BOTCHU_PROFILE`: with `BOTCHU_DATA_DIR`, CLI profiles to add, from `name|family|command`
 ///   (`family` as in `AgentKind`), several separated by `;`.
 /// - `BOTCHU_SEND`: send this message to the selected bot's shown conversation at launch (its Home,
@@ -124,54 +126,100 @@ enum DevHooks {
     static var usageFetch: UsageCache.Fetch? {
         guard dataDir != nil, let fixture = env["BOTCHU_USAGE"],
               ["sample", "stale", "expired", "unavailable", "mixed"].contains(fixture) else { return nil }
-        let started = Date()
+        let checks = UsageChecks()
         return { request, _ in
             if fixture == "unavailable" { throw UsageFailure("Check the account’s sign-in, then refresh.") }
             let now = Date()
-            if fixture == "mixed", let reading = try mixedUsage(request.account, now: now, started: started) { return reading }
-            let readAt = now.addingTimeInterval(fixture == "stale" ? -7_200 : 0)
-            switch request.account.kind {
-            case .pi:
-                // A key with a weekly spending limit.
-                return ProviderUsage(windows: [UsageWindow(id: "key", title: "Key allowance", usedPercent: 26.4,
-                    resetsAt: now.addingTimeInterval(fixture == "expired" ? -60 : 302_400), detail: "$18.40 of $25.00 left")], readAt: readAt)
-            case .codex:
-                // Codex says whether the account has usage credits and free resets.
-                return ProviderUsage(windows: [UsageWindow(id: "week", title: "Weekly", usedPercent: 41, resetsAt: now.addingTimeInterval(fixture == "expired" ? -60 : 388_800))],
-                                     readAt: readAt, credits: UsageCredits(available: true, balance: 65_292.36),
-                                     resets: UsageResets(available: 2, expiries: [now.addingTimeInterval(432_000), now.addingTimeInterval(1_123_200)]))
-            default:
-                return ProviderUsage(windows: [
-                    UsageWindow(id: "session", title: "5-hour", usedPercent: 24,
-                                resetsAt: now.addingTimeInterval(fixture == "expired" ? -60 : 7_200)),
-                    UsageWindow(id: "week", title: "Weekly", usedPercent: 83, resetsAt: now.addingTimeInterval(259_200)),
-                ], readAt: readAt)
-            }
+            if fixture == "mixed", let reading = try await mixedUsage(request.account, now: now, check: await checks.next(request.account.id)) { return reading }
+            var reading = sampleUsage(request.account, now: now)
+            if fixture == "stale" { reading.readAt = now.addingTimeInterval(-7_200) }
+            if fixture == "expired" { reading.windows = reading.windows.map { var window = $0; window.resetsAt = now.addingTimeInterval(-60); return window } }
+            return reading
         }
     }
 
-    /// `BOTCHU_USAGE=mixed`: Antigravity with more windows than a row shows, Muse stale, Pi's key
-    /// without a limit, Codex Personal with no credits and one free reset, Codex Work unavailable,
-    /// and Claude Work whose first reading is followed by a failed check (`start` makes it); the
-    /// others get the sample.
-    nonisolated private static func mixedUsage(_ account: Account, now: Date, started: Date) throws -> ProviderUsage? {
+    /// `BOTCHU_USAGE=sample`, as Providers' mock draws its main state: Claude's 5-hour, Weekly and
+    /// Fable's week; Codex's week with credits (Codex Personal none) and two free resets;
+    /// Antigravity's four windows; Muse read 12 minutes ago; Pi's key with a daily spending limit.
+    /// An added profile gets its family's.
+    nonisolated private static func sampleUsage(_ account: Account, now: Date) -> ProviderUsage {
+        func at(_ days: Double, _ hours: Double, _ minutes: Double) -> Date { now.addingTimeInterval(days * 86_400 + hours * 3_600 + minutes * 60) }
+        func claude(_ session: Double, _ week: Double, _ fable: Double, session sessionReset: Date, week weekReset: Date) -> ProviderUsage {
+            ProviderUsage(windows: [UsageWindow(id: "session", title: "5-hour", usedPercent: session, resetsAt: sessionReset),
+                                    UsageWindow(id: "week", title: "Weekly", usedPercent: week, resetsAt: weekReset),
+                                    UsageWindow(id: "week-fable", title: "Fable · Weekly", usedPercent: fable, resetsAt: weekReset)], readAt: now)
+        }
+        func codex(_ week: Double, credits: Double?, resets weekReset: Date) -> ProviderUsage {
+            ProviderUsage(windows: [UsageWindow(id: "week", title: "Weekly", usedPercent: week, resetsAt: weekReset)], readAt: now,
+                          credits: UsageCredits(available: credits != nil, balance: credits ?? 0),
+                          resets: UsageResets(available: 2, expiries: [at(4, 8, 35), at(12, 12, 8)]))
+        }
         switch account.id {
-        case "codex-personal":
-            return ProviderUsage(windows: [UsageWindow(id: "week", title: "Weekly", usedPercent: 100, resetsAt: now.addingTimeInterval(97_200))],
-                                 readAt: now, credits: UsageCredits(available: false, balance: 0),
-                                 resets: UsageResets(available: 1, expiries: [now.addingTimeInterval(259_200)]))
-        case "google":
-            return ProviderUsage(windows: ["Gemini · Weekly", "Gemini · 5-hour", "Claude & GPT · Weekly", "Claude & GPT · 5-hour", "Images · Daily"].enumerated().map {
-                UsageWindow(id: $1, title: $1, usedPercent: Double([22, 4, 97, 0, 61][$0]), resetsAt: now.addingTimeInterval(Double($0 + 1) * 9_000))
-            }, readAt: now)
-        case "muse":
-            return ProviderUsage(windows: [UsageWindow(id: "window", title: "5-hour", usedPercent: 5, resetsAt: now.addingTimeInterval(3_600)),
-                                           UsageWindow(id: "weekly", title: "Weekly", usedPercent: 34, resetsAt: now.addingTimeInterval(172_800))],
+        case "claude-dev": return claude(4, 34, 7, session: at(0, 3, 58), week: at(1, 2, 48))
+        case "claude-work": return claude(2, 7, 0, session: at(0, 1, 28), week: at(1, 16, 48))
+        case "codex-personal": return codex(9, credits: nil, resets: at(6, 19, 44))
+        case "codex-work": return codex(0, credits: 60_891, resets: at(6, 22, 58))
+        default: break
+        }
+        switch account.kind {
+        case .claude: return claude(0, 66, 20, session: at(0, 4, 28), week: at(1, 10, 48))
+        case .codex: return codex(0, credits: 65_292.36, resets: at(6, 22, 58))
+        case .antigravity:
+            return ProviderUsage(windows: [UsageWindow(id: "gw", title: "Gemini · Weekly", usedPercent: 1, resetsAt: at(6, 10, 37)),
+                                           UsageWindow(id: "g5", title: "Gemini · 5-hour", usedPercent: 0, resetsAt: at(0, 4, 58)),
+                                           UsageWindow(id: "cw", title: "Claude & GPT · Weekly", usedPercent: 52, resetsAt: at(4, 12, 17)),
+                                           UsageWindow(id: "c5", title: "Claude & GPT · 5-hour", usedPercent: 0, resetsAt: at(0, 4, 58))], readAt: now)
+        case .muse:
+            return ProviderUsage(windows: [UsageWindow(id: "window", title: "5-hour", usedPercent: 1, resetsAt: at(0, 1, 58)),
+                                           UsageWindow(id: "weekly", title: "Weekly", usedPercent: 41, resetsAt: at(0, 13, 48))],
+                                 readAt: now.addingTimeInterval(-720))
+        case .pi:
+            return ProviderUsage(windows: [UsageWindow(id: "key", title: "Key allowance", usedPercent: 0.04, resetsAt: at(0, 13, 48),
+                                                       detail: "$24.99 of $25.00 left")], readAt: now)
+        }
+    }
+
+    /// `BOTCHU_USAGE=mixed`, the mock's problems: Claude Work read two hours ago, its 5-hour window
+    /// reset since, then a failed check (`start` makes it); Codex Personal's week used up, with no
+    /// credits and one free reset that expires in two days; Codex Work unavailable; Antigravity
+    /// nearly used up, with a daily window; Muse still checking; Pi's key without a limit; and an
+    /// added profile (`BOTCHU_PROFILE`) whose command isn't found. The others get the sample.
+    nonisolated private static func mixedUsage(_ account: Account, now: Date, check: Int) async throws -> ProviderUsage? {
+        func at(_ days: Double, _ hours: Double, _ minutes: Double) -> Date { now.addingTimeInterval(days * 86_400 + hours * 3_600 + minutes * 60) }
+        switch account.id {
+        case "claude-work" where check > 1: throw UsageFailure("Usage check timed out. Try refreshing later.")
+        case "claude-work":
+            return ProviderUsage(windows: [UsageWindow(id: "session", title: "5-hour", usedPercent: 2, resetsAt: at(0, 0, -32)),
+                                           UsageWindow(id: "week", title: "Weekly", usedPercent: 7, resetsAt: at(1, 16, 48)),
+                                           UsageWindow(id: "week-fable", title: "Fable · Weekly", usedPercent: 0, resetsAt: at(1, 16, 48))],
                                  readAt: now.addingTimeInterval(-7_200))
+        case "codex-personal":
+            return ProviderUsage(windows: [UsageWindow(id: "week", title: "Weekly", usedPercent: 100, resetsAt: at(1, 3, 16))],
+                                 readAt: now, credits: UsageCredits(available: false, balance: 0),
+                                 resets: UsageResets(available: 1, expiries: [at(2, 0, 0)]))
+        case "google":
+            return ProviderUsage(windows: [UsageWindow(id: "gw", title: "Gemini · Weekly", usedPercent: 22, resetsAt: at(6, 10, 37)),
+                                           UsageWindow(id: "g5", title: "Gemini · 5-hour", usedPercent: 4, resetsAt: at(0, 2, 40)),
+                                           UsageWindow(id: "cw", title: "Claude & GPT · Weekly", usedPercent: 97, resetsAt: at(4, 12, 17)),
+                                           UsageWindow(id: "c5", title: "Claude & GPT · 5-hour", usedPercent: 100, resetsAt: at(0, 2, 58)),
+                                           UsageWindow(id: "id", title: "Images · Daily", usedPercent: 61, resetsAt: at(0, 12, 48))], readAt: now)
+        case "muse":
+            // Still checking with its brief request.
+            try await Task.sleep(for: .seconds(3_600))
+            return nil
         case "openrouter": return ProviderUsage(windows: [], note: "No key spending limit · $1.25 used", readAt: now)
         case "codex-work": throw UsageFailure("Could not read account usage. Check the CLI’s sign-in and command, then refresh.")
-        case "claude-work" where now.timeIntervalSince(started) > 2: throw UsageFailure("Usage check timed out. Try refreshing later.")
+        case let id where id.hasPrefix("custom-"): throw UsageFailure("The login shell can’t find this profile’s command.")
         default: return nil
+        }
+    }
+
+    /// How many times each profile has been checked in a fixture run (`mixedUsage`).
+    private actor UsageChecks {
+        private var counts: [String: Int] = [:]
+        func next(_ id: String) -> Int {
+            counts[id, default: 0] += 1
+            return counts[id]!
         }
     }
 
@@ -234,6 +282,7 @@ enum DevHooks {
         switch env["BOTCHU_OPEN"] {
         case "inbox", "projects", "agents", "providers", "skills", "jobs":
             model.destination = env["BOTCHU_OPEN"].flatMap(LibraryDestination.init(rawValue:))
+            if let account = env["BOTCHU_PROVIDER"] { model.providerSelection = account }
             if let item = env["BOTCHU_INBOX_ITEM"].flatMap(UUID.init(uuidString:)) { model.inbox.selected = item }
             if let repo = env["BOTCHU_PROJECT"] {
                 model.selectProject(repo, tab: env["BOTCHU_PROJECT_TAB"].flatMap(ProjectSelection.Tab.init(rawValue:)) ?? .overview,

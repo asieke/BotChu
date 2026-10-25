@@ -164,6 +164,10 @@ final class AppModel {
     var taskSheet: TaskSheetRequest?
     /// The repository selected in Projects, shown in its sidebar; nil hides the sidebar.
     var projectSelection: ProjectSelection?
+    /// The profile selected in Providers, by account id, shown in its sidebar; nil hides the sidebar.
+    var providerSelection: String?
+    /// Where Settings scrolls to when it next shows, such as Accounts for Change Command.
+    var settingsFocus: SettingsFocus?
     var documentEditor: DocumentEditorRequest?
     /// Report a Bug or Feature, what files its issues: gh, or a stand-in (`DevHooks`, tests), what
     /// takes its window's screenshot, and whether one is being taken, before the sheet opens.
