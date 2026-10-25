@@ -65,8 +65,7 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     }
 
     /// A review of the task's pull request, in a worktree detached at its head: in the
-    /// conversation only (`review`), or also posted on GitHub as one review (`comment`, the
-    /// workspace standard's "Review and comment on this PR").
+    /// conversation only (`review`), or also posted on GitHub as one review (`comment`).
     public enum Review: String, Codable, Sendable {
         case review, comment
     }
@@ -204,9 +203,8 @@ public enum TaskNaming {
     }
 
     /// `feat/<number>-<slug>` for an issue, `feat/<slug>` for a brief: up to four plain words, in
-    /// ASCII letters and digits (accents dropped), at most 50 characters, as the workspace standard's
-    /// `scripts/worktree.sh` insists. A brief's slug never starts with a number, which the script
-    /// would take for an issue's. `fallback` names a branch whose text has no usable words.
+    /// ASCII letters and digits (accents dropped), at most 50 characters. A brief's slug never starts
+    /// with a number, which would be taken for an issue's (and linked to that issue on GitHub). `fallback` names a branch whose text has no usable words.
     public static func branch(issue: Int?, text: String, fallback: String) -> String {
         let stop: Set<String> = ["a", "an", "the", "and", "or", "of", "to", "in", "on", "for", "with", "it", "its", "is",
                                  "as", "at", "by", "from", "into", "please", "this", "that"]
@@ -234,8 +232,8 @@ public enum TaskNaming {
         return base + suffix
     }
 
-    /// Whether the workspace standard's `scripts/worktree.sh` takes the branch:
-    /// `<feat|fix|chore|docs>/<slug>` in lowercase letters, digits and hyphens, at most 50 characters.
+    /// Whether the branch has the team's form: `<feat|fix|chore|docs>/<slug>` in lowercase letters,
+    /// digits and hyphens, at most 50 characters.
     public static func isStandardBranch(_ branch: String) -> Bool {
         branch.count <= 50 && branch.range(of: "^(feat|fix|chore|docs)/[a-z0-9-]+$", options: .regularExpression) != nil
     }
@@ -312,11 +310,11 @@ public enum FanOutBrief {
         1. Start one sub-agent per issue, as yourself: `botchu-subagent spawn --agent \(Shell.quote(agent)) --title 'Fix #<number>' --brief '…'`. \
         Run at most \(parallel) at once, and collect them with `botchu-subagent wait` before starting more.
         2. Give each its issue's number, title and link, and tell it to: read the issue and its discussion \
-        (`gh issue view <number> --repo \(repo) --comments`); fix only that issue, following the repository's AGENTS.md; work in a new \
-        worktree and branch of its own from the latest default branch on origin (`scripts/worktree.sh <type>/<number>-<slug>` when the \
-        repository has it, else `git worktree add`), never in this task's folder, so no two share files; make the smallest complete \
-        change and run the repository's checks; push, open a pull request whose description says `Closes #<number>`, and hand back its \
-        URL, or what stopped it.
+        (`gh issue view <number> --repo \(repo) --comments`); fix only that issue, following the project rules in the repository's \
+        AGENTS.md; work in a new worktree and branch of its own (`<type>/<number>-<slug>`) from the latest default branch on origin \
+        (`git worktree add`), never in this task's folder, so no two share files; make the smallest complete change and run the tests \
+        that cover it (the repository's README says how); push, open a pull request whose description says `Closes #<number>`, and hand \
+        back its URL, or what stopped it.
         3. Change nothing in this task's own worktree.
         4. When every sub-agent has finished, reply with one line per issue: its pull request, or why it has none.
         """
@@ -339,8 +337,7 @@ public enum FanOutBrief {
 
             1. Start one sub-agent per pull request, as yourself: `botchu-subagent spawn --agent \(Shell.quote(agent)) --title 'Review #<number>' \
             --brief '…'`. Run at most \(parallel) at once, and collect them with `botchu-subagent wait` before starting more.
-            2. Give each its pull request's number, title and link, and tell it to review only that pull request, as the repository's AGENTS.md \
-            says under "Reviewing a pull request" when it has that section: read the pull request, its discussion, reviews, checks and diff \
+            2. Give each its pull request's number, title and link, and tell it to review only that pull request: read the pull request, its discussion, reviews and its diff against the merge base \
             (`gh pr view <number> --repo \(repo) --comments`, `gh pr diff <number> --repo \(repo)`); test it in a detached worktree of its own \
             at the pull request's head (`git fetch origin pull/<number>/head && git worktree add --detach "$(mktemp -d)/pr-<number>" FETCH_HEAD`), \
             never in this task's folder, and remove that worktree when done; then hand back the commit it reviewed, each finding with its \

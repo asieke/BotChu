@@ -128,7 +128,7 @@ it does not erase already-returned handoff files or undo delegated changes.
 
 ## Verification
 
-`scripts/check.sh` runs core and rendering tests and builds the app. Delegation tests exercise
+`scripts/test.sh` runs core and rendering tests and builds the app. Delegation tests exercise
 helper round trips, validation, scoped persistence, nested fan-out, stop, restart, transport failure
 and local/SSH environment handling. The standard `botchu-smoke` two-turn checks verify real CLI
 execution and resumption separately, using each account's own login and allowance.

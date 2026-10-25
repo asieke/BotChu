@@ -7,7 +7,7 @@ import BotChuCore
 
 /// What a launch costs with months of history (#109): eight bots, forty open tasks, sixteen closed
 /// ones and a hundred finished sub-agents, over 100 MB of transcripts on disk. Not part of
-/// `scripts/check.sh`, and it asserts nothing about time, which varies with load: it runs only with
+/// `scripts/test.sh`, and it asserts nothing about time, which varies with load: it runs only with
 /// `BOTCHU_LAUNCH_BENCHMARK` set, prints a table and, when the variable names a file, writes it there.
 ///
 ///     BOTCHU_LAUNCH_BENCHMARK=/tmp/launch-bench.txt swift test --configuration release \

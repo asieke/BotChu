@@ -6,7 +6,7 @@ import Testing
 /// Markdown for long replies being written (#106): converting the next revision of prose, code,
 /// shell code with `$HOME`, equation-heavy and table-and-diagram replies; a 128 KB reply given 100
 /// rapid deltas, with the worker's counts; and the memory ten 128 KB replies keep. Not part of
-/// `scripts/check.sh`, and it asserts nothing about time, which varies with load: it runs only with
+/// `scripts/test.sh`, and it asserts nothing about time, which varies with load: it runs only with
 /// `BOTCHU_MARKDOWN_BENCHMARK` set, prints a table and, when the variable names a file, writes it.
 ///
 ///     BOTCHU_MARKDOWN_BENCHMARK=/tmp/markdown-bench.txt swift test --configuration release \

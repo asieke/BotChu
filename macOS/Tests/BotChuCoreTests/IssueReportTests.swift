@@ -212,7 +212,7 @@ private struct FakeGH {
             ChatMessage(role: .user, text: "My bank password is hunter2."),
             ChatMessage(role: .tool, toolID: "t1", toolName: "Bash", toolInput: "cat ~/.ssh/id_rsa", toolOutput: "ssh key material", toolState: .done),
             ChatMessage(role: .assistant, text: "Done, see /Users/alexsieke/apps/payroll-private."),
-            ChatMessage(role: .error, text: "Couldn't make this task's worktree on Omarchy. scripts/worktree.sh feat/12-rotate-payroll-key failed.\n"
+            ChatMessage(role: .error, text: "Couldn't make this task's worktree on Omarchy. Making the worktree for feat/12-rotate-payroll-key failed.\n"
                         + "$ make the worktree in ~/apps/payroll-private\nfatal: could not read Password for 'https://ghp_secret@github.com'"),
         ]
         let status = BotStatus.make(task: task, messages: messages, run: nil)
@@ -234,7 +234,7 @@ private struct FakeGH {
         ])
         let body = IssueReport.body(report: "The worktree wasn't made.", snapshot: snapshot)
         for secret in ["Secret Agent", "Acme", "acme", "hunter2", "brass", "alexsieke", "payroll", "Omarchy", "omarchy", "ghp_", "staging",
-                       "11111111", "id_rsa", "key material", "Bash", "feat/", "worktree.sh", "#12", "Rotate", "~/apps", "claude-work", "Claude Work"] {
+                       "11111111", "id_rsa", "key material", "Bash", "feat/", "Making the worktree", "#12", "Rotate", "~/apps", "claude-work", "Claude Work"] {
             #expect(!body.contains(secret), "“\(secret)” reached the issue")
         }
     }
@@ -287,7 +287,7 @@ private struct FakeGH {
 
     @Test func errorsBecomeKindsWithoutTheirText() {
         let kinds: [(String, String)] = [
-            ("Couldn't make this task's worktree on Omarchy. scripts/worktree.sh feat/x failed.", "couldn't make the task's worktree"),
+            ("Couldn't make this task's worktree on Omarchy. Making the worktree for feat/x failed.", "couldn't make the task's worktree"),
             ("Couldn't reach Omarchy over SSH:\nssh: connect to host 10.0.0.2 port 22: Connection refused", "couldn't reach the host over SSH"),
             ("Claude Dev exited with status 1:\n/Users/alex/.local/bin/claude-dev: line 3: no such file", "the CLI exited with status 1"),
             ("Alex's Codex exited with status 137 without replying.", "the CLI exited with status 137 without replying"),

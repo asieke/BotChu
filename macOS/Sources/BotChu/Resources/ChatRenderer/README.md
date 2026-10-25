@@ -16,7 +16,7 @@ integration code, not part of either upstream distribution.
 To update, download explicit versions with `npm pack --ignore-scripts` into a temporary directory,
 verify each tarball's SHA-512 integrity against the registry metadata, and replace only the files
 listed above. Preserve the license files and the Mermaid bundle's embedded dependency notices.
-Update `versions.json` and `SHA256SUMS`, then run `scripts/check.sh` and visually review math,
+Update `versions.json` and `SHA256SUMS`, then run `scripts/test.sh` and visually review math,
 flowcharts with subgraphs, sequence diagrams, light/dark appearance and incomplete streamed input.
 Node/npm is only needed for this maintenance step; building and running BotChu needs neither.
 

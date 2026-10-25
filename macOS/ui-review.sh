@@ -95,7 +95,7 @@ cat > "$tasks/7a0c2d4e-1b3f-4c5d-8e9f-0a1b2c3d4e60/task.json" <<JSON
 JSON
 cat > "$tasks/7a0c2d4e-1b3f-4c5d-8e9f-0a1b2c3d4e60/thread.jsonl" <<'JSON'
 {"date":"2026-10-22T03:03:00Z","id":"00000000-0000-4000-8000-000000000021","role":"user","text":"Work on issue #3 “Fix the typo”."}
-{"date":"2026-10-22T03:03:05Z","id":"00000000-0000-4000-8000-000000000022","role":"error","text":"Couldn't make this task's worktree. scripts/worktree.sh feat/3-fix-typo failed."}
+{"date":"2026-10-22T03:03:05Z","id":"00000000-0000-4000-8000-000000000022","role":"error","text":"Couldn't make this task's worktree. Making the worktree for feat/3-fix-typo failed."}
 JSON
 # Generation controls can be reviewed on any account, without sending a message or changing live settings.
 python3 - "$data/bots.json" <<'PY'

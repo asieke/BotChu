@@ -234,7 +234,8 @@ private func tempDir(_ name: String) -> URL {
         #expect(quiet.contains("Post nothing to GitHub."))
         let posted = BotContext.taskPreamble(bot: bot, task: task(review: .comment), memory: "", sharedMemory: "", history: [])
         #expect(posted.contains("Your task is to review and comment on pull request #12 “Faster feeds”"))
-        #expect(posted.contains("“Review and comment on this PR”, so post your review there, as one review, without asking again."))
+        #expect(posted.contains("Then post your review there, as one review, without asking again: `gh api repos/asieke/x-digest/pulls/12/reviews --method POST`"))
+        #expect(!posted.contains("AGENTS.md says") && !quiet.contains("AGENTS.md says"))
         #expect(task(review: .comment).opening == "Review and comment on pull request #12 “Faster feeds”.")
         #expect(TaskNaming.title(repo: "asieke/x-digest", work: task(review: .review).work, brief: "", review: true) == "x-digest #12 review")
     }
