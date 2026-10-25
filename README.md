@@ -335,7 +335,11 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     Opening Jobs or a history never runs anything. An agent's card in **Agents** counts its jobs
     (opening Jobs filtered to it) and its menu has **New Job…**; its status sidebar's **Activity**
     lists them under its tasks, with **New Job…** and **All Jobs**. The editor sets the agent (chosen
-    already from an agent's own places, and fixed once the job exists), title, instructions, how often
+    already from an agent's own places, and fixed once the job exists), the account, model and
+    reasoning effort its runs use (**Same as** the agent, as they are when each run starts, until
+    others are chosen, from the same accounts and model and effort pickers as a conversation's; the
+    efforts offered are those the chosen account and model take, and another CLI family clears the
+    model and effort), title, instructions, how often
     it runs (every day, weekdays or chosen days at a time; every so many minutes, from 5, or hours,
     from a start time), its time zone (the Mac's at first, shown with the job everywhere), missed
     times, the time limit and whether it is on, with the schedule in words and its next three times.
@@ -350,9 +354,15 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     skipped. Earlier missed times are never made up, nor are times while a job was paused, or before
     its schedule changed. Each run is a fresh CLI session of its agent's, with its identity,
     instructions, team playbook, personality, memory and skills, then the job's instructions, but not
-    its Home conversation, on the agent's account, model and effort (recorded with the run), in its
-    workspace; it never resumes Home's session or touches Home's queue, draft or receipts, and gets
-    nothing written to it while it runs. A job never overlaps itself (a time due while its run waits
+    its Home conversation, on the job's account, model and effort, else the agent's (recorded with
+    the run), in its workspace; it never resumes Home's session or touches Home's queue, draft or
+    receipts, and gets nothing written to it while it runs. A job's own choice is saved with it, and a
+    job saved before jobs had one runs on its agent's. When its account is gone from Providers, or
+    OpenRouter's catalog no longer lists its OpenRouter model, its runs use the agent's account,
+    model and effort instead, never another provider, and the editor (which shows the choice as
+    unavailable), the job's row, its history and the run's first line say so; it keeps the choice for
+    when the account is back. A CLI's own models and custom IDs run as chosen: one the CLI rejects
+    fails the run with its reason. A job never overlaps itself (a time due while its run waits
     or runs is recorded skipped, once however many); one agent's runs go one at a time, and wait
     (**Waiting**) for its Home turn or a sub-agent in its workspace to finish; at most two run at
     once. A run is stopped at its time limit (30 minutes by default) and counts as failed; three
@@ -1112,7 +1122,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
   `BOTCHU_JOBS=sample` gives the demo bots sample jobs, with a history of every kind of run and a
   receipt in the first bot's Home, and runs no job (Run Now records a failed run), so nothing starts a CLI; `BOTCHU_OPEN=job-editor`
-  or `job-history` opens a new job's editor or the first job's history.
+  or `job-history` opens a new job's editor or the first job's history, `job-model` or `job-effort` a
+  new job's model or effort picker, and `job-edit` the editor of the job `BOTCHU_JOB` names (else the
+  first): `Check the deploy` has its own account, model and effort, and `Friday release notes` one on
+  a CLI profile that is gone.
   `BOTCHU_SECTION=<name>` moves the first bot into a sidebar section of that name, and
   `BOTCHU_SEARCH=<text>` opens Agents (`BOTCHU_OPEN=agents`) with that search.
   `BOTCHU_TAB=<n>` shows the first bot's nth conversation (and the message goes there), and

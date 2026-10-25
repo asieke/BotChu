@@ -347,10 +347,14 @@ public struct Job: Identifiable, Codable, Hashable, Sendable {
     public var pauseReason: String?
     /// Its runs, oldest first, at most `JobLimits.keptRuns` (and always the last that succeeded).
     public var runs: [JobRun]
+    /// The account, model and effort its runs use, when the owner chose them for the job; nil runs
+    /// it on its agent's, as they are when each run starts (and as every job saved before did).
+    public var runsOn: JobRunsOn?
 
     public init(id: UUID = UUID(), botID: UUID, title: String = "", prompt: String = "", schedule: JobSchedule = JobSchedule(),
                 missedRuns: MissedRunPolicy = .runOnce, catchUpWindow: TimeInterval = JobLimits.defaultCatchUpWindow,
-                timeLimit: TimeInterval = JobLimits.defaultTimeLimit, enabled: Bool = true, createdAt: Date = Date()) {
+                timeLimit: TimeInterval = JobLimits.defaultTimeLimit, enabled: Bool = true, createdAt: Date = Date(),
+                runsOn: JobRunsOn? = nil) {
         self.id = id
         self.botID = botID
         self.title = title
@@ -365,6 +369,7 @@ public struct Job: Identifiable, Codable, Hashable, Sendable {
         handledThrough = createdAt
         failureStreak = 0
         runs = []
+        self.runsOn = runsOn
     }
 
     /// How the Jobs table shows it.
@@ -397,6 +402,105 @@ public struct Job: Identifiable, Codable, Hashable, Sendable {
         if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Say what the job should do." }
         if timeLimit < 60 { return "Give each run at least a minute." }
         return schedule.problem
+    }
+}
+
+/// The account, model and reasoning effort the owner chose for a job's runs, in place of its agent's.
+public struct JobRunsOn: Codable, Hashable, Sendable {
+    public var accountID: String
+    /// A CLI profile's details, kept with the choice as a bot keeps its own, so the job still names it
+    /// (and its CLI family) once the profile is gone; nil for the accounts BotChu comes with.
+    public var accountProfile: Account?
+    /// Empty means the account's default model.
+    public var model: String
+    /// Nil leaves reasoning effort to the CLI.
+    public var reasoningEffort: ReasoningEffort?
+
+    public init(accountID: String, accountProfile: Account? = nil, model: String = "", reasoningEffort: ReasoningEffort? = nil) {
+        self.accountID = accountID
+        self.accountProfile = accountProfile
+        self.model = model
+        self.reasoningEffort = reasoningEffort
+    }
+
+    /// A conversation's account, model and effort, as a job's choice.
+    public init(_ settings: any RunSettings) {
+        self.init(accountID: settings.accountID, accountProfile: settings.accountProfile.flatMap { $0.id == settings.accountID ? $0 : nil },
+                  model: settings.model, reasoningEffort: settings.reasoningEffort)
+    }
+
+    /// Why BotChu can't run the choice, so the job's runs use its agent's.
+    public enum Unavailable: Equatable, Sendable {
+        /// Its account isn't one BotChu offers any more (a CLI profile gone from Providers).
+        case account(name: String)
+        /// OpenRouter's catalog doesn't list its model any more.
+        case model(String)
+
+        /// Why its runs are on the agent's, as the editor and a run's transcript say it.
+        public func explanation(agent: String) -> String {
+            switch self {
+            case .account(let name): "\(name) is no longer in Providers, so this job runs on \(agent)'s account, model and effort."
+            case .model(let id): "OpenRouter no longer lists \(id), so this job runs on \(agent)'s account, model and effort."
+            }
+        }
+    }
+
+    /// `accounts` are those BotChu offers now; `catalog` is OpenRouter's models, empty while unknown.
+    /// Only OpenRouter's catalog says a model is gone: a CLI's own models, and custom IDs, are passed
+    /// as chosen, and a CLI that rejects one fails the run with its reason, as a turn does.
+    public func unavailable(accounts: [Account], catalog: [CatalogModel] = []) -> Unavailable? {
+        guard let account = accounts.first(where: { $0.id == accountID }) else { return .account(name: accountProfile?.name ?? accountID) }
+        let model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if account.kind == .pi, !model.isEmpty, !catalog.isEmpty, !catalog.contains(where: { $0.id == model }) { return .model(model) }
+        return nil
+    }
+
+    /// `agent` with this account, model and effort; `accounts` give a CLI profile's current details.
+    public func applied(to agent: Bot, accounts: [Account] = []) -> Bot {
+        var bot = agent
+        bot.accountID = accountID
+        bot.accountProfile = Accounts.all.contains { $0.id == accountID } ? nil : accounts.first { $0.id == accountID } ?? accountProfile
+        bot.model = model
+        bot.reasoningEffort = reasoningEffort
+        return bot
+    }
+}
+
+extension Job {
+    /// Its agent as a run sees it: with the job's own account, model and effort, or as it is when the
+    /// job has none or BotChu can't run them (`unavailable` says why). Never another provider.
+    public func runSettings(agent: Bot, accounts: [Account], catalog: [CatalogModel] = []) -> (settings: Bot, unavailable: JobRunsOn.Unavailable?) {
+        guard let runsOn else { return (agent, nil) }
+        if let unavailable = runsOn.unavailable(accounts: accounts, catalog: catalog) { return (agent, unavailable) }
+        return (runsOn.applied(to: agent, accounts: accounts), nil)
+    }
+
+    /// Chooses the account its runs use, or its agent's (`nil`). Another CLI family clears the model
+    /// and effort, as a conversation's account change does.
+    public mutating func selectAccount(_ account: Account?, agent: Bot) {
+        guard let account else {
+            runsOn = nil
+            return
+        }
+        var settings = runsOn?.applied(to: agent) ?? agent
+        settings.selectAccount(account)
+        runsOn = JobRunsOn(settings)
+    }
+
+    /// Chooses the model its runs use, on the account they use; an effort the model doesn't take goes.
+    public mutating func selectModel(_ model: String, agent: Bot) {
+        var settings = runsOn?.applied(to: agent) ?? agent
+        settings.selectModel(model)
+        runsOn = JobRunsOn(settings)
+    }
+
+    /// Chooses the effort its runs use, only one their account and model take.
+    public mutating func selectReasoningEffort(_ effort: ReasoningEffort?, agent: Bot, openRouterDefault: String) {
+        var settings = runsOn?.applied(to: agent) ?? agent
+        let model = GenerationOptions.effectiveModel(settings.model, kind: settings.account.kind, openRouterDefault: openRouterDefault)
+        if let effort, !GenerationOptions.efforts(for: settings.account.kind, model: model).contains(effort) { return }
+        settings.reasoningEffort = effort
+        runsOn = JobRunsOn(settings)
     }
 }
 
@@ -638,9 +742,9 @@ extension BotHome {
 
 // MARK: Running
 
-/// How a run is started: a fresh CLI session on the agent's account, model and effort (never its
-/// Home session), with its context and the job's instructions as the prompt, and its stdin closed,
-/// so nothing is written into it while it runs.
+/// How a run is started: a fresh CLI session on the job's account, model and effort, else its agent's
+/// (`Job.runSettings`), never its agent's Home session, with its context and the job's instructions
+/// as the prompt, and its stdin closed, so nothing is written into it while it runs.
 public enum JobLaunch {
     public static func invocation(for agent: any RunSettings, prompt: String, openRouterDefault: String, openRouterKey: String?) -> Invocation {
         let account = agent.account
@@ -648,6 +752,13 @@ public enum JobLaunch {
                                          model: GenerationOptions.effectiveModel(agent.model, kind: account.kind, openRouterDefault: openRouterDefault),
                                          sessionID: nil, reasoningEffort: agent.reasoningEffort,
                                          openRouterKey: account.kind == .pi ? openRouterKey : nil, liveInput: false)
+    }
+
+    /// The first line of a run's transcript: the account it started on, and why, when the job's own
+    /// choice couldn't be used.
+    public static func startNote(account: Account, agent: String, unavailable: JobRunsOn.Unavailable?) -> String {
+        let note = "Started on \(account.name)"
+        return unavailable.map { "\(note). \($0.explanation(agent: agent))" } ?? note
     }
 
     /// The run's context: who it is (identity, instructions, playbook, personality and memory),
