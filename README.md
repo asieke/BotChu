@@ -12,8 +12,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   - **Workspace:** the left sidebar has **Projects**, **Agents**, **Providers**, **Skills** and **Jobs**, followed by
     the bots, one row each, in sections (below); a bot's Home and tasks are the tabs beside its chat
     (**Tasks**). A bot's row says on its second line what it is doing ("Working on #113", "2 tasks
-    running", its Home's activity, "4 tasks", or its account), with a small dot at its end for each of
-    its conversations that isn't idle, in the tabs' colours, at most four, then +N. Selecting a bot
+    running", its Home's activity, "4 tasks", or its account), with a small dot at the row's end,
+    centred on it, for each of its conversations that isn't idle, in the tabs' colours, at most four,
+    then +N. Selecting a bot
     shows the conversation it showed last. Opening a gallery keeps the selected conversation and unsent draft;
     turns that finish while a gallery is shown still show as news (a blue dot). In dark mode the sidebar
     takes the status sidebar's darker shade, with a hairline along its edge, so it stands apart from
@@ -280,9 +281,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     finished since it was last shown (blue, with its pull request), or its last turn failed (red,
     until its next turn starts); while idle (a faint ring), what it is about (its issue's title, or
     a brief's words) and its last activity (2m, 1h, 1d). Home's tab names its account, or its own
-    turn's state. The selected tab takes the chat's background and runs into
-    it. Dots hold still; when a turn ends, its dot pops once (with Reduce Motion, it only
-    crossfades). A click, **⌘1** (Home) to **⌘9** (the first eight tasks, in the Bot menu), ⌃Tab,
+    turn's state. The rows are inset 8 points from both of the column's edges, and the selected
+    one is a card with its edge all round, as the rail's selected tile is. Dots hold still; when a
+    turn ends, its dot pops once (with Reduce Motion, it only crossfades). A click, **⌘1** (Home) to **⌘9** (the first eight tasks, in the Bot menu), ⌃Tab,
     and ↑ and ↓ while a tab has keyboard focus switch conversations. Hovering a task's tab turns its
     dot into a close button, unless its turn is running, and its tooltip says what it is about,
     then the repository, the issue, the machine and the shortcut; its context menu keeps the issue, pull request, branch,
