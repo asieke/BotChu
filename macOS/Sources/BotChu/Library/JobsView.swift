@@ -102,7 +102,7 @@ struct JobsView: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let now = max(context.date, Date())
             Table(matches, selection: $selection) {
-                TableColumn("Job") { (job: Job) in JobTitleCell(job: job, problem: model.jobs.problems[job.id]) }
+                TableColumn("Job") { (job: Job) in JobTitleCell(job: job, problem: model.jobs.problems[job.id], fallback: model.jobs.fallback(of: job)) }
                     .width(min: 130, ideal: 180)
                 TableColumn("Agent") { (job: Job) in JobAgentCell(botID: job.botID) }
                     .width(min: 90, ideal: 120, max: 220)
@@ -180,6 +180,8 @@ struct JobMenuItems: View {
 private struct JobTitleCell: View {
     let job: Job
     let problem: String?
+    /// Why its runs are on its agent's instead of its own choice.
+    let fallback: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(job.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
@@ -187,6 +189,8 @@ private struct JobTitleCell: View {
                 Text(problem).font(.system(size: 11)).foregroundStyle(.red).lineLimit(1).help(problem)
             } else if let reason = job.pauseReason, !job.enabled {
                 Text(reason).font(.system(size: 11)).foregroundStyle(.orange).lineLimit(1).help(reason)
+            } else if let fallback {
+                Text(fallback).font(.system(size: 11)).foregroundStyle(.orange).lineLimit(1).help(fallback)
             } else {
                 Text(job.prompt).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).help(job.prompt)
             }

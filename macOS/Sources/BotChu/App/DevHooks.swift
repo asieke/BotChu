@@ -10,7 +10,8 @@ import BotChuCore
 ///   rows (`sidebar.png`), which the window's picture leaves out.
 /// - `BOTCHU_OPEN`: open `editor` (a new bot), `task` (New Task), `memory`, `soul`, or `settings` at launch.
 /// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
-/// - `BOTCHU_OPEN=model|effort|inspector-model|inspector-effort`: open a generation picker.
+/// - `BOTCHU_OPEN=model|effort|inspector-model|inspector-effort`: open a generation picker;
+///   `job-model|job-effort` opens a new job's editor with its picker open.
 /// - `BOTCHU_INSPECTOR=activity|model|session|memory`: select an inspector area on throwaway data.
 /// - `BOTCHU_DEFAULT_MODEL`: an OpenRouter default for a throwaway run only.
 /// - `BOTCHU_WINDOW=compact`: review the main window at its minimum width, on throwaway data.
@@ -54,7 +55,8 @@ import BotChuCore
 ///   with this report and file it, with the stand-in `gh`.
 /// - `BOTCHU_JOBS=sample`: with `BOTCHU_DATA_DIR`, give the bots sample scheduled jobs with a history
 ///   of every kind of run (`sampleJobs`), and run no job, so nothing starts a CLI. `BOTCHU_OPEN=jobs`
-///   opens Jobs, `job-editor` the editor for a new job, and `job-history` the first job's history.
+///   opens Jobs, `job-editor` the editor for a new job, `job-edit` the editor for the job titled
+///   `BOTCHU_JOB` (else the first), and `job-history` the first job's history.
 @MainActor
 enum DevHooks {
     static let env = ProcessInfo.processInfo.environment
@@ -199,7 +201,9 @@ enum DevHooks {
                                     item: env["BOTCHU_PROJECT_ITEM"].flatMap(Int.init))
             }
         case "editor": model.newBot()
-        case "job-editor": model.jobs.newJob(for: model.selection)
+        case "job-editor", "job-model", "job-effort": model.jobs.newJob(for: model.selection)
+        case "job-edit":
+            if let job = model.jobs.jobs.first(where: { $0.title == env["BOTCHU_JOB"] }) ?? model.jobs.jobs.first { model.jobs.edit(job.id) }
         case "job-history": if let job = model.jobs.jobs.first { model.jobs.showHistory(job.id) }
         case "task": if let id = model.selection { model.newTask(for: id) }
         case "memory": if let id = model.selection { model.editDocument(.memory, for: id) }
@@ -325,12 +329,15 @@ enum DevHooks {
                          createdAt: now.addingTimeInterval(-30 * 86_400))
         weekly.pauseReason = "Paused after 3 failed runs in a row. Fix what failed, then Resume."
         weekly.runs = [run(.failed, hoursAgo: 170, summary: "Invalid API key · Please run /login — Sign in to \(first.account.name) in Terminal, then Run Now.")]
+        // On a CLI profile that is gone, so its runs are on its agent's.
+        weekly.runsOn = JobRunsOn(accountID: "custom-review-gone", accountProfile: Account(id: "custom-review-gone", name: "Codex Research", kind: .codex,
+                                  defaultCommand: "codex-research", symbol: "terminal"), model: "gpt-6-luna", reasoningEffort: .high)
         var jobs = [triage, weekly]
         if model.bots.count > 1 {
             let second = model.bots[1]
             var check = Job(botID: second.id, title: "Check the deploy", prompt: "Check that the site responds and the last deploy succeeded.",
                             schedule: JobSchedule(kind: .interval, every: 90, unit: .minutes, anchor: now.addingTimeInterval(-6 * 3600), timeZone: zone),
-                            createdAt: now.addingTimeInterval(-86_400))
+                            createdAt: now.addingTimeInterval(-86_400), runsOn: JobRunsOn(accountID: "claude-work", model: "sonnet", reasoningEffort: .low))
             check.handledThrough = now.addingTimeInterval(-600)
             var waiting = JobRun(trigger: .scheduled, scheduledFor: now.addingTimeInterval(-600), timeZone: zone, reservedAt: now.addingTimeInterval(-600))
             waiting.outcome = .waiting
