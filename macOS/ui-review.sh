@@ -30,7 +30,8 @@
 #                                          # history (none ever runs); BOTCHU_OPEN=job-editor or job-history
 #                                          # opens a new job's editor or the first job's history instead
 #   BOTCHU_REPORT="It crashed" macOS/ui-review.sh  # and file this report, with a stand-in gh that
-#                                          # keeps it in $data/reports (BOTCHU_REPORT_FAIL=1: it fails)
+#                                          # keeps it in $data/reports (BOTCHU_REPORT_FAIL=1: it fails),
+#                                          # with the window's screenshot (BOTCHU_SCREENSHOT_FAIL=1: none)
 # Prints the snapshot folder. Quit the app with `pkill -x BotChu` when done.
 set -euo pipefail
 dir=$(cd "$(dirname "$0")" && pwd)
@@ -132,6 +133,7 @@ chmod +x "$data/fake-gh"
 [ -n "${BOTCHU_REPORT_FAIL:-}" ] && touch "$data/fake-gh-fails"
 args+=(--env "BOTCHU_REPORT_GH=$data/fake-gh")
 [ -n "${BOTCHU_REPORT:-}" ] && args+=(--env "BOTCHU_REPORT=$BOTCHU_REPORT")
+[ -n "${BOTCHU_SCREENSHOT_FAIL:-}" ] && args+=(--env "BOTCHU_SCREENSHOT_FAIL=1")
 [ -n "${BOTCHU_OPEN:-}" ] && args+=(--env "BOTCHU_OPEN=$BOTCHU_OPEN")
 [ -n "${BOTCHU_TASK:-}" ] && args+=(--env "BOTCHU_TASK=$BOTCHU_TASK")
 [ -n "${BOTCHU_TAB:-}" ] && args+=(--env "BOTCHU_TAB=$BOTCHU_TAB")

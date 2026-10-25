@@ -40,6 +40,7 @@ struct TaskInspector: View {
                             }
                         }
                     }
+                    if !task.repo.isEmpty { TaskIssuesSection(repo: task.repo) }
                     RunReviewsSection(target: target)
                     InspectorSection("Conversation") {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {

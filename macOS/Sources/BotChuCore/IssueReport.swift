@@ -13,6 +13,8 @@ public enum IssueReport {
     public static let bodyLimit = 65_536
     /// As many images as a message takes.
     public static let imageLimit = ImageAttachment.maximumCount
+    /// The longest edge, in pixels, of a window's screenshot, as of any image a draft takes.
+    public static let screenshotEdge = 2048
     /// What an image's address on GitHub, put in place of its file's name, may add to the description.
     static let imageAddressAllowance = 100
     static let fallbackTitle = "Report from BotChu"
@@ -37,6 +39,15 @@ public enum IssueReport {
             + "\n\n### App state\n\n"
             + snapshot.lines.map { "- " + $0 }.joined(separator: "\n")
             + "\n\n_Filed from BotChu. The app state holds categories and counts only: no conversations, instructions, memory, paths or names._\n"
+    }
+
+    /// The size, in pixels, a report's screenshot of a window `width` × `height` points, shown at
+    /// `scale` pixels a point, is taken at: every pixel the window shows, scaled down to fit
+    /// `screenshotEdge` when it is larger, never up, so its text stays as sharp as that allows.
+    public static func screenshotSize(width: Double, height: Double, scale: Double) -> (width: Int, height: Int) {
+        let pixels = (width: max(width * max(scale, 1), 1), height: max(height * max(scale, 1), 1))
+        let fit = min(1, Double(screenshotEdge) / max(pixels.width, pixels.height))
+        return (max(Int((pixels.width * fit).rounded()), 1), max(Int((pixels.height * fit).rounded()), 1))
     }
 
     /// The name the report's `n`th image has while gh attaches it, in the folder gh runs in: a

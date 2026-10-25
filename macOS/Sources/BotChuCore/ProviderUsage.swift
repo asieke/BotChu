@@ -37,6 +37,63 @@ public struct UsageWindow: Identifiable, Equatable, Sendable {
     public func currentPercent(at now: Date) -> Double? { hasReset(at: now) ? nil : usedPercent }
 }
 
+/// An allowance window as a line of a compact list, such as a Providers row: its title, the share
+/// used and its reset, as text.
+public struct UsageLine: Identifiable, Equatable, Sendable {
+    /// The parts of a line that line up with the other rows' lines.
+    public enum Part: Sendable { case title, percent, reset }
+    public var id: String
+    public var title: String
+    public var percent: Double?
+    public var percentText: String
+    public var reset: String
+
+    public init(_ window: UsageWindow, at now: Date) {
+        id = window.id
+        title = window.title
+        percent = window.currentPercent(at: now)
+        percentText = percent.map { "\($0.formatted(.number.precision(.fractionLength(0))))%" } ?? "—"
+        reset = window.hasReset(at: now) ? "Reset passed"
+            : window.resetsAt?.formatted(.dateTime.weekday(.abbreviated).hour().minute()) ?? window.resetDescription ?? "—"
+    }
+}
+
+extension ProviderUsage {
+    /// A compact row's lines: every window up to `limit`, else one fewer, leaving a line to say how
+    /// many more there are.
+    public func lines(at now: Date, limit: Int = 4) -> (shown: [UsageLine], more: Int) {
+        let shown = windows.count > limit ? Array(windows.prefix(limit - 1)) : windows
+        return (shown.map { UsageLine($0, at: now) }, windows.count - shown.count)
+    }
+}
+
+/// How wide each part of a usage line is: the widest across every row, so that each row's bars,
+/// percentages and resets start at the same place, whatever its windows are called.
+public struct UsageLineWidths: Equatable, Sendable {
+    /// A longer title is cut short, so one long name doesn't push every row's bar across.
+    public static let maxTitle = 160.0
+    public var title: Double
+    public var percent: Double
+    public var reset: Double
+
+    public init(title: Double = 0, percent: Double = 0, reset: Double = 0) {
+        self.title = title
+        self.percent = percent
+        self.reset = reset
+    }
+
+    /// `measure` gives a text's width in the font its part is shown in.
+    public init(_ lines: some Sequence<UsageLine>, measure: (String, UsageLine.Part) -> Double) {
+        self.init()
+        for line in lines {
+            title = max(title, measure(line.title, .title).rounded(.up))
+            percent = max(percent, measure(line.percentText, .percent).rounded(.up))
+            reset = max(reset, measure(line.reset, .reset).rounded(.up))
+        }
+        title = min(title, Self.maxTitle)
+    }
+}
+
 public struct UsageFailure: LocalizedError, Sendable {
     public let message: String
     public var retryAfter: TimeInterval?
