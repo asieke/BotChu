@@ -150,8 +150,8 @@ struct SidebarShade: ViewModifier {
     }
 }
 
-/// A bot's row: its face, its name, and on the second line what it is doing and a small dot for
-/// each of its conversations that isn't idle (#128), at most four, then +N.
+/// A bot's row: its face, its name over what it is doing, and a small dot for each of its
+/// conversations that isn't idle (#128), at most four, then +N, at its end, centred on the row (#144).
 struct BotRow: View {
     let bot: Bot
     let status: BotStatus
@@ -159,30 +159,29 @@ struct BotRow: View {
     let selected: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 6) {
             // Only the selected bot and busy ones move, so a long list stays calm.
             BotAvatar(bot: bot, size: 30, activity: status.activity, animates: selected || status.activity != .idle)
+                .padding(.trailing, 4)
             VStack(alignment: .leading, spacing: 2) {
                 Text(bot.name)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
-                HStack(spacing: 6) {
-                    Text(summary.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    if !summary.dots.isEmpty {
-                        BotRowDots(summary: summary)
-                    }
-                }
+                Text(summary.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if !summary.dots.isEmpty {
+                BotRowDots(summary: summary)
             }
         }
         .padding(.vertical, 3)
     }
 }
 
-/// The small dots at the end of a bot's second line, in its tabs' colours.
+/// The small dots at the end of a bot's row, in its tabs' colours.
 struct BotRowDots: View {
     let summary: BotRowSummary
 
