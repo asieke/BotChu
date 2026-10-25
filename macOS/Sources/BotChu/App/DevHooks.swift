@@ -107,6 +107,13 @@ enum DevHooks {
         }
     }
 
+    /// What takes a report's screenshot: the window itself, except in a throwaway run with
+    /// `BOTCHU_SCREENSHOT_FAIL`, which can't take one, to show the report without it.
+    static var windowCapture: WindowCapture.Capture {
+        guard dataDir != nil, env["BOTCHU_SCREENSHOT_FAIL"] != nil else { return WindowCapture.screen }
+        return { _ in throw ImageDelivery.Failure("The window isn't on screen.") }
+    }
+
     static var usageFetch: UsageCache.Fetch? {
         guard dataDir != nil, let fixture = env["BOTCHU_USAGE"],
               ["sample", "stale", "expired", "unavailable", "mixed"].contains(fixture) else { return nil }
@@ -252,10 +259,11 @@ enum DevHooks {
         // Last, so the report's app state has what the hooks above showed.
         let report = dataDir == nil ? nil : env["BOTCHU_REPORT"]
         if env["BOTCHU_OPEN"] == "report" || report != nil {
-            model.reportIssue(text: report ?? "")
-            if report != nil, let request = model.issueReport {
-                let filer = model.issueFiler
-                Task { await request.submit(with: filer) }
+            // Once the window shows what the hooks above opened, for its screenshot.
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                guard let request = await model.openReport(text: report ?? ""), report != nil else { return }
+                await request.submit(with: model.issueFiler)
             }
         }
     }
