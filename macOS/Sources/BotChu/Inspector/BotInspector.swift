@@ -34,8 +34,7 @@ struct BotInspector: View {
                     InspectorSection("Runs on") {
                         RunsOnCard(settings: bot, target: .home(botID))
                     }
-                    let usageRequest = UsageRequest(account: bot.account, command: model.settings.command(for: bot.account),
-                        credentialRevision: bot.account.kind == .pi ? model.settings.usageCredentialRevision : 0)
+                    let usageRequest = model.usageRequest(for: bot.account)
                     AccountUsageSection(request: usageRequest, isRunning: model.isRunning(.home(botID)))
                         .id(usageRequest)
                 case .session:
@@ -635,6 +634,8 @@ enum Palette {
     static let text = buttonText
     static let accent = dynamic(0x5B3FD0, 0x6E52E0)
     static let violet = dynamic(0x7C5CFA, 0x9D84FF)
+    /// An allowance nearly used, or a reading that is stale or failed.
+    static let warning = dynamic(0xB96D00, 0xF5A623)
 
     static func dynamic(_ light: UInt32, _ dark: UInt32) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
