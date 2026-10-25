@@ -191,7 +191,19 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     the rendering catches up. A reply of 256 blocks or more is laid out in chunks of 128, each apart from the rest of
     the chat and only at the width it is shown at, so typing, another row or the next delta doesn't lay out the chunks
     already written again. Headings, nested lists, quotes,
-    tables and fenced code use native block layouts; code has a Copy button. A table's cells stay on
+    tables and fenced code use native block layouts; code has a Copy button. A reply's text is
+    selected as one text, across its lines and blocks (#156): a drag or Shift-click selects across
+    paragraphs, headings, list items, quotes, code and tables, a double click selects a word and a
+    triple click a paragraph (in code, a line), ⌘A selects the reply clicked in, and ⌘C, Edit ▸ Copy
+    or Copy in its right-click menu copies the selection in reading order, with a blank line between
+    blocks, a line break between list items (a tab in for each level of nesting) and table rows, a
+    space after an item's bullet or number, and a tab between cells. A click on a link opens it. One
+    reply has a selection at a time (selecting in another clears it), and it stays as its reply is
+    written; long replies select across their chunks. (SwiftUI selects within one `Text` only, so
+    the reply's texts take no clicks, and a view behind them finds the text under the mouse from
+    SwiftUI's layout of it and shows the selection. In a long reply's chunks each text gives its
+    layout as it is drawn, as asking SwiftUI for them would lay every chunk out again with each
+    delta.) Rich replies, in WebKit, select as web pages do. A table's cells stay on
     one line, each row ruled straight across whatever its cells hold (empty, or inline code), and a
     table wider than the chat scrolls sideways. Replies have soft rounded
     bubbles. Inline and display math use bundled KaTeX; Mermaid code fences display diagrams with
@@ -973,7 +985,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     the tab's two lines, the row's dots and subtitle, and when the column folds into the rail
     (`ConversationTabs.swift`), replies' parsed Markdown, cached by their text within a
     budget of bytes (`MarkdownCache.swift`), and parsed off the main thread as they are written, one
-    revision at a time for each reply (`MarkdownPreparation.swift`), pets: the activity a tool call means
+    revision at a time for each reply (`MarkdownPreparation.swift`), a reply's text as it is selected
+    and copied: its texts in reading order, what goes between them, words and paragraphs
+    (`ReplyText.swift`), and where their lines and glyphs are drawn, for the place under a point and
+    what a selection covers (`TextLines.swift`), pets: the activity a tool call means
     and the clips that show it (`Pet.swift`), making a pet: its poses and clips, the Codex prompt
     for the stills, the OpenRouter request and job, the cost estimate, the manifest and install
     (`PetVideo.swift`), scheduled jobs: their schedules in their own time zones, runs, history and
@@ -1050,7 +1065,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished turns and runs to the daily run reviews, `Evaluations.swift`),
-    `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
+    `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, selecting a reply's text across its blocks, `ReplySelection.swift`, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
     status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
     the hosts, Telegram and run reviews), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
