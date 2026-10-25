@@ -205,7 +205,6 @@ struct ExplorationHeader: View {
         .help(live ? "Exploring" : open ? "Show the summary" : "Show every call")
         .accessibilityLabel(live ? "Exploring, \(group.calls.count) calls so far" : "Explored \(group.summary)" + (group.location.isEmpty ? "" : " in \(group.location)"))
     }
-
 }
 
 /// An opened group's first row: its header, at the top of the card its rows make.

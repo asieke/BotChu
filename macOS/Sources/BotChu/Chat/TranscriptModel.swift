@@ -145,7 +145,7 @@ final class TranscriptModel {
     private func load(_ messages: [ChatMessage], root: String?) {
         // Grouped anew, the thread's items are counted from what is grouped here: a place among
         // the old ones would be somewhere else.
-        windowStart = nil
+        if windowStart != nil { windowStart = nil }
         if let start = ActivityTranscript.recentStart(in: messages, keeping: Self.recentMessages, scanning: Self.coldLimit) {
             transcript = ActivityTranscript(root: root, skipping: start, of: messages)
         } else {
