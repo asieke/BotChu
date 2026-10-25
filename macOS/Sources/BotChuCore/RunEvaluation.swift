@@ -273,7 +273,7 @@ public struct EvaluationRequest: Sendable {
         let start = min(max(0, turnStart), thread.count)
         guard start < thread.count else { return nil }
         let prompt = thread[..<start].lastIndex { $0.role == .user } ?? start
-        var heading = "a turn of the task “\(task.title)” in \(task.repo)"
+        var heading = "a turn of the task “\(task.title)”" + (task.jobRun == nil ? " in \(task.repo)" : ", a scheduled job's run")
         if let work = task.work { heading += task.review == nil ? ", on \(work.reference)" : ", reviewing \(work.reference)" }
         heading += ", on \(machine)"
         guard worthReviewing(thread[prompt...], ending: ending) else { return nil }

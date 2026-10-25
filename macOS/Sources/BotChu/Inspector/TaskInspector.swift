@@ -12,7 +12,7 @@ struct TaskInspector: View {
             let machine = model.machineName(task.hostID, fallback: task.hostName)
             InspectorPanel(badgeCounts: [.subagents: model.delegation.activeCount(target, includeTasks: false)]) {
                 InspectorSection("Status") {
-                    AvatarCard(bot: bot, status: status, title: task.repoName,
+                    AvatarCard(bot: bot, status: status, title: task.jobRun?.jobTitle ?? task.repoName,
                                subtitle: subtitle(for: task, machine: machine),
                                account: task.account, eyebrow: bot.name)
                 }
@@ -21,7 +21,20 @@ struct TaskInspector: View {
                 case .activity:
                     InspectorSection("Task") {
                         InspectorCard {
-                            InspectorRow("Repository", value: task.repo)
+                            if let origin = task.jobRun {
+                                // A job's run (#146): its job, and the time it was for.
+                                InspectorRow("Job") {
+                                    Button(origin.jobTitle) { model.jobs.showHistory(origin.jobID, run: origin.runID) }
+                                        .buttonStyle(.link)
+                                        .foregroundStyle(Palette.accent)
+                                        .disabled(model.jobs.job(origin.jobID) == nil)
+                                        .help(model.jobs.job(origin.jobID) == nil ? "The job was deleted" : "Show this run in the job's history")
+                                }
+                                InspectorRow("Run", value: JobTasks.when(origin))
+                                    .help(JobTasks.schedule(origin))
+                            } else {
+                                InspectorRow("Repository", value: task.repo)
+                            }
                             InspectorRow("Machine", last: task.work?.isPullRequest != false && task.review == nil) {
                                 Label(machine, systemImage: task.isRemote ? "network" : "laptopcomputer")
                                     .labelStyle(.titleAndIcon)
@@ -104,6 +117,7 @@ struct TaskInspector: View {
     }
 
     private func subtitle(for task: BotTask, machine: String) -> String {
+        if let origin = task.jobRun { return JobTasks.when(origin) }
         var title = task.title == task.repoName ? "" : task.title
         for prefix in ["\(task.repoName) · ", "\(task.repoName) "] where title.hasPrefix(prefix) {
             title = String(title.dropFirst(prefix.count))

@@ -247,7 +247,15 @@ public enum BotContext {
         if let skills = skillsContext(skills, remote: machine != nil) { parts.append(skills) }
         let on = machine.map { "on \($0), " } ?? ""
         let there = machine == nil ? "" : " there"
-        if let folder = task.folder, task.review != nil {
+        if let origin = task.jobRun {
+            parts.append("""
+                This task is a run of your scheduled job “\(origin.jobTitle)” \
+                (\(JobTasks.schedule(origin, locale: Locale(identifier: "en_US_POSIX")))), in your workspace \
+                \(task.folder ?? bot.workspace), not in a repository: its first message was the job's instructions, and your \
+                owner continues it here. Don't change a repository's files from here; when the work needs one, ask for a task \
+                as your AGENTS.md explains.
+                """)
+        } else if let folder = task.folder, task.review != nil {
             let head = task.head ?? "the pull request's head"
             parts.append("""
                 You are \(on)in a review worktree of \(task.repo) at \(folder), detached at \(head), which BotChu made for \
@@ -600,7 +608,8 @@ public enum BotContext {
     /// `replyCut` says `lastReply` is the start of a longer reply (`ThreadDigest`).
     public static func taskReport(_ task: BotTask, status: BotStatus, pullRequest: Int?, lastReply: String?, replyCut: Bool = false,
                                   replyLimit: Int = maxReportReply) -> String {
-        var line = "“\(task.title)” (task \(task.id.uuidString.lowercased().prefix(8))) in \(task.repo)"
+        var line = "“\(task.title)” (task \(task.id.uuidString.lowercased().prefix(8)))"
+            + (task.jobRun.map { ", a run of your scheduled job “\($0.jobTitle)”" } ?? " in \(task.repo)")
         if let work = task.work { line += ", on \(work.reference)" }
         if !task.branch.isEmpty { line += ", branch \(task.branch)" }
         switch status.phase {

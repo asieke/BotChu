@@ -292,7 +292,7 @@ public struct IssueSnapshot: Equatable, Sendable {
                 case (.some, .review?): what += "reviewing a pull request here only"
                 case (.some, .comment?): what += "reviewing a pull request and posting the review"
                 case (let work?, nil): what += work.isPullRequest ? "continuing a pull request" : "working on an issue"
-                case (nil, _): what += "new work from a brief"
+                case (nil, _): what += task.jobRun == nil ? "new work from a brief" : "a scheduled job's run"
                 }
                 if task.origin == .home { what += ", started by its bot" }
                 if task.folder == nil { what += ", no worktree yet" }

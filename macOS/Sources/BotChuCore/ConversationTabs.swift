@@ -101,15 +101,17 @@ public enum TabState: Equatable, Sendable {
 }
 
 /// What a conversation's tab says (#128): on its first, prominent line the repository it works in
-/// and its issue's number ("BotChu #113"), or Home; on the second what it is doing, with a time, or
-/// while idle what it is about.
+/// and its issue's number ("BotChu #113"), its job for a job's run, or Home; on the second what it
+/// is doing, with a time, or while idle what it is about.
 public struct ConversationTab: Equatable, Sendable {
     public var isHome: Bool
-    /// "Home", or the task's repository, by its name without its owner.
+    /// "Home", the task's repository, by its name without its owner, or a job's run's job (#146).
     public var name: String
     /// The task's issue or pull request; nil for Home and a task from a brief.
     public var number: Int?
     public var isReview: Bool
+    /// A run of one of the bot's scheduled jobs (#146).
+    public var isJob: Bool = false
     /// The host the task works on; nil on this Mac, and for Home.
     public var machine: String?
     /// What the task is about: its issue's or pull request's title, else its brief. Home's account.
@@ -122,15 +124,21 @@ public struct ConversationTab: Equatable, Sendable {
         ConversationTab(isHome: true, name: "Home", number: nil, isReview: false, machine: nil, subject: account, state: state, about: ["Home"])
     }
 
-    /// A task's tab; `machine` is the host it works on, nil on this Mac.
+    /// A task's tab; `machine` is the host it works on, nil on this Mac. A job's run names its job,
+    /// and is about the time it was for.
     public init(task: BotTask, machine: String?, state: TabState) {
         isHome = false
-        name = task.repoName
+        name = task.jobRun?.jobTitle ?? task.repoName
         number = task.work?.number
         isReview = task.review != nil
+        isJob = task.jobRun != nil
         self.machine = machine
         subject = Self.subject(of: task)
         self.state = state
+        if let origin = task.jobRun {
+            self.about = ["Job “\(origin.jobTitle)”", machine ?? "This Mac"]
+            return
+        }
         var about = [task.repo]
         if let work = task.work {
             about.append((work.isPullRequest ? "Pull request #" : "Issue #") + "\(work.number)" + (isReview ? " review" : ""))
@@ -153,8 +161,9 @@ public struct ConversationTab: Equatable, Sendable {
     /// The issue's or pull request's title; else the brief's words, from the task's title
     /// ("GitChu · Speed up the sync"), or its whole first line when the title is the one BotChu
     /// gave it (it has more room than the title's 28 characters); else the task's title. A task
-    /// whose issue isn't looked up yet names it: "Issue #113".
+    /// whose issue isn't looked up yet names it: "Issue #113". A job's run: the time it was for.
     public static func subject(of task: BotTask) -> String {
+        if let origin = task.jobRun { return JobTasks.when(origin) }
         if let work = task.work {
             if !work.title.isEmpty { return work.title }
             return task.title == TaskNaming.title(repo: task.repo, work: work, brief: task.brief, review: task.review != nil)
@@ -181,7 +190,7 @@ public struct ConversationTab: Equatable, Sendable {
     /// What VoiceOver reads for the tab: its title (and host), what it is about, what it is doing,
     /// and its time.
     public func spoken(at now: Date) -> String {
-        let name = (isReview ? "Review of " : "") + title + (machine.map { " on \($0)" } ?? "")
+        let name = (isReview ? "Review of " : isJob ? "Run of job " : "") + title + (machine.map { " on \($0)" } ?? "")
         return [name, subject, state.text, state.spokenTime(at: now)].compactMap { $0 }.joined(separator: ", ")
     }
 
@@ -220,7 +229,7 @@ public struct BotRowSummary: Equatable, Sendable {
         more = max(0, busy.count - Self.dotLimit)
         let running = tasks.filter { $0.state.kind.isActive }
         if running.count == 1, let task = running.first?.task {
-            subtitle = "Working on " + (task.work.map { "#\($0.number)" } ?? task.repoName)
+            subtitle = "Working on " + (task.work.map { "#\($0.number)" } ?? task.jobRun?.jobTitle ?? task.repoName)
         } else if running.count > 1 {
             subtitle = "\(running.count) tasks running"
         } else if home.kind.isActive, let text = home.text {

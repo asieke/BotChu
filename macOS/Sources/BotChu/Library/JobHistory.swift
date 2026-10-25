@@ -2,7 +2,9 @@ import SwiftUI
 import BotChuCore
 
 /// A job's runs, newest first, beside the chosen run: when it was meant for and when it ran, what
-/// it ran on, how it went, and its transcript (live while it runs). Opening it never runs anything.
+/// it ran on, how it went, and its transcript (live while it runs), which is its task's
+/// conversation (#146): Open Task, or a double-click on the run, opens that. Opening it never runs
+/// anything.
 struct JobHistorySheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -101,6 +103,9 @@ struct JobHistorySheet: View {
                 .tag(run.id)
             }
         }
+        .contextMenu(forSelectionType: UUID.self) { _ in } primaryAction: { ids in
+            if let id = ids.first, model.jobs.target(of: id, in: job) != nil { model.jobs.open(run: id, of: job.id) }
+        }
         .listStyle(.inset)
     }
 }
@@ -113,6 +118,7 @@ private struct JobRunDetail: View {
 
     var body: some View {
         let bot = model.bot(job.botID)
+        let target = model.jobs.target(of: run.id, in: job)
         let messages = model.jobs.thread(of: run.id, in: job)
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
@@ -121,6 +127,10 @@ private struct JobRunDetail: View {
                     Text(JobOutcomeIcon.title(run)).font(.headline)
                     Text(Self.trigger(run)).font(.callout).foregroundStyle(.secondary)
                     Spacer()
+                    if target != nil {
+                        Button("Open Task") { model.jobs.open(run: run.id, of: job.id) }
+                            .help("Open this run's task beside \(bot?.name ?? "the agent")'s chat, to read it there or continue it")
+                    }
                     if run.outcome.isActive {
                         Button(run.outcome == .running ? "Stop This Run" : "Cancel") { model.jobs.stop(run: run.id) }
                             .help("Stops this run only; the job keeps its schedule (Pause stops that)")
@@ -156,7 +166,7 @@ private struct JobRunDetail: View {
                                             : model.settings.account(run.accountID ?? bot.accountID).kind,
                                        startsBotTurn: message.role != .note && (index == 0 || messages[index - 1].role == .note || messages[index - 1].role == .user))
                         }
-                        if let state = model.jobs.live(run.id)?.state {
+                        if let state = target.flatMap({ model.runStates[$0] }) ?? model.jobs.live(run.id)?.state {
                             Text(state.activity.doing).font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -170,6 +180,8 @@ private struct JobRunDetail: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // A task's conversation not in memory is read for it.
+        .onAppear { if let target { model.hydrate(target) } }
     }
 
     private func row(_ label: String, _ value: String) -> some View {
