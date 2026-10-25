@@ -55,9 +55,9 @@ extension RenderingTests {
         }
         // Claude Work's reading, then a failed check: the reading stays, with the error.
         let account = try #require(settings.accounts.first { $0.id == "claude-work" })
-        let request = UsageRequest(account: account, command: settings.command(for: account), credentialRevision: settings.usageCredentialRevision)
+        let request = UsageRequest(account: account, command: settings.command(for: account), openRouterKeyRevision: settings.usageCredentialRevision)
         _ = await usage.read(request, now: .now.addingTimeInterval(-400))
-        let stale = await usage.read(request, manual: true)
+        let stale = await usage.read(request, for: .manual)
         #expect(stale.reading != nil && stale.error != nil)
 
         var keyReads = 0
@@ -115,7 +115,7 @@ extension RenderingTests {
 
         let usage = UsageCache(fetch: { _, _ in ProviderUsage(windows: [UsageWindow(id: "week", title: "Weekly", usedPercent: 50)]) }, file: file)
         let board = ProviderUsageBoard()
-        await board.refresh(request, usage: usage, openRouterKey: { nil }, background: true)
+        await board.refresh(request, usage: usage, openRouterKey: { nil }, for: .background)
         #expect(board.states[request]?.reading == reading) // ten minutes old: shown, not checked
         #expect(board.checking.isEmpty)
         await board.refresh(request, usage: usage, openRouterKey: { nil })

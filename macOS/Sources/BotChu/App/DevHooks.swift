@@ -184,10 +184,10 @@ enum DevHooks {
         }
         if dataDir != nil, env["BOTCHU_USAGE"] == "mixed", let account = model.settings.accounts.first(where: { $0.id == "claude-work" }) {
             // A check after Claude Work's first reading, which fails, so the reading shows stale with the error.
-            let request = UsageRequest(account: account, command: model.settings.command(for: account), credentialRevision: model.settings.usageCredentialRevision)
+            let request = model.usageRequest(for: account)
             Task {
                 try? await Task.sleep(for: .seconds(3))
-                _ = await model.usage.read(request, manual: true, now: .now.addingTimeInterval(31))
+                _ = await model.usage.read(request, for: .manual, now: .now.addingTimeInterval(31))
                 await model.usageBoard.sync(request, usage: model.usage)
             }
         }

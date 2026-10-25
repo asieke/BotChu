@@ -84,6 +84,8 @@ extension RenderingTests {
         settings.botsRoot = root.appendingPathComponent("bots").path
         settings.reposRoot = root.appendingPathComponent("repos").path
         settings.hosts = [remote]
+        // An OpenRouter key saved before: other profiles' readings stay shared all the same.
+        settings.usageCredentialRevision = 2
         let readings = InspectorUsageProbe()
         var keyReads = 0
         let model = AppModel(store: store, settings: settings, usage: UsageCache { request, key in
@@ -91,6 +93,10 @@ extension RenderingTests {
             #expect(usesExpectedKey)
             return await readings.read(request.account.id)
         }, openRouterKey: { keyReads += 1; return "test-openrouter-key" })
+        // The background has read Home's account already (#147).
+        let background = try #require(model.usageRequests.first { $0.account.id == "codex-dev" })
+        await model.usageBoard.refresh(background, usage: model.usage, openRouterKey: model.openRouterKey, for: .background)
+        #expect(await readings.accounts == ["codex-dev"])
         let taskTarget = ChatTarget.task(task.id, of: bot.id)
         model.runStates[taskTarget] = RunState(hasOutput: true, activity: .coding)
         defer { model.runStates.removeAll() }
@@ -101,7 +107,7 @@ extension RenderingTests {
         window.contentView = NSHostingView(rootView: ContentView().environment(model).defaultAppStorage(defaults))
         window.makeKeyAndOrderFront(nil)
         try await Task.sleep(for: .milliseconds(150))
-        #expect(await readings.accounts.isEmpty)
+        #expect(await readings.accounts == ["codex-dev"])
 
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             window.appearance = NSAppearance(named: appearance)
@@ -121,9 +127,11 @@ extension RenderingTests {
                 }
             }
         }
-        // Mounting the model area on Home and the task reads their own accounts, once each;
-        // other areas never start allowance queries, and remounting uses the shared cache.
+        // Mounting the model area on Home shows the background's reading without a check; on the
+        // task, whose account has none, it reads it once. Other areas never start allowance
+        // queries, and remounting uses the shared cache.
         #expect(await readings.accounts == ["codex-dev", "claude-work"])
+        #expect(model.usageBoard.states[background]?.reading != nil)
         #expect(keyReads == 0) // Other providers never ask for an OpenRouter key.
 
         // Switching Home to OpenRouter exercises the inspector's injected credential lookup too.

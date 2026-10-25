@@ -127,8 +127,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     rest, so its bars grow with the window. Readings are saved between launches (`usage.json`
     beside the bot index; usage fields only) and kept current in the background, every 15
     minutes for a CLI profile and hourly for Muse, and every 5 minutes while Providers shows,
-    so it opens on the last numbers and updates them in place. It shares the conversation
-    inspector's allowance cache and refresh limits, and searches by name or family. **Add CLI**
+    so it opens on the last numbers and updates them in place; a conversation's **Model & Usage**
+    shows the same readings, with the same refresh limits. It searches by name or family. **Add CLI**
     adds a named profile of Claude Code, Codex, Antigravity, Muse or Pi, with an installed command or
     wrapper and **Test Command**. Sign in through that CLI in Terminal; BotChu does not create its
     login. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
@@ -826,9 +826,12 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   - **Account usage:** the selected account's allowance used and reset times, shared by all bots
     on that account. Claude Code and Antigravity use their native `/usage` commands; Codex uses
     `account/rateLimits/read`. They run the command configured in Settings, with the CLI managing
-    its own login. Checks run in a temporary folder, outside bot conversations, every five minutes
-    while **Model & Usage** is visible, after turns while that area is open, or with Refresh (at most
-    once every 30 seconds).
+    its own login, in a temporary folder, outside bot conversations. **Model & Usage** shows the
+    reading Providers and the background checks keep (every 15 minutes, hourly for Muse), so opening
+    it, or another conversation while it shows, gives the last numbers at once, with when they were
+    read, marked stale (older than that) or failed as on Providers, and a check made anywhere
+    updates them in place. The area checks the account itself only when it has no reading or one
+    that old, after turns while it is open, or with Refresh (at most once every 30 seconds).
     Muse needs one brief `Reply with OK.` request to learn its allowance: it uses isolated,
     temporary host state, checks hourly automatically, and at most once every five minutes after
     a turn or with Refresh. This spends a small amount of its allowance. Muse reports the
@@ -837,8 +840,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     saved key's spending allowance and any reported shared budgets, with resets at midnight UTC;
     an uncapped key says so, without claiming unlimited account credits. Saving a different key
     clears its previous readout. Failed checks retain the last successful reading marked stale;
-    an expired window hides its old percentage until a new reading arrives. CLI output,
-    credentials and usage readings are not written to disk by BotChu.
+    an expired window hides its old percentage until a new reading arrives. CLI output and
+    credentials are not written to disk by BotChu; of a reading, only its usage fields are
+    (`usage.json`).
   - **Settings:** **GitHub ▸ Test Connection** checks that `gh` is available and can authenticate to
     github.com, then shows its version and signed-in username. Connection failures give install/login
     guidance without displaying credentials. Settings also contains the bots folder, the repositories folder, the hosts and where you chose to work
@@ -1054,8 +1058,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
     grows and how far its text scrolls; each account's allowance, with Muse's check through a
     stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
-    answered empty, and none at all; the widths that line up Providers' allowance lines in every
-    row; skills: their frontmatter, finding and making them, which a
+    answered empty, and none at all; Model & Usage showing the reading the background keeps,
+    checking only one missing or as old as its interval, and Refresh's limits; the widths that line
+    up Providers' allowance lines in every row; skills: their frontmatter, finding and making them, which a
     bot uses, and the catalog, or (on a host) the files in full, that sessions get; the Telegram
     gateway against a stand-in Bot API: round trips, refused and revoked chats, each chat's own bot,
     busy conversations, repeated updates, cancelled batches, relaunches, forwarded input,
@@ -1120,7 +1125,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     the sidebar's sections of bots (their menus, the alert that names them, collapsing and revealing, and changes that can't
     be saved, shown until Try Again or quitting saves them), Agents grouped under them and editing
     them with the same menus and alert, inspector tab navigation and
-    restored selection, conversation-scoped allowance reads, automatic task branch creation, the
+    restored selection, conversation-scoped allowance reads that show the background's reading
+    instead of checking again, automatic task branch creation, the
     main window's layout at its narrowest, galleries that preserve conversation state, the project
     sidebar's tabs, details and fan-out tasks, deleting an issue from the Issues table's and the
     sidebar's menus and its detail (confirmed first, through a stand-in `gh`, and refused), custom profile persistence, the Providers table's

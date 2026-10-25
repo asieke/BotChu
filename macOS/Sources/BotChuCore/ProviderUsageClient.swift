@@ -12,11 +12,38 @@ public struct UsageRequest: Hashable, Sendable, Codable {
         self.credentialRevision = credentialRevision
     }
 
+    /// A profile's request wherever its allowance shows, so Providers, the background checks and a
+    /// conversation's Model & Usage share one reading. Only a Pi profile's reading depends on the
+    /// OpenRouter key, so saving another key (`openRouterKeyRevision`) starts only its readings afresh.
+    public init(account: Account, command: String, openRouterKeyRevision: Int) {
+        self.init(account: account, command: command, credentialRevision: account.kind == .pi ? openRouterKeyRevision : 0)
+    }
+
     public var refreshInterval: TimeInterval { account.kind == .muse ? 3_600 : 300 }
     /// How often the app checks while Providers isn't showing, so it opens on current numbers;
-    /// a reading older than this is stale there.
+    /// a reading older than this is stale there and in Model & Usage.
     public var backgroundInterval: TimeInterval { account.kind == .muse ? 3_600 : 900 }
     public var manualInterval: TimeInterval { account.kind == .muse ? 300 : 30 }
+
+    /// How old the last check may be before `check` makes another.
+    public func interval(for check: UsageCheck) -> TimeInterval {
+        switch check {
+        case .background: backgroundInterval
+        case .providers: refreshInterval
+        case .manual: manualInterval
+        }
+    }
+}
+
+/// Who asks for a profile's allowance, which sets how often it is checked (`UsageRequest.interval(for:)`).
+public enum UsageCheck: Sendable {
+    /// The app keeping every profile current, and a conversation's Model & Usage, which shows that
+    /// reading instead of checking each time it opens (#147).
+    case background
+    /// Providers while it shows.
+    case providers
+    /// Refresh, or a turn that has just spent some while Model & Usage shows.
+    case manual
 }
 
 public enum ProviderUsageClient {

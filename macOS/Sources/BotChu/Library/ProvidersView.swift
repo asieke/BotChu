@@ -15,9 +15,7 @@ struct ProvidersView: View {
     private var matches: [Account] {
         model.settings.accounts.filter { query.isEmpty || [$0.name, $0.kind.displayName].joined(separator: " ").localizedCaseInsensitiveContains(query) }
     }
-    private func request(_ account: Account) -> UsageRequest {
-        UsageRequest(account: account, command: model.settings.command(for: account), credentialRevision: model.settings.usageCredentialRevision)
-    }
+    private func request(_ account: Account) -> UsageRequest { model.usageRequest(for: account) }
     var body: some View {
         let board = model.usageBoard
         let requests = model.usageRequests
@@ -54,7 +52,7 @@ struct ProvidersView: View {
                             TableColumn("Updated") { (account: Account) in
                                 let request = request(account)
                                 ProviderFreshnessCell(request: request, state: board.states[request], checking: board.checking.contains(request)) {
-                                    Task { await board.refresh(request, usage: model.usage, openRouterKey: model.openRouterKey, manual: true) }
+                                    Task { await board.refresh(request, usage: model.usage, openRouterKey: model.openRouterKey, for: .manual) }
                                 }
                             }
                             .width(columns.updated)
@@ -76,8 +74,9 @@ struct ProvidersView: View {
 }
 
 /// Each profile's allowance as the shared usage cache last gave it, and whether its command is
-/// found. A table's cells share no state, so its rows read them from here. The app keeps one,
-/// refreshed in the background (`AppModel`) and while Providers shows.
+/// found. A table's cells share no state, so its rows read them from here, and a conversation's
+/// Model & Usage reads its account's from here too. The app keeps one, refreshed in the background
+/// (`AppModel`), while Providers shows, and with either one's Refresh.
 @MainActor @Observable final class ProviderUsageBoard {
     private(set) var states: [UsageRequest: UsageState] = [:]
     private(set) var checking: Set<UsageRequest> = []
@@ -100,16 +99,14 @@ struct ProvidersView: View {
         }
     }
 
-    /// Shows what the cache has, then checks if that is due: after the request's own interval,
-    /// or its longer `backgroundInterval` for a check nobody is looking at.
-    func refresh(_ request: UsageRequest, usage: UsageCache, openRouterKey: @MainActor () -> String?, manual: Bool = false, background: Bool = false) async {
+    /// Shows what the cache has, then checks if that is due for who asks (`UsageCheck`).
+    func refresh(_ request: UsageRequest, usage: UsageCache, openRouterKey: @MainActor () -> String?, for check: UsageCheck = .providers) async {
         await sync(request, usage: usage)
-        let maxAge = background ? request.backgroundInterval : nil
-        guard !checking.contains(request), await usage.isDue(request, manual: manual, maxAge: maxAge) else { return }
+        guard !checking.contains(request), await usage.isDue(request, for: check) else { return }
         checking.insert(request)
         defer { checking.remove(request) }
         let key = request.account.kind == .pi ? openRouterKey() : nil
-        states[request] = await usage.read(request, openRouterKey: key, manual: manual, maxAge: maxAge)
+        states[request] = await usage.read(request, openRouterKey: key, for: check)
     }
 
     /// What the cache last read for the profile, also when something else read it.
@@ -385,9 +382,7 @@ private struct ProviderFreshnessCell: View {
         }
     }
 
-    private var nextCheck: Date? {
-        [state?.retryAt, state?.checkedAt.map { $0.addingTimeInterval(request.manualInterval) }].compactMap { $0 }.max()
-    }
+    private var nextCheck: Date? { state?.nextManualCheck(interval: request.manualInterval) }
 
     private func canRefresh(at now: Date) -> Bool { nextCheck.map { now >= $0 } ?? true }
 

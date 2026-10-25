@@ -17,6 +17,12 @@ public struct UsageState: Equatable, Sendable, Codable {
         guard let reading else { return false }
         return error != nil || now.timeIntervalSince(reading.readAt) >= interval
     }
+
+    /// When Refresh may check again: `interval` (the request's `manualInterval`) after the last
+    /// check, or at the retry the provider asked for, whichever is later; nil before any check.
+    public func nextManualCheck(interval: TimeInterval) -> Date? {
+        [retryAt, checkedAt?.addingTimeInterval(interval)].compactMap { $0 }.max()
+    }
 }
 
 /// Shared across bots on the same account command. Never stores credentials or raw responses.
@@ -42,21 +48,19 @@ public actor UsageCache {
     public func saved(_ request: UsageRequest) -> UsageState? { states[request] }
 
     /// Whether `read` would check now rather than give the last reading: none is under way, no
-    /// retry is pending, and the last check is older than the interval (`maxAge`, else the
-    /// request's own).
-    public func isDue(_ request: UsageRequest, manual: Bool = false, maxAge: TimeInterval? = nil, now: Date = .now) -> Bool {
+    /// retry is pending, and the last check is older than the interval for who asks.
+    public func isDue(_ request: UsageRequest, for check: UsageCheck = .providers, now: Date = .now) -> Bool {
         guard running[request] == nil else { return false }
         let previous = states[request] ?? UsageState()
         if let retry = previous.retryAt, now < retry { return false }
-        let interval = manual ? request.manualInterval : maxAge ?? request.refreshInterval
-        return previous.checkedAt.map { now.timeIntervalSince($0) >= interval } ?? true
+        return previous.checkedAt.map { now.timeIntervalSince($0) >= request.interval(for: check) } ?? true
     }
 
-    public func read(_ request: UsageRequest, openRouterKey: String? = nil, manual: Bool = false, maxAge: TimeInterval? = nil,
+    public func read(_ request: UsageRequest, openRouterKey: String? = nil, for check: UsageCheck = .providers,
                      now: Date = .now) async -> UsageState {
         if let task = running[request] { return await task.value }
         let previous = states[request] ?? UsageState()
-        guard isDue(request, manual: manual, maxAge: maxAge, now: now) else { return previous }
+        guard isDue(request, for: check, now: now) else { return previous }
         let fetch = fetch
         let task = Task<UsageState, Never> {
             do {

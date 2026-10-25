@@ -268,14 +268,14 @@ private actor UsageFetchProbe {
         let cache = UsageCache { request, _ in try await probe.read(request) }
         let now = Date()
         async let first = cache.read(request, now: now)
-        async let second = cache.read(request, manual: true, now: now)
+        async let second = cache.read(request, for: .manual, now: now)
         let results = await [first, second]
         #expect(results[0] == results[1])
         #expect(await probe.count() == 1)
         _ = await cache.read(request, now: now.addingTimeInterval(299))
-        _ = await cache.read(request, manual: true, now: now.addingTimeInterval(29))
+        _ = await cache.read(request, for: .manual, now: now.addingTimeInterval(29))
         #expect(await probe.count() == 1)
-        _ = await cache.read(request, manual: true, now: now.addingTimeInterval(31))
+        _ = await cache.read(request, for: .manual, now: now.addingTimeInterval(31))
         #expect(await probe.count() == 2)
     }
 
@@ -305,9 +305,11 @@ private actor UsageFetchProbe {
         #expect(failed.reading == good.reading)
         #expect(failed.error == "Try later")
         #expect(failed.isStale(at: now, interval: 300))
-        _ = await cache.read(request, manual: true, now: now.addingTimeInterval(1_200))
+        // Refresh waits for the provider's retry, which is later than its own limit.
+        #expect(failed.nextManualCheck(interval: request.manualInterval) == now.addingTimeInterval(1_201))
+        _ = await cache.read(request, for: .manual, now: now.addingTimeInterval(1_200))
         #expect(await probe.count() == 2)
-        _ = await cache.read(request, manual: true, now: now.addingTimeInterval(1_201))
+        _ = await cache.read(request, for: .manual, now: now.addingTimeInterval(1_201))
         #expect(await probe.count() == 3)
     }
 
@@ -332,7 +334,7 @@ private actor UsageFetchProbe {
         #expect(await again.read(request, now: now.addingTimeInterval(60)) == read)
         #expect(await probe.count() == 1)
         // The background's longer interval, and the request's own.
-        #expect(await again.isDue(request, maxAge: request.backgroundInterval, now: now.addingTimeInterval(600)) == false)
+        #expect(await again.isDue(request, for: .background, now: now.addingTimeInterval(600)) == false)
         #expect(await again.isDue(request, now: now.addingTimeInterval(600)))
         // A file from elsewhere, or none, starts empty.
         try Data("not json".utf8).write(to: file)
@@ -346,9 +348,69 @@ private actor UsageFetchProbe {
         let now = Date()
         _ = await cache.read(muse, now: now)
         _ = await cache.read(muse, now: now.addingTimeInterval(3_599))
-        _ = await cache.read(muse, manual: true, now: now.addingTimeInterval(299))
+        _ = await cache.read(muse, for: .manual, now: now.addingTimeInterval(299))
         #expect(await probe.count() == 1)
         _ = await cache.read(muse, now: now.addingTimeInterval(3_600))
+        #expect(await probe.count() == 2)
+    }
+
+    /// Model & Usage shows the reading the background keeps current (#147): opened on one younger
+    /// than the background's interval, however often, it checks nothing; a missing or older one is
+    /// checked once, and Refresh still checks within its own limit.
+    @Test func modelAndUsageShowsTheBackgroundsReadingInsteadOfChecking() async {
+        let probe = UsageFetchProbe()
+        let cache = UsageCache { request, _ in try await probe.read(request) }
+        let now = Date()
+        // Nothing read yet: opening it checks.
+        #expect(await cache.isDue(request, for: .background, now: now))
+        let background = await cache.read(request, for: .background, now: now)
+        #expect(await probe.count() == 1)
+        // Opened again and again, or on another conversation on the account, within the interval.
+        for minutes in [0.5, 5, 10, 14.9] {
+            #expect(await cache.read(request, for: .background, now: now.addingTimeInterval(minutes * 60)) == background)
+        }
+        #expect(await probe.count() == 1)
+        // Where Providers would check by now, it waits for the background's interval.
+        #expect(await cache.isDue(request, for: .providers, now: now.addingTimeInterval(600)))
+        #expect(await !cache.isDue(request, for: .background, now: now.addingTimeInterval(600)))
+        // A reading as old as that is checked, once.
+        let later = now.addingTimeInterval(request.backgroundInterval)
+        let current = await cache.read(request, for: .background, now: later)
+        #expect(current.checkedAt == later)
+        #expect(await cache.read(request, for: .background, now: later.addingTimeInterval(60)) == current)
+        #expect(await probe.count() == 2)
+        // Refresh checks within it, at most every 30 seconds.
+        #expect(current.nextManualCheck(interval: request.manualInterval) == later.addingTimeInterval(30))
+        _ = await cache.read(request, for: .manual, now: later.addingTimeInterval(29))
+        #expect(await probe.count() == 2)
+        _ = await cache.read(request, for: .manual, now: later.addingTimeInterval(30))
+        #expect(await probe.count() == 3)
+    }
+
+    /// What the background reads is what Model & Usage shows, also after a relaunch, and a check it
+    /// makes is what the background and Providers show: one reading per profile.
+    @Test func everyViewOfAProfileSharesOneReading() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-usage-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("usage.json")
+        let probe = UsageFetchProbe()
+        let now = Date()
+        let claude = Accounts.account(id: "claude-dev"), pi = Accounts.account(id: "openrouter")
+        // Saving another OpenRouter key starts only a Pi profile's readings afresh.
+        let shown = UsageRequest(account: claude, command: "claude-dev", openRouterKeyRevision: 3)
+        #expect(shown == UsageRequest(account: claude, command: "claude-dev", openRouterKeyRevision: 0))
+        #expect(UsageRequest(account: pi, command: "pi", openRouterKeyRevision: 3) != UsageRequest(account: pi, command: "pi", openRouterKeyRevision: 2))
+
+        let background = UsageCache(fetch: { request, _ in try await probe.read(request) }, file: file)
+        let read = await background.read(shown, for: .background, now: now)
+        let relaunched = UsageCache(fetch: { request, _ in try await probe.read(request) }, file: file)
+        #expect(await relaunched.saved(shown) == read)
+        #expect(await relaunched.read(shown, for: .background, now: now.addingTimeInterval(600)) == read)
+        #expect(await probe.count() == 1)
+        // Refresh from Model & Usage: the next background or Providers look finds it, unchecked.
+        let refreshed = await relaunched.read(shown, for: .manual, now: now.addingTimeInterval(601))
+        #expect(await relaunched.saved(shown) == refreshed)
+        #expect(await !relaunched.isDue(shown, for: .providers, now: now.addingTimeInterval(660)))
         #expect(await probe.count() == 2)
     }
 }
