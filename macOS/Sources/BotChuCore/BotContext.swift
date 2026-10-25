@@ -190,10 +190,17 @@ public enum BotContext {
         return "<botchu_context>\n\(parts.joined(separator: "\n\n"))\n</botchu_context>"
     }
 
+    /// How a task reviews a pull request, in the review worktree it starts in.
+    static let reviewSteps = "Read it, its discussion and reviews, and its diff against the merge base (`gh pr view --comments`, "
+        + "`gh pr diff`), then as much of the code around it as you need, and run the relevant tests here. Look for bugs, regressions, "
+        + "design problems, security issues, unhandled edge cases, missing or weak tests and documents it should have updated. Report each "
+        + "finding with its severity (high, medium or low), file:line, what is wrong and how to fix it, most severe first, then a verdict: "
+        + "ready to merge, or what must change first. A review changes no code."
+
     /// Context put before the first message of a new task session. A task runs in a worktree of a
     /// repository, whose own `AGENTS.md`, `CLAUDE.md` and README the CLI reads, so BotChu writes
     /// nothing there: this carries the bot's identity, instructions and memories, where the task runs
-    /// and what it is (as the workspace standard hands work to an agent), and when the task already
+    /// and what it is, and when the task already
     /// has history, a recap of it. A task on a host (`machine`, such as "Omarchy (asieke@omarchy)")
     /// can't open the bot's folder on this Mac, so it also gets the recent part of the bot's `home`
     /// conversation, saves memories through `<remember>` blocks, and gets its skills in full.
@@ -260,8 +267,8 @@ public enum BotContext {
         var brief: String
         if let work = task.work, let review = task.review {
             brief = review == .comment
-                ? "Your task is to review and comment on \(work.reference) (\(work.url.absoluteString)) in \(task.repo), as “Reviewing a pull request” in AGENTS.md says: this request is the workspace standard's “Review and comment on this PR”, so post your review there, as one review, without asking again."
-                : "Your task is to review \(work.reference) (\(work.url.absoluteString)) in \(task.repo), as “Reviewing a pull request” in AGENTS.md says, and give your review here, in your reply. Post nothing to GitHub."
+                ? "Your task is to review and comment on \(work.reference) (\(work.url.absoluteString)) in \(task.repo). \(Self.reviewSteps) Then post your review there, as one review, without asking again: `gh api repos/\(task.repo)/pulls/\(work.number)/reviews --method POST` with the commit you reviewed, `\"event\": \"COMMENT\"`, the verdict and findings in its body, and each finding as an inline comment on its line where GitHub takes one; give the review's URL."
+                : "Your task is to review \(work.reference) (\(work.url.absoluteString)) in \(task.repo). \(Self.reviewSteps) Give your review here, in your reply. Post nothing to GitHub."
         } else if let work = task.work, work.isPullRequest {
             brief = "Your task is to continue \(work.reference) (\(work.url.absoluteString)), whose branch this is: read its description, review comments and checks, and carry on."
         } else if let work = task.work {

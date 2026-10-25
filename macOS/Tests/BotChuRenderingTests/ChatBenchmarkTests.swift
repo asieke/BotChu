@@ -10,7 +10,7 @@ import WebKit
 /// long one being written, with the composer typed in meanwhile, and a rich one until WebKit has
 /// drawn it, #106), a live many-call exploration, seventeen sub-agents, expanding a group or a
 /// large output, and the grouping itself. Not part of
-/// `scripts/check.sh`, and it asserts nothing about time, which varies with load: it runs only with
+/// `scripts/test.sh`, and it asserts nothing about time, which varies with load: it runs only with
 /// `BOTCHU_BENCHMARK` set, prints a table and, when the variable names a file, writes it there.
 ///
 ///     BOTCHU_BENCHMARK=/tmp/chat-bench.txt swift test --package-path macOS --filter chatBenchmark

@@ -30,13 +30,13 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
         #expect(BotTask(repo: "a/b", checkout: "/w/b", work: issue, brief: " Keep it small ").opening == "Keep it small")
     }
 
-    @Test func branchesFollowTheStandard() {
+    @Test func branchesHaveTheTeamsForm() {
         #expect(TaskNaming.branch(issue: 48, text: "Add a filter bar to the list", fallback: "x") == "feat/48-add-filter-bar-list")
         #expect(TaskNaming.branch(issue: nil, text: "Fix: crash when the token expires", fallback: "x") == "feat/fix-crash-when-token")
         #expect(TaskNaming.branch(issue: nil, text: "Café menü", fallback: "x") == "feat/cafe-menu")
         #expect(TaskNaming.branch(issue: 7, text: "🎉", fallback: "x") == "feat/7-issue")
         #expect(TaskNaming.branch(issue: nil, text: "", fallback: "task-1a2b3c") == "feat/task-1a2b3c")
-        // Not feat/2-…, which scripts/worktree.sh would link to issue #2.
+        // Not feat/2-…, which would be linked to issue #2 on GitHub.
         #expect(TaskNaming.branch(issue: nil, text: "2 small fixes in 3 docs", fallback: "x") == "feat/small-fixes-3-docs")
         let long = TaskNaming.branch(issue: 12345, text: "internationalization localization accessibility responsiveness", fallback: "x")
         #expect(long.count <= 50 && TaskNaming.isStandardBranch(long))
@@ -284,22 +284,31 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
         #expect(!FileManager.default.fileExists(atPath: folder + "/LOCAL.md"))
     }
 
-    @Test func usesTheRepositorysOwnScript() async throws {
+    @Test func linksTheMainCheckoutsEnvAndIgnoresAWorktreeScript() async throws {
         let root = tempDir("botchu-worktree")
         defer { try? FileManager.default.removeItem(at: root) }
         let checkout = try await checkout(in: root)
+        try ".env\n".write(to: checkout.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try await git("add", ".gitignore", in: checkout)
+        try await git("commit", "--quiet", "-m", "Ignore .env", in: checkout)
+        try await git("push", "--quiet", "origin", "HEAD:main", in: checkout)
+        try "TOKEN=x\n".write(to: checkout.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+        // Not ignored, so not linked: it would show up as a new file in the worktree.
+        try "X=y\n".write(to: checkout.appendingPathComponent(".env.local"), atomically: true, encoding: .utf8)
+        // A copy of the retired standard's script is never run.
         let scripts = checkout.appendingPathComponent("scripts")
         try FileManager.default.createDirectory(at: scripts, withIntermediateDirectories: true)
-        let made = root.appendingPathComponent("made-by-script").path
-        // Like the standard's script: progress on stderr, the folder last on stdout.
-        try "#!/bin/sh\necho \"worktree: making $1\" >&2\nmkdir -p '\(made)'\necho '\(made)'\n"
+        try "#!/bin/sh\nmkdir -p '\(root.path)/made-by-script'\necho '\(root.path)/made-by-script'\n"
             .write(to: scripts.appendingPathComponent("worktree.sh"), atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scripts.appendingPathComponent("worktree.sh").path)
 
-        #expect(try await TaskWorktree.prepare(branch: "fix/7-crash", checkout: checkout.path).get() == made)
-        // A branch the script refuses is made with git instead.
-        let other = try await TaskWorktree.prepare(branch: "claude/odd-name", checkout: checkout.path).get()
-        #expect(other.hasSuffix(".claude/worktrees/claude-odd-name"))
+        let folder = try await TaskWorktree.prepare(branch: "fix/7-crash", checkout: checkout.path).get()
+        #expect(folder.hasSuffix(".claude/worktrees/fix-7-crash"))
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("made-by-script").path))
+        let link = try FileManager.default.destinationOfSymbolicLink(atPath: folder + "/.env")
+        #expect(URL(fileURLWithPath: link).resolvingSymlinksInPath() == checkout.appendingPathComponent(".env").resolvingSymlinksInPath())
+        #expect(!FileManager.default.fileExists(atPath: folder + "/.env.local"))
+        #expect(await Shell.run(["git", "status", "--porcelain"], in: folder).output.isEmpty)
     }
 
     @Test func reportsAFolderThatIsNotAWorktree() async throws {

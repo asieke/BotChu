@@ -129,7 +129,7 @@ public struct ProjectRecord: Equatable, Codable, Sendable {
             updated.insert(contentsOf: Self.keys.filter { old[$0] == nil }.map { "\($0): \(Self.encoded(values[$0]!, key: $0))" }, at: end)
             return updated.joined(separator: newline)
         }
-        // A minimal record makes no claim that the repository follows the full workspace standard.
+        // A new record holds only the metadata fields and a title.
         return (["---"] + Self.keys.map { "\($0): \(Self.encoded(values[$0]!, key: $0))" } + ["---", "", "# \(metadata.name)", ""]).joined(separator: "\n")
     }
 

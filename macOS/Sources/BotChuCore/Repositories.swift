@@ -181,10 +181,6 @@ public struct RepoCheckout: Identifiable, Hashable, Sendable {
     /// How tasks name it: `owner/name`, else the folder's name.
     public var repo: String { nameWithOwner ?? (path as NSString).lastPathComponent }
     public var name: String { TaskNaming.repoName(repo) }
-    /// Whether it follows the workspace standard, which makes task worktrees with this script.
-    public var hasWorktreeScript: Bool {
-        FileManager.default.isExecutableFile(atPath: (path as NSString).appendingPathComponent("scripts/worktree.sh"))
-    }
 }
 
 /// The checkouts tasks can run in: the git repositories directly inside the repositories folder.
@@ -285,24 +281,22 @@ public enum TaskWorktree {
         public var head: String
     }
 
-    /// Where BotChu puts a branch's worktree itself: `.claude/worktrees/<type>-<slug>` in the main
-    /// checkout, where the workspace standard's `scripts/worktree.sh` puts it too.
+    /// Where BotChu puts a branch's worktree: `.claude/worktrees/<type>-<slug>` in the main checkout.
     public static func folder(for branch: String, in checkout: String) -> String {
         (checkout as NSString).appendingPathComponent(".claude/worktrees/" + branch.replacingOccurrences(of: "/", with: "-"))
     }
 
-    /// The worktree on `branch`, made or reopened. A repository with the standard's
-    /// `scripts/worktree.sh` makes it itself (from origin's main, with `.env` linked, and a new
-    /// `<type>/<number>-<slug>` branch created on GitHub, linked to its issue). Elsewhere BotChu uses
-    /// git: the worktree already on the branch, else a new one on the local branch, on origin's
-    /// branch, or on a new branch from origin's default branch. Returns the worktree's folder.
+    /// The worktree on `branch`, made or reopened with git: the worktree already on the branch, else a
+    /// new one on the local branch, on origin's branch, or on a new branch from origin's default branch.
+    /// A new `<type>/<number>-<slug>` branch is first made on GitHub, linked to issue `number`
+    /// (`gh issue develop`), when the checkout's origin is on GitHub and `gh` is there. The main
+    /// checkout's `.env` files are linked into the worktree. Returns the worktree's folder.
     public static func prepare(branch: String, checkout: String, on machine: Machine = .thisMac) async -> Result<String, Failure> {
-        let run = await machine.script(prepareScript, arguments: [branch, TaskNaming.isStandardBranch(branch) ? "1" : "0"], in: checkout)
+        let run = await machine.script(prepareScript, arguments: [branch], in: checkout)
         guard run.ok, let folder = run.lastLine, !folder.isEmpty else {
             let step: String
             switch run.status {
             case 3: step = lastLine(run.errors) ?? "\(checkout) isn't a git checkout"
-            case 5: step = "scripts/worktree.sh \(branch) failed"
             default: step = machine.isRemote && run.status == 255 ? "Couldn't reach \(machine.destination ?? "")" : "Making the worktree for \(branch) failed"
             }
             return .failure(Failure(step: step, output: run.report("make the worktree for \(branch) in \(checkout)")))
@@ -311,8 +305,8 @@ public enum TaskWorktree {
     }
 
     /// A review worktree of pull request `number`, detached at its head (`pull/<number>/head` on
-    /// origin, so a pull request from a fork works too), in a new temporary folder, as AGENTS.md's
-    /// "Reviewing a pull request" makes one. The main checkout stays as it is.
+    /// origin, so a pull request from a fork works too), in a new temporary folder. The main checkout
+    /// stays as it is.
     public static func review(number: Int, checkout: String, on machine: Machine = .thisMac) async -> Result<Review, Failure> {
         let run = await machine.script(reviewScript, arguments: [String(number)], in: checkout)
         let lines = run.output.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
@@ -348,37 +342,51 @@ public enum TaskWorktree {
         text.split(whereSeparator: \.isNewline).last.map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
-    /// `prepare`: `$1` the branch, `$2` 1 when `scripts/worktree.sh` takes it. Prints the folder
-    /// last; exits 3 (saying why) for a folder in the way, 5 when the repository's script failed.
+    /// `prepare`: `$1` the branch. Prints the folder last; exits 3 (saying why) for a folder in the way.
     static let prepareScript = #"""
         branch=$1
         git rev-parse --git-dir >/dev/null 2>&1 || { echo "$(pwd -P) isn't a git checkout" >&2; exit 3; }
         # A worktree whose folder was deleted by hand is still registered, and git won't make it again.
         git worktree prune 2>/dev/null
-        if [ "$2" = 1 ] && [ -x scripts/worktree.sh ]; then
-          scripts/worktree.sh "$branch" || exit 5
-          exit 0
-        fi
-        dir=$(git worktree list --porcelain | awk -v b="branch refs/heads/$branch" '/^worktree /{p=substr($0,10)} $0==b{print p; exit}')
-        if [ -n "$dir" ] && [ -d "$dir" ]; then printf '%s\n' "$dir"; exit 0; fi
-        folder="$(pwd -P)/.claude/worktrees/$(printf '%s' "$branch" | tr / -)"
-        if [ -e "$folder" ]; then
-          echo "$folder exists but isn't a worktree on $branch. Move it out of the way, then try again." >&2; exit 3
-        fi
-        git fetch --quiet origin 2>/dev/null
-        git check-ignore -q --no-index .claude/worktrees/x || printf '.claude/worktrees/\n' >> "$(git rev-parse --git-common-dir)/info/exclude"
-        if git show-ref --verify --quiet "refs/heads/$branch"; then
-          git worktree add --quiet "$folder" "$branch" || exit 4
-        elif git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-          git worktree add --quiet --track -b "$branch" "$folder" "origin/$branch" || exit 4
-        else
+        folder=$(git worktree list --porcelain | awk -v b="branch refs/heads/$branch" '/^worktree /{p=substr($0,10)} $0==b{print p; exit}')
+        if [ -z "$folder" ] || [ ! -d "$folder" ]; then
+          folder="$(pwd -P)/.claude/worktrees/$(printf '%s' "$branch" | tr / -)"
+          if [ -e "$folder" ]; then
+            echo "$folder exists but isn't a worktree on $branch. Move it out of the way, then try again." >&2; exit 3
+          fi
+          git fetch --quiet origin 2>/dev/null
+          git check-ignore -q --no-index .claude/worktrees/x || printf '.claude/worktrees/\n' >> "$(git rev-parse --git-common-dir)/info/exclude"
           # From origin's default branch as last fetched (just now, unless offline); without origin,
           # from the main checkout's own branch.
           base=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
           [ -n "$base" ] || { git show-ref --verify --quiet refs/remotes/origin/main && base=origin/main; }
           [ -n "$base" ] || { git show-ref --verify --quiet refs/remotes/origin/master && base=origin/master; }
-          git worktree add --quiet --no-track -b "$branch" "$folder" "${base:-HEAD}" || exit 4
+          # A new <type>/<number>-<slug> branch is made on GitHub, linked to issue <number>, so the issue
+          # shows it under Development; without gh or a GitHub origin, or when GitHub refuses, it is made here.
+          issue=$(printf '%s' "$branch" | sed -n 's|^[a-z]*/\([0-9][0-9]*\)-.*|\1|p')
+          if [ -n "$issue" ] && [ -n "$base" ] && ! git show-ref --verify --quiet "refs/heads/$branch" \
+            && ! git show-ref --verify --quiet "refs/remotes/origin/$branch" && command -v gh >/dev/null 2>&1 \
+            && git remote get-url origin 2>/dev/null | grep -q 'github\.com'; then
+            GH_PROMPT_DISABLED=1 gh issue develop "$issue" --name "$branch" --base "${base#origin/}" >/dev/null 2>&1 \
+              && git fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null
+          fi
+          if git show-ref --verify --quiet "refs/heads/$branch"; then
+            git worktree add --quiet "$folder" "$branch" || exit 4
+          elif git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+            git worktree add --quiet --track -b "$branch" "$folder" "origin/$branch" || exit 4
+          else
+            git worktree add --quiet --no-track -b "$branch" "$folder" "${base:-HEAD}" || exit 4
+          fi
         fi
+        # Each .env file at the main checkout's root, linked into the worktree where Git ignores it there.
+        main=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+        for f in "$main"/.env "$main"/.env.*; do
+          [ -f "$f" ] || continue
+          name=${f##*/}
+          if [ ! -e "$folder/$name" ] && [ ! -L "$folder/$name" ] && git -C "$folder" check-ignore -q --no-index "$name"; then
+            ln -s "$f" "$folder/$name"
+          fi
+        done
         printf '%s\n' "$folder"
         """#
 
