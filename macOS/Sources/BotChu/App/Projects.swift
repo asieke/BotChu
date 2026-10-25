@@ -1,6 +1,17 @@
 import Foundation
 import BotChuCore
 
+/// An issue the owner chose to delete from Projects (#154), which GitHub deletes for good: asked
+/// to confirm first, and once tried, why it wasn't deleted.
+struct IssueDeletion: Identifiable, Equatable {
+    var repo: String
+    var number: Int
+    var title: String
+    /// Nil until it was tried.
+    var failure: String?
+    var id: String { "\(repo)#\(number)" }
+}
+
 extension AppModel {
     /// Shows the Projects catalog saved on disk as soon as it is read (off the main thread), and
     /// every change a sync makes to it from then on.
@@ -126,6 +137,32 @@ extension AppModel {
         guard let bot = bot(botID), !pulls.isEmpty else { return }
         newTask(for: botID, repo: repo,
                 brief: FanOutBrief.reviewPullRequests(pulls.map(\.work), repo: repo, agent: subagentName(of: bot), comment: comment))
+    }
+
+    // MARK: Deleting an issue
+
+    /// Asks the owner to confirm deleting the issue, which can't be undone (`ProjectsView` asks).
+    func askToDeleteIssue(_ number: Int, of repo: String, title: String) {
+        issueDeletion = IssueDeletion(repo: repo, number: number, title: title)
+    }
+
+    /// Deletes the issue on GitHub, once confirmed. Once it's gone it leaves Projects at once, and
+    /// the sidebar showing it goes back to the list; when it isn't, nothing changes, and
+    /// `issueDeletion` says why.
+    func deleteIssue(_ number: Int, of repo: String, title: String) async {
+        let id = "\(repo)#\(number)"
+        guard deletingIssues.insert(id).inserted else { return }
+        defer { deletingIssues.remove(id) }
+        switch await projectSync.deleteIssue(number, of: repo) {
+        case .success:
+            showProjects(await projectSync.state)
+            workDetails[id] = nil
+            if let shown = projectSelection, shown.tab == .issues, shown.item == number, shown.repo.caseInsensitiveCompare(repo) == .orderedSame {
+                selectProject(shown.repo, tab: .issues)
+            }
+        case .failure(let failure):
+            issueDeletion = IssueDeletion(repo: repo, number: number, title: title, failure: failure.message)
+        }
     }
 
     /// How `botchu-subagent` finds the bot: by its name, or by its id when the name finds another too.
