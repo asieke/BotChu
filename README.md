@@ -9,7 +9,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
 
 ## Scope
 - Does:
-  - **Workspace:** the left sidebar has **Projects**, **Agents**, **Providers**, **Skills** and **Jobs**, followed by
+  - **Workspace:** the left sidebar has **Inbox**, **Projects**, **Agents**, **Providers**, **Skills** and **Jobs**, followed by
     the bots, one row each, in sections (below); a bot's Home and tasks are the tabs beside its chat
     (**Tasks**). A bot's row says on its second line what it is doing ("Working on #113", "2 tasks
     running", its Home's activity, "4 tasks", or its account), with a small dot at the row's end,
@@ -55,6 +55,12 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     (**Review with**, **Review and Comment with**), continues it (unless it comes from a fork) or
     starts a task on an issue with a bot, opening New Task with it chosen, or opens the task already
     on it. They are read with one GraphQL query per ten repositories whose open work changed (below).
+    An issue's menu also has **Delete Issue…**, as its page in the sidebar has Delete (#154): after
+    an alert naming the repository and number says it can't be undone, `gh issue delete <n> --repo
+    <owner/name> --yes` deletes it on GitHub for good. It then leaves the lists, the counts and
+    `projects.json` at once, without a sync (one under way that read it before doesn't bring it
+    back), and the sidebar showing it goes back to its Issues. When GitHub refuses (it lets only a
+    repository's admins delete issues) or can't be reached, nothing is removed and an alert says why.
   - **Saved and synced:** the repositories, their `PROJECT.md`, and the open pull requests and
     issues with GitHub's counts are kept on this Mac (`projects.json`) for the account `gh` is signed
     in to, with when they were last synced, so Projects, New Task and Home's task requests have them
@@ -77,9 +83,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     table opens that tab. **Overview** has its open work, its type, status, merge policy and
     deployment, where its tasks work, the open tasks on it, **Start Task with**, **Edit Metadata…**
     and GitHub. **Issues** and **PRs** list the open ones read for it (saying so when there are
-    more), with their labels, checks and the bots on them; each opens in place, read with `gh issue
+    more), with their labels, checks and the bots on them, and the tables' menu; each opens in place, read with `gh issue
     view` or `gh pr view`: its description, labels and conversation, and a pull request's branches,
-    checks, changed files and reviews. An issue's **Fix with** starts a task on it with an agent, and
+    checks, changed files and reviews. An open issue's bar has Delete (the trash), which deletes it
+    as **Delete Issue…** does (above). An issue's **Fix with** starts a task on it with an agent, and
     **Fix All** one task in which the agent hands each listed issue that no task works on to a
     parallel sub-agent of its own (`botchu-subagent spawn`, at most four at once), each in its own
     worktree and branch with a pull request that closes its issue. A pull request's **Review**
@@ -120,8 +127,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     rest, so its bars grow with the window. Readings are saved between launches (`usage.json`
     beside the bot index; usage fields only) and kept current in the background, every 15
     minutes for a CLI profile and hourly for Muse, and every 5 minutes while Providers shows,
-    so it opens on the last numbers and updates them in place. It shares the conversation
-    inspector's allowance cache and refresh limits, and searches by name or family. **Add CLI**
+    so it opens on the last numbers and updates them in place; a conversation's **Model & Usage**
+    shows the same readings, with the same refresh limits. It searches by name or family. **Add CLI**
     adds a named profile of Claude Code, Codex, Antigravity, Muse or Pi, with an installed command or
     wrapper and **Test Command**. Sign in through that CLI in Terminal; BotChu does not create its
     login. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
@@ -393,9 +400,28 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     banner: the sender (with the bots it credits), the title, and the question or the start of the
     note as plain text, with the sender's pet still when it has a pet. It has a button per choice,
     which sends that choice as the reply word for word, and Reply, whose placeholder names the bot;
-    clicking it brings BotChu forward on the delivery's conversation. An answer from a banner that
+    clicking it brings BotChu forward on the delivery in the Inbox. An answer from a banner that
     launched BotChu is sent once the deliveries are read. BotChu asks for notifications the first
     time a delivery arrives, not at launch. The Dock tile's badge shows the unread deliveries.
+  - **Inbox:** first under Workspace (⇧⌘I), with how many deliveries are unread. A 392-point list
+    (320 in a narrower window) in the tasks column's idiom: **Needs you** (questions not answered
+    since they were sent), **Today**, **Yesterday**, then each earlier day, newest first, with
+    **Done** collapsed at the end with its count. A row has the sender's pet (a credited bot's on its
+    corner), the sender, the conversation it came from (Home, a task or a job's run) and the time,
+    the title (semibold while unread, with a blue dot), and chips for what waits on the owner and
+    what came with it. The row being read keeps its place until the owner leaves it; ↑ and ↓ move
+    through the list. The reading pane shows the repository and issue, the title, the sender with
+    whom it credits, where and when; the note in the chat's Markdown; then a card for each file
+    (a document's first 260 points, then **Show all**; an HTML page in a web view with its scripts on
+    and the network off, links opening in the browser; an image; any other file) and for each
+    repository's pull requests or issues, read from GitHub, each opening in Projects; then the
+    exchange under it: the owner's replies, what waits in the queue, the bot's answers and the bot
+    at work. A question's choices sit above a composer that names where a reply goes; a choice is
+    sent as the reply, word for word. The toolbar opens the conversation (**Open Home**, **Open
+    Task** or **Open Run**, ⌘O) and files the delivery as **Done** (⌃⌘A); its menu marks it read or
+    unread and finds the copies and the originals. With nothing left to read it says when the last
+    delivery came, with **Show Done**. In the sending conversation's chat, a delivery is a card with
+    **Show in Inbox**, and a reply from the Inbox shows under a "Reply from your Inbox" line.
   - **Jobs:** an agent can own scheduled jobs, saved instructions it runs on a schedule, such as a
     morning issue triage on weekdays at 9:00. **Jobs** in the sidebar is one table of every agent's
     jobs: the job, its agent, its schedule and time zone, its next run, its state (on, paused,
@@ -843,9 +869,12 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   - **Account usage:** the selected account's allowance used and reset times, shared by all bots
     on that account. Claude Code and Antigravity use their native `/usage` commands; Codex uses
     `account/rateLimits/read`. They run the command configured in Settings, with the CLI managing
-    its own login. Checks run in a temporary folder, outside bot conversations, every five minutes
-    while **Model & Usage** is visible, after turns while that area is open, or with Refresh (at most
-    once every 30 seconds).
+    its own login, in a temporary folder, outside bot conversations. **Model & Usage** shows the
+    reading Providers and the background checks keep (every 15 minutes, hourly for Muse), so opening
+    it, or another conversation while it shows, gives the last numbers at once, with when they were
+    read, marked stale (older than that) or failed as on Providers, and a check made anywhere
+    updates them in place. The area checks the account itself only when it has no reading or one
+    that old, after turns while it is open, or with Refresh (at most once every 30 seconds).
     Muse needs one brief `Reply with OK.` request to learn its allowance: it uses isolated,
     temporary host state, checks hourly automatically, and at most once every five minutes after
     a turn or with Refresh. This spends a small amount of its allowance. Muse reports the
@@ -854,8 +883,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     saved key's spending allowance and any reported shared budgets, with resets at midnight UTC;
     an uncapped key says so, without claiming unlimited account credits. Saving a different key
     clears its previous readout. Failed checks retain the last successful reading marked stale;
-    an expired window hides its old percentage until a new reading arrives. CLI output,
-    credentials and usage readings are not written to disk by BotChu.
+    an expired window hides its old percentage until a new reading arrives. CLI output and
+    credentials are not written to disk by BotChu; of a reading, only its usage fields are
+    (`usage.json`).
   - **Settings:** **GitHub ▸ Test Connection** checks that `gh` is available and can authenticate to
     github.com, then shows its version and signed-in username. Connection failures give install/login
     guidance without displaying credentials. Settings also contains the bots folder, the repositories folder, the hosts and where you chose to work
@@ -962,7 +992,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     the saved Projects catalog, what a sync reads again and how it takes the answers, GitHub's REST
     answers, and the projects offline readers such as completion see (`ProjectCatalog.swift`), and the
     sync that keeps it on disk and in step with GitHub, with its ETags, probes, bounded requests and
-    coalesced refreshes (`ProjectSync.swift`), a repository's open issues at a glance as a task's
+    coalesced refreshes, and deleting an issue with `gh` (`ProjectSync.swift`), a repository's open issues at a glance as a task's
     Activity shows them, from that catalog (`IssuePreview.swift`),
     an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store, with
     the index saved whole or a failure to show (`Store.swift`), with conversations' files read without losing
@@ -1039,7 +1069,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     full from `gh`'s output, and fan-out briefs; the Projects catalog and its sync through a stand-in
     `gh` (the saved catalog shown before any request completes, checks for changes that read only
     what changed, failures, removals, coalesced refreshes, another account, a missing or unreadable
-    file, and the four-request limit); and hosts: their `ssh` command lines, where a repository is worked on, clones,
+    file, the four-request limit, and a deleted issue leaving it at once, also while a sync that read
+    it is under way, or staying when gh refuses, with why); and hosts: their `ssh` command lines, where a repository is worked on, clones,
     worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
     from a remote task; memory: #88's Home sequence (a routing preference saved in the turn that
     agrees, and recalled by a fresh session), what is left out, bot or shared scope, repeats,
@@ -1077,8 +1108,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
     grows and how far its text scrolls; each account's allowance, with Muse's check through a
     stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
-    answered empty, and none at all; the widths that line up Providers' allowance lines in every
-    row; skills: their frontmatter, finding and making them, which a
+    answered empty, and none at all; Model & Usage showing the reading the background keeps,
+    checking only one missing or as old as its interval, and Refresh's limits; the widths that line
+    up Providers' allowance lines in every row; skills: their frontmatter, finding and making them, which a
     bot uses, and the catalog, or (on a host) the files in full, that sessions get; the Telegram
     gateway against a stand-in Bot API: round trips, refused and revoked chats, each chat's own bot,
     busy conversations, repeated updates, cancelled batches, relaunches, forwarded input,
@@ -1143,9 +1175,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     the sidebar's sections of bots (their menus, the alert that names them, collapsing and revealing, and changes that can't
     be saved, shown until Try Again or quitting saves them), Agents grouped under them and editing
     them with the same menus and alert, inspector tab navigation and
-    restored selection, conversation-scoped allowance reads, automatic task branch creation, the
+    restored selection, conversation-scoped allowance reads that show the background's reading
+    instead of checking again, automatic task branch creation, the
     main window's layout at its narrowest, galleries that preserve conversation state, the project
-    sidebar's tabs, details and fan-out tasks, custom profile persistence, the Providers table's
+    sidebar's tabs, details and fan-out tasks, deleting an issue from the Issues table's and the
+    sidebar's menus and its detail (confirmed first, through a stand-in `gh`, and refused), custom profile persistence, the Providers table's
     rows under 100 points in every state and at its narrowest, provider logos in both
     appearances and in account menus, the report
     sheet, with a stand-in screenshot (taken of its window before the sheet opens, removed, not
@@ -1199,7 +1233,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     Telegram recognizing a repeated message in a Home not read yet. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
-    (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
+    (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `issuesAreDeletedFromTheirMenuAndDetailAfterConfirming`, `providersTableRowsStayCompact`,
     `activityChatRendersGroupsCardsAndLiveWork`, `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`,
     `jobsBelongToTheirAgentAndReachHomeOnlyAsReceipts`, `aJobsRunIsANewTaskInItsAgentsTasks`, `taskActivityShowsItsRepositorysOpenIssues`, or
     `conversationColumnFollowsTheWindowAndTheOwnersChoice`)
@@ -1300,6 +1334,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
   tab and an issue or pull request there, read with your `gh` login.
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
+  `BOTCHU_INBOX=sample` gives the Inbox sample deliveries from both demo bots (a report with a
+  question crediting the other bot, a page from a task, pull requests, older and done ones), with the
+  first one's card in the first bot's Home; `replied` has it answered from the Inbox, with the bot's
+  answer; `done` has every one Done. `BOTCHU_OPEN=inbox` opens the Inbox, on the delivery `BOTCHU_INBOX_ITEM` names
+  (`00000000-0000-4000-9000-00000000000<n>`); the window's snapshot draws web views in too.
   `BOTCHU_JOBS=sample` gives the demo bots sample jobs, with a history of every kind of run, the
   latest a task beside the first bot's chat, and a receipt in the first bot's Home, and runs no job (Run Now records a failed run), so nothing starts a CLI; `BOTCHU_OPEN=job-editor`
   or `job-history` opens a new job's editor or the first job's history, `job-model` or `job-effort` a

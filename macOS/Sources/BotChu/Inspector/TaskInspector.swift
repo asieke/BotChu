@@ -69,8 +69,7 @@ struct TaskInspector: View {
                     InspectorSection("Runs on") {
                         RunsOnCard(settings: task, target: target)
                     }
-                    let usageRequest = UsageRequest(account: task.account, command: model.settings.command(for: task.account),
-                        credentialRevision: task.account.kind == .pi ? model.settings.usageCredentialRevision : 0)
+                    let usageRequest = model.usageRequest(for: task.account)
                     AccountUsageSection(request: usageRequest, isRunning: model.isRunning(target))
                         .id(usageRequest)
                 case .session:

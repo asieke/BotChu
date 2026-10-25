@@ -214,6 +214,20 @@ public struct ProjectSnapshot: Codable, Equatable, Sendable {
             probeETags[repo] = nil
         }
     }
+
+    /// Forgets issue `number` of `repo`, deleted on GitHub: it leaves the open issues read, and
+    /// GitHub's count of them, which counted it, drops by one. One that wasn't read (closed, or
+    /// beyond those read) changes nothing; GitHub's list entry moves, so the next sync reads the
+    /// repository again. Returns whether it was there.
+    @discardableResult
+    public mutating func removeIssue(_ number: Int, of repo: String) -> Bool {
+        guard let key = work.keys.first(where: { $0.caseInsensitiveCompare(repo) == .orderedSame }), var read = work[key],
+              let index = read.items.firstIndex(where: { !$0.isPullRequest && $0.number == number }) else { return false }
+        read.items.remove(at: index)
+        read.counts.issues = max(0, read.counts.issues - 1)
+        work[key] = read
+        return true
+    }
 }
 
 /// What a sync reads once it has the list: PROJECT.md of each repository pushed to since it was

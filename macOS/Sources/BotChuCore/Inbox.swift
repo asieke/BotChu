@@ -371,6 +371,20 @@ public struct InboxState: Codable, Equatable, Sendable {
         self.entries = entries
     }
 
+    private enum CodingKeys: String, CodingKey { case entries }
+
+    /// By the delivery's ID as a string, so the file is an object a person can read.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decodeIfPresent([String: Entry].self, forKey: .entries) ?? [:]
+        entries = Dictionary(uniqueKeysWithValues: raw.compactMap { key, value in UUID(uuidString: key).map { ($0, value) } })
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(Dictionary(uniqueKeysWithValues: entries.map { ($0.key.uuidString, $0.value) }), forKey: .entries)
+    }
+
     public subscript(id: UUID) -> Entry {
         get { entries[id] ?? Entry() }
         set { entries[id] = newValue == Entry() ? nil : newValue }

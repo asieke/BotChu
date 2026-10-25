@@ -63,7 +63,7 @@ extension RenderingTests {
 
         system.click(try #require(DeliveryBanner.response(action: "open", userInfo: info, text: nil)))
         #expect(system.broughtForward == 1)
-        #expect(app.destination == nil && app.visibleBotID == fixture.fox.id && app.isShown(home))
+        #expect(app.destination == .inbox && app.inbox.selected == banner.deliveryID)
     }
 
     @Test func aReplyThatLaunchedBotChuIsSentOnceTheDeliveriesAreRead() async throws {

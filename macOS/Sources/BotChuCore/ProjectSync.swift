@@ -85,6 +85,9 @@ public actor ProjectSync {
     private var activeWaiters: [CheckedContinuation<Void, Never>] = []
     private var queued: Scope?
     private var queuedWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Issues deleted while a sync was under way, which it may have read before: kept out of what
+    /// it takes, until it ends.
+    private var deleted: [DeletedIssue] = []
 
     public init(file: URL, client: Client, saveDelay: Duration = .seconds(1)) {
         self.file = file
@@ -169,6 +172,7 @@ public actor ProjectSync {
         } catch {
             self.error = error.localizedDescription
         }
+        deleted = []
         saveNow()
         let waiters = activeWaiters
         activeWaiters = queuedWaiters
@@ -234,6 +238,7 @@ public actor ProjectSync {
         let fingerprints = Dictionary(snapshot.listed.map { ($0.nameWithOwner, $0.fingerprint) }) { first, _ in first }
         snapshot.emptyWork(plan.emptied, under: fingerprints)
         self.snapshot = snapshot
+        forgetDeleted()
         changed()
         // Repositories to read that weren't probed yet are probed first, so the ETag kept with
         // what is read predates it, and the next probe sees any change since.
@@ -266,6 +271,7 @@ public actor ProjectSync {
             WorkAnswer(asked: batch, result: await client.openWork(batch))
         }, take: { answer in
             self.snapshot?.takeWork(answer.asked, answer.result, under: fingerprints, etags: etags)
+            self.forgetDeleted()
             self.changed()
         })
     }
@@ -412,6 +418,63 @@ public actor ProjectSync {
             if answer.gone { gone.append(answer.repo) }
         })
         return gone
+    }
+
+    // MARK: Deleting an issue
+
+    /// Why gh didn't delete an issue, in a sentence for the owner.
+    public struct DeletionFailure: Error, Equatable, Sendable {
+        public var message: String
+        public init(_ message: String) { self.message = message }
+    }
+
+    private struct DeletedIssue: Sendable { let repo: String; let number: Int }
+
+    /// Deletes issue `number` of `repo` (`owner/name`) on GitHub with `gh issue delete`, for good,
+    /// as gh is signed in (GitHub lets only a repository's admins); then forgets it in the catalog
+    /// at once, on disk too, and keeps it out of what a sync under way read before. When gh fails,
+    /// nothing changes.
+    public func deleteIssue(_ number: Int, of repo: String) async -> Result<Void, DeletionFailure> {
+        guard number > 0, GitHubLookup.isSafeName(repo) else {
+            return .failure(DeletionFailure("Issue #\(number) of \(repo) isn't one gh can name."))
+        }
+        let run = await client.gh(["gh", "issue", "delete", String(number), "--repo", repo, "--yes"])
+        guard run.ok else { return .failure(Self.deletionFailure(run, number: number, repo: repo)) }
+        load()
+        if active != nil { deleted.append(DeletedIssue(repo: repo, number: number)) }
+        if snapshot?.removeIssue(number, of: repo) == true {
+            saveNow()
+            publish()
+        }
+        return .success(())
+    }
+
+    /// Why gh couldn't delete it, from what gh printed.
+    static func deletionFailure(_ run: Shell.Result, number: Int, repo: String) -> DeletionFailure {
+        let printed = [run.errors, run.output].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        let said = printed.lowercased()
+        if run.status == 127 || said.contains("command not found") {
+            return DeletionFailure("Couldn't run gh. Install the GitHub CLI and sign in with gh auth login.")
+        }
+        if said.contains("gh auth login") {
+            return DeletionFailure("gh isn't signed in to GitHub. Run gh auth login in Terminal, then try again.")
+        }
+        if said.contains("permission") || said.contains("not accessible") {
+            return DeletionFailure("GitHub lets only a repository's admins delete its issues, and gh's account isn't an admin of \(repo).")
+        }
+        if ["error connecting", "could not resolve host", "no such host", "timeout", "network is unreachable"].contains(where: said.contains) {
+            return DeletionFailure("Couldn't reach GitHub. Check the connection, then try again.")
+        }
+        if said.contains("could not resolve to") || said.contains("not found") {
+            return DeletionFailure("GitHub has no issue #\(number) in \(repo) for gh's account; it may be deleted already. Refresh to update Projects.")
+        }
+        return DeletionFailure(printed.isEmpty ? "gh couldn't delete it (exit \(run.status)) and printed nothing." : "gh couldn't delete it: \(printed)")
+    }
+
+    /// Keeps the issues deleted during a sync out of what it read before.
+    private func forgetDeleted() {
+        for issue in deleted { snapshot?.removeIssue(issue.number, of: issue.repo) }
     }
 
     // MARK: Keeping it

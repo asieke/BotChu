@@ -71,11 +71,11 @@ import BotChuCore
         waiting.forEach(handle)
     }
 
-    /// Brings BotChu forward on the delivery: the conversation that sent it.
+    /// Brings BotChu forward on the delivery, in the Inbox.
     func showDelivery(_ id: UUID) {
-        guard let model, let delivery = model.inbox.delivery(id) else { return }
+        guard let model, model.inbox.delivery(id) != nil else { return }
         system?.bringForward(opening: openWindow)
-        model.show(model.inbox.target(of: delivery))
+        model.showDelivery(id)
     }
 
     /// Keeps the Dock tile's badge on the unread count, as it changes.

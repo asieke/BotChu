@@ -23,6 +23,8 @@ struct BotChuApp: App {
                     .keyboardShortcut("n")
             }
             CommandGroup(after: .sidebar) {
+                Button("Show Inbox") { model.destination = .inbox }
+                    .keyboardShortcut("i", modifiers: [.command, .shift])
                 Button(showsStatus ? "Hide Status" : "Show Status") { showsStatus.toggle() }
                     .keyboardShortcut("i", modifiers: [.command, .option])
                 Picker("Chat Density", selection: $chatDensity) {
