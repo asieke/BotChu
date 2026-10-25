@@ -28,6 +28,7 @@ extension RenderingTests {
         for target in [bench.home, bench.paging] + bench.conversations.map(\.1) { _ = await app.loadedThread(target) }
         let defaults = UserDefaults(suiteName: bench.domain)!
         defaults.set(true, forKey: "showsStatus")
+        ChatRows.defaults = defaults
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 820),
                               styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -607,6 +608,9 @@ extension RenderingTests {
 /// What the chat has laid out (#110): rows realized now (counted as they appear and go), and where
 /// the reader's row is on the screen.
 @MainActor enum ChatRows {
+    /// The benchmark's settings, with its chat density.
+    static var defaults: UserDefaults?
+
     static func realized(_ model: TranscriptModel, app: AppModel, target: ChatTarget) -> Int { model.realized }
     static func peak(_ model: TranscriptModel, app: AppModel, target: ChatTarget) -> Int { model.peakRealized }
     static func resetPeak(_ model: TranscriptModel) { model.peakRealized = model.realized }
