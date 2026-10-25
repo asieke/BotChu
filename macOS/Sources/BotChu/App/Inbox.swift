@@ -16,6 +16,10 @@ final class InboxModel {
     private(set) var state = InboxState()
     /// The delivery chosen in the Inbox's list, kept while other pages show.
     var selected: UUID?
+    /// What is typed in each delivery's reply box and not sent yet.
+    var drafts: [UUID: String] = [:]
+    /// Deliveries opened while they were news, so the reading pane shows the exchange's end.
+    @ObservationIgnored var openedAsNews: Set<UUID> = []
     /// Whether the Inbox's page is showing, so the selected delivery is being read.
     @ObservationIgnored var isShowing = false
     @ObservationIgnored weak var model: AppModel?

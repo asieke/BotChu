@@ -83,6 +83,7 @@ private struct DetailColumn: View {
     @ViewBuilder private var content: some View {
         if let destination = model.destination {
             switch destination {
+            case .inbox: InboxView()
             case .projects: ProjectsView()
             case .agents: AgentsView()
             case .providers: ProvidersView()

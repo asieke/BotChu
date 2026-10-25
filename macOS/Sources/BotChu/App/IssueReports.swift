@@ -108,6 +108,7 @@ extension AppModel {
         var conversation: IssueSnapshot.Conversation?
         if let destination {
             switch destination {
+            case .inbox: screen = .inbox
             case .projects: screen = .projects
             case .agents: screen = .agents
             case .providers: screen = .providers

@@ -16,7 +16,9 @@ struct SidebarView: View {
             })) {
             Section("Workspace") {
                 ForEach(LibraryDestination.allCases, id: \.self) { destination in
-                    Label(destination.title, systemImage: destination.symbol).tag(SidebarDestination.library(destination))
+                    Label(destination.title, systemImage: destination.symbol)
+                        .badge(destination == .inbox ? model.inbox.unreadCount : 0)
+                        .tag(SidebarDestination.library(destination))
                 }
             }
             // The bots in no section, under Conversations, then each section the owner made. One row
