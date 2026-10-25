@@ -172,6 +172,84 @@ extension RenderingTests {
         snapshot("conversation-none")
     }
 
+    /// #144: the selected tab is a card inset as far from the column's trailing edge as from its
+    /// leading one, Home's as a task's, in light and dark. Measured in the column's own drawing,
+    /// where the card is the only thing in the chat's colour.
+    @Test func selectedTabIsACardInsetEvenlyFromTheColumnsEdges() async throws {
+        _ = NSApplication.shared
+        let oldAppearance = NSApp.appearance
+        defer { NSApp.appearance = oldAppearance }
+        let fixture = try TabsFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot
+        let tasks = fixture.tasks.map { ChatTarget.task($0.id, of: bot.id) }
+        model.runStates[tasks[1]] = RunState(startedAt: Date().addingTimeInterval(-252), hasOutput: true, activity: .coding)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let swatch = NSHostingView(rootView: Palette.chat)
+        let host = NSHostingView(rootView: ConversationSplit(botID: bot.id) { Color.clear }
+            .environment(model).defaultAppStorage(fixture.defaults))
+        window.makeKeyAndOrderFront(nil)
+        // 8 points from each of the column's edges.
+        let width = CGFloat(ConversationColumnLayout.width), inset: CGFloat = 8
+
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            window.appearance = NSAppearance(named: appearance)
+            NSApp.appearance = NSAppearance(named: appearance)
+            // The chat's colour as this window draws it: the display's color profile shifts the
+            // values, so the card is found by this swatch rather than by numbers.
+            window.contentView = swatch
+            try await settle(window)
+            let fill = try #require(try Drawing(of: swatch).color(x: 10, y: 10))
+            window.contentView = host
+            for target in [tasks[1], .home(bot.id)] {
+                model.show(target)
+                try await settle(window)
+                let drawing = try Drawing(of: host)
+                // Down the card's leading part, left of its dot, then across its middle, where only
+                // its texts are between its edges.
+                let card = try #require(drawing.bounds(in: CGRect(x: inset + 9, y: 0, width: 0.5, height: host.bounds.height)) { near($0, fill) })
+                let across = try #require(drawing.bounds(in: CGRect(x: 0, y: card.midY, width: width, height: 0.5)) { near($0, fill) })
+                let leading = across.minX, trailing = width - across.maxX
+                #expect(abs(leading - inset) <= 1.5, "\(appearance.rawValue), \(target): the card starts \(leading) from the column's leading edge")
+                #expect(abs(trailing - leading) <= 1, "\(appearance.rawValue), \(target): \(leading) from the leading edge, \(trailing) from the trailing one")
+            }
+        }
+    }
+
+    /// #144: a bot row's dots sit at its end, centred on the row, not on its second line.
+    @Test func botRowDotsAreCentredOnTheRow() async throws {
+        _ = NSApplication.shared
+        let fixture = try TabsFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot
+        let tasks = fixture.tasks.map { ChatTarget.task($0.id, of: bot.id) }
+        model.runStates[tasks[1]] = RunState(startedAt: Date().addingTimeInterval(-252), hasOutput: true, activity: .coding)
+        model.unread.insert(tasks[0])
+        let summary = model.botRowSummary(of: bot)
+        try #require(summary.dots == [.news, .working])
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let host = NSHostingView(rootView: BotRow(bot: bot, status: model.status(of: bot), summary: summary, selected: false)
+            .frame(width: 220).environment(model))
+        window.contentView = host
+        window.setContentSize(host.fittingSize)
+        window.makeKeyAndOrderFront(nil)
+        try await settle(window)
+        // Right of the avatar, the dots are the only colour that isn't grey: blue, then violet (dark
+        // mode's is pale).
+        let drawing = try Drawing(of: host)
+        let dots = try #require(drawing.bounds(in: CGRect(x: 60, y: 0, width: host.bounds.width - 60, height: host.bounds.height)) {
+            $0.alphaComponent > 0.5 && $0.saturationComponent > 0.25
+        })
+        // Both 6-point dots, 4 points apart.
+        #expect(abs(dots.width - 16) <= 1 && abs(dots.height - 6) <= 1, "the dots are \(dots)")
+        #expect(abs(dots.midY - host.bounds.height / 2) <= 1, "the dots' middle is \(dots.midY) in a row \(host.bounds.height) tall")
+        #expect(host.bounds.width - dots.maxX < 8, "the dots end \(host.bounds.width - dots.maxX) from the row's end, \(dots) in \(host.bounds)")
+    }
+
     /// What the tabs and the bot's row read from the model: each conversation's state, its tab's
     /// texts, the row's dots and subtitle, and the shortcuts and close order of the tabs.
     @Test func conversationTabsReadTheModelAndMoveTheSelectionUpOnClose() throws {
@@ -309,6 +387,12 @@ extension RenderingTests {
         return try #require(menu)
     }
 
+    /// The same colour, within what antialiasing leaves of a flat fill.
+    private func near(_ a: NSColor, _ b: NSColor) -> Bool {
+        [a.redComponent - b.redComponent, a.greenComponent - b.greenComponent,
+         a.blueComponent - b.blueComponent, a.alphaComponent - b.alphaComponent].allSatisfy { abs($0) < 0.01 }
+    }
+
     private func settle(_ window: NSWindow) async throws {
         for _ in 0..<6 {
             window.updateConstraintsIfNeeded()
@@ -350,6 +434,36 @@ private struct HoveredRow: View {
         ConversationRow(target: target, index: 1, selected: false, hovered: true, focus: $focus) { _ in }
             .frame(width: 232)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// A view's own drawing, as `cacheDisplay` makes it, in sRGB and measured in points from its
+/// top-left corner.
+@MainActor private struct Drawing {
+    let rep: NSBitmapImageRep
+    let scale: CGFloat
+
+    init(of view: NSView) throws {
+        rep = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        scale = CGFloat(rep.pixelsWide) / view.bounds.width
+    }
+
+    func color(x: CGFloat, y: CGFloat) -> NSColor? {
+        rep.colorAt(x: Int(x * scale), y: Int(y * scale))?.usingColorSpace(.sRGB)
+    }
+
+    /// The smallest rectangle holding every pixel of `rect` whose colour matches, if any does.
+    func bounds(in rect: CGRect, where match: (NSColor) -> Bool) -> CGRect? {
+        var found: CGRect?
+        for y in max(0, Int(rect.minY * scale))..<min(rep.pixelsHigh, Int((rect.maxY * scale).rounded(.up))) {
+            for x in max(0, Int(rect.minX * scale))..<min(rep.pixelsWide, Int((rect.maxX * scale).rounded(.up))) {
+                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), match(color) else { continue }
+                let pixel = CGRect(x: CGFloat(x) / scale, y: CGFloat(y) / scale, width: 1 / scale, height: 1 / scale)
+                found = found.map { $0.union(pixel) } ?? pixel
+            }
+        }
+        return found
     }
 }
 
