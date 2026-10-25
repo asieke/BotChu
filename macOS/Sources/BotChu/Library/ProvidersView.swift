@@ -230,7 +230,7 @@ private struct UsageLineStack: Layout {
     let dated: Bool
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        CGSize(width: proposal.width ?? UsageLineLayout.idealWidth(widths), height: 16)
+        CGSize(width: proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? UsageLineLayout.idealWidth(widths), height: 16)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {

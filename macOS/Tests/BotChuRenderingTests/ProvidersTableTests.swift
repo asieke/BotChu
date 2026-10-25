@@ -91,12 +91,12 @@ extension RenderingTests {
             let visible = try #require(rows.enclosingScrollView?.contentView.bounds.width)
             #expect(rows.bounds.width <= visible + 1)
             // The other columns as wide as the table's size has them, and the allowance the rest.
-            let table = try #require(rows.enclosingScrollView?.bounds.width)
-            let columns = ProvidersColumns(width: table)
+            let tableWidth = try #require(rows.enclosingScrollView?.bounds.width)
+            let columns = ProvidersColumns(width: tableWidth)
             let widths = Dictionary(uniqueKeysWithValues: rows.tableColumns.map { ($0.title, Double($0.width)) })
             #expect(widths["Provider"] == columns.provider && widths["Command"] == columns.command && widths["Updated"] == columns.updated)
-            #expect(abs((widths["Allowance"] ?? 0) - columns.allowance(in: table)) <= 2)
-            if width > 1_800 { #expect((widths["Allowance"] ?? 0) > table / 2) }
+            #expect(abs((widths["Allowance"] ?? 0) - columns.allowance(in: tableWidth)) <= 2)
+            if width > 1_800 { #expect((widths["Allowance"] ?? 0) > tableWidth / 2) }
             try captureProviders(window, name: "providers-\(Int(width))-\(appearance == .darkAqua ? "dark" : "light")")
         }
         #expect(keyReads > 0) // The OpenRouter row uses the stand-in, even with an injected usage cache.

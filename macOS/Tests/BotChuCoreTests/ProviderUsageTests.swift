@@ -170,7 +170,7 @@ import Testing
         let badges = codex.badges(at: now)
         #expect(badges.map(\.kind) == [.credits, .resets])
         #expect(badges.map(\.text) == ["\(1_234.0.formatted(.number.precision(.fractionLength(0)))) credits", "2 free resets"])
-        #expect(badges.allSatisfy(\.available))
+        #expect(badges.allSatisfy { $0.available })
         #expect(badges[1].help.contains(Date(timeIntervalSince1970: 1_793_299_644).formatted(date: .abbreviated, time: .shortened)))
         #expect(codex.details(at: now).contains("2 free resets of the usage limits"))
         // An older answer says nothing of either; none, and the chips say so.
