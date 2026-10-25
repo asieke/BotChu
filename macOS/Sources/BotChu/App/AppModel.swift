@@ -171,8 +171,8 @@ final class AppModel {
     let settings: AppSettings
     /// Every profile's allowance, saved between launches (`usage.json`).
     let usage: UsageCache
-    /// What Providers shows of it, kept current in the background in the app itself, so the table
-    /// opens on numbers instead of checking.
+    /// What Providers and a conversation's Model & Usage show of it, kept current in the background
+    /// in the app itself, so both open on numbers instead of checking.
     let usageBoard = ProviderUsageBoard()
     @ObservationIgnored private var usageWatch: Task<Void, Never>?
     /// Usage views inject this lookup in tests so they never read the owner's Keychain.
@@ -238,6 +238,10 @@ final class AppModel {
     /// shows it, and the ones read so far, by `owner/name#number`.
     let workDetailLookup: @Sendable (String, Int, Bool) async -> Result<GitHubLookup.WorkDetail, TaskWorktree.Failure>
     @ObservationIgnored var workDetails: [String: GitHubLookup.WorkDetail] = [:]
+    /// The issue the owner chose to delete in Projects, until they confirm it, and then why GitHub
+    /// didn't delete it; the issues being deleted, by `owner/name#number` (`Projects.swift`).
+    var issueDeletion: IssueDeletion?
+    var deletingIssues: Set<String> = []
     var githubConnection: ProjectGitHub.Connection?
     var githubChecking = false
     let projectGitHub: ProjectGitHub
@@ -320,16 +324,20 @@ final class AppModel {
         // paused them, once their own conversation is recovered (`recovered`), after the window is up.
     }
 
-    /// Every profile's usage request, as Providers and the background checks make them.
-    var usageRequests: [UsageRequest] {
-        settings.accounts.map { UsageRequest(account: $0, command: settings.command(for: $0), credentialRevision: settings.usageCredentialRevision) }
+    /// A profile's usage request, the one Providers, the background checks and a conversation's
+    /// Model & Usage share, so they show one reading.
+    func usageRequest(for account: Account) -> UsageRequest {
+        UsageRequest(account: account, command: settings.command(for: account), openRouterKeyRevision: settings.usageCredentialRevision)
     }
+
+    /// Every profile's usage request.
+    var usageRequests: [UsageRequest] { settings.accounts.map(usageRequest) }
 
     /// Checks each profile whose reading is older than its background interval, each on its own,
     /// so a slow CLI holds up no other.
     private func refreshUsageInBackground() {
         for request in usageRequests {
-            Task { await usageBoard.refresh(request, usage: usage, openRouterKey: openRouterKey, background: true) }
+            Task { await usageBoard.refresh(request, usage: usage, openRouterKey: openRouterKey, for: .background) }
         }
     }
 

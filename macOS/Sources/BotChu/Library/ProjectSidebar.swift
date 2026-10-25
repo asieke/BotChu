@@ -291,7 +291,7 @@ struct ProjectWorkList: View {
 }
 
 /// An open issue or pull request in the sidebar's list: what it is, who opened it, when it last
-/// changed, its checks and labels, and the bots on it.
+/// changed, its checks and labels, and the bots on it. Its menu is the Projects tables'.
 private struct WorkRow: View {
     @Environment(AppModel.self) private var model
     let item: GitHubLookup.OpenItem
@@ -351,13 +351,15 @@ private struct WorkRow: View {
         .overlay(alignment: .bottom) {
             if !last { Rectangle().fill(Palette.rowDivider).frame(height: 1) }
         }
+        .contextMenu { WorkMenu(item: item, tasks: tasks) }
         .accessibilityLabel("\(item.isPullRequest ? "Pull request" : "Issue") \(item.number): \(item.title)")
         .accessibilityHint("Shows it")
     }
 }
 
 /// One issue or pull request, read in full: its description and conversation, and for a pull
-/// request its branches, checks and changed files; with Fix, or Review and Continue, for any bot.
+/// request its branches, checks and changed files; with Fix, or Review and Continue, for any bot,
+/// and Delete for an issue.
 struct WorkDetailView: View {
     @Environment(AppModel.self) private var model
     let repo: GitHubLookup.Repo
@@ -382,7 +384,8 @@ struct WorkDetailView: View {
                 }
                 .help("Back to the list")
                 Spacer()
-                if loading { ProgressView().controlSize(.small) }
+                let deleting = model.deletingIssues.contains(key)
+                if loading || deleting { ProgressView().controlSize(.small) }
                 Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(loading)
                     .help("Read it again")
@@ -390,6 +393,14 @@ struct WorkDetailView: View {
                 Button { NSWorkspace.shared.open(work.url) } label: { Image(systemName: "arrow.up.right.square") }
                     .help("Open on GitHub")
                     .accessibilityLabel("Open on GitHub")
+                if !pulls {
+                    Button { model.askToDeleteIssue(number, of: repo.id, title: detail?.title ?? item?.title ?? "Issue #\(number)") } label: {
+                        Image(systemName: "trash")
+                    }
+                    .disabled(deleting)
+                    .help("Delete Issue…")
+                    .accessibilityLabel("Delete issue")
+                }
             }
             .buttonStyle(.borderless)
             .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 14))
