@@ -156,6 +156,17 @@ final class DraftImages {
         problem = nil
     }
 
+    /// Adds an image BotChu made itself, already PNG, such as a window's screenshot; its id.
+    func add(png: Data, name: String) throws -> UUID {
+        guard images.count < ImageAttachment.maximumCount else { throw ImageDelivery.Failure("Attach up to \(ImageAttachment.maximumCount) images.") }
+        guard png.count <= ImageAttachment.maximumBytes, let preview = NSImage(data: png) else {
+            throw ImageDelivery.Failure("The picture couldn't be read, or was larger than 5 MB.")
+        }
+        let image = Image(name: name, png: png, preview: preview)
+        images.append(image)
+        return image.id
+    }
+
     private func add(_ sources: [ImagePaste.Source]) {
         problem = nil
         for source in sources {

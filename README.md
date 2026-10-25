@@ -106,7 +106,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   - **Providers:** one compact table of CLI profiles, a row each, under 100 points high whatever
     its state: the logo, name and CLI family; the command, and whether the login shell finds it;
     a line per allowance window, with its use and reset (the reset when the column has room, and
-    at most four lines, the rest in the tooltip); when it was read, marked stale or failed (with
+    at most four lines, the rest in the tooltip), whose bars, percentages and resets line up from
+    row to row; when it was read, marked stale or failed (with
     the error in a tooltip and a popover); and Refresh. It shares the conversation inspector's
     allowance cache and refresh limits, and searches by name or family. **Add CLI**
     adds a named profile of Claude Code, Codex, Antigravity, Muse or Pi, with an installed command or
@@ -652,7 +653,16 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and launches; its data always belongs to the shown Home or task. The character, tabs and bottom
     actions stay visible while the selected area's content scrolls. Home keeps Edit and New Session;
     tasks keep Close Task and New Session. Task Activity includes the repository, computer and
-    linked issue. Home and task accounts can change in Model & Usage; Session keeps Finder, Terminal and
+    linked issue, then the repository's open issues, from the saved Projects catalog: **Issues · N**,
+    GitHub's count of its open issues (pull requests aside), which stays in the heading when the
+    section is collapsed, then the five most recently updated, each a number and title that opens it
+    in the Projects sidebar, **View All Issues** (with the count when there are more), which opens
+    the repository's Issues there, and Refresh, which syncs Projects. Going to Projects keeps the task
+    and its draft to come back to. Until the count is read, the heading says why instead (reading,
+    not read, couldn't read, or unavailable for a repository `gh` doesn't list), never zero; an empty
+    repository shows **No open issues**, and a sync that fails keeps what was read, marked not
+    updated, with why, and Refresh tries again. Showing it checks the catalog is current, at most
+    every two minutes, like Projects. Home and task accounts can change in Model & Usage; Session keeps Finder, Terminal and
     remote SSH controls. Branch names, review commits, generated pull request metadata and task
     authorship are managed internally and omitted from the task form, cards, headers, sidebar tooltips
     and new automatic progress notes. Explicitly choosing a pull request to continue or review is
@@ -711,20 +721,28 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     a day. See [Telegram gateway](docs/telegram.md) for setup and troubleshooting.
   - **Reporting bugs and features:** the ladybug button at the toolbar's trailing end, on every
     screen, or **Help ▸ Report a Bug or Feature…** opens a sheet with one field, which takes up to
-    eight images as the message box does. **Submit** (⌘↩)
+    eight images as the message box does. Just before the sheet opens, BotChu takes a screenshot of
+    the window it was opened from, as it shows then (its sidebar, conversation or gallery, and
+    status sidebar, scrolled as they were), and puts it first among the report's images, one of the
+    eight, where its preview's × removes it. It is taken once a report, never again on Submit or a
+    retry, and only of that window: not other apps, BotChu's other windows or the desktop. macOS
+    doesn't ask for Screen Recording to take it (it needs macOS 14.4 or later); when it can't be
+    taken, the sheet says that no screenshot is attached, and the report goes without it. It is
+    kept in memory, not in a file, and nothing is uploaded before **Submit**. **Submit** (⌘↩)
     files it as an issue in `asieke/BotChu` with `gh issue create`, titled from its first line or
     sentence (cut at a word, 72 characters at most), with its images after the text, and links the
     new issue; when gh fails, the report stays, with gh's reason. gh attaches the images itself
     (`--attach`, gh 2.99 or later, which needs write access to the repository), each as
     `image-<n>.png` from a private folder that goes afterwards; if one doesn't upload, the issue is
-    made without it, and the sheet says so. The repository is public, so besides the images you add,
-    the issue adds only the app state
+    made without it, and the sheet says so. The repository is public: anyone can see the issue's
+    images, as the sheet says beneath them, and the screenshot shows whatever the window showed,
+    conversations and names included. Besides the images, the issue adds only the app state
     the sheet shows before it goes, as categories and counts: the version and commit, macOS, the
     screen and status sidebar area, the conversation's kind (Home, or a task on this Mac or a host
     and its kind of work), CLI family, starter model and effort, its turn's state (an error by kind
     only), message and queue counts, the window's size and appearance, and how many bots and turns
     there are. Conversations, instructions, memory, prompts, tool calls, error text, paths and the
-    names of bots, tasks, accounts, hosts and repositories never go into it.
+    names of bots, tasks, accounts, hosts and repositories never go into the app state.
 - Does not: run a bot's Home anywhere but this Mac, or tasks anywhere but this Mac and SSH hosts
   (no containers or cloud), run scheduled jobs while BotChu is quit or the Mac asleep, ask for approval of tool calls (every CLI runs with
   its permission prompts bypassed, inside the bot's folder or the task's worktree), or keep any
@@ -751,8 +769,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     rows the chat lays out, their heights kept by what they showed and how, and the reader's row and
     offset into it (`TranscriptViewport.swift`), the identity, instructions,
     team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
-    files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries
-    (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
+    files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries,
+    and the lines Providers shows, lined up across its rows (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
     (`UsageCache.swift`), per-conversation pending-message delivery, keeping a follow-up the CLI
     took until a saved transcript holds it (`MessageQueue.swift`, saved in that order by
     `Store.swift`), how tall the message box is for its draft and how far its text may scroll
@@ -778,7 +796,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     the saved Projects catalog, what a sync reads again and how it takes the answers, GitHub's REST
     answers, and the projects offline readers such as completion see (`ProjectCatalog.swift`), and the
     sync that keeps it on disk and in step with GitHub, with its ETags, probes, bounded requests and
-    coalesced refreshes (`ProjectSync.swift`),
+    coalesced refreshes (`ProjectSync.swift`), a repository's open issues at a glance as a task's
+    Activity shows them, from that catalog (`IssuePreview.swift`),
     an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store, with
     the index saved whole or a failure to show (`Store.swift`), with conversations' files read without losing
     what can't be read (`Transcript.swift`), the writer that saves files off the main thread, each
@@ -804,8 +823,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     (`MemoryWriter.saveReviewed`), the exact diff it records and its revert (`AppliedChange`), and the
     review's own CLI run, whose tool-free command lines are in `Accounts.swift`
     (`CommandBuilder.toolFreeInvocation`).
-    Reports filed from the app (their title, description, app state and `gh issue create`) are in
-    `IssueReport.swift`. The Telegram gateway is in `Telegram.swift` (the Bot API client: long
+    Reports filed from the app (their title, description, app state, the size their window's
+    screenshot is taken at, and `gh issue create`) are in `IssueReport.swift`. The Telegram gateway is in `Telegram.swift` (the Bot API client: long
     polling, sending, and errors that never hold the token) and `TelegramGateway.swift` (which chats
     may reach which bot, message IDs that recognize a repeated update, replies cut to Telegram's
     limit, the saved offset and replies owed, and retries). `@` and `#` mentions are in
@@ -816,12 +835,13 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     in standard system materials: `App/` (the app, window, model, each conversation's state, observed
     on its own, with whether its history is in memory and what waits for it (`Conversations.swift`), settings, Keychain, dev hooks, making
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
-    computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, the
+    computers, `TaskPlaces.swift`, what a report says about the app, `IssueReports.swift`, and the
+    screenshot of its window, through ScreenCaptureKit, `WindowCapture.swift`, the
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished runs to run reviews, `Evaluations.swift`),
     `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
-    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
+    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
     the hosts and Telegram), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
@@ -843,7 +863,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     from a remote task; memory: #88's Home sequence (a routing preference saved in the turn that
     agrees, and recalled by a fresh session), what is left out, bot or shared scope, repeats,
     corrections and forgets, concurrent saves, and saves that fail, wait (also across a relaunch)
-    and are tried again; reports: their titles, app state, and filing (with attached images) through a stand-in `gh`;
+    and are tried again; reports: their titles, app state, the size of their window's screenshot, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
     within its budget (ten 128 KB replies written in revisions, then memory pressure), replies being
     written parsed off the main thread (100 rapid deltas coalesced, the worker's limit shared, a slow
@@ -871,7 +891,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
     grows and how far its text scrolls; each account's allowance, with Muse's check through a
     stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
-    answered empty, and none at all; skills: their frontmatter, finding and making them, which a
+    answered empty, and none at all; the widths that line up Providers' allowance lines in every
+    row; skills: their frontmatter, finding and making them, which a
     bot uses, and the catalog, or (on a host) the files in full, that sessions get; the Telegram
     gateway against a stand-in Bot API: round trips, refused and revoked chats, each chat's own bot,
     busy conversations, repeated updates, cancelled batches, relaunches, forwarded input,
@@ -887,7 +908,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     itself, pausing, resuming and editing that never make up time, Run Now while paused, failures
     that pause a job, the history's bounds, crash recovery, jobs moving with their agent, a run's
     context (its agent, when it was meant for, how late, no Home), its fresh session, and quiet,
-    empty and failed results; and run reviews, with stand-in reviewers (no test
+    empty and failed results; a task's glance at its repository's open issues: GitHub's count
+    whatever the preview and the read list hold, pull requests left out, loading, not read,
+    unavailable, zero and kept after a failed read, and another repository's answer never showing
+    under the one switched to; and run reviews, with stand-in reviewers (no test
     runs a real review): the bounded snapshot of finished, failed and stopped runs, and labels and
     tags in a run's text that can't pass for its own, handing a run over without waiting, one review
     despite repeated ends and relaunches, a review cut short by quitting, no-change outcomes, which
@@ -926,7 +950,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     sidebar's tabs, details and fan-out tasks, custom profile persistence, the Providers table's
     rows under 100 points in every state and at its narrowest, provider logos in both
     appearances and in account menus, the report
-    sheet, filing with a stand-in, images pasted with Edit ▸ Paste into the composer, the report
+    sheet, with a stand-in screenshot (taken of its window before the sheet opens, removed, not
+    taken again on a retry, new for the next report, and a report without one when it can't be
+    taken) and a real one of a test window through ScreenCaptureKit, filing with a stand-in, images pasted with Edit ▸ Paste into the composer, the report
     and New Task (through a stand-in for the general pasteboard, so no test touches the clipboard)
     and what pastes as text instead, New Task starting a task from a project and a brief with an
     image, the activity chat at every density, light and dark and at its
@@ -943,8 +969,10 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     text that opens nothing, links kept through copy and paste, a message's
     links and their context through sending, and the report and New Task boxes without it, a job
     made for its agent, shown in Jobs, delivered to Home as a receipt that leaves Home's draft and
-    queue alone, and deleted with its agent, and a sub-agent's handoff and a task's receipt that
-    don't wait for their run reviews; and, with writes slowed to 250 ms each or failing: a turn that
+    queue alone, and deleted with its agent, a sub-agent's handoff and a task's receipt that
+    don't wait for their run reviews, and a task's Activity listing its repository's open issues:
+    one or all opened in Projects and back to the task with its draft, switching tasks, a failed
+    refresh keeping what was read, and no GitHub request from showing or updating it; and, with writes slowed to 250 ms each or failing: a turn that
     starts only once its message is saved, sending and Stop that never wait for a write, a message
     that can't be queued coming back to the composer, typing and switching while four conversations
     save, quitting through the real notification waiting for writes and saying which it couldn't,
@@ -960,8 +988,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
-    `activityChatRendersGroupsCardsAndLiveWork`, `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`, or
-    `jobsBelongToTheirAgentAndReachHomeOnlyAsReceipts`)
+    `activityChatRendersGroupsCardsAndLiveWork`, `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`,
+    `jobsBelongToTheirAgentAndReachHomeOnlyAsReceipts`, or `taskActivityShowsItsRepositorysOpenIssues`)
     to render isolated gallery/table (sidebar, chat, or Agents' sections, wide and narrow) screenshots
     with sample data. These
     share a serialized suite because AppKit
@@ -1096,8 +1124,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
   `BOTCHU_WINDOW=compact` checks the minimum window width. `BOTCHU_DRAFT=<text>` puts that draft in
   the message box (`\n` for a new line), to check how it grows and scrolls.
-  `BOTCHU_OPEN=report` opens Report a Bug or Feature, and `BOTCHU_REPORT="<report>"` files one at
-  launch. A review copy files reports only with a stand-in `gh`, which keeps them (and the images it
+  `BOTCHU_OPEN=report` opens Report a Bug or Feature, and `BOTCHU_REPORT="<report>"` files one,
+  two seconds after launch, each with the window's screenshot (`BOTCHU_SCREENSHOT_FAIL=1` shows a
+  report whose screenshot couldn't be taken). A review copy files reports only with a stand-in `gh`, which keeps them (and the images it
   attaches) in `reports/` in
   its data folder and prints a made-up issue's link (with `BOTCHU_REPORT_FAIL=1`, it fails as a
   signed-out gh does), so no review creates a real issue.

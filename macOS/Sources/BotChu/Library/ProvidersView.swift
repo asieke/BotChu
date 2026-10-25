@@ -24,27 +24,33 @@ struct ProvidersView: View {
             if matches.isEmpty {
                 LibraryEmpty(title: "No matching providers", subtitle: "Try a profile name or CLI family.", symbol: "terminal")
             } else {
-                Table(matches) {
-                    TableColumn("Provider") { (account: Account) in ProviderNameCell(account: account) }
-                        .width(min: 130, ideal: 190, max: 300)
-                    TableColumn("Command") { (account: Account) in
-                        ProviderCommandCell(command: model.settings.command(for: account), found: board.found[model.settings.command(for: account)])
-                    }
-                    .width(min: 80, ideal: 170, max: 320)
-                    TableColumn("Allowance") { (account: Account) in
-                        let request = request(account)
-                        ProviderAllowanceCell(request: request, state: board.states[request], checking: board.checking.contains(request))
-                    }
-                    .width(min: 180, ideal: 340)
-                    TableColumn("Updated") { (account: Account) in
-                        let request = request(account)
-                        ProviderFreshnessCell(request: request, state: board.states[request], checking: board.checking.contains(request)) {
-                            Task { await board.refresh(request, usage: model.usage, openRouterKey: model.openRouterKey, manual: true) }
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    // The timeline's date is its last tick, before a reading made since.
+                    let now = max(context.date, Date())
+                    // Every row's lines take the same widths, so their bars and resets line up.
+                    let widths = UsageLineWidths.measured(matches.flatMap { board.states[request($0)]?.reading?.lines(at: now).shown ?? [] })
+                    Table(matches) {
+                        TableColumn("Provider") { (account: Account) in ProviderNameCell(account: account) }
+                            .width(min: 130, ideal: 190, max: 300)
+                        TableColumn("Command") { (account: Account) in
+                            ProviderCommandCell(command: model.settings.command(for: account), found: board.found[model.settings.command(for: account)])
                         }
+                        .width(min: 80, ideal: 170, max: 320)
+                        TableColumn("Allowance") { (account: Account) in
+                            let request = request(account)
+                            ProviderAllowanceCell(request: request, state: board.states[request], checking: board.checking.contains(request), now: now, widths: widths)
+                        }
+                        .width(min: 180, ideal: 340)
+                        TableColumn("Updated") { (account: Account) in
+                            let request = request(account)
+                            ProviderFreshnessCell(request: request, state: board.states[request], checking: board.checking.contains(request)) {
+                                Task { await board.refresh(request, usage: model.usage, openRouterKey: model.openRouterKey, manual: true) }
+                            }
+                        }
+                        .width(min: 104, ideal: 132, max: 180)
                     }
-                    .width(min: 104, ideal: 132, max: 180)
+                    .tableStyle(.inset(alternatesRowBackgrounds: true))
                 }
-                .tableStyle(.inset(alternatesRowBackgrounds: true))
             }
         }.background(Color(nsColor: .windowBackgroundColor)).frame(minWidth: 580, maxWidth: .infinity, maxHeight: .infinity).navigationTitle("Providers")
         .sheet(isPresented: $adding) { AddProviderSheet().environment(model) }
@@ -123,69 +129,66 @@ private struct ProviderCommandCell: View {
 }
 
 /// One line per allowance window, its reset when the column has room. At most four lines, so a
-/// row stays under 100 points; the rest are in the tooltip.
+/// row stays under 100 points; the rest are in the tooltip. Each part of a line takes the width the
+/// table gives it, the same in every row.
 private struct ProviderAllowanceCell: View {
     let request: UsageRequest
     let state: UsageState?
     let checking: Bool
+    let now: Date
+    let widths: UsageLineWidths
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            let now = max(context.date, Date())
-            Group {
-                if let reading = state?.reading, !reading.windows.isEmpty {
-                    let shown = reading.windows.count > 4 ? Array(reading.windows.prefix(3)) : reading.windows
-                    VStack(alignment: .leading, spacing: 3) {
-                        ViewThatFits(in: .horizontal) {
-                            windows(shown, now: now, resets: true)
-                            windows(shown, now: now, resets: false)
-                        }
-                        if shown.count < reading.windows.count {
-                            Text("+\(reading.windows.count - shown.count) more").font(.system(size: 11)).foregroundStyle(.secondary)
-                        }
+        Group {
+            if let reading = state?.reading, !reading.windows.isEmpty {
+                let lines = reading.lines(at: now)
+                VStack(alignment: .leading, spacing: 3) {
+                    ViewThatFits(in: .horizontal) {
+                        self.lines(lines.shown, resets: true)
+                        self.lines(lines.shown, resets: false)
                     }
-                    .help(details(reading, now: now))
-                } else if let note = state?.reading?.note {
-                    Text(note).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2).help(note)
-                } else if let error = state?.error {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Usage unavailable").font(.system(size: 12, weight: .medium))
-                        Text(error).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    if lines.more > 0 {
+                        Text("+\(lines.more) more").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
-                    .help(error)
-                } else if state == nil || checking {
-                    Text(request.account.kind == .muse ? "Checking with a brief Muse request…" : "Checking…")
-                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                } else {
-                    Text("Usage unavailable").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
+                .help(details(reading, now: now))
+            } else if let note = state?.reading?.note {
+                Text(note).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2).help(note)
+            } else if let error = state?.error {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Usage unavailable").font(.system(size: 12, weight: .medium))
+                    Text(error).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                .help(error)
+            } else if state == nil || checking {
+                Text(request.account.kind == .muse ? "Checking with a brief Muse request…" : "Checking…")
+                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            } else {
+                Text("Usage unavailable").font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            .padding(.vertical, 6)
         }
+        .padding(.vertical, 6)
     }
 
-    private func windows(_ windows: [UsageWindow], now: Date, resets: Bool) -> some View {
-        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 3) {
-            ForEach(windows) { window in
-                let percent = window.currentPercent(at: now)
-                GridRow {
-                    Text(window.title).font(.system(size: 11, weight: .medium)).lineLimit(1).fixedSize(horizontal: resets, vertical: false)
+    /// Without resets, a column too narrow for the titles cuts them short, in every row alike.
+    private func lines(_ lines: [UsageLine], resets: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(lines) { line in
+                HStack(spacing: 8) {
+                    Text(line.title).font(UsageLineWidths.font(.title)).lineLimit(1)
+                        .frame(minWidth: resets ? widths.title : 0, idealWidth: widths.title, maxWidth: widths.title, alignment: .leading)
                     Group {
-                        if let percent { UsageBar(title: window.title, percent: percent) } else { Capsule().fill(Palette.rowDivider) }
+                        if let percent = line.percent { UsageBar(title: line.title, percent: percent) } else { Capsule().fill(Palette.rowDivider) }
                     }
                     .frame(width: 48, height: 4)
-                    Text(percent.map { "\($0.formatted(.number.precision(.fractionLength(0))))%" } ?? "—")
-                        .font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary).fixedSize()
-                        .gridColumnAlignment(.trailing)
-                    if resets { Text(reset(window, now: now)).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize() }
+                    Text(line.percentText).font(UsageLineWidths.font(.percent)).foregroundStyle(.secondary).fixedSize()
+                        .frame(width: widths.percent, alignment: .trailing)
+                    if resets {
+                        Text(line.reset).font(UsageLineWidths.font(.reset)).foregroundStyle(.secondary).fixedSize()
+                            .frame(width: widths.reset, alignment: .leading)
+                    }
                 }
             }
         }
-    }
-
-    private func reset(_ window: UsageWindow, now: Date) -> String {
-        if window.hasReset(at: now) { return "Reset passed" }
-        if let date = window.resetsAt { return date.formatted(.dateTime.weekday(.abbreviated).hour().minute()) }
-        return window.resetDescription ?? "—"
     }
 
     private func details(_ reading: ProviderUsage, now: Date) -> String {
@@ -196,6 +199,24 @@ private struct ProviderAllowanceCell: View {
             return ["\(window.title): \(percent), \(reset)", window.hasReset(at: now) ? nil : window.detail].compactMap { $0 }.joined(separator: " · ")
         }
         return (lines + [reading.note].compactMap { $0 }).joined(separator: "\n")
+    }
+}
+
+private extension UsageLineWidths {
+    /// Each part's font, measured as it is drawn.
+    static func nsFont(_ part: UsageLine.Part) -> NSFont {
+        switch part {
+        case .title: .systemFont(ofSize: 11, weight: .medium)
+        case .percent: .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        case .reset: .systemFont(ofSize: 11)
+        }
+    }
+
+    static func font(_ part: UsageLine.Part) -> Font { Font(nsFont(part) as CTFont) }
+
+    static func measured(_ lines: [UsageLine]) -> UsageLineWidths {
+        // A point to spare, so a title never comes out a hair too wide for its own width.
+        UsageLineWidths(lines) { text, part in NSAttributedString(string: text, attributes: [.font: nsFont(part)]).size().width + 1 }
     }
 }
 

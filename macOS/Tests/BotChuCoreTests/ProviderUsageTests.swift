@@ -69,6 +69,41 @@ import Testing
         #expect(UsageParser.claudeReset("9am (Not/A_Zone)", now: now) == nil)
     }
 
+    @Test func compactLinesShowAtMostFourWindows() {
+        let resetsAt = now.addingTimeInterval(7_200)
+        let windows = [UsageWindow(id: "a", title: "5-hour", usedPercent: 23.6, resetsAt: resetsAt),
+                       UsageWindow(id: "b", title: "Weekly", usedPercent: 80, resetsAt: now),
+                       UsageWindow(id: "c", title: "Key", usedPercent: 0, resetDescription: "No scheduled reset"),
+                       UsageWindow(id: "d", title: "Unknown", usedPercent: nil)]
+        let four = ProviderUsage(windows: windows).lines(at: now)
+        #expect(four.more == 0)
+        #expect(four.shown.map(\.id) == ["a", "b", "c", "d"])
+        #expect(four.shown.map(\.percent) == [23.6, nil, 0, nil]) // a passed reset's reading isn't the new window's
+        #expect(four.shown.map(\.percentText) == ["24%", "—", "0%", "—"])
+        #expect(four.shown.map(\.reset) == [resetsAt.formatted(.dateTime.weekday(.abbreviated).hour().minute()),
+                                            "Reset passed", "No scheduled reset", "—"])
+        let five = ProviderUsage(windows: windows + [UsageWindow(id: "e", title: "Extra", usedPercent: 1)]).lines(at: now)
+        #expect(five.shown.map(\.id) == ["a", "b", "c"]) // the fourth line says how many more
+        #expect(five.more == 2)
+    }
+
+    @Test func lineWidthsAreTheWidestOfEveryRow() {
+        let claude = ProviderUsage(windows: [UsageWindow(id: "a", title: "5-hour", usedPercent: 0, resetDescription: "Sat"),
+                                             UsageWindow(id: "b", title: "Weekly", usedPercent: 54, resetsAt: now)]).lines(at: now).shown
+        let google = ProviderUsage(windows: [UsageWindow(id: "c", title: "Claude & GPT · 5-hour", usedPercent: 100)]).lines(at: now).shown
+        var parts: [UsageLine.Part: Set<String>] = [:]
+        let widths = UsageLineWidths(claude + google) { text, part in
+            parts[part, default: []].insert(text)
+            return Double(text.count) * (part == .title ? 6.5 : 6)
+        }
+        // Each part is measured in its own font, and rounded up to whole points.
+        #expect(parts == [.title: ["5-hour", "Weekly", "Claude & GPT · 5-hour"], .percent: ["0%", "—", "100%"], .reset: ["Sat", "Reset passed", "—"]])
+        #expect(widths == UsageLineWidths(title: 137, percent: 24, reset: 72))
+        #expect(UsageLineWidths([], measure: { _, _ in 10 }) == UsageLineWidths())
+        let long = ProviderUsage(windows: [UsageWindow(id: "x", title: String(repeating: "Long ", count: 60), usedPercent: 1)]).lines(at: now).shown
+        #expect(UsageLineWidths(long, measure: { text, _ in Double(text.count) * 6 }).title == UsageLineWidths.maxTitle)
+    }
+
     @Test func openRouterLimitsAndUTCResets() throws {
         let data = Data(#"{"data":{"limit":100,"limit_remaining":74.5,"limit_reset":"weekly","usage":999,"usage_weekly":25.5}}"#.utf8)
         let reading = try UsageParser.openRouter(data, now: now)

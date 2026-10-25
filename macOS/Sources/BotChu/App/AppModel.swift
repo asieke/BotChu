@@ -158,9 +158,12 @@ final class AppModel {
     /// The repository selected in Projects, shown in its sidebar; nil hides the sidebar.
     var projectSelection: ProjectSelection?
     var documentEditor: DocumentEditorRequest?
-    /// Report a Bug or Feature, and what files its issues: gh, or a stand-in (`DevHooks`, tests).
+    /// Report a Bug or Feature, what files its issues: gh, or a stand-in (`DevHooks`, tests), what
+    /// takes its window's screenshot, and whether one is being taken, before the sheet opens.
     var issueReport: IssueReportRequest?
     @ObservationIgnored var issueFiler = DevHooks.issueFiler
+    @ObservationIgnored var windowCapture = DevHooks.windowCapture
+    var openingReport = false
     let settings: AppSettings
     let usage: UsageCache
     /// Usage views inject this lookup in tests so they never read the owner's Keychain.
@@ -211,6 +214,8 @@ final class AppModel {
     /// The open pull requests and issues across the repositories, as saved or synced.
     var openItems: [GitHubLookup.OpenItem]?
     var openItemsError: String?
+    /// Each repository's open issue count, as saved or synced (`issuePreview(of:)`).
+    var openIssueStatus: [String: OpenIssueStatus]?
     /// The GitHub account the Projects catalog belongs to, and when it was last synced.
     var projectsLogin: String?
     var repositoriesReadAt: Date?
