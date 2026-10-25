@@ -8,7 +8,10 @@ cd "$(dirname "$0")/.."
   || { echo "deploy: needs a clean checkout of main" >&2; exit 1; }
 if [ -z "${DEPLOY_UPDATED:-}" ]; then
   DEPLOY_FROM=$(git rev-parse HEAD)
-  git fetch --quiet origin main && git merge --quiet --ff-only --no-overwrite-ignore origin/main
+  git fetch --quiet origin main
+  git merge --quiet --ff-only --no-overwrite-ignore origin/main
+  [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] \
+    || { echo "deploy: main has commits that are not on origin/main; deploy only what is merged" >&2; exit 1; }
   DEPLOY_UPDATED=1 DEPLOY_FROM=$DEPLOY_FROM exec scripts/deploy.sh "$@"
 fi
 unset DEPLOY_UPDATED; export DEPLOY_FROM   # the commit that was here before this deploy
