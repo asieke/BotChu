@@ -28,7 +28,7 @@ extension RenderingTests {
         window.makeKeyAndOrderFront(nil)
         try await Task.sleep(for: .milliseconds(300))
 
-        // Rows, from the top: Home, the heading, then each task, one line of title each.
+        // Rows, from the top: Home, the heading, then each task, two lines each.
         let home = NSPoint(x: 120, y: 33), heading: CGFloat = 77
         func row(_ index: Int) -> NSPoint { NSPoint(x: 120, y: 124 + CGFloat(index) * 52) }
         func click(_ point: NSPoint, in view: NSView? = nil) async throws {
@@ -191,10 +191,11 @@ extension RenderingTests {
         model.unread.insert(tasks[0])
         model.conversation(tasks[2]).replace([ChatMessage(role: .user, text: "Go"), ChatMessage(role: .error, text: "It broke")])
         #expect(model.tabState(of: tasks[0]).kind == .news)
-        #expect(model.conversationTab(of: tasks[0])?.detail == "repo · Finished · PR #122")
-        #expect(model.conversationTab(of: tasks[1])?.detail == "repo · Editing code…")
-        #expect(model.conversationTab(of: tasks[2])?.detail == "repo · Turn failed")
-        #expect(model.conversationTab(of: tasks[2])?.title == "#43 Speed up the sync")
+        #expect(model.conversationTab(of: tasks[0])?.detail == "Finished · PR #122")
+        #expect(model.conversationTab(of: tasks[1])?.detail == "Editing code…")
+        #expect(model.conversationTab(of: tasks[2])?.detail == "Turn failed")
+        #expect(model.conversationTab(of: tasks[2])?.title == "repo #43")
+        #expect(model.conversationTab(of: tasks[2])?.subject == "Speed up the sync")
         #expect(model.conversationTab(of: home)?.detail == bot.account.name)
         let summary = model.botRowSummary(of: bot)
         #expect(summary.dots == [.news, .working, .failed])

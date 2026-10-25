@@ -70,25 +70,30 @@ import Testing
         #expect(![Kind.idle, .news, .failed].contains { $0.isActive })
     }
 
-    @Test func aTaskTabShowsItsNumberSubjectPlaceAndState() {
+    @Test func aTaskTabShowsItsRepositoryProminentlyAndWhatItIsDoing() {
         let working = TabState.working(.coding, since: now.addingTimeInterval(-252))
         let tab = ConversationTab(task: issue, machine: nil, state: working)
-        #expect(tab.numberText == "#113")
-        #expect(tab.title == "#113 Show repository issues and their count in the Task Activity sidebar")
-        #expect(tab.detail == "BotChu · Editing code…")
-        #expect(tab.detailPlace == "BotChu · ")
+        // The first, prominent line: the repository it works in and the issue's number.
+        #expect(tab.name == "BotChu" && tab.numberText == "#113")
+        #expect(tab.title == "BotChu #113")
+        // The second: what it is doing, with its time.
+        #expect(tab.detail == "Editing code…")
         #expect(tab.state.time(at: now) == "4:12")
-        #expect(tab.help(shortcut: "⌘2") == "asieke/BotChu · Issue #113 · This Mac · ⌘2")
-        #expect(tab.spoken(at: now) == "#113 Show repository issues and their count in the Task Activity sidebar, Editing code…, 4 minutes 12 seconds")
-        // Idle, it names only where it is.
+        #expect(tab.help(shortcut: "⌘2") == "Show repository issues and their count in the Task Activity sidebar\nasieke/BotChu · Issue #113 · This Mac · ⌘2")
+        #expect(tab.spoken(at: now)
+                == "BotChu #113, Show repository issues and their count in the Task Activity sidebar, Editing code…, 4 minutes 12 seconds")
+        // Idle, the second line says what it is about.
         let idle = ConversationTab(task: issue, machine: nil, state: .idle(since: now.addingTimeInterval(-3_600)))
-        #expect(idle.detail == "BotChu")
-        #expect(idle.detailPlace == "BotChu")
-        #expect(idle.spoken(at: now) == "#113 Show repository issues and their count in the Task Activity sidebar, BotChu, 1 hour ago")
+        #expect(idle.detail == "Show repository issues and their count in the Task Activity sidebar")
+        #expect(idle.spoken(at: now) == "BotChu #113, Show repository issues and their count in the Task Activity sidebar, 1 hour ago")
+        // Finished with its pull request, or failed.
+        #expect(ConversationTab(task: issue, machine: nil, state: .news(pullRequest: 122, at: now)).detail == "Finished · PR #122")
         // On a host, without a shortcut (past the first eight tasks).
         let far = ConversationTab(task: issue, machine: "Far Mac", state: .failed(at: now))
-        #expect(far.detail == "BotChu on Far Mac · Turn failed")
-        #expect(far.help(shortcut: nil) == "asieke/BotChu · Issue #113 · Far Mac")
+        #expect(far.title == "BotChu #113" && far.machine == "Far Mac")
+        #expect(far.detail == "Turn failed")
+        #expect(far.help(shortcut: nil).hasSuffix("asieke/BotChu · Issue #113 · Far Mac"))
+        #expect(far.spoken(at: now).hasPrefix("BotChu #113 on Far Mac, Show repository issues"))
     }
 
     @Test func aReviewABriefAndAnIssueNotLookedUpYet() {
@@ -97,24 +102,27 @@ import Testing
                                          isPullRequest: true), review: .review)
         review.pullRequest = 41
         let tab = ConversationTab(task: review, machine: nil, state: .news(pullRequest: 41, at: now))
-        #expect(tab.isReview && tab.title == "#41 Add a greeting to the README")
-        #expect(tab.detail == "Hello-World review · Finished · PR #41")
-        #expect(tab.help(shortcut: "⌘5") == "octocat/Hello-World · Pull request #41 review · This Mac · ⌘5")
-        #expect(tab.spoken(at: now).hasPrefix("#41 Review of Add a greeting to the README, Finished · PR #41"))
+        #expect(tab.isReview && tab.title == "Hello-World #41")
+        #expect(tab.detail == "Finished · PR #41")
+        #expect(tab.help(shortcut: "⌘5") == "Add a greeting to the README\noctocat/Hello-World · Pull request #41 review · This Mac · ⌘5")
+        #expect(tab.spoken(at: now).hasPrefix("Review of Hello-World #41, Add a greeting to the README, Finished · PR #41"))
 
-        // A brief shows its words, more of them than the title's 28 characters.
+        // A brief has no number: the repository alone, and the brief's words, more of them than the
+        // title's 28 characters.
         let brief = BotTask(repo: "asieke/GitChu", checkout: "/w/GitChu", brief: "Speed up the sync of large repositories by batching requests\nDetails…")
         #expect(brief.title == "GitChu · Speed up the sync of large…")
         let briefTab = ConversationTab(task: brief, machine: nil, state: .idle(since: nil))
         #expect(briefTab.number == nil && briefTab.numberText == nil)
-        #expect(briefTab.title == "Speed up the sync of large repositories by batching requests")
-        #expect(briefTab.help(shortcut: "⌘3") == "asieke/GitChu · This Mac · ⌘3")
+        #expect(briefTab.title == "GitChu")
+        #expect(briefTab.detail == "Speed up the sync of large repositories by batching requests")
+        #expect(briefTab.help(shortcut: "⌘3").hasSuffix("asieke/GitChu · This Mac · ⌘3"))
         // A title of its own, after the repository's name, or whole.
         #expect(ConversationTab.subject(of: BotTask(title: "GitChu · Tidy up", repo: "asieke/GitChu", checkout: "/w", brief: "Something else")) == "Tidy up")
         #expect(ConversationTab.subject(of: BotTask(title: "Tidy up", repo: "asieke/GitChu", checkout: "/w")) == "Tidy up")
-        // An issue whose title isn't read yet shows the repository, not "BotChu #113" again.
+        // An issue whose title isn't read yet names the issue, not "BotChu #113" again.
         let unread = BotTask(repo: "asieke/BotChu", checkout: "/w", work: .init(number: 113, isPullRequest: false, repo: "asieke/BotChu"))
-        #expect(ConversationTab(task: unread, machine: nil, state: .preparing).title == "#113 BotChu")
+        let unreadTab = ConversationTab(task: unread, machine: nil, state: .idle(since: nil))
+        #expect(unreadTab.title == "BotChu #113" && unreadTab.detail == "Issue #113")
         let named = BotTask(title: "ScreenTimeDaddy improvements", repo: "fixture/repo", checkout: "/w",
                             work: .init(number: 41, isPullRequest: false, repo: "fixture/repo"))
         #expect(ConversationTab.subject(of: named) == "ScreenTimeDaddy improvements")
@@ -129,7 +137,6 @@ import Testing
         #expect(idle.help(shortcut: "⌘1") == "Home · ⌘1")
         let working = ConversationTab.home(account: "Claude Dev", state: .working(.thinking, since: now.addingTimeInterval(-5)))
         #expect(working.detail == "Thinking…")
-        #expect(working.detailPlace == nil)
     }
 
     @Test func shortcutsCoverHomeAndTheFirstEightTasks() {

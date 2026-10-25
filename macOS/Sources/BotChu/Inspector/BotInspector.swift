@@ -297,8 +297,8 @@ struct ClosedTasksSection: View {
     }
 }
 
-/// A closed task in Home's list: its number and what it was about, and its repository; a click
-/// opens it again.
+/// A closed task in Home's list: its repository and number, and what it was about; a click opens
+/// it again.
 struct ClosedTaskRow: View {
     let task: BotTask
     let last: Bool
@@ -312,11 +312,10 @@ struct ClosedTaskRow: View {
                     Text(tab.title)
                         .font(.system(size: 13, weight: .medium))
                         .lineLimit(1)
-                    Text(task.repo)
+                    Text(tab.subject)
                         .font(.system(size: 11))
                         .foregroundStyle(Palette.secondaryText)
                         .lineLimit(1)
-                        .truncationMode(.middle)
                 }
                 Spacer(minLength: 4)
                 Image(systemName: "arrow.uturn.backward")

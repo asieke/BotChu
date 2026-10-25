@@ -221,7 +221,7 @@ struct ConversationColumn: View {
 }
 
 /// One tab of the column: a status dot (a close button in its place on hover, while no turn runs),
-/// the number and what it is about on up to two lines, then where it is, its state and a time.
+/// the repository and issue number, then what it is doing and a time, or what it is about.
 struct ConversationRow: View {
     @Environment(AppModel.self) private var model
     let target: ChatTarget
@@ -245,8 +245,8 @@ struct ConversationRow: View {
                         .opacity(closable && hovered ? 0 : 1)
                     VStack(alignment: .leading, spacing: 3) {
                         ConversationTitle(tab: tab, selected: selected)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                         ConversationDetail(tab: tab)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -296,7 +296,8 @@ struct ConversationRow: View {
     }
 }
 
-/// A tab's first line: its number in the secondary colour, a review's eye, then what it is about.
+/// A tab's first, prominent line: a review's eye, the repository it works in, then its issue's
+/// number (and its host) in the secondary colour.
 struct ConversationTitle: View {
     let tab: ConversationTab
     let selected: Bool
@@ -307,18 +308,23 @@ struct ConversationTitle: View {
 
     private var text: Text {
         var text = Text("")
-        if let number = tab.numberText {
-            text = text + Text(number + " ").foregroundStyle(Palette.secondaryText).fontWeight(.medium).monospacedDigit()
-        }
         if tab.isReview {
             text = text + Text(Image(systemName: "eye")).foregroundStyle(Palette.secondaryText) + Text(" ")
         }
-        return text + Text(tab.subject)
+        text = text + Text(tab.name)
+        if let number = tab.numberText {
+            text = text + Text(" " + number).foregroundStyle(Palette.secondaryText).fontWeight(.medium).monospacedDigit()
+        }
+        if let machine = tab.machine {
+            text = text + Text(" · " + machine).foregroundStyle(Palette.secondaryText).fontWeight(.regular)
+        }
+        return text
     }
 }
 
-/// A tab's second line: where it is and its state on the left, which shortens first, and its time
-/// on the right, in tabular digits, never cut off. A running turn's time ticks each second.
+/// A tab's second line: what it is doing (while idle, what it is about) on the left, which shortens
+/// first, and its time on the right, in tabular digits, never cut off. A running turn's time ticks
+/// each second.
 struct ConversationDetail: View {
     let tab: ConversationTab
 
@@ -347,15 +353,12 @@ struct ConversationDetail: View {
     }
 
     private var what: Text {
-        var text = Text(tab.detailPlace ?? "")
         switch tab.state {
-        case .idle: break
-        case .failed: text = text + Text(tab.state.text ?? "").foregroundStyle(StatusLook.error.dot)
+        case .failed: Text(tab.detail).foregroundStyle(StatusLook.error.dot)
         case .news(let pullRequest?, _):
-            text = text + Text("Finished · ") + Text("PR #\(pullRequest)").foregroundStyle(Palette.pathText).fontWeight(.medium)
-        default: text = text + Text(tab.state.text ?? "")
+            Text("Finished · ") + Text("PR #\(pullRequest)").foregroundStyle(Palette.pathText).fontWeight(.medium)
+        default: Text(tab.detail)
         }
-        return text
     }
 }
 
@@ -542,10 +545,12 @@ private struct RailTile: View {
         }
     }
 
-    /// The tab's two lines, with its shortcut.
+    /// The tab's two lines, with its host and shortcut; while it works, what it is about too.
     private func railHelp(_ tab: ConversationTab) -> String {
+        let first = tab.title + (tab.machine.map { " · \($0)" } ?? "")
         let second = [tab.detail, tab.state.time(at: .now), ConversationTab.shortcut(forTab: index)].compactMap { $0 }
-        return tab.title + "\n" + second.joined(separator: " · ")
+        let about = tab.isHome || tab.state.text == nil ? [] : [tab.subject]
+        return ([first] + about + [second.joined(separator: " · ")]).joined(separator: "\n")
     }
 }
 

@@ -262,19 +262,20 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     and memory (which stays in the bot's folder), where the task is and what it is. While a bot has
     an open task, its conversations are tabs in a column between the bot list and the chat: Home
     pinned at the top, then a **Tasks** heading with their count, **+** (New Task, ⌘T) and **«**
-    (collapse), then the open tasks in the order they were opened, which scroll. A tab's first line
-    is its issue's or pull request's number and title (a review's with an eye; a brief's words
-    without an issue), on up to two lines; its second, its repository and its state, with a time
-    on the right that is never cut off: idle (a faint ring, and its last activity: 2m, 1h, 1d),
-    making the worktree or starting (a violet ring), working (violet, what it is doing and its
-    elapsed time, ticking each second), finished since it was last shown (blue, with its pull
-    request), or its last turn failed (red, until its next turn starts). Home's tab names its
-    account, or its own turn's state. The selected tab takes the chat's background and runs into
+    (collapse), then the open tasks in the order they were opened, which scroll. A tab's first,
+    prominent line is the repository it works in and its issue's or pull request's number
+    ("BotChu #113"; a review's with an eye, a host's name after it); its second says what it is
+    doing, with a time on the right that is never cut off: making the worktree or starting (a
+    violet ring), working (violet, what it is doing and its elapsed time, ticking each second),
+    finished since it was last shown (blue, with its pull request), or its last turn failed (red,
+    until its next turn starts); while idle (a faint ring), what it is about (its issue's title, or
+    a brief's words) and its last activity (2m, 1h, 1d). Home's tab names its account, or its own
+    turn's state. The selected tab takes the chat's background and runs into
     it. Dots hold still; when a turn ends, its dot pops once (with Reduce Motion, it only
     crossfades). A click, **⌘1** (Home) to **⌘9** (the first eight tasks, in the Bot menu), ⌃Tab,
     and ↑ and ↓ while a tab has keyboard focus switch conversations. Hovering a task's tab turns its
-    dot into a close button, unless its turn is running, and its tooltip names the repository, the
-    issue, the machine and the shortcut; its context menu keeps the issue, pull request, branch,
+    dot into a close button, unless its turn is running, and its tooltip says what it is about,
+    then the repository, the issue, the machine and the shortcut; its context menu keeps the issue, pull request, branch,
     folder, Terminal, new-session and close actions. Closing the shown task shows the tab above it.
     The column is 240 points wide; drag its edge to make it 200 to 320, which is remembered. **«**
     or **View ▸ Collapse Tasks** folds it into a 56-point rail of tiles (a house for Home, each

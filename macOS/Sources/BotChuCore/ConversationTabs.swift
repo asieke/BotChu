@@ -100,33 +100,36 @@ public enum TabState: Equatable, Sendable {
     }
 }
 
-/// What a conversation's tab says (#128): on the first line its number and what it is about, on
-/// the second where it is and how it is doing, with a time.
+/// What a conversation's tab says (#128): on its first, prominent line the repository it works in
+/// and its issue's number ("BotChu #113"), or Home; on the second what it is doing, with a time, or
+/// while idle what it is about.
 public struct ConversationTab: Equatable, Sendable {
     public var isHome: Bool
+    /// "Home", or the task's repository, by its name without its owner.
+    public var name: String
     /// The task's issue or pull request; nil for Home and a task from a brief.
     public var number: Int?
-    /// "Home", or what the task is about: its issue's or pull request's title, else its brief.
-    public var subject: String
     public var isReview: Bool
-    /// Where it is: the task's repository (" review" for a review, " on Far Mac" on a host), or
-    /// Home's account.
-    public var place: String
+    /// The host the task works on; nil on this Mac, and for Home.
+    public var machine: String?
+    /// What the task is about: its issue's or pull request's title, else its brief. Home's account.
+    public var subject: String
     public var state: TabState
     /// The tooltip's parts before the shortcut: `owner/name`, `Issue #105`, `This Mac`.
     var about: [String]
 
     public static func home(account: String, state: TabState) -> ConversationTab {
-        ConversationTab(isHome: true, number: nil, subject: "Home", isReview: false, place: account, state: state, about: ["Home"])
+        ConversationTab(isHome: true, name: "Home", number: nil, isReview: false, machine: nil, subject: account, state: state, about: ["Home"])
     }
 
     /// A task's tab; `machine` is the host it works on, nil on this Mac.
     public init(task: BotTask, machine: String?, state: TabState) {
         isHome = false
+        name = task.repoName
         number = task.work?.number
-        subject = Self.subject(of: task)
         isReview = task.review != nil
-        place = task.repoName + (isReview ? " review" : "") + (machine.map { " on \($0)" } ?? "")
+        self.machine = machine
+        subject = Self.subject(of: task)
         self.state = state
         var about = [task.repo]
         if let work = task.work {
@@ -136,25 +139,26 @@ public struct ConversationTab: Equatable, Sendable {
         self.about = about
     }
 
-    init(isHome: Bool, number: Int?, subject: String, isReview: Bool, place: String, state: TabState, about: [String]) {
+    init(isHome: Bool, name: String, number: Int?, isReview: Bool, machine: String?, subject: String, state: TabState, about: [String]) {
         self.isHome = isHome
+        self.name = name
         self.number = number
-        self.subject = subject
         self.isReview = isReview
-        self.place = place
+        self.machine = machine
+        self.subject = subject
         self.state = state
         self.about = about
     }
 
     /// The issue's or pull request's title; else the brief's words, from the task's title
     /// ("GitChu · Speed up the sync"), or its whole first line when the title is the one BotChu
-    /// gave it (two lines show more than the title's 28 characters); else the task's title. A task
-    /// whose issue isn't looked up yet shows its repository.
+    /// gave it (it has more room than the title's 28 characters); else the task's title. A task
+    /// whose issue isn't looked up yet names it: "Issue #113".
     public static func subject(of task: BotTask) -> String {
         if let work = task.work {
             if !work.title.isEmpty { return work.title }
             return task.title == TaskNaming.title(repo: task.repo, work: work, brief: task.brief, review: task.review != nil)
-                ? task.repoName : task.title
+                ? (work.isPullRequest ? "Pull request #" : "Issue #") + "\(work.number)" : task.title
         }
         if task.title == TaskNaming.title(repo: task.repo, work: nil, brief: task.brief) {
             let line = TaskNaming.shortened(task.brief, limit: .max)
@@ -164,35 +168,28 @@ public struct ConversationTab: Equatable, Sendable {
         return task.title.hasPrefix(prefix) ? String(task.title.dropFirst(prefix.count)) : task.title
     }
 
-    /// "#113", the number as the first line starts with it.
+    /// "#113", after the repository's name on the first line.
     public var numberText: String? { number.map { "#\($0)" } }
 
-    /// The first line as one string: "#113 Show repository issues…".
-    public var title: String { [numberText, subject].compactMap { $0 }.joined(separator: " ") }
+    /// The first line as one string: "BotChu #113", "Home".
+    public var title: String { [name, numberText].compactMap { $0 }.joined(separator: " ") }
 
-    /// The second line's left side: where it is, then how it is doing unless idle. Home names only
-    /// its account while idle, and only its state otherwise.
-    public var detail: String {
-        guard let text = state.text else { return place }
-        return isHome ? text : "\(place) · \(text)"
-    }
+    /// The second line's left side: what it is doing, or while idle what it is about (Home: its
+    /// account).
+    public var detail: String { state.text ?? subject }
 
-    /// The prefix of `detail` before its state, which shows in the secondary colour while the state
-    /// may show in red.
-    public var detailPlace: String? {
-        guard state.text != nil else { return place }
-        return isHome ? nil : "\(place) · "
-    }
-
-    /// What VoiceOver reads for the tab: its title, its state and its time.
+    /// What VoiceOver reads for the tab: its title (and host), what it is about, what it is doing,
+    /// and its time.
     public func spoken(at now: Date) -> String {
-        let name = isReview ? [numberText, "Review of " + subject].compactMap { $0 }.joined(separator: " ") : title
-        return [name, state.text ?? place, state.spokenTime(at: now)].compactMap { $0 }.joined(separator: ", ")
+        let name = (isReview ? "Review of " : "") + title + (machine.map { " on \($0)" } ?? "")
+        return [name, subject, state.text, state.spokenTime(at: now)].compactMap { $0 }.joined(separator: ", ")
     }
 
-    /// The tooltip: `owner/name · Issue #105 · This Mac · ⌘2`.
+    /// The tooltip: what a task is about, then `owner/name · Issue #105 · This Mac · ⌘2`; Home's
+    /// is `Home · ⌘1`.
     public func help(shortcut: String?) -> String {
-        (about + [shortcut].compactMap { $0 }).joined(separator: " · ")
+        let place = (about + [shortcut].compactMap { $0 }).joined(separator: " · ")
+        return isHome ? place : subject + "\n" + place
     }
 
     /// ⌘1 shows Home and ⌘2 to ⌘9 the first eight tasks: the shortcut of the tab at `index` among
