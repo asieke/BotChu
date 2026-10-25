@@ -517,10 +517,8 @@ extension RenderingTests {
         try await idle(300)
         let conversation = app.conversation(target)
         let scroll = try #require(Self.chatScrollView(in: window.contentView!))
-        func scrollTo(_ y: CGFloat) {
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, y)))
-            scroll.reflectScrolledClipView(scroll.contentView)
-        }
+        // As the reader scrolls: one who leaves the newest content isn't taken back to it (#131).
+        func scrollTo(_ y: CGFloat) { Self.dragScroller(scroll, to: y) }
         func items() -> ChunkedArray<ActivityItem> {
             model.items(for: app.thread(target), root: app.task(target)?.folder ?? bench.bot.workspace, epoch: conversation.epoch)
         }
