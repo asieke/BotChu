@@ -324,6 +324,28 @@ private struct Layout {
         #expect(layout.viewport.correction == nil)
     }
 
+    /// A card opened while the chat follows grows downward from where it was clicked: the chat
+    /// stops following in the same update, and the reader's row is where they were looking.
+    @Test func aCardOpenedWhileFollowingGrowsFromWhereItWasClicked() {
+        let messages = [ChatMessage(role: .user, text: "Trace it")] + (0..<5_000).map { call($0) }
+            + [ChatMessage(role: .assistant, text: "Done.")]
+        var layout = Layout(items(messages))
+        layout.settle()
+        guard case .exploration(let group) = layout.items[1] else { Issue.record("no group"); return }
+        let head = TranscriptViewport.RowID(item: group.id, part: 0)
+        let clicked = try! #require(layout.onScreen(head))
+        layout.opened = [group.id]
+        // The update that opens it plans while still pinned, then the chat no longer follows.
+        _ = layout.viewport.plan(layout.items, from: 0, inputs: .init(width: layout.width, density: 1, dark: false, epoch: 0), pinned: true) { _, item in
+            if case .exploration = item { return .init(split: .opened) }
+            return .init()
+        }
+        layout.pinned = false
+        layout.settle()
+        #expect(layout.onScreen(head).map { abs($0 - clicked) < 0.5 } == true)
+        #expect(layout.viewport.plan.rows.count <= TranscriptViewport.rowLimit)
+    }
+
     /// A reader who went to the very end without following stays there as the rows near it are
     /// measured taller than estimated, so the chat sees them at the bottom and follows again.
     @Test func aReaderAtTheEndStaysThere() {

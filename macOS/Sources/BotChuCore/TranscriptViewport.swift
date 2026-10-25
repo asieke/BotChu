@@ -250,7 +250,9 @@ public struct TranscriptViewport: Sendable {
         shift = 0
         planned.removeAll(keepingCapacity: true)
         for (index, row) in plan.rows.enumerated() { planned[row.id] = index }
-        if pinned || anchorAt == nil { anchor = self.anchor(at: top) }
+        // While pinned, the reader's row is where the scroll view last said (`scrolled`): a card
+        // opened then grows from where it was clicked, once the chat no longer follows.
+        if !pinned, anchorAt == nil { anchor = self.anchor(at: top) }
         return plan
     }
 
@@ -353,7 +355,7 @@ public struct TranscriptViewport: Sendable {
             self.correction = nil
         } else {
             anchor = anchor(at: top)
-            atEnd = isAtEnd(top: top, height: height)
+            atEnd = !pinned && isAtEnd(top: top, height: height)
         }
         return resized || uncovered(top: top, height: height)
     }
@@ -373,7 +375,7 @@ public struct TranscriptViewport: Sendable {
         visibleTop = top
         if abs(correction - top) > 0.5 {
             anchor = anchor(at: top)
-            atEnd = isAtEnd(top: top, height: viewport ?? Self.defaultViewport)
+            atEnd = !pinned && isAtEnd(top: top, height: viewport ?? Self.defaultViewport)
         }
     }
 

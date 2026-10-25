@@ -187,7 +187,7 @@ extension RenderingTests {
         #expect(model.peakRealized <= limit)
     }
 
-    /// Rich replies, code, tables and images above the reader, rendered late, shown again after
+    /// Rich replies, code, tables and pictures above the reader, rendered late, shown again after
     /// memory pressure, at another width and in the other appearance: the row the reader is at
     /// stays where it is on the screen, and no blank space opens up in the visible part.
     @Test func lateHeightsAboveTheReaderDontMoveIt() async throws {
@@ -196,7 +196,14 @@ extension RenderingTests {
         let fixture = try ActivityChatFixture()
         defer { fixture.cleanUp() }
         let app = fixture.app
-        app.conversation(fixture.task).replace(BrowsingFixture.richMessages(240))
+        // And pictures, which take their height once decoded.
+        let workspace = try #require(app.bot(fixture.task.botID)?.workspace)
+        let picture = try BotHome(workspace: workspace).saveImage(BrowsingFixture.png(), name: "screenshot.png")
+        var messages = BrowsingFixture.richMessages(240)
+        for index in stride(from: 8, to: messages.count, by: 24) {
+            messages[index] = ChatMessage(role: .user, text: "Look at this", images: [picture])
+        }
+        app.conversation(fixture.task).replace(messages)
         TranscriptCache.forget(fixture.task)
         app.show(fixture.task)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 760), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -300,6 +307,18 @@ extension RenderingTests {
             default: message(5 + index % 2)
             }
         }
+    }
+
+    /// A 600 × 400 picture.
+    static func png() -> Data {
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 600, pixelsHigh: 400, bitsPerSample: 8, samplesPerPixel: 4,
+                                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSColor.systemTeal.setFill()
+        NSRect(x: 0, y: 0, width: 600, height: 400).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.representation(using: .png, properties: [:])!
     }
 
     static func anchor(_ model: TranscriptModel) -> (row: TranscriptViewport.RowID, at: Double)? {
