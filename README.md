@@ -203,7 +203,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     Antigravity subagent
     launch cards finish when the CLI acknowledges the launch; the bot reports the workers' results
     in its replies. A missing completion record shows a neutral question mark, not a tool failure.
-    A turn can be stopped. The
+    A turn can be stopped: its CLI is interrupted, terminated 3 seconds later and killed, with
+    what it started, 5 seconds after that. A CLI still running 30 seconds after it said its turn
+    ended (Antigravity once printed its result and never exited, #145) is terminated, then killed
+    5 seconds later; the turn stands as it said, with a note in its conversation. The
     thread and the CLI's session id are saved, so the next message (also after a relaunch) resumes
     the same CLI session; quitting mid-turn saves what the turn printed so far. A CLI's output is
     parsed off the main thread and reaches the window a few times a second, and each conversation
@@ -341,7 +344,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     first, which counts any failures. A run that finishes while the tab shows it stays in view until
     the tab is shown again, as does one opened from the chat. Home also groups delegations
     belonging to its tasks. These runs never add tabs. Stop cascades through
-    descendants; callers must wait before finishing their turn.
+    descendants; callers must wait before finishing their turn. A run whose CLI said its turn
+    ended but doesn't exit is ended as a turn's is (above), and its handoff goes back.
     Three nesting levels, twelve concurrent children and sixty-four delegations per root turn bound
     runaway fan-out. Interrupted records become stopped on relaunch. The helper needs Python 3 on
     each execution machine; SSH mailboxes are polled independently of CLI output. See
@@ -937,7 +941,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     agrees, and recalled by a fresh session), what is left out, bot or shared scope, repeats,
     corrections and forgets, concurrent saves, and saves that fail, wait (also across a relaunch)
     and are tried again; reports: their titles, app state, the size of their window's screenshot, and filing (with attached images) through a stand-in `gh`;
-    output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
+    output parsed off the main thread and delivered in batches, a CLI's end (#145: one still
+    running after it said its turn ended is ended with its turn standing, one that takes input only
+    once its input is closed, one that carries on is left alone, and Stop kills one that ignores
+    SIGINT and SIGTERM, with a process it started), thread summaries, the Markdown cache
     within its budget (ten 128 KB replies written in revisions, then memory pressure), replies being
     written parsed off the main thread (100 rapid deltas coalesced, the worker's limit shared, a slow
     earlier revision never shown over a newer one, the last always settling as a full parse), one

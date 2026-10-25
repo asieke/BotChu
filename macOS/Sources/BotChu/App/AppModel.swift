@@ -1564,6 +1564,8 @@ final class AppModel {
                         ThreadAssembler.closeRunningTools(&messages)
                         if stopped {
                             messages.append(ChatMessage(role: .note, text: "Stopped"))
+                        } else if run.lingered {
+                            messages.append(ChatMessage(role: .note, text: "\(account.name) didn't exit after its reply, so BotChu ended it."))
                         } else if !outcome.ended, machine.isRemote, status == 255 {
                             // ssh's own failure: the host didn't answer, or refused the connection.
                             let detail = Self.lastLines(stderr)
