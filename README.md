@@ -372,6 +372,23 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     rather than a second. "New subagent @bot" (or "delegate this to @bot as a sub-agent") is a
     **sub-agent run** (above): child work of the turn, in its Sub-agents inspector, with no tab of
     its own. A batch goes to one bot as one Task, whose turn spawns a sub-agent run per issue.
+  - **Deliveries:** a bot hands the owner something on purpose with `botchu-inbox send` (the same
+    helper under a third name, found from the conversation's environment as the others are): a
+    `--title`, a Markdown `--note` (or `--note-file`), `--file`s, which are copied as they are when
+    sent (up to 20 MB each, so later edits don't change what the owner reviews), `--pr` and
+    `--issue` links (`owner/name#n`, a number in the current checkout, or a GitHub URL), and an
+    optional `--ask` with `--choice`s. It prints the delivery's ID; the same title sent again in the
+    turn updates that delivery. Sent from a sub-agent run, it is the delivery of the conversation at
+    the top of the chain, crediting the sub-agent's bot (and its files are kept under that bot's
+    name); `--credit <bot>` credits others. A delivery is kept in the sending bot's
+    `.botchu/inbox/<id>/` (`delivery.json` and `files/`), works from a task on a host too (its files
+    are fetched over SSH), and shows as a card in the sending conversation's chat after the turn's
+    reply. A reply to it goes into that conversation through its queue like any message, marked
+    with the delivery, and the bot reads which delivery it answers; the bot's answer joins the
+    delivery's thread. One unread state: reading a delivery clears its conversation's news dot,
+    and showing the conversation reads what it delivered. What the owner did with each delivery
+    (read, done, replied) is in `inbox.json` beside `index.json`. Every session's instructions
+    describe the helper.
   - **Jobs:** an agent can own scheduled jobs, saved instructions it runs on a schedule, such as a
     morning issue triage on weekdays at 9:00. **Jobs** in the sidebar is one table of every agent's
     jobs: the job, its agent, its schedule and time zone, its next run, its state (on, paused,
@@ -958,7 +975,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation. A Task
     handed to another bot (`botchu-task create`, the same helper under a second name) goes through
     the same mailbox; `TaskHandoff.swift` reads and checks the request, recognizes it when asked
-    again, and holds what is written back.
+    again, and holds what is written back. A delivery to the Inbox (`botchu-inbox send`) goes through
+    it too: `Inbox.swift` reads and checks the request, keeps deliveries and their copies in a bot's
+    folder, what the owner did with them (`InboxState`), the list's groups (`InboxList`) and a reply's
+    prompt and thread (`InboxReply`); the app's `InboxModel` takes them in and sends the replies.
     What replies ask to remember (`MemoryNotes`, in `BotContext.swift`) is saved to memory files
     by `MemoryWriter.swift`: one save at a time, read back to check it held, with notes that wait
     and are tried again. Run reviews are in `ReviewStretch.swift` and `RunEvaluation.swift`: each

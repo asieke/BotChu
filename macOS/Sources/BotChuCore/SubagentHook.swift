@@ -4,8 +4,9 @@ import Foundation
 /// Python before starting a turn. Every path is supplied as data, never interpolated into a shell.
 public enum SubagentHookInstaller {
     /// The helper's commands, each a copy of `script`, which acts by the name it is run as:
-    /// `botchu-subagent` starts sub-agent runs, `botchu-task` creates Tasks (#111).
-    public static let commands = ["botchu-subagent", "botchu-task"]
+    /// `botchu-subagent` starts sub-agent runs, `botchu-task` creates Tasks (#111), and
+    /// `botchu-inbox` delivers to the owner's Inbox.
+    public static let commands = ["botchu-subagent", "botchu-task", "botchu-inbox"]
 
     @discardableResult public static func install(binDirectory: URL = SubagentIPC.defaultBinDirectory) throws -> URL {
         try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true,
@@ -282,9 +283,136 @@ def task_main():
         fail("--wait must be between 0 and 3600 seconds.")
     return task_wait(task_submit(args), args.wait)
 
+INBOX_FILE_BYTES = 20 << 20
+INBOX_NOTE_BYTES = 160000
+
+def checkout_repo():
+    try:
+        import subprocess
+        url = subprocess.run(["git", "config", "--get", "remote.origin.url"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, ValueError):
+        return None
+    import re
+    match = re.match(r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    return match.group(1) + "/" + match.group(2) if match else None
+
+def inbox_link(text, pull):
+    import re
+    text = text.strip()
+    match = re.match(r"^https://github\.com/([^/]+)/([^/]+)/(pull|issues)/([0-9]+)", text)
+    if match:
+        return {"repo": match.group(1) + "/" + match.group(2), "number": int(match.group(4)), "pullRequest": match.group(3) == "pull"}
+    match = re.match(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)$", text)
+    if match:
+        return {"repo": match.group(1), "number": int(match.group(2)), "pullRequest": pull}
+    match = re.match(r"^#?([0-9]+)$", text)
+    if match:
+        repo = checkout_repo()
+        if not repo:
+            fail("Give " + text + " as owner/name#number: this folder isn't a checkout of a GitHub repository.")
+        return {"repo": repo, "number": int(match.group(1)), "pullRequest": pull}
+    fail("Give a pull request or issue as owner/name#number, a number, or its GitHub URL: " + text)
+
+def inbox_send(args):
+    import shutil
+    live()
+    title = args.title.strip()
+    if not title or len(title) > 200:
+        fail("Give the delivery a title of 1–200 characters (--title).")
+    if args.note is not None and args.note_file:
+        fail("Use --note or --note-file, not both.")
+    note = args.note or ""
+    if args.note_file:
+        try:
+            note = pathlib.Path(args.note_file).expanduser().read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            fail("Couldn't read the note file: " + str(error))
+    if len(note.encode("utf-8")) > INBOX_NOTE_BYTES:
+        fail("The note must be at most 160 KB; send a longer text as a file (--file).")
+    if args.choice and not args.ask:
+        fail("--choice offers an answer to a question: ask it with --ask.")
+    sources = []
+    for path in args.file or []:
+        source = pathlib.Path(path).expanduser().resolve()
+        if not source.is_file():
+            fail("Not a file: " + path)
+        if source.name.startswith("."):
+            fail("Send " + path + " under a name that doesn't start with a dot.")
+        if source.stat().st_size > INBOX_FILE_BYTES:
+            fail(path + " is larger than 20 MB.")
+        if source.name in (other.name for other in sources):
+            fail("Two files are called " + source.name + "; send one under another name.")
+        sources.append(source)
+    if len(sources) > 20:
+        fail("Send at most 20 files.")
+    links = [inbox_link(value, True) for value in args.pr or []] + [inbox_link(value, False) for value in args.issue or []]
+    request_id = str(uuid.uuid4())
+    staged = ROOT / "inbox" / request_id
+    files = []
+    if sources:
+        staged.mkdir(parents=True, mode=0o700)
+        for source in sources:
+            copy = staged / source.name
+            shutil.copyfile(source, copy)
+            size = copy.stat().st_size
+            if size > INBOX_FILE_BYTES:
+                fail(str(source) + " grew past 20 MB while it was copied.")
+            files.append({"name": source.name, "staged": "inbox/" + request_id + "/" + source.name, "bytes": size, "source": str(source)})
+    delivery = {"title": title, "note": note, "files": files, "links": links, "credits": args.credit or []}
+    if args.ask:
+        delivery["question"] = {"text": args.ask, "choices": args.choice or []}
+    atomic_json(ROOT / "requests" / (request_id + ".json"), {
+        "kind": "inbox",
+        "id": request_id,
+        "invocationID": caller_uuid("BOTCHU_INVOCATION_ID", True),
+        "callerBotID": caller_uuid("BOTCHU_CALLER_BOT_ID", True),
+        "callerTaskID": caller_uuid("BOTCHU_CALLER_TASK_ID"),
+        "parentSubagentID": caller_uuid("BOTCHU_CALLER_SUBAGENT_ID"),
+        "createdAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "delivery": delivery,
+    })
+    started = time.monotonic()
+    path = ROOT / "results" / (request_id + ".result.json")
+    while not path.exists():
+        if time.monotonic() - started > args.wait:
+            print("Pending — BotChu has the delivery and hasn't put it in the Inbox yet. Request: " + request_id, flush=True)
+            return 1
+        live()
+        time.sleep(0.25)
+    result = read_json(path)
+    if result.get("kind") != "inbox" or canonical(result.get("id")) != request_id:
+        fail("Mismatched delivery result: " + request_id)
+    if not result.get("delivered"):
+        fail("Not delivered: " + str(result.get("errorMessage") or "BotChu couldn't take it."))
+    print(("Updated" if result.get("updated") else "Delivered") + " to your owner's Inbox: " + title, flush=True)
+    print("Delivery: " + str(result.get("deliveryID")), flush=True)
+    return 0
+
+def inbox_main():
+    parser = argparse.ArgumentParser(prog="botchu-inbox", description="Deliver something to your owner's Inbox in BotChu: "
+        "a note, copies of files, pull requests and issues, and a question with choices. Their reply comes back into this conversation.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    send = commands.add_parser("send", help="Send a delivery, or update the one sent with the same title in this turn")
+    send.add_argument("--title", required=True)
+    send.add_argument("--note", help="What it is, in Markdown")
+    send.add_argument("--note-file", help="A Markdown file to use as the note")
+    send.add_argument("--file", action="append", help="A file to copy into the delivery (repeatable)")
+    send.add_argument("--pr", action="append", help="A pull request: owner/name#n, n in this repository, or its URL (repeatable)")
+    send.add_argument("--issue", action="append", help="An issue: owner/name#n, n in this repository, or its URL (repeatable)")
+    send.add_argument("--ask", help="The question you can't go on without")
+    send.add_argument("--choice", action="append", help="An answer to --ask your owner can pick in one click (repeatable)")
+    send.add_argument("--credit", action="append", help="Another bot whose work it is: its name, slug or UUID (repeatable)")
+    send.add_argument("--wait", type=float, default=60, help="Seconds to wait for BotChu to take it (default 60)")
+    args = parser.parse_args()
+    if not 0 <= args.wait <= 600:
+        fail("--wait must be between 0 and 600 seconds.")
+    return inbox_send(args)
+
 def main():
     if os.path.basename(sys.argv[0]) == "botchu-task":
         return task_main()
+    if os.path.basename(sys.argv[0]) == "botchu-inbox":
+        return inbox_main()
     parser = argparse.ArgumentParser(description="Start sub-agent runs: child work of this turn, shown in BotChu's Sub-agents "
         "inspector, whose handoffs come back here; call/wait before finishing your turn. To create an independent Task "
         "for a bot, use botchu-task create instead.")

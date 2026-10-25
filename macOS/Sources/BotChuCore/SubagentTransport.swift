@@ -126,6 +126,40 @@ public struct SubagentTransport: Sendable {
         try await write(data, relativePath: "roster.json")
     }
 
+    /// A file `botchu-inbox send` staged in the mailbox (`inbox/<request id>/<name>`), at most `limit`
+    /// bytes, read without following links.
+    public func readStaged(_ relativePath: String, request: UUID, limit: Int) async throws -> Data {
+        guard InboxRequest.isStagedPath(relativePath, request: request) else { throw Failure(message: "Invalid staged file path.") }
+        if machine.isRemote {
+            let data = try await remote("read", [relativePath, String(limit)], outputLimit: limit * 4 / 3 + 1024)
+            guard let decoded = Data(base64Encoded: String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)),
+                  decoded.count <= limit else { throw Failure(message: "A staged file couldn't be read.") }
+            return decoded
+        }
+        try Task.checkCancellation()
+        let path = URL(fileURLWithPath: directory).appendingPathComponent(relativePath).path
+        let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard descriptor >= 0 else { throw Failure(message: "A staged file couldn't be opened.") }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, Int(info.st_size) <= limit else {
+            throw Failure(message: "A staged file must be a regular file of at most \(limit / (1 << 20)) MB.")
+        }
+        let data = try handle.read(upToCount: limit + 1) ?? Data()
+        guard data.count <= limit else { throw Failure(message: "A staged file grew too large.") }
+        return data
+    }
+
+    /// Removes what `botchu-inbox send` staged for a request, once BotChu has its copies.
+    public func removeStaged(request: UUID) async throws {
+        let name = request.uuidString.lowercased()
+        if machine.isRemote { _ = try await remote("drop", [name]); return }
+        try Task.checkCancellation()
+        do { try FileManager.default.removeItem(at: URL(fileURLWithPath: directory).appendingPathComponent("inbox").appendingPathComponent(name)) }
+        catch CocoaError.fileNoSuchFile { }
+    }
+
     public func heartbeat() async throws {
         if machine.isRemote { _ = try await remote("heartbeat"); return }
         try await write(Self.heartbeatData(closed: false), relativePath: "heartbeat.json")
@@ -152,14 +186,15 @@ public struct SubagentTransport: Sendable {
         return Data("{\"updatedAt\":\"\(date)\",\"closed\":\(closed ? "true" : "false")}".utf8)
     }
 
-    private func remote(_ operation: String, _ arguments: [String] = []) async throws -> Data {
+    private func remote(_ operation: String, _ arguments: [String] = [], outputLimit: Int = TransportCommand.outputLimit) async throws -> Data {
         try Task.checkCancellation()
         let script = "printf '%s\\n' \(Shell.marker); exec python3 -c \"$@\""
         let command = Machine.remoteCommand(script: script, arguments: [Self.remoteScript, operation, directory], in: "~")
         let input = try JSONEncoder().encode(arguments)
         let run = TransportCommand()
         let result = await withTaskCancellationHandler {
-            await run.execute(executable: sshExecutable, arguments: Machine.sshOptions + [machine.destination ?? "", command], input: input, timeout: timeout)
+            await run.execute(executable: sshExecutable, arguments: Machine.sshOptions + [machine.destination ?? "", command], input: input,
+                              timeout: operation == "read" ? max(timeout, 120) : timeout, outputLimit: outputLimit)
         } onCancel: { run.cancel() }
         try Task.checkCancellation()
         guard result.status == 0 else {
@@ -188,7 +223,7 @@ if operation == 'prepare':
         folder = root / part
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(folder, 0o700)
-    for command in ['botchu-subagent', 'botchu-task']:
+    for command in ['botchu-subagent', 'botchu-task', 'botchu-inbox']:
         helper = root / 'bin' / command
         atomic(helper, base64.b64decode(parameters[0]))
         os.chmod(helper, 0o755)
@@ -228,6 +263,22 @@ elif operation == 'write':
     relative = pathlib.PurePosixPath(parameters[0])
     if relative.is_absolute() or '..' in relative.parts: raise ValueError('Invalid mailbox path')
     atomic(root / relative, base64.b64decode(parameters[1]))
+elif operation == 'read':
+    relative = pathlib.PurePosixPath(parameters[0])
+    limit = int(parameters[1])
+    if relative.is_absolute() or '..' in relative.parts or len(relative.parts) != 3 or relative.parts[0] != 'inbox': raise ValueError('Invalid staged path')
+    fd = os.open(root / relative, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit: raise ValueError('Staged file is not a regular file within the limit')
+        data = stream.read(limit + 1)
+        if len(data) > limit: raise ValueError('Staged file grew past the limit')
+        sys.stdout.write(base64.b64encode(data).decode())
+elif operation == 'drop':
+    name = parameters[0]
+    if not name or '/' in name or name.startswith('.'): raise ValueError('Invalid staged request')
+    import shutil
+    shutil.rmtree(root / 'inbox' / name, ignore_errors=True)
 elif operation in ['heartbeat', 'close']:
     closed = operation == 'close'
     stamp = '1970-01-01T00:00:00Z' if closed else datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -257,7 +308,11 @@ final class TransportCommand: @unchecked Sendable {
         }
     }
 
-    func execute(executable: String, arguments: [String], input: Data? = nil, timeout: TimeInterval) async -> Shell.Result {
+    /// How much of a command's output is kept, unless it asks for more.
+    static let outputLimit = 12_000_000
+
+    func execute(executable: String, arguments: [String], input: Data? = nil, timeout: TimeInterval,
+                 outputLimit: Int = TransportCommand.outputLimit) async -> Shell.Result {
         await withCheckedContinuation { continuation in
             let out = Pipe(), err = Pipe(), group = DispatchGroup()
             let stdin = input.map { _ in Pipe() }
@@ -298,7 +353,7 @@ final class TransportCommand: @unchecked Sendable {
             for (handle, isError) in [(out.fileHandleForReading, false), (err.fileHandleForReading, true)] {
                 group.enter()
                 DispatchQueue.global().async {
-                    let cap = isError ? 16_384 : 12_000_000
+                    let cap = isError ? 16_384 : outputLimit
                     var data = Data()
                     while let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty {
                         if data.count < cap { data.append(chunk.prefix(cap - data.count)) }
