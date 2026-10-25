@@ -73,6 +73,10 @@ final class TranscriptModel {
     @ObservationIgnored private var expansions = 0
     /// Which rows are laid out, their heights and the reader's place among them.
     @ObservationIgnored private(set) var viewport = TranscriptViewport()
+    /// Whether the reader is kept at the newest content (#131).
+    private var pin = ChatPin()
+    /// The shown part of the items as last planned: where it starts, and how many there were.
+    @ObservationIgnored private var shown = (start: 0, count: 0)
     /// Bumped when the rows laid out should be worked out again: the reader scrolled past them,
     /// measured rows no longer cover what is near the visible part, or the chat changed size.
     private var replans = 0
@@ -195,15 +199,31 @@ final class TranscriptModel {
         return index
     }
 
-    /// While the reader looks at earlier content, the shown part stays where it is, so new items
-    /// don't push what they read away. Back at the newest items, a part grown long slides again,
-    /// dropping items far above the window.
-    func follow(_ following: Bool, items: ChunkedArray<ActivityItem>) {
-        if !following {
-            if windowStart == nil { windowStart = start(of: items) }
-        } else if let windowStart, items.count - windowStart > Self.page * 2 {
-            self.windowStart = nil
+    /// Whether the chat keeps the reader at its newest content.
+    var isPinned: Bool { pin.isPinned }
+
+    /// What happened to the reader's place (`ChatPin`). The chat goes to its end when they asked
+    /// for the newest content, wherever they were. While they look at earlier content, the shown
+    /// part stays where it is, so new items don't push what they read away; back at the newest
+    /// items, a part grown long slides again, dropping items far above the window.
+    func follow(_ event: ChatPin.Event) {
+        var pin = self.pin
+        let toEnd = pin.apply(event)
+        // Set only when it changes: the probe reports every step of the reader's scrolling.
+        if pin != self.pin {
+            self.pin = pin
+            if !pin.isPinned {
+                if windowStart == nil { windowStart = shown.start }
+            } else if let windowStart, shown.count - windowStart > Self.page * 2 {
+                self.windowStart = nil
+            }
         }
+        if toEnd { probe?.goToEnd() }
+    }
+
+    /// Whether the chat should go to its end, `below` points under the visible part (`ChatPin`).
+    func keepsEnd(below: Double, readerScrolling: Bool) -> Bool {
+        pin.keepsEnd(below: below, readerScrolling: readerScrolling)
     }
 
     func showEarlier(items: ChunkedArray<ActivityItem>) {
@@ -225,18 +245,15 @@ final class TranscriptModel {
 
     // MARK: Rows laid out
 
-    /// The rows of `items` from `start` to lay out now, and the space above and below them.
-    func plan(_ items: ChunkedArray<ActivityItem>, from start: Int, inputs: TranscriptViewport.Inputs, pinned: Bool,
+    /// The rows of `items` from `start` to lay out now, and the space above and below them: at the
+    /// newest content while the reader is pinned there.
+    func plan(_ items: ChunkedArray<ActivityItem>, from start: Int, inputs: TranscriptViewport.Inputs,
               style: (Int, ActivityItem) -> TranscriptViewport.Style) -> TranscriptViewport.Plan {
         _ = replans
         var inputs = inputs
         inputs.width = width
-        var pinned = pinned
-        if #unavailable(macOS 15) {
-            // Before macOS 15 the chat always follows: the reader is pinned only while at the bottom.
-            if let top = viewport.visibleTop, let height = viewport.viewport, top + height < viewport.plan.total - 40 { pinned = false }
-        }
-        let plan = viewport.plan(items, from: start, inputs: inputs, pinned: pinned, expanded: expanded, expansions: expansions, style: style)
+        shown = (start, items.count)
+        let plan = viewport.plan(items, from: start, inputs: inputs, pinned: pin.isPinned, expanded: expanded, expansions: expansions, style: style)
         if viewport.correction != nil { probe?.correctAfterLayout() }
         return plan
     }

@@ -5,6 +5,11 @@ import SwiftUI
 /// transcript where the visible part is, in the rows' coordinates, as the reader scrolls and the
 /// chat resizes, and moves the visible part to keep the reader's row in place when what is above
 /// it changes height (`TranscriptViewport.correction`).
+///
+/// It also tells the transcript when the reader scrolls (#131), as AppKit says with its live-scroll
+/// notifications for wheels, gestures and the scroller alike, and while the reader is pinned to the
+/// newest content (`ChatPin`), keeps the visible part at the chat's end after anything else moved
+/// or resized it: content growing, the window or the message box resizing, the scroll view settling.
 struct ChatScrollProbe: NSViewRepresentable {
     let transcript: TranscriptModel
 
@@ -34,6 +39,13 @@ final class ChatScrollProbeView: NSView {
     private weak var clip: NSClipView?
     private var scheduled = false
     private var correcting = false
+    private var settleScheduled = false
+    /// Between AppKit's start and end of a live scroll: a gesture with its momentum, or the scroller
+    /// dragged. A legacy wheel's scrolls come without them.
+    private var liveScrolling = false
+    /// The visible part's top, in the rows' coordinates, as the reader's last scroll or the chat's
+    /// last move left it: how far the reader's next scroll went counts from there.
+    private var settledTop: CGFloat?
 
     override var isFlipped: Bool { true }
 
@@ -41,6 +53,7 @@ final class ChatScrollProbeView: NSView {
         super.viewDidMoveToWindow()
         watch()
         report()
+        keepEnd()
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -58,6 +71,7 @@ final class ChatScrollProbeView: NSView {
             correctNow()
         }
         report()
+        if moved { keepEnd() }
     }
 
     private func watch() {
@@ -74,19 +88,97 @@ final class ChatScrollProbeView: NSView {
             document.postsFrameChangedNotifications = true
             NotificationCenter.default.addObserver(self, selector: #selector(documentChanged), name: NSView.frameDidChangeNotification, object: document)
         }
+        if let scroll = enclosingScrollView {
+            NotificationCenter.default.addObserver(self, selector: #selector(liveScrollStarted), name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+            NotificationCenter.default.addObserver(self, selector: #selector(liveScrolled), name: NSScrollView.didLiveScrollNotification, object: scroll)
+            NotificationCenter.default.addObserver(self, selector: #selector(liveScrollEnded), name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+        }
+        settledTop = visible?.minY
     }
 
     func stop() {
         NotificationCenter.default.removeObserver(self)
         clip = nil
+        liveScrolling = false
     }
 
-    @objc private func changed(_ notification: Notification) { report() }
+    /// The visible part moved or resized. Resized, a pinned chat goes back to its end at once;
+    /// moved, once AppKit has said whether the reader moved it (`liveScrolled`).
+    @objc private func changed(_ notification: Notification) {
+        report()
+        guard !correcting else { return }
+        if notification.name == NSView.frameDidChangeNotification { keepEnd() } else { settleLater() }
+    }
 
     /// The rows grew or shrank: where the reader should be is now in reach.
     @objc private func documentChanged(_ notification: Notification) {
         correctNow()
         report()
+        keepEnd()
+    }
+
+    @objc private func liveScrollStarted(_ notification: Notification) { liveScrolling = true }
+
+    /// The reader moved the visible part, by `delta` from where it was.
+    @objc private func liveScrolled(_ notification: Notification) {
+        guard let visible, let below, let transcript else { return }
+        let delta = visible.minY - (settledTop ?? visible.minY)
+        settledTop = visible.minY
+        transcript.follow(.scrolled(delta: delta, below: below))
+    }
+
+    /// The reader let go: back at the end, when what they scrolled to pinned the chat.
+    @objc private func liveScrollEnded(_ notification: Notification) {
+        liveScrolling = false
+        keepEnd()
+    }
+
+    /// Once the move that is under way has been told apart (`liveScrolled` follows the reader's
+    /// own at once): a pinned chat that something else moved goes back to its end.
+    private func settleLater() {
+        guard !settleScheduled else { return }
+        settleScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.settleScheduled = false
+            self.keepEnd()
+        }
+    }
+
+    /// The reader asked for the newest content: the end now, and again once the rows planned for
+    /// it are laid out.
+    func goToEnd() {
+        liveScrolling = false
+        keepEnd()
+        DispatchQueue.main.async { [weak self] in self?.keepEnd() }
+    }
+
+    /// While the reader is pinned and not scrolling, the visible part goes to the end of the chat.
+    func keepEnd() {
+        guard !correcting, let clip, let transcript, let below, window != nil else { return }
+        if transcript.keepsEnd(below: below, readerScrolling: liveScrolling) {
+            correcting = true
+            clip.setBoundsOrigin(Self.end(of: clip))
+            enclosingScrollView?.reflectScrolledClipView(clip)
+            correcting = false
+            report()
+        }
+        settledTop = visible?.minY
+    }
+
+    /// Where the clip view's bounds start with the end of the chat at the bottom of the visible part.
+    private static func end(of clip: NSClipView) -> NSPoint {
+        guard let document = clip.documentView else { return clip.bounds.origin }
+        var bounds = clip.bounds
+        bounds.origin.y = clip.isFlipped ? document.frame.maxY : document.frame.minY - bounds.height
+        return clip.constrainBoundsRect(bounds).origin
+    }
+
+    /// How far the end of the chat is below the visible part; negative past it.
+    private var below: Double? {
+        guard let clip, window != nil else { return nil }
+        let end = Self.end(of: clip).y
+        return clip.isFlipped ? end - clip.bounds.minY : clip.bounds.minY - end
     }
 
     /// The visible part, in the rows' coordinates: 0 at the top of the first row that can be
@@ -129,6 +221,7 @@ final class ChatScrollProbeView: NSView {
             enclosingScrollView?.reflectScrolledClipView(clip)
         }
         let reached = convert(clip.bounds, from: clip).minY
+        settledTop = reached
         let done = abs(reached - target) <= 0.5 || settling
         if done { transcript.corrected(to: reached) }
         correcting = false

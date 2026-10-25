@@ -33,8 +33,7 @@ extension RenderingTests {
         let limit = TranscriptViewport.rowLimit
         let scroll = try #require(Self.chatScrollView(in: host))
         func scrollTo(_ y: CGFloat) async throws {
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, min(y, (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height))))
-            scroll.reflectScrolledClipView(scroll.contentView)
+            Self.dragScroller(scroll, to: y)
             try await settle(window)
         }
         func items() -> ChunkedArray<ActivityItem> {
@@ -150,8 +149,7 @@ extension RenderingTests {
         let limit = TranscriptViewport.rowLimit
         let scroll = try #require(Self.chatScrollView(in: host))
         func scrollTo(_ y: CGFloat) async throws {
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, min(y, (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height))))
-            scroll.reflectScrolledClipView(scroll.contentView)
+            Self.dragScroller(scroll, to: y)
             try await settle(window)
         }
         model.peakRealized = model.realized
@@ -220,8 +218,7 @@ extension RenderingTests {
         model.showEarlier(items: model.items(for: app.thread(fixture.task), root: app.task(fixture.task)?.folder, epoch: app.conversation(fixture.task).epoch))
         try await settle(window, frames: 20)
         func scrollTo(_ y: CGFloat) async throws {
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, min(y, (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height))))
-            scroll.reflectScrolledClipView(scroll.contentView)
+            Self.dragScroller(scroll, to: y)
             try await settle(window, frames: 2)
         }
         func holds(_ what: String, while change: () async throws -> Void) async throws {

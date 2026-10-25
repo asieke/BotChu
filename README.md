@@ -233,9 +233,12 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     summary and put back, so a call costs the same in an exploration of 5,000 calls as in one of 5,
     and so do its sub-agents' card placement and tool counts. A conversation shown again keeps its
     grouping and opened cards; a long one opened anew shows its newest items at once, with a spinner
-    where earlier ones go while they are grouped off the main thread. A reader at the bottom follows
-    new content; one reading earlier content keeps their place while a turn goes on, and **Follow
-    Live** takes them back.
+    where earlier ones go while they are grouped off the main thread. A reader at the end stays
+    there as a reply streams, calls and groups grow, sub-agents report and the window or message box
+    resize. Scrolling up by their own hand leaves it: then nothing that arrives moves them, until they
+    scroll back to the end or click **Jump to Latest** (**Follow Live** while the bot works). Sending a
+    message, and opening or switching to a conversation, takes them to the newest content from
+    wherever they were.
   - **Tasks:** besides its Home, a bot can work on tasks, several at once: each in one of your
     GitHub repositories, with its own conversation and CLI session, in its own git worktree, so
     tasks never share files. BotChu does all of this itself, with no other app. **New Task** (⌘T)
@@ -782,7 +785,8 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     change, and sub-agents' tool counts kept as they stream (`ActivityTranscript.swift`, in chunked
     storage that copies a chunk, not every element, when shared: `ChunkedArray.swift`), which of its
     rows the chat lays out, their heights kept by what they showed and how, and the reader's row and
-    offset into it (`TranscriptViewport.swift`), the identity, instructions,
+    offset into it (`TranscriptViewport.swift`), when the chat keeps its reader at the newest content
+    (`ChatPin.swift`), the identity, instructions,
     team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries,
     and the lines Providers shows, lined up across its rows (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled in-memory cache
@@ -858,7 +862,7 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished runs to run reviews, `Evaluations.swift`),
-    `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
+    `Sidebar/` (workspace destinations and bot conversations, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
     status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
     the hosts and Telegram), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -898,7 +902,9 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     5,000 messages, 1,000 items arriving and a group of 5,000 calls in Raw and opened again and again,
     every row reached scrolling down and up again, heights never reused for other content, layout
     inputs or an edited thread, measurements of rows gone dropped, and the reader's row (or the end)
-    kept as rows above it change, are forgotten or move; the sidebar's sections of bots, and searching them; follow-ups the CLI
+    kept as rows above it change, are forgotten or move; when the chat keeps its reader at its end
+    (only their own scrolling up leaves it, not a bounce; back within 40 points, or sending, opening
+    or Jump to Latest from anywhere, pins it again); the sidebar's sections of bots, and searching them; follow-ups the CLI
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
     before the next save, also in a queue going through a relaunch; saving off the main thread: each
@@ -975,7 +981,12 @@ sidebar: on this Mac, or on another computer it reaches over SSH. A task can als
     and New Task (through a stand-in for the general pasteboard, so no test touches the clipboard)
     and what pastes as text instead, New Task starting a task from a project and a brief with an
     image, the activity chat at every density, light and dark and at its
-    narrowest, a chat that follows new content only for a reader at the bottom, a long
+    narrowest, a chat that follows new content only for a reader at the bottom; a message sent from the
+    end or from far up that lands in view and stays there through the queue, the turn's preparation
+    and its reply; a chat at its end that stays there as a reply streams, calls group live, a command
+    and a sub-agent's card arrive and the message box and window resize; a reader who scrolled up
+    with the wheel keeping what they see as a turn goes on and the window resizes, until they scroll
+    back down or click Jump to Latest, and back at the end after switching away and back; a long
     conversation opened anew that shows its newest items at once and groups its history off the
     main thread, then regroups only a streaming reply, a Sub-agents
     tab that folds finished runs and scrolls to one the chat opens, and switching without a flash:
