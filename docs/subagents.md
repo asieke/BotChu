@@ -87,8 +87,13 @@ within its invocation. Each child's transcript and final record are saved before
 handoff. While a child streams, its transcript is checkpointed off the main thread at most once a
 second, and checkpoints still waiting are written when BotChu quits. Result writes are atomic and retry transient delivery failures. An unrecoverable delivery
 closes the mailbox so the helper fails; startup republishes persisted results. Stop interrupts
-running processes and waits for their exit before completing the child. A parent handoff waits
-for its descendants to finish stopping. Active records found on restart become stopped.
+running processes, terminates them 3 seconds later and kills them, with what they started, 5
+seconds after that, and waits for their exit before completing the child. A child whose CLI is
+still running 30 seconds after it said its turn ended is terminated, then killed 5 seconds later,
+and completes with its handoff and a note saying so (#145: Antigravity printed a handoff, then
+never exited and ignored Stop's signals, so the run stayed running until BotChu restarted). A
+parent handoff waits for its descendants to finish stopping. Active records found on restart
+become stopped.
 
 BotChu refreshes the heartbeat every two seconds; the helper checks it and fails after thirty
 seconds without one. Its
@@ -129,6 +134,7 @@ it does not erase already-returned handoff files or undo delegated changes.
 ## Verification
 
 `scripts/test.sh` runs core and rendering tests and builds the app. Delegation tests exercise
-helper round trips, validation, scoped persistence, nested fan-out, stop, restart, transport failure
+helper round trips, validation, scoped persistence, nested fan-out, stop (also of a child that
+ignores SIGINT and SIGTERM), a child that never exits after its handoff, restart, transport failure
 and local/SSH environment handling. The standard `botchu-smoke` two-turn checks verify real CLI
 execution and resumption separately, using each account's own login and allowance.

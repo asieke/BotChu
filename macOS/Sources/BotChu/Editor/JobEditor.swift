@@ -141,7 +141,7 @@ struct JobEditor: View {
                         ForEach(Self.options(Self.timeLimits, including: job.timeLimit), id: \.1) { Text($0.0).tag($0.1) }
                     }
                     Toggle("Enabled", isOn: $job.enabled)
-                    Text("Each run is a fresh session of \(agent?.name ?? "the agent")'s\(agent.map { " on \(model.jobs.runSettings(of: job, agent: $0).settings.account.name)" } ?? ""), with its identity, instructions and memory, in its workspace. It never uses its Home conversation. Findings and failures appear in Home with Open Run; a run that ends with nothing to report stays in the job's history.")
+                    Text("Each run is a fresh session of \(agent?.name ?? "the agent")'s\(agent.map { " on \(model.jobs.runSettings(of: job, agent: $0).settings.account.name)" } ?? ""), with its identity, instructions and memory, in its workspace, as a new task beside its Home conversation, which it never uses. Findings and failures appear in Home with Open Run; a run that ends with nothing to report stays in the job's history and its task.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }

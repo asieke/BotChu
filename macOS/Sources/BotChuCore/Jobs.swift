@@ -289,6 +289,9 @@ public struct JobRun: Identifiable, Codable, Hashable, Sendable {
     public var reportedModel: String?
     /// The CLI session it ran in: its own, never its agent's Home.
     public var sessionID: String?
+    /// The task of its agent's whose conversation it is (`JobTasks`); nil for runs from before runs
+    /// were tasks, whose transcript is `runs/<id>.jsonl`, and for runs that never started.
+    public var taskID: UUID?
 
     public init(id: UUID = UUID(), trigger: JobTrigger, scheduledFor: Date?, timeZone: String, reservedAt: Date,
                 outcome: JobOutcome = .waiting, summary: String = "", coalesced: Int = 0) {
@@ -780,8 +783,9 @@ public enum JobLaunch {
         var parts = ["""
             You are \(bot.name)\(bot.title.isEmpty ? "" : " — \(bot.title)"), a persistent bot in BotChu, running one of your \
             scheduled jobs, “\(job.title)”, in a fresh session of its own in your workspace \(bot.workspace) on your owner's \
-            Mac. This is not your Home conversation: your owner isn't watching it, and its transcript is kept with the job's \
-            history in \(folder)/jobs/\(job.id.uuidString.lowercased())/.
+            Mac. This is not your Home conversation: the run is a task of its own beside it, which your owner may open \
+            later from your tasks and continue, and the job's history in \(folder)/jobs/\(job.id.uuidString.lowercased())/ \
+            keeps the run. Your owner isn't watching it as it runs.
             """]
         parts += BotContext.identity(bot: bot, memory: memory, sharedMemory: sharedMemory, soul: soul, instructions: instructions,
                                      team: team, saving: """

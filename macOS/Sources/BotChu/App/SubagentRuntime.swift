@@ -493,9 +493,13 @@ final class SubagentRuntime {
                 live.update { messages in
                     assembler.apply(.textEnd, to: &messages)
                     ThreadAssembler.closeRunningTools(&messages)
+                    if runner.lingered {
+                        messages.append(ChatMessage(role: .note, text: "\(account.name) didn't exit after its reply, so BotChu ended it."))
+                    }
                 }
                 let reply = live.messages.last(where: { $0.role == .assistant })?.text ?? ""
-                let reason = persistenceFailure ?? failure ?? ((status != 0 || !finished || reply.isEmpty)
+                // A CLI that BotChu ended for staying on after its turn (#145) exits by a signal; its handoff stands.
+                let reason = persistenceFailure ?? failure ?? ((status != 0 && !runner.lingered || !finished || reply.isEmpty)
                     ? "\(account.name) ended without a successful handoff (exit \(status)). \(AppModel.lastLines(stderr))" : nil)
                 self.finish(id, phase: persistenceFailure != nil ? .failed : runner.stopped ? .stopped : reason == nil ? .completed : .failed, error: reason)
             }

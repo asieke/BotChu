@@ -22,6 +22,22 @@ public final class AgentRun: @unchecked Sendable {
     private var buffer = Data()
     private var errorTail = Data()
     public private(set) var stopped = false
+    /// How long a CLI may go on running once it has said its turn ended and has nothing more to
+    /// read. CLIs exit within a second of their last event; one still running then is ended, and
+    /// its turn stands as it said (#145: Antigravity printed its result and never exited, so a
+    /// sub-agent whose handoff was written stayed running for hours).
+    public var lingerLimit: TimeInterval = AgentRun.defaultLingerLimit
+    /// `lingerLimit` for the runs made from now on; tests shorten it.
+    nonisolated(unsafe) public static var defaultLingerLimit: TimeInterval = 30
+    /// How long after SIGTERM a CLI still running is killed, with its process group.
+    public var killDelay: TimeInterval = 5
+    /// Whether BotChu ended the CLI because it was still running `lingerLimit` after its turn
+    /// ended. It wasn't stopped: its turn ended as it said, though its exit status is a signal's.
+    public private(set) var lingered = false
+    /// Whether the CLI said its turn ended (`.finished`) and hasn't carried on since, and which
+    /// wait for its exit is the current one; guarded by `lock`.
+    private var turnEnded = false
+    private var exitWatch = 0
     /// The shortest time between two deliveries to the main queue.
     public var deliveryInterval: TimeInterval = 0.04
     /// Parses stdout off the main thread, when set (`deliverEvents`); guarded by `parseLock`.
@@ -183,7 +199,11 @@ public final class AgentRun: @unchecked Sendable {
             _ = enqueue(takeLines(appending: Data("\n".utf8)))
             flushOutput()
             lock.lock()
-            let tail = String(decoding: errorTail, as: UTF8.self)
+            var tail = String(decoding: errorTail, as: UTF8.self)
+            if lingered {
+                tail += (tail.isEmpty || tail.hasSuffix("\n") ? "" : "\n")
+                    + "BotChu ended it: it was still running \(String(format: "%g", lingerLimit)) s after it said its turn had ended."
+            }
             lock.unlock()
             onExit(process.terminationStatus, tail)
         }
@@ -221,6 +241,7 @@ public final class AgentRun: @unchecked Sendable {
         defer { lock.unlock() }
         if let events {
             pendingEvents += events
+            noteTurn(events)
             if !printed {
                 printed = true
                 announcePrinted = true
@@ -270,13 +291,49 @@ public final class AgentRun: @unchecked Sendable {
         lock.lock()
         let pipe = stdin
         stdin = nil
+        if pipe != nil, turnEnded { watchForExit() }
         lock.unlock()
         guard let pipe else { return }
         inputQueue.async { try? pipe.fileHandleForWriting.close() }
     }
 
-    /// Interrupts the CLI as Ctrl-C would, then terminates it if it is still running. On a host,
-    /// the CLI there is interrupted too: closing the connection alone would leave it running.
+    /// Notes whether these events end the CLI's turn or carry it on, and starts waiting for its
+    /// exit once its turn has ended and it has nothing more to read. Under `lock`.
+    private func noteTurn(_ events: [AgentEvent]) {
+        let wasEnded = turnEnded
+        for event in events {
+            switch event {
+            case .finished: turnEnded = true
+            case .text, .textDelta, .toolStarted, .toolFinished, .inputTaken: turnEnded = false
+            default: break
+            }
+        }
+        if turnEnded, !wasEnded, stdin == nil { watchForExit() }
+    }
+
+    /// Ends the CLI `lingerLimit` from now if it is still running then, its turn still over and
+    /// not stopped; a newer wait replaces this one. Under `lock`.
+    private func watchForExit() {
+        exitWatch += 1
+        let watch = exitWatch
+        DispatchQueue.main.asyncAfter(deadline: .now() + lingerLimit) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let lingering = watch == self.exitWatch && self.turnEnded && self.stdin == nil && !self.stopped
+                && self.process.isRunning
+            if lingering { self.lingered = true }
+            let pid = self.remotePID
+            self.lock.unlock()
+            guard lingering else { return }
+            if let remote = self.remote, let pid { self.signalHost(remote, pid, ["TERM", "KILL"]) }
+            self.terminate(after: 0)
+        }
+    }
+
+    /// Interrupts the CLI as Ctrl-C would, then terminates it if it is still running, then kills
+    /// it: a CLI that ignores both (Antigravity stuck shutting down, #145) still ends, and with it
+    /// its turn. On a host, the CLI there is interrupted too: closing the connection alone would
+    /// leave it running.
     public func stop() {
         lock.lock()
         stopped = true
@@ -286,17 +343,38 @@ public final class AgentRun: @unchecked Sendable {
         lock.lock()
         let pid = remotePID
         lock.unlock()
-        if let remote, let pid {
-            Task.detached {
-                _ = await remote.run(["kill", "-INT", pid], in: "~")
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                _ = await remote.run(["kill", "-TERM", pid], in: "~")
+        if let remote, let pid { signalHost(remote, pid, ["INT", "TERM", "KILL"]) }
+        process.interrupt()
+        terminate(after: remote == nil ? 3 : 5)
+    }
+
+    /// Terminates the CLI `delay` from now if it is still running, and kills it with its process
+    /// group (BotChu starts each CLI in a group of its own) `killDelay` after that.
+    private func terminate(after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [process, killDelay] in
+            guard process.isRunning else { return }
+            process.terminate()
+            DispatchQueue.main.asyncAfter(deadline: .now() + killDelay) {
+                if process.isRunning { Self.killGroup(of: process) }
             }
         }
-        process.interrupt()
-        DispatchQueue.main.asyncAfter(deadline: .now() + (remote == nil ? 3 : 5)) { [process] in
-            if process.isRunning { process.terminate() }
+    }
+
+    /// Sends the CLI on a host these signals in turn, each 3 seconds after the one before, and
+    /// KILL `killDelay` after it.
+    private func signalHost(_ machine: Machine, _ pid: String, _ signals: [String]) {
+        let killDelay = killDelay
+        Task.detached {
+            for (index, name) in signals.enumerated() {
+                if index > 0 { try? await Task.sleep(for: .seconds(name == "KILL" ? killDelay : 3)) }
+                _ = await machine.run(["kill", "-\(name)", pid], in: "~")
+            }
         }
+    }
+
+    private static func killGroup(of process: Process) {
+        let pid = process.processIdentifier
+        if Darwin.killpg(pid, SIGKILL) != 0 { Darwin.kill(pid, SIGKILL) }
     }
 
     /// Ends the CLI at once (SIGKILL) if it is still running: for a run that must not outlive its
@@ -306,7 +384,7 @@ public final class AgentRun: @unchecked Sendable {
         stopped = true
         lock.unlock()
         guard remote == nil, process.isRunning else { return }
-        Darwin.kill(process.processIdentifier, SIGKILL)
+        Self.killGroup(of: process)
     }
 
     private func takeLines(appending data: Data) -> [String] {

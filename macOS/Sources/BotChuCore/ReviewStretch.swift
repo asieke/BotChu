@@ -525,7 +525,8 @@ public struct ReviewDay: Sendable {
         if let task {
             let machine = task.hostName.map { "\(EvaluationSnapshot.quoted(EvaluationSnapshot.oneLine($0), 80)) over SSH" }
                 ?? (task.isRemote ? "another computer over SSH" : "This Mac")
-            let place = "the task “\(EvaluationSnapshot.quoted(EvaluationSnapshot.oneLine(task.title), 200))” in \(EvaluationSnapshot.quoted(task.repo, 200))"
+            let place = "the task “\(EvaluationSnapshot.quoted(EvaluationSnapshot.oneLine(task.title), 200))”"
+                + (task.jobRun == nil ? " in \(EvaluationSnapshot.quoted(task.repo, 200))" : ", a scheduled job's run")
                 + (task.work.map { task.review == nil ? ", on \($0.reference)" : ", reviewing \($0.reference)" } ?? "")
                 + ", on \(machine), \(task.isArchived ? "closed" : "open")"
             title = own ? place : "sub-agent runs as \(EvaluationSnapshot.quoted(input.botName, 120)), delegated by \(owner) from \(place)"

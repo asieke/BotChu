@@ -12,8 +12,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   - **Workspace:** the left sidebar has **Projects**, **Agents**, **Providers**, **Skills** and **Jobs**, followed by
     the bots, one row each, in sections (below); a bot's Home and tasks are the tabs beside its chat
     (**Tasks**). A bot's row says on its second line what it is doing ("Working on #113", "2 tasks
-    running", its Home's activity, "4 tasks", or its account), with a small dot at its end for each of
-    its conversations that isn't idle, in the tabs' colours, at most four, then +N. Selecting a bot
+    running", its Home's activity, "4 tasks", or its account), with a small dot at the row's end,
+    centred on it, for each of its conversations that isn't idle, in the tabs' colours, at most four,
+    then +N. Selecting a bot
     shows the conversation it showed last. Opening a gallery keeps the selected conversation and unsent draft;
     turns that finish while a gallery is shown still show as news (a blue dot). In dark mode the sidebar
     takes the status sidebar's darker shade, with a hairline along its edge, so it stands apart from
@@ -203,7 +204,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     Antigravity subagent
     launch cards finish when the CLI acknowledges the launch; the bot reports the workers' results
     in its replies. A missing completion record shows a neutral question mark, not a tool failure.
-    A turn can be stopped. The
+    A turn can be stopped: its CLI is interrupted, terminated 3 seconds later and killed, with
+    what it started, 5 seconds after that. A CLI still running 30 seconds after it said its turn
+    ended (Antigravity once printed its result and never exited, #145) is terminated, then killed
+    5 seconds later; the turn stands as it said, with a note in its conversation. The
     thread and the CLI's session id are saved, so the next message (also after a relaunch) resumes
     the same CLI session; quitting mid-turn saves what the turn printed so far. A CLI's output is
     parsed off the main thread and reaches the window a few times a second, and each conversation
@@ -280,9 +284,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     finished since it was last shown (blue, with its pull request), or its last turn failed (red,
     until its next turn starts); while idle (a faint ring), what it is about (its issue's title, or
     a brief's words) and its last activity (2m, 1h, 1d). Home's tab names its account, or its own
-    turn's state. The selected tab takes the chat's background and runs into
-    it. Dots hold still; when a turn ends, its dot pops once (with Reduce Motion, it only
-    crossfades). A click, **⌘1** (Home) to **⌘9** (the first eight tasks, in the Bot menu), ⌃Tab,
+    turn's state. The rows are inset 8 points from both of the column's edges, and the selected
+    one is a card with its edge all round, as the rail's selected tile is. Dots hold still; when a
+    turn ends, its dot pops once (with Reduce Motion, it only crossfades). A click, **⌘1** (Home) to **⌘9** (the first eight tasks, in the Bot menu), ⌃Tab,
     and ↑ and ↓ while a tab has keyboard focus switch conversations. Hovering a task's tab turns its
     dot into a close button, unless its turn is running, and its tooltip says what it is about,
     then the repository, the issue, the machine and the shortcut; its context menu keeps the issue, pull request, branch,
@@ -301,6 +305,12 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     box reads "Message 10x Engineer Bot about #113". Closing a task keeps its record, conversation and worktree;
     Home's status lists closed tasks to open again. Once its pull request merges, the agent removes
     its worktree (`git worktree remove`); if it is gone, the task's next message makes it again.
+    A scheduled job's run is a task too (**Jobs**, below), in the bot's workspace rather than a
+    repository's worktree: its tab names the job, with a clock (a clock on its rail tile), and while
+    idle the time it was for ("Oct 24 at 9:00 AM", "· caught up", or "Run Now ·"); its chat opens
+    with "Scheduled job · Scheduled for Fri, Oct 24 at 9:00 AM EDT · History" above the job's title,
+    its message box reads "Message Product Fox about Morning triage", its menu has **Show Run in Job
+    History** in place of the issue and branch, and its status sidebar names the job and the run.
   - **Pull request reviews:** a pull request's menu in Projects ▸ Pull Requests, or its **Review** in
     the project sidebar, can also **Review with** or **Review and Comment with** a bot, opening New
     Task for that review. The review works
@@ -341,7 +351,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     first, which counts any failures. A run that finishes while the tab shows it stays in view until
     the tab is shown again, as does one opened from the chat. Home also groups delegations
     belonging to its tasks. These runs never add tabs. Stop cascades through
-    descendants; callers must wait before finishing their turn.
+    descendants; callers must wait before finishing their turn. A run whose CLI said its turn
+    ended but doesn't exit is ended as a turn's is (above), and its handoff goes back.
     Three nesting levels, twelve concurrent children and sixty-four delegations per root turn bound
     runaway fan-out. Interrupted records become stopped on relaunch. The helper needs Python 3 on
     each execution machine; SSH mailboxes are polled independently of CLI output. See
@@ -368,7 +379,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     menu runs it now (also a paused job, which stays paused), pauses or resumes it, stops its run
     (which leaves its schedule alone), edits or deletes it, or opens its history (also a
     double-click): its runs, newest first, each with the time it was for and the time it started,
-    how late that was, how long it took, what it ran on and its transcript, live while it runs.
+    how late that was, how long it took, what it ran on and its transcript, live while it runs (its
+    task's conversation, below, with **Open Task**).
     Opening Jobs or a history never runs anything. An agent's card in **Agents** counts its jobs
     (opening Jobs filtered to it) and its menu has **New Job…**; its status sidebar's **Activity**
     lists them under its tasks, with **New Job…** and **All Jobs**. The editor sets the agent (chosen
@@ -393,7 +405,24 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     instructions, team playbook, personality, memory and skills, then the job's instructions, but not
     its Home conversation, on the job's account, model and effort, else the agent's (recorded with
     the run), in its workspace; it never resumes Home's session or touches Home's queue, draft or
-    receipts, and gets nothing written to it while it runs. A job's own choice is saved with it, and a
+    receipts, and gets nothing written to it while it runs. Each run starts as a new task of its
+    agent's (#146), in its **Tasks** beside Home: titled after the job and the time it was for
+    ("Morning triage · Oct 24 at 9:00 AM"), with the job's instructions as its first message and its
+    brief, its transcript live in the task while it runs, on the run's account, model and effort, in
+    the agent's workspace (a job's run needs no repository, so no worktree is made); the task says
+    which job and scheduled time it came from (see **Tasks**). Home gets no receipt of the task, only
+    the job's own (below), and a finding or a failure also marks the task as news. Stop in the task
+    stops the run, as Stop in Jobs does. A message written in the task while the run goes waits in
+    its queue until the run ends, then resumes the run's session; from the owner's first message
+    there the task is theirs. A job keeps one open task in Tasks, its latest run's: a new run closes
+    the task of the one before, unless the owner wrote in it, it is shown, or it holds a draft or
+    queued messages. A closed run's task is found in the job's history, whose rows open it (**Open
+    Task**, or a double-click), as Home's **Open Run** does, rather than among Home's closed tasks;
+    when the history lets a run go, its task goes with it (its record and conversation, never the
+    workspace), unless the owner wrote in it, which then stays among the closed tasks. Deleting the
+    job leaves its runs' tasks, as it leaves the tasks it asked for. Runs from before runs were tasks
+    keep their transcripts in the history, and a run that never started (its agent's folder gone, or
+    in a review copy) has only its reason there. A job's own choice is saved with it, and a
     job saved before jobs had one runs on its agent's. When its account is gone from Providers, or
     OpenRouter's catalog no longer lists its OpenRouter model, its runs use the agent's account,
     model and effort instead, never another provider, and the editor (which shows the choice as
@@ -401,21 +430,22 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     when the account is back. A CLI's own models and custom IDs run as chosen: one the CLI rejects
     fails the run with its reason. A job never overlaps itself (a time due while its run waits
     or runs is recorded skipped, once however many); one agent's runs go one at a time, and wait
-    (**Waiting**) for its Home turn or a sub-agent in its workspace to finish; at most two run at
-    once. A run is stopped at its time limit (30 minutes by default) and counts as failed; three
-    failed runs in a row pause the job, saying why. BotChu never runs one again on its own. A run
+    (**Waiting**) for its Home turn, a turn of one of its runs' tasks or a sub-agent in its workspace
+    to finish; at most two run at once. A run is stopped at its time limit (30 minutes by default)
+    and counts as failed; three failed runs in a row pause the job, saying why. BotChu never runs one again on its own. A run
     asks for repository work as Home does, with a task request (which names the job), and BotChu
     starts the task when the run ends. Every run is kept, with how it was started (on schedule,
     caught up, or Run Now) and how it went: succeeded, nothing to report, failed (with what to do:
     sign in, wait for the allowance, fix the command, check the network or the disk), stopped,
     skipped or interrupted, and a line about it; the history keeps the latest 50 and always the last
-    success. A run whose reply ends with `NOTHING_TO_REPORT` stays in the history only. A finding, a
-    failure or an interrupted run adds one receipt to its agent's Home, with **Open Run**, marked as
-    news, which Home's next turn hears of; an empty reply counts as failed, not quiet. Before a run
+    success. A run whose reply ends with `NOTHING_TO_REPORT` stays in the history and its task, with
+    nothing marked as news. A finding, a failure or an interrupted run adds one receipt to its
+    agent's Home, with **Open Run** (which opens the run's task), marked as news, which Home's next
+    turn hears of; an empty reply counts as failed, not quiet. Before a run
     starts, its time is reserved in the job's `job.json`, in one save, so a timer, a wake or a
     relaunch never starts it twice; when that save fails, nothing starts and the job says why. After
     a quit or a crash, a run that was running is recorded interrupted (it may have done part of its
-    work) and isn't run again. Jobs are kept in their agent's folder, so they move with its
+    work), which its task says, and isn't run again. Jobs are kept in their agent's folder, so they move with its
     workspace and stay its own when it is renamed; deleting the agent deletes them, as its
     confirmation says, and a job whose folder has gone doesn't run.
   - **Message box:** a multiline writing area with account, model/effort and send/stop controls in
@@ -506,7 +536,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     the repository, computer, branch, worktree, session and pull request, and the task's
     `thread.jsonl` and index), the
     task requests it writes (`dispatch/`), its scheduled jobs (`jobs/<id>/`: `job.json` with the
-    job, where its schedule is up to and its runs, and each run's transcript in `runs/<run>.jsonl`),
+    job, where its schedule is up to and its runs, each with its task, whose conversation is the run;
+    runs from before runs were tasks keep their transcripts in `runs/<run>.jsonl`),
     a log of every turn and job run (`logs/<date>.log`:
     the command, where it ran, how long it took, the exit status, any error and the CLI's error output), notes
     it couldn't save to memory yet (`memory-unsaved.json`, `shared-memory-unsaved.json`), the reviews of its work (`evaluations/`
@@ -894,7 +925,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     (`PetVideo.swift`), scheduled jobs: their schedules in their own time zones, runs, history and
     storage, what is due, a run's context and how it went (`Jobs.swift`), and the scheduler that
     reserves a time before its run starts, makes runs wait, records how they end and recovers after
-    a quit (`JobEngine.swift`), tasks: the task, its title
+    a quit (`JobEngine.swift`), the task a job's run starts as, what it says of its job and time,
+    and which runs' tasks close or go (`JobTasks.swift`), tasks: the task, its title
     and branch names, its pull request, receipts, dispatch requests and the briefs of tasks that fan
     out to sub-agents (`Tasks.swift`), hosts and
     where a repository is worked on (`Hosts.swift`), running
@@ -982,7 +1014,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     agrees, and recalled by a fresh session), what is left out, bot or shared scope, repeats,
     corrections and forgets, concurrent saves, and saves that fail, wait (also across a relaunch)
     and are tried again; reports: their titles, app state, the size of their window's screenshot, and filing (with attached images) through a stand-in `gh`;
-    output parsed off the main thread and delivered in batches, thread summaries, the Markdown cache
+    output parsed off the main thread and delivered in batches, a CLI's end (#145: one still
+    running after it said its turn ended is ended with its turn standing, one that takes input only
+    once its input is closed, one that carries on is left alone, and Stop kills one that ignores
+    SIGINT and SIGTERM, with a process it started), thread summaries, the Markdown cache
     within its budget (ten 128 KB replies written in revisions, then memory pressure), replies being
     written parsed off the main thread (100 rapid deltas coalesced, the worker's limit shared, a slow
     earlier revision never shown over a newer one, the last always settling as a full parse), one
@@ -1028,7 +1063,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     itself, pausing, resuming and editing that never make up time, Run Now while paused, failures
     that pause a job, the history's bounds, crash recovery, jobs moving with their agent, a run's
     context (its agent, when it was meant for, how late, no Home), its fresh session, and quiet,
-    empty and failed results; a task's glance at its repository's open issues: GitHub's count
+    empty and failed results; a job's run as a task: in the agent's workspace on the run's account,
+    model and effort, named after its job and time, what its tab and context say, the earlier runs'
+    tasks a new run closes unless the owner took one over, and those that go with the runs the
+    history lets go; a task's glance at its repository's open issues: GitHub's count
     whatever the preview and the read list hold, pull requests left out, loading, not read,
     unavailable, zero and kept after a failed read, and another repository's answer never showing
     under the one switched to; and run reviews, with stand-in reviewers (no test
@@ -1103,7 +1141,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     text that opens nothing, links kept through copy and paste, a message's
     links and their context through sending, and the report and New Task boxes without it, a job
     made for its agent, shown in Jobs, delivered to Home as a receipt that leaves Home's draft and
-    queue alone, and deleted with its agent, a sub-agent's handoff and a task's receipt that
+    queue alone, and deleted with its agent, a job's run as a new task in its agent's Tasks column
+    with the job's menu, its conversation the run's, opened from Home's receipt, taking the place of
+    the run before, kept open once the owner writes in it (resuming the run's session) and gone with
+    a run the history lets go, a sub-agent's handoff and a task's receipt that
     don't wait for run reviews, which review each bot's own work on its own account, Activity's run
     reviews (the summary line, news rows and counts line, in light and dark, and Review now) and
     the review time in Settings, a task's Activity listing its repository's open issues:
@@ -1129,7 +1170,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
     (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `providersTableRowsStayCompact`,
     `activityChatRendersGroupsCardsAndLiveWork`, `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`,
-    `jobsBelongToTheirAgentAndReachHomeOnlyAsReceipts`, `taskActivityShowsItsRepositorysOpenIssues`, or
+    `jobsBelongToTheirAgentAndReachHomeOnlyAsReceipts`, `aJobsRunIsANewTaskInItsAgentsTasks`, `taskActivityShowsItsRepositorysOpenIssues`, or
     `conversationColumnFollowsTheWindowAndTheOwnersChoice`)
     to render isolated gallery/table (sidebar, chat, tasks' column and rail, or Agents' sections, wide and narrow) screenshots
     with sample data. These
@@ -1228,8 +1269,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
   tab and an issue or pull request there, read with your `gh` login.
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
-  `BOTCHU_JOBS=sample` gives the demo bots sample jobs, with a history of every kind of run and a
-  receipt in the first bot's Home, and runs no job (Run Now records a failed run), so nothing starts a CLI; `BOTCHU_OPEN=job-editor`
+  `BOTCHU_JOBS=sample` gives the demo bots sample jobs, with a history of every kind of run, the
+  latest a task beside the first bot's chat, and a receipt in the first bot's Home, and runs no job (Run Now records a failed run), so nothing starts a CLI; `BOTCHU_OPEN=job-editor`
   or `job-history` opens a new job's editor or the first job's history, `job-model` or `job-effort` a
   new job's model or effort picker, and `job-edit` the editor of the job `BOTCHU_JOB` names (else the
   first): `Check the deploy` has its own account, model and effort, and `Friday release notes` one on

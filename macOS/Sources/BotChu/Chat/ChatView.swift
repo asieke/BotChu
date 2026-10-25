@@ -196,10 +196,11 @@ struct ChatView: View {
         }
     }
 
-    /// "Message 10x Engineer Bot about #113": a task's issue or pull request, else its repository.
+    /// "Message 10x Engineer Bot about #113": a task's issue or pull request, else its repository
+    /// (a job's run: its job).
     static func placeholder(bot: Bot, task: BotTask?) -> String {
         guard let task else { return "Message \(bot.name)" }
-        return "Message \(bot.name) about " + (task.work.map { "#\($0.number)" } ?? task.repoName)
+        return "Message \(bot.name) about " + (task.work.map { "#\($0.number)" } ?? task.jobRun?.jobTitle ?? task.repoName)
     }
 
     /// How an item is laid out, and what else its height depends on: an exploration group as one
@@ -418,8 +419,10 @@ struct BotIntro: View {
 }
 
 /// The top of a task's chat: the bot, where the task is (its repository, issue or pull request,
-/// and host), and what it is about as its headline (#128).
+/// and host), and what it is about as its headline (#128). A job's run says which job and time it
+/// came from, with the run in its job's history, and its job is its headline (#146).
 struct TaskIntro: View {
+    @Environment(AppModel.self) private var model
     let bot: Bot
     let task: BotTask
     /// The host it works on; nil on this Mac.
@@ -430,7 +433,19 @@ struct TaskIntro: View {
             BotAvatar(bot: bot, size: 40)
                 .padding(.bottom, 6)
             HStack(spacing: 4) {
-                Text(task.repo)
+                if let origin = task.jobRun {
+                    Label("Scheduled job", systemImage: "clock.arrow.circlepath")
+                    Text("·")
+                    Text(JobTasks.schedule(origin))
+                    if model.jobs.job(origin.jobID) != nil {
+                        Text("·")
+                        Button("History") { model.jobs.showHistory(origin.jobID, run: origin.runID) }
+                            .buttonStyle(.link)
+                            .help("Show this run in the job's history")
+                    }
+                } else {
+                    Text(task.repo)
+                }
                 if let work = task.work {
                     Text("·")
                     Link("\(work.isPullRequest ? "Pull request" : "Issue") #\(work.number)", destination: work.url)
@@ -450,7 +465,7 @@ struct TaskIntro: View {
             .monospacedDigit()
             .foregroundStyle(.secondary)
             .lineLimit(1)
-            Text(ConversationTab.subject(of: task))
+            Text(task.jobRun?.jobTitle ?? ConversationTab.subject(of: task))
                 .font(.system(size: 20, weight: .semibold))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)

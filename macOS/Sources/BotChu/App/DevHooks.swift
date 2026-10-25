@@ -334,7 +334,8 @@ enum DevHooks {
     }
 
     /// Sample jobs for a review (`BOTCHU_JOBS=sample`): for the first bot a weekday triage with a
-    /// history of every kind of run, one with a transcript, and a paused job; for the second, a job
+    /// history of every kind of run, its latest a task beside the chat (#146) and an older one with a
+    /// transcript, and a paused job; for the second, a job
     /// every 90 minutes that is waiting; and Home's receipt for the triage's last finding. Saved in
     /// the throwaway bots' folders; none ever runs.
     static func sampleJobs(model: AppModel) {
@@ -365,6 +366,22 @@ enum DevHooks {
             run(.succeeded, hoursAgo: 25, trigger: .catchUp, summary: "Caught up on the weekend: #18 needs a decision on the API shape."),
             run(.succeeded, hoursAgo: 1, summary: "One new issue needs you: #21 asks for SSH hosts in Settings."),
         ]
+        func transcript(on bot: Bot) -> [ChatMessage] {
+            [ChatMessage(role: .note, text: "Started on \(bot.account.name)"),
+             ChatMessage(role: .tool, toolID: "1", toolName: "Bash", toolInput: "gh issue list --state open --limit 20", toolState: .done),
+             ChatMessage(role: .assistant, text: "**One new issue needs you:** #21 asks for SSH hosts in Settings.\n\n- #19 and #20 are labelled `bug` and assigned.\n- #22 is a duplicate of #14; I closed it with a link.")]
+        }
+        // Its latest run is a task beside the first bot's chat (#146), its conversation the run's.
+        if let i = triage.runs.indices.last, let startedAt = triage.runs[i].startedAt {
+            let task = JobTasks.task(for: first, job: triage, run: triage.runs[i], startedAt: startedAt)
+            triage.runs[i].taskID = task.id
+            if let target = model.startJobTask(task, for: first.id) {
+                var messages = transcript(on: first)
+                messages.insert(ChatMessage(role: .user, text: triage.prompt), at: 1)
+                model.conversation(target).replace(messages)
+                model.saveThread(target)
+            }
+        }
         var weekly = Job(botID: first.id, title: "Friday release notes", prompt: "Draft release notes from this week's merged pull requests.",
                          schedule: JobSchedule(kind: .days, hour: 16, minute: 30, days: [6], timeZone: zone), enabled: false,
                          createdAt: now.addingTimeInterval(-30 * 86_400))
@@ -389,12 +406,8 @@ enum DevHooks {
             guard let bot = model.bot(job.botID) else { continue }
             let home = BotHome(workspace: bot.workspace)
             try? home.save(job)
-            if let last = job.runs.last(where: { $0.outcome == .succeeded && !$0.quiet }) {
-                try? home.saveJobThread([
-                    ChatMessage(role: .note, text: "Started on \(bot.account.name)"),
-                    ChatMessage(role: .tool, toolID: "1", toolName: "Bash", toolInput: "gh issue list --state open --limit 20", toolState: .done),
-                    ChatMessage(role: .assistant, text: "**One new issue needs you:** #21 asks for SSH hosts in Settings.\n\n- #19 and #20 are labelled `bug` and assigned.\n- #22 is a duplicate of #14; I closed it with a link."),
-                ], job: job.id, run: last.id)
+            if let last = job.runs.last(where: { $0.outcome == .succeeded && !$0.quiet && $0.taskID == nil }) {
+                try? home.saveJobThread(transcript(on: bot), job: job.id, run: last.id)
             }
         }
         model.jobs.addSamples(jobs)

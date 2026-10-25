@@ -110,9 +110,9 @@ struct ReceiptRow: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
             if job != nil {
-                Button("Open Run") { model.jobs.showHistory(link.job, run: link.run) }
+                Button("Open Run") { model.jobs.open(run: link.run, of: link.job) }
                     .buttonStyle(.link)
-                    .help("Show this run in the job's history")
+                    .help("Open this run's task, or the job's history for a run from before runs were tasks")
             }
         }
         .font(.caption)

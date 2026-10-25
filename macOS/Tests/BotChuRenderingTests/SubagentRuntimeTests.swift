@@ -334,6 +334,44 @@ extension RenderingTests {
         #expect(fixture.home.loadSubagents(taskID: fixture.target.taskID).allSatisfy { $0.phase == .stopped })
     }
 
+    /// #145: Antigravity printed a sub-agent's handoff and the end of its turn, then never exited
+    /// (and ignored Stop), so the run stayed running until BotChu restarted. Its handoff now goes
+    /// back a short while after the turn ended, completed, with a note saying why it took so long.
+    @Test func aWorkerThatNeverExitsAfterItsReplyStillHandsOff() async throws {
+        let limit = AgentRun.defaultLingerLimit
+        AgentRun.defaultLingerLimit = 1
+        defer { AgentRun.defaultLingerLimit = limit }
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let caller = try await fixture.app.delegation.prepareCaller(target: fixture.target, directory: fixture.folder.path, machine: .thisMac, hostID: nil)
+        defer { fixture.app.delegation.endCaller(caller.id) }
+        let ipc = SubagentIPC(root: URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!))
+        let request = SubagentRequest(invocationID: caller.id, callerBotID: fixture.parent.id, callerTaskID: fixture.target.taskID,
+                                     depth: 0, targetAgent: "Worker", brief: "LINGER")
+        try SubagentIPC.encode(request).write(to: ipc.requestURL(request.id), options: .atomic)
+        try await fixture.wait { FileManager.default.fileExists(atPath: ipc.resultURL(request.id).path) }
+        let result = try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: ipc.resultURL(request.id)))
+        #expect(result.phase == .completed)
+        #expect(result.handoffOutput == "HANDOFF-LINGER")
+        let thread = fixture.home.loadSubagentThread(id: request.id, taskID: fixture.target.taskID)
+        #expect(thread.last?.role == .note)
+        #expect(thread.last?.text == "Codex Work didn't exit after its reply, so BotChu ended it.")
+    }
+
+    /// Stop ends a worker whose CLI ignores SIGINT and SIGTERM (#145), so the tree stops.
+    @Test func stoppingAParentEndsAWorkerThatIgnoresInterruptAndTerminate() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app
+        app.send("STUBBORN_TREE", to: fixture.target)
+        try await fixture.wait { app.delegation.all.contains { $0.phase == .running } }
+        try await Task.sleep(for: .milliseconds(500))
+        app.stop(fixture.target)
+        try await fixture.wait { !app.isRunning(fixture.target) && app.delegation.all.allSatisfy { !$0.phase.isActive } }
+        #expect(app.delegation.all.count == 1)
+        #expect(app.delegation.all.allSatisfy { $0.phase == .stopped })
+    }
+
     @Test func subagentDepthAndUnknownNamesFailWithoutHangingTheCaller() async throws {
         let fixture = try SubagentFixture()
         defer { fixture.cleanUp() }
@@ -737,6 +775,19 @@ private final class ArchiveWrites: @unchecked Sendable {
         emit({"type":"item.completed", "item":{"type":"agent_message", "text":"Cannot persist this reply"}})
         while True: time.sleep(.1)
     elif brief == "BLOCK":
+        while True: time.sleep(.1)
+    elif brief == "LINGER":
+        # Antigravity in #145: the handoff and the end of its turn, then it never exits and ignores Stop.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        emit({"type":"item.completed", "item":{"type":"agent_message", "text":"HANDOFF-LINGER"}})
+        emit({"type":"turn.completed"})
+        while True: time.sleep(.1)
+    elif brief == "STUBBORN_TREE":
+        answer = helper("call", "--agent", "Worker", "--brief", "STUBBORN")
+    elif brief == "STUBBORN":
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         while True: time.sleep(.1)
     elif brief == "STREAM_PARENT":
         answer = helper("call", "--agent", "Worker", "--brief", "STREAM_CHILD")

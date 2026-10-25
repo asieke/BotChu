@@ -10,7 +10,7 @@ extension Palette {
     static let idleRing = dynamic(0xB8B8BE, 0x5E5E66)
     /// A turn that finished since the conversation was last shown, as the news badge was.
     static let news = Color(nsColor: .systemBlue)
-    /// The chat's background, which the selected tab takes so the conversation hangs from it.
+    /// The window's background, which the selected tab and tile take, lifted off the column.
     static let chat = Color(nsColor: .windowBackgroundColor)
 }
 
@@ -115,8 +115,8 @@ struct ConversationSplit<Chat: View>: View {
 }
 
 /// The column: Home pinned at the top, then a heading with the tasks' count, New Task and
-/// collapse, then the open tasks, which scroll. The selected tab runs into the chat. Its trailing
-/// edge resizes it.
+/// collapse, then the open tasks, which scroll. The rows are inset `rowInset` from both of its
+/// edges, as the selected one's card shows (#144). Its trailing edge resizes it.
 struct ConversationColumn: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -128,6 +128,9 @@ struct ConversationColumn: View {
     @State private var hovered: ChatTarget?
     @State private var dragStart: CGFloat?
 
+    /// How far a row is from the column's edges, on both sides.
+    static let rowInset: CGFloat = 8
+
     var body: some View {
         let tasks = model.openTasks(of: botID).map { ChatTarget.task($0.id, of: botID) }
         let shown = model.tab(of: botID)
@@ -135,7 +138,7 @@ struct ConversationColumn: View {
             ConversationRow(target: .home(botID), index: 0, selected: shown == .home(botID), hovered: hovered == .home(botID),
                             focus: focus) { hovered = $0 ? .home(botID) : (hovered == .home(botID) ? nil : hovered) }
                 .padding(.top, 8)
-                .padding(.leading, 8)
+                .padding(.horizontal, Self.rowInset)
             HStack(spacing: 6) {
                 Text("Tasks")
                     .font(.system(size: 11, weight: .semibold))
@@ -168,7 +171,7 @@ struct ConversationColumn: View {
                                     Rectangle().fill(Palette.rowDivider)
                                         .frame(height: 1)
                                         .padding(.leading, 32)
-                                        .padding(.trailing, 14)
+                                        .padding(.trailing, ConversationRow.padding.trailing)
                                         .offset(y: -1)
                                         .allowsHitTesting(false)
                                         .accessibilityHidden(true)
@@ -179,7 +182,7 @@ struct ConversationColumn: View {
                 }
                 .padding(.top, 4)
                 .padding(.bottom, 8)
-                .padding(.leading, 8)
+                .padding(.horizontal, Self.rowInset)
                 .animation(reduceMotion ? .easeInOut(duration: 0.16) : .easeOut(duration: 0.2), value: tasks)
             }
             .scrollIndicators(.never)
@@ -189,7 +192,6 @@ struct ConversationColumn: View {
         .frame(minWidth: ConversationColumnLayout.railWidth, idealWidth: width, maxWidth: width)
         .frame(maxHeight: .infinity, alignment: .top)
         .background {
-            // Under the rows, so the selected one covers the hairline where it meets the chat.
             Palette.conversationColumn
                 .overlay(alignment: .trailing) { Rectangle().fill(Palette.hairline).frame(width: 1) }
                 .ignoresSafeArea(edges: .bottom)
@@ -233,7 +235,10 @@ struct ConversationRow: View {
     let focus: FocusState<ChatTarget?>.Binding
     let hover: (Bool) -> Void
 
-    private static let shape = UnevenRoundedRectangle(topLeadingRadius: 8, bottomLeadingRadius: 8, style: .continuous)
+    private static let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+    /// Between the row's edges and its dot and texts: the time ends as far from the column's
+    /// trailing edge as the dot starts from its leading one.
+    static let padding = EdgeInsets(top: 9, leading: 8, bottom: 10, trailing: 8)
 
     var body: some View {
         if let tab = model.conversationTab(of: target) {
@@ -251,7 +256,7 @@ struct ConversationRow: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(EdgeInsets(top: 9, leading: 8, bottom: 10, trailing: 14))
+                .padding(Self.padding)
                 .foregroundStyle(selected ? Palette.text : Palette.pathText)
                 .background { background }
                 .contentShape(Self.shape)
@@ -263,8 +268,8 @@ struct ConversationRow: View {
             .overlay(alignment: .topLeading) {
                 if closable && hovered {
                     CloseTabButton(target: target, title: tab.title)
-                        .padding(.top, 9)
-                        .padding(.leading, 8)
+                        .padding(.top, Self.padding.top)
+                        .padding(.leading, Self.padding.leading)
                 }
             }
             .onHover(perform: hover)
@@ -286,9 +291,11 @@ struct ConversationRow: View {
     @ViewBuilder private var background: some View {
         let focused = focus.wrappedValue == target
         if selected {
+            // A card with its edge all round, as the rail's selected tile is: the chat's real
+            // background isn't the window's in dark mode, so a tab left open to it showed a seam (#144).
             Self.shape.fill(Palette.chat)
-                .shadow(color: .black.opacity(0.06), radius: 2, x: -1, y: 1)
-                .overlay { TabEdge(radius: 8).stroke(focused ? Palette.violet : Color.primary.opacity(0.08), lineWidth: focused ? 2 : 0.5) }
+                .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
+                .overlay { Self.shape.strokeBorder(focused ? Palette.violet : Color.primary.opacity(0.08), lineWidth: focused ? 2 : 0.5) }
         } else if hovered || focused {
             Self.shape.fill(Color.primary.opacity(0.045))
                 .overlay { if focused { Self.shape.strokeBorder(Palette.violet, lineWidth: 2) } }
@@ -296,8 +303,8 @@ struct ConversationRow: View {
     }
 }
 
-/// A tab's first, prominent line: a review's eye, the repository it works in, then its issue's
-/// number (and its host) in the secondary colour.
+/// A tab's first, prominent line: a review's eye or a job's clock, the repository it works in (a
+/// job's run: its job), then its issue's number (and its host) in the secondary colour.
 struct ConversationTitle: View {
     let tab: ConversationTab
     let selected: Bool
@@ -308,8 +315,8 @@ struct ConversationTitle: View {
 
     private var text: Text {
         var text = Text("")
-        if tab.isReview {
-            text = text + Text(Image(systemName: "eye")).foregroundStyle(Palette.secondaryText) + Text(" ")
+        if tab.isReview || tab.isJob {
+            text = text + Text(Image(systemName: tab.isJob ? "clock.arrow.circlepath" : "eye")).foregroundStyle(Palette.secondaryText) + Text(" ")
         }
         text = text + Text(tab.name)
         if let number = tab.numberText {
@@ -359,23 +366,6 @@ struct ConversationDetail: View {
             Text("Finished · ") + Text("PR #\(pullRequest)").foregroundStyle(Palette.pathText).fontWeight(.medium)
         default: Text(tab.detail)
         }
-    }
-}
-
-/// The selected tab's edge: along its top, round its leading corners and along its bottom, open
-/// where it meets the chat.
-private struct TabEdge: Shape {
-    let radius: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.minY))
-        path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.minX, y: rect.minY + radius), radius: radius)
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - radius))
-        path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX + radius, y: rect.maxY), radius: radius)
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        return path
     }
 }
 
@@ -502,6 +492,8 @@ private struct RailTile: View {
                 Group {
                     if tab.isHome {
                         Image(systemName: "house").font(.system(size: 14))
+                    } else if tab.isJob {
+                        Image(systemName: "clock.arrow.circlepath").font(.system(size: 14))
                     } else if let number = tab.numberText {
                         Text(number).font(.system(size: 11.5, weight: .semibold)).monospacedDigit()
                             .lineLimit(1).minimumScaleFactor(0.7)
@@ -554,14 +546,18 @@ private struct RailTile: View {
     }
 }
 
-/// A task's menu, in its tab and its tile: its issue or pull request, branch, folder and Terminal,
-/// then New Session and Close Task.
+/// A task's menu, in its tab and its tile: its issue or pull request (a job's run: the run in its
+/// job's history), branch, folder and Terminal, then New Session and Close Task.
 struct TaskMenu: View {
     @Environment(AppModel.self) private var model
     let target: ChatTarget
     let task: BotTask
 
     var body: some View {
+        if let origin = task.jobRun {
+            Button("Show Run in Job History") { model.jobs.showHistory(origin.jobID, run: origin.runID) }
+                .disabled(model.jobs.job(origin.jobID) == nil)
+        }
         if let work = task.work {
             Link("Open \(work.isPullRequest ? "Pull Request" : "Issue") #\(work.number)", destination: work.url)
         }
