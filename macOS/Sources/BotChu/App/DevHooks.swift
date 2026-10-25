@@ -491,17 +491,18 @@ enum DevHooks {
     }
 
     /// The window's picture with the pets' frames drawn in their circles.
-    /// Each web view's latest picture: `cacheDisplay` can't draw a web view, which renders in
-    /// another process, so its picture is asked for at one snapshot and drawn in at the next.
+    /// Each delivered page's latest picture (`OfflinePage`): `cacheDisplay` can't draw a web view,
+    /// which renders in another process, so its picture is asked for at one snapshot and drawn in at
+    /// the next. (Only those: the chat's own web views are drawn as they are, and not all shown.)
     @MainActor private static var webPictures: [ObjectIdentifier: CGImage] = [:]
 
-    /// The web views' pictures in `root`, where they show.
+    /// The delivered pages' pictures in `root`, where they show.
     static func webViewFrames(in root: NSView) -> [(CGImage, CGRect)] {
         var found: [(CGImage, CGRect)] = []
         func walk(_ view: NSView) {
-            if let web = view as? WKWebView {
+            if let web = view as? OfflinePage.WebView {
                 let id = ObjectIdentifier(web), visible = web.visibleRect
-                guard !visible.isEmpty else { return }
+                guard !visible.isEmpty, !web.isHiddenOrHasHiddenAncestor else { return }
                 let configuration = WKSnapshotConfiguration()
                 configuration.rect = visible
                 web.takeSnapshot(with: configuration) { image, _ in

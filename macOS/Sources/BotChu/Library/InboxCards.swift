@@ -217,12 +217,15 @@ struct OfflinePage: NSViewRepresentable {
          {"trigger": {"url-filter": "^about:"}, "action": {"type": "ignore-previous-rules"}}]
         """
 
+    /// Its own class, so the dev snapshot finds it (`DevHooks.webViewFrames`).
+    final class WebView: WKWebView {}
+
     func makeCoordinator() -> Coordinator { Coordinator(title: $title) }
 
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> WebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = WebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         context.coordinator.watch(view)
         view.setValue(false, forKey: "drawsBackground")
@@ -236,7 +239,7 @@ struct OfflinePage: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ view: WKWebView, context: Context) {}
+    func updateNSView(_ view: WebView, context: Context) {}
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         let title: Binding<String?>
