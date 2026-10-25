@@ -105,6 +105,8 @@ final class AppModel {
     var telegram: TelegramBridge!
     /// The bots' scheduled jobs, run while BotChu is open (Jobs).
     var jobs: JobRuntime!
+    /// What the bots deliver to the owner with `botchu-inbox send` (Inbox).
+    var inbox: InboxModel!
     /// Each bot's tasks, open and closed, oldest first.
     var tasks: [UUID: [BotTask]] = [:]
     /// Every conversation (each bot's Home, and each task), observed one by one: see
@@ -122,6 +124,7 @@ final class AppModel {
             guard destination == nil else { return }
             react(.greeting, for: tab(of: selection), seconds: 5)
             unread.remove(tab(of: selection))
+            inbox?.conversationShown(tab(of: selection))
         }
     }
     /// The task tab shown for each bot; none shows its Home.
@@ -305,6 +308,8 @@ final class AppModel {
             ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot, archive: SubagentArchive(storage: storage))
         telegram = TelegramBridge(model: self, stateURL: self.store.root.appendingPathComponent("telegram.json"))
         jobs = JobRuntime(model: self, runs: DevHooks.runsJobs)
+        inbox = InboxModel(model: self, root: self.store.root, storage: storage)
+        inbox.load(bots: bots)
         selection = bots.first?.id
         showSavedProjects()
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
@@ -356,6 +361,8 @@ final class AppModel {
     }
 
     func thread(_ target: ChatTarget) -> [ChatMessage] { conversation(target).messages }
+    /// Whether the conversation is the one in the window now.
+    func isShown(_ target: ChatTarget) -> Bool { visibleBotID == target.botID && tab(of: target.botID) == target }
     func isRunning(_ target: ChatTarget) -> Bool { runStates[target] != nil || (delegation?.activeCount(target) ?? 0) > 0 }
     /// Whether any of the bot's conversations has a turn under way. Reading its Home's and its
     /// tasks' turns by name observes them, also a task's that is made later.
@@ -384,6 +391,7 @@ final class AppModel {
         if wasHidden, selection == target.botID { react(.greeting, for: target, seconds: 5) }
         openTask[target.botID] = target.taskID
         unread.remove(target)
+        inbox?.conversationShown(target)
         if selection != target.botID { selection = target.botID }
         hydrate(target)
     }
@@ -541,6 +549,7 @@ final class AppModel {
     func delete(_ id: UUID) {
         delegation.stopBot(id)
         jobs.removeBot(id)
+        inbox.forget(bot: id)
         for (target, run) in runs where target.botID == id { run.stop() }
         petRuns[id]?.stop()
         petTasks.removeValue(forKey: id)?.cancel()
@@ -1157,7 +1166,7 @@ final class AppModel {
     /// queue pauses and the conversation says why.
     @discardableResult
     func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [], id: UUID = UUID(),
-              references: [MessageReference] = [], accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
+              references: [MessageReference] = [], delivery: UUID? = nil, accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
         let (text, references) = MessageReference.trimming(text, references: references)
         guard images.count <= ImageAttachment.maximumCount else {
             attachmentErrors[target] = "Attach up to 8 images per message. Remove an image before sending."
@@ -1181,20 +1190,22 @@ final class AppModel {
         }
         // The queue changes once it is recovered after the launch, so what was saved in it isn't lost.
         if later(target, needs: .recovery, { [weak self] in self?.enqueue(text, to: target, images: images, id: id, references: references,
-                                                                         reserved: ticket, accepted: accepted) },
+                                                                         delivery: delivery, reserved: ticket, accepted: accepted) },
                  cancel: { accepted?(false) }) {
             return true
         }
-        enqueue(text, to: target, images: images, id: id, references: references, reserved: ticket, accepted: accepted)
+        enqueue(text, to: target, images: images, id: id, references: references, delivery: delivery, reserved: ticket, accepted: accepted)
         return true
     }
 
     /// Queues a message being sent, saves the queue, then sends it (`send`); `reserved` is the
     /// ticket that keeps the conversation busy meanwhile.
     private func enqueue(_ text: String, to target: ChatTarget, images: [ImageAttachment], id: UUID, references: [MessageReference],
-                         reserved ticket: UUID?, accepted: (@MainActor @Sendable (Bool) -> Void)?) {
+                         delivery: UUID? = nil, reserved ticket: UUID?, accepted: (@MainActor @Sendable (Bool) -> Void)?) {
         var queue = messageQueues[target] ?? MessageQueue()
-        queue.enqueue(ChatMessage(id: id, role: .user, text: text, images: images, references: references), unsaved: true)
+        var message = ChatMessage(id: id, role: .user, text: text, images: images, references: references)
+        message.delivery = delivery
+        queue.enqueue(message, unsaved: true)
         messageQueues[target] = queue
         saveQueue(for: target) { [weak self] saved in
             guard let self else { return accepted?(false) ?? () }
@@ -1661,9 +1672,12 @@ final class AppModel {
                         return
                     }
                     let stopped = run.stopped
+                    // What the turn delivered to the Inbox shows after its reply.
+                    let cards = self.inbox.takeCards(for: target)
                     self.conversation(target).stream { messages in
                         assembler.apply(.textEnd, to: &messages)
                         ThreadAssembler.closeRunningTools(&messages)
+                        messages += cards
                         if stopped {
                             messages.append(ChatMessage(role: .note, text: "Stopped"))
                         } else if run.lingered {
@@ -1683,6 +1697,8 @@ final class AppModel {
                     let messages = self.thread(target)
                     let failure = outcome.failure(stopped: stopped, exitError: messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil })
                     let turn = Array(messages.suffix(from: min(turnStart, messages.count)))
+                    // The owner's message that started it is just before it.
+                    self.inbox.turnEnded(target, turn: Array(messages.suffix(from: max(0, min(turnStart, messages.count) - 1))))
                     self.log(TurnLog.ended(
                         at: Date(), startedAt: startedAt, status: status, stopped: stopped,
                         toolCalls: turn.filter { $0.role == .tool }.count,

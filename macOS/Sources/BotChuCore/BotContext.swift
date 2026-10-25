@@ -321,12 +321,47 @@ public enum BotContext {
         return "<botchu_context>\n\(parts.joined(separator: "\n\n"))\n</botchu_context>"
     }
 
-    /// Included again on resumed turns so an existing CLI session learns about newly available bots.
+    /// Included again on resumed turns so an existing CLI session learns about newly available bots,
+    /// with how to deliver to the owner's Inbox (`inboxSection`).
     public static func subagentsSection(availableBots: [BotRosterEntry], depth: Int = 0) -> String {
         guard depth < SubagentLimits.maxDepth else {
             return "Maximum sub-agent recursion depth (\(SubagentLimits.maxDepth)) has been reached. Complete this brief yourself; further delegation is unavailable."
+                + "\n\n" + inboxSection(subagent: true)
         }
         guard !availableBots.isEmpty else { return "" }
+        return delegationSection(availableBots: availableBots) + "\n\n" + inboxSection(subagent: depth > 0)
+    }
+
+    /// How to hand the owner something to review or decide: `botchu-inbox send`, which works as
+    /// `botchu-task` does. From a sub-agent run, a delivery is its caller's, crediting it.
+    public static func inboxSection(subagent: Bool = false) -> String {
+        let from = subagent
+            ? "You are a sub-agent run, so what you send arrives as a delivery of the conversation at the top of the chain "
+                + "that called you, crediting you. Send only what your brief asks you to hand the owner; otherwise put it in your handoff."
+            : "From a sub-agent run, a delivery arrives as this conversation's, crediting that bot. Credit another bot whose "
+                + "work it is (such as a sub-agent's) with `--credit <bot>`."
+        return """
+            <inbox>
+            ## Your owner's Inbox: `botchu-inbox send`
+            When you hand your owner something to review, or need their decision to go on (a report, a mockup, pull \
+            requests, a question), deliver it to their Inbox rather than only mentioning a path in your reply:
+            `botchu-inbox send --title "<short title>" --note "<Markdown: what it is, and what you'd do>" [--file <path>]… [--pr owner/name#n]… [--issue owner/name#n]… [--ask "<question>" --choice "<answer>"…]`
+            - `--note-file <path>` instead of `--note` for a longer note. Files are copied as they are when you send \
+            them (up to 20 MB each), so later edits don't change what your owner reviews: Markdown shows as a \
+            document, an HTML page as a page that opens without network access (make it self-contained), images as \
+            images. `--pr` and `--issue` also take a number in the current repository, or a GitHub URL.
+            - `--ask` asks the one question you can't go on without; each `--choice` is an answer your owner can pick \
+            in one click.
+            - It prints the delivery's ID. Sending the same title again in this turn updates that delivery instead of \
+            making another.
+            - Your owner's reply comes back into this conversation as a message that names the delivery it answers.
+            - \(from)
+            Deliver only what your owner should look at: a turn ending, a task starting and progress don't belong there.
+            </inbox>
+            """
+    }
+
+    private static func delegationSection(availableBots: [BotRosterEntry]) -> String {
         let roster = availableBots.map { "- `\($0.slug)` (\($0.name); \($0.id.uuidString.lowercased())) — \($0.title)" }.joined(separator: "\n")
         return """
             <subagents>

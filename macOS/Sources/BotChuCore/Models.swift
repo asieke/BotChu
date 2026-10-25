@@ -155,6 +155,9 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     public var mentions: [MessageReference] { references ?? [] }
     /// On a receipt about a scheduled job's run (`JobReceipt`), the run it reports on.
     public var jobRun: JobRunLink?
+    /// On the owner's message, the delivery it replies to from the Inbox (`InboxReply`); on a note,
+    /// the delivery it shows in the chat as a card. Nil otherwise, and in threads saved before.
+    public var delivery: UUID?
 
     public init(
         id: UUID = UUID(), role: Role, text: String = "", date: Date = Date(), toolID: String? = nil,

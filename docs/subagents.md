@@ -109,15 +109,19 @@ Records and transcripts stay with the owning conversation:
 <owner workspace>/.botchu/tasks/<task id>/subagents/<run id>/{run.json,thread.jsonl}
 ```
 
-The standalone helper is installed in `~/.botchu/bin`, as `botchu-subagent` and `botchu-task`
-(one script that acts by the name it is run as). Each turn also receives private copies in
+The standalone helper is installed in `~/.botchu/bin`, as `botchu-subagent`, `botchu-task` and
+`botchu-inbox` (one script that acts by the name it is run as). Each turn also receives private copies in
 its mailbox's `bin` directory, prepended to PATH after login-shell initialization. Local mailboxes
 are under `~/.botchu/ipc/subagents/<invocation id>`. A remote mailbox is under
 `~/.botchu/ipc/subagents/<app namespace>/<invocation id>` on the host. Each contains `roster.json`,
 `heartbeat.json`, `requests/<id>.json`, `status/<id>.status.json` (rewritten only when the child's
 phase or activity changes) and `results/<id>.result.json`. A Task request is a request with `"kind":
 "task"`; its result is rewritten as it goes from pending to created to started, and
-`botchu-subagent wait` refuses it, as `botchu-task status` refuses a sub-agent run's.
+`botchu-subagent wait` refuses it, as `botchu-task status` refuses a sub-agent run's. A delivery
+(`botchu-inbox send`) is a request with `"kind": "inbox"`; the helper first copies its files into
+`inbox/<request id>/` in the mailbox, BotChu reads them from there (over SSH from a host, each at
+most 20 MB) into the sending bot's `.botchu/inbox/<delivery id>/`, removes them, and writes a result
+that says whether it was delivered or updated, or why not.
 The app namespace survives relaunch. Isolated tests and development runs use their own data root.
 
 SSH mailbox polling uses an independent connection through the existing ControlMaster, so a

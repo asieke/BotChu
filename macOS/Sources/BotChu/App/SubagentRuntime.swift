@@ -32,6 +32,8 @@ final class SubagentRuntime {
     @ObservationIgnored private var rejections: [UUID: [UUID: SubagentResult]] = [:]
     /// What each Task request (`botchu-task create`) has come to so far, by request (#111).
     @ObservationIgnored private var handoffs: [UUID: TaskHandoffResult] = [:]
+    /// What each delivery (`botchu-inbox send`) came to, by request.
+    @ObservationIgnored private var inboxResults: [UUID: InboxResult] = [:]
     @ObservationIgnored private var pendingFinishes: [UUID: (SubagentPhase, String?)] = [:]
     @ObservationIgnored private var requestCounts: [ChatTarget: Int] = [:]
     /// Runs whose end is being saved: still active until it is, so their caller waits for them.
@@ -177,7 +179,10 @@ final class SubagentRuntime {
         var caller = Caller(id: id, target: target, parent: parent, depth: depth,
                             directory: directory, hostID: hostID, transport: transport)
         contexts[id] = caller
-        if parent == nil { requestCounts[target] = 0 }
+        if parent == nil {
+            requestCounts[target] = 0
+            model?.inbox?.turnStarts(target)
+        }
         do {
             let endpoint = try await transport.prepare(script: SubagentHookInstaller.script,
                                                         roster: SubagentIPC.encode(roster))
@@ -264,6 +269,11 @@ final class SubagentRuntime {
             await receiveHandoff(data, id: fileID, filename: filename, from: caller)
             return
         }
+        // A delivery to the owner's Inbox, as the conversation at the top of the chain.
+        if InboxRequest.isDelivery(data) {
+            await receiveDelivery(data, id: fileID, filename: filename, from: caller)
+            return
+        }
         if let rejected = rejections[caller.id]?[fileID] {
             do {
                 try await caller.transport.writeResult(id: fileID, data: SubagentIPC.encode(rejected))
@@ -334,6 +344,48 @@ final class SubagentRuntime {
                 try await caller.transport.acknowledge(filename: filename)
             } catch { self.error = "Couldn't deliver a sub-agent failure: \(error.localizedDescription)" }
         }
+    }
+
+    // MARK: Deliveries to the Inbox
+
+    /// Takes a `botchu-inbox send` request: the delivery is the caller's conversation's (the top of
+    /// the chain), crediting the sub-agent's bot when a sub-agent sent it and the bots it names. Its
+    /// answer, written into the caller's mailbox, says what became of it; asking again gets the same.
+    private func receiveDelivery(_ data: Data, id: UUID, filename: String, from caller: Caller) async {
+        if let known = inboxResults[id] {
+            try? await caller.transport.writeResult(id: id, data: SubagentIPC.encode(known))
+            try? await caller.transport.acknowledge(filename: filename)
+            return
+        }
+        var result: InboxResult
+        do {
+            guard let model, let inbox = model.inbox else { throw InboxRequest.Problem("BotChu is shutting down") }
+            let request = try InboxRequest.parse(data)
+            guard request.id == id else { throw InboxRequest.Problem("the request's ID doesn't match its file") }
+            try request.validate(SubagentCallerContext(invocationID: caller.id, botID: caller.target.botID, taskID: caller.target.taskID,
+                                                       parentSubagentID: caller.parent, depth: caller.depth,
+                                                       workingDirectory: caller.directory, hostID: caller.hostID))
+            guard contexts[caller.id] != nil else { throw InboxRequest.Problem("the sending turn has ended") }
+            let subagent = caller.parent.flatMap { run($0) }.map { Delivery.Credit(botID: $0.targetBotID, name: $0.targetBotName) }
+            var credits = subagent.map { [$0] } ?? []
+            for name in request.credits {
+                let bot = try SubagentResolver.resolve(name, bots: model.bots, list: "botchu-subagent list")
+                credits.append(Delivery.Credit(botID: bot.id, name: bot.name))
+            }
+            var seen: Set<UUID> = [caller.target.botID]
+            credits = credits.filter { seen.insert($0.botID).inserted }
+            let received = try await inbox.receive(request, in: caller.target, credits: credits,
+                                                   subagent: subagent.flatMap { $0.botID == caller.target.botID ? nil : $0 },
+                                                   transport: caller.transport)
+            result = InboxResult(id: id, deliveryID: received.delivery.id, updated: received.updated)
+        } catch {
+            result = InboxResult(id: id, errorMessage: (error as? InboxRequest.Problem)?.message ?? error.localizedDescription)
+        }
+        inboxResults[id] = result
+        do {
+            try await caller.transport.writeResult(id: id, data: SubagentIPC.encode(result))
+            try await caller.transport.acknowledge(filename: filename)
+        } catch { if isWatching(caller.id) { report("Couldn't answer a delivery: \(error.localizedDescription)") } }
     }
 
     // MARK: Tasks handed to bots (#111)

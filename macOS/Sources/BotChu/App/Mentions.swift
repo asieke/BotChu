@@ -37,6 +37,12 @@ extension AppModel {
     /// The text a message reaches its bot with: what its mentions point at (`ReferenceContext`), then
     /// the message. A message without mentions goes as it is.
     func deliveredText(of message: ChatMessage, for target: ChatTarget) -> String {
+        // A reply from the Inbox says which delivery it answers.
+        if let id = message.delivery, let delivery = inbox?.delivery(id) {
+            var plain = message
+            plain.delivery = nil
+            return InboxReply.prompt(deliveredText(of: plain, for: target), delivery: delivery)
+        }
         guard !message.mentions.isEmpty,
               let section = ReferenceContext.section(for: message.mentions, recipient: target.botID, agents: bots.map(BotRosterEntry.init),
                                                      projects: repositories == nil ? nil : projectCatalog, login: projectsLogin)
