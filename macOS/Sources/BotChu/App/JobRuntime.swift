@@ -431,7 +431,7 @@ final class JobRuntime {
                 guard let self, !self.quitting, let model = self.model else { return }
                 let cards = model.inbox.takeCards(for: target)
                 for card in cards { conversation.append(card) }
-                model.inbox.turnEnded(target, turn: [])
+                model.inbox.turnEnded(target)
                 let report = JobReport.isDue(result, delivered: !cards.isEmpty) ? reply : nil
                 let finish: @MainActor @Sendable () -> Void = { [weak self] in
                     guard let self else { return }

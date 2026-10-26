@@ -271,6 +271,7 @@ extension RenderingTests {
         try await wait("the reply's answer") { app.thread(sent.target).contains { $0.text.hasPrefix("GOT-REPLY") } && !app.isRunning(sent.target) }
         #expect(app.thread(sent.target).last { $0.role == .assistant }?.text == "GOT-REPLY \(delivery.id.uuidString.lowercased()) Yes")
         #expect(app.thread(sent.target).last { $0.role == .user }?.delivery == delivery.id)
+        #expect(app.inbox.isDone(delivery.id) && app.inbox.state.isAnswered(delivery))
 
         // A delivery its helper stopped waiting for arrives before the run ends, once.
         let late = try await run("PENDING")

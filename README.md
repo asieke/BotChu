@@ -427,8 +427,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     `.botchu/inbox/<id>/` (`delivery.json` and `files/`), works from a task on a host too (its files
     are fetched over SSH), and shows as a card in the sending conversation's chat after the turn's
     reply. A reply to it goes into that conversation through its queue like any message, marked
-    with the delivery, and the bot reads which delivery it answers; the bot's answer joins the
-    delivery's thread. One unread state: reading a delivery clears its conversation's news dot,
+    with the delivery, and the bot reads which delivery it answers. Once the queue has saved it (it
+    may wait there while the bot is busy), the delivery is answered and Done, and what the bot does
+    with it shows in that conversation; its answer doesn't bring the delivery back out of Done, only
+    a new delivery asks for the owner again. One unread state: reading a delivery clears its conversation's news dot,
     and showing the conversation reads what it delivered. What the owner did with each delivery
     (read, done, replied) is in `inbox.json` beside `index.json`. Every session's instructions
     describe the helper.
@@ -450,14 +452,17 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     whom it credits, where and when; the note in the chat's Markdown; then a card for each file
     (a document's first 260 points, then **Show all**; an HTML page in a web view with its scripts on
     and the network off, links opening in the browser; an image; any other file) and for each
-    repository's pull requests or issues, read from GitHub, each opening in Projects; then the
-    exchange under it: the owner's replies, what waits in the queue, the bot's answers and the bot
-    at work. A question's choices sit above a composer that names where a reply goes; a choice is
-    sent as the reply, word for word. The toolbar opens the conversation (**Open Home**, **Open
+    repository's pull requests or issues, read from GitHub, each opening in Projects. A question's
+    choices sit above a composer that names where a reply goes; a choice (also ⌘1 to ⌘9) is sent as
+    the reply, word for word, and once its conversation's queue holds the reply the delivery is
+    Done and that conversation opens (Home, the task, opened again if it was closed, or the job's
+    run). One reply goes at a time; one the queue can't take keeps the draft and the choices and
+    says so, with **Try Again**. Answered, the question says when. The toolbar opens the conversation (**Open Home**, **Open
     Task** or **Open Run**, ⌘O) and files the delivery as **Done** (⌃⌘A); its menu marks it read or
     unread and finds the copies and the originals. With nothing left to read it says when the last
     delivery came, with **Show Done**. In the sending conversation's chat, a delivery is a card with
-    **Show in Inbox**, and a reply from the Inbox shows under a "Reply from your Inbox" line.
+    **Show in Inbox** and its question's choices until it is answered, each sent as from the Inbox,
+    and a reply from the Inbox shows under a "Reply from your Inbox" line.
   - **Jobs:** an agent can own scheduled jobs, saved instructions it runs on a schedule, such as a
     morning issue triage on weekdays at 9:00. **Jobs** in the sidebar is one table of every agent's
     jobs: the job, its agent, its schedule and time zone, its next run, its state (on, paused,
@@ -1088,7 +1093,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     again, and holds what is written back. A delivery to the Inbox (`botchu-inbox send`) goes through
     it too: `Inbox.swift` reads and checks the request, keeps deliveries and their copies in a bot's
     folder, what the owner did with them (`InboxState`), the list's groups (`InboxList`) and a reply's
-    prompt and thread (`InboxReply`); the app's `InboxModel` takes them in and sends the replies.
+    prompt (`InboxReply`); the app's `InboxModel` takes them in and sends the replies, one at a time.
     `DeliveryBanner.swift` makes a delivery's banner (its text, buttons and category, the newest 20
     categories kept registered) and reads a click back into a reply or "show it"; the app's
     `InboxNotifications.swift` (`InboxNotifier`) posts banners, answers clicks and keeps the Dock
@@ -1438,8 +1443,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
   `BOTCHU_INBOX=sample` gives the Inbox sample deliveries from both demo bots (a report with a
   question crediting the other bot, a page from a task, pull requests, older and done ones), with the
-  first one's card in the first bot's Home; `replied` has it answered from the Inbox, with the bot's
-  answer; `done` has every one Done. `BOTCHU_OPEN=inbox` opens the Inbox, on the delivery `BOTCHU_INBOX_ITEM` names
+  first one's card in the first bot's Home; `replied` has it answered from the Inbox (Done), with the
+  bot's answer in that Home; `done` has every one Done. `BOTCHU_OPEN=inbox` opens the Inbox, on the delivery `BOTCHU_INBOX_ITEM` names
   (`00000000-0000-4000-9000-00000000000<n>`); the window's snapshot draws web views in too.
   `BOTCHU_JOBS=sample` gives the demo bots sample jobs, with a history of every kind of run, the
   latest a task beside the first bot's chat, and a receipt in the first bot's Home, and runs no job (Run Now records a failed run), so nothing starts a CLI; `BOTCHU_OPEN=job-editor`
