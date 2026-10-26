@@ -400,6 +400,10 @@ public struct InboxState: Codable, Equatable, Sendable {
 
     public func unreadCount(_ deliveries: [Delivery]) -> Int { deliveries.filter(isUnread).count }
 
+    /// The deliveries not Done, read or not: the count beside Inbox in the sidebar (#189). The Dock
+    /// and the dots keep counting what is unread.
+    public func unfinishedCount(_ deliveries: [Delivery]) -> Int { deliveries.filter { !self[$0.id].done }.count }
+
     /// Forgets deliveries that are gone, so the file doesn't grow with them.
     public mutating func keep(only ids: Set<UUID>) {
         entries = entries.filter { ids.contains($0.key) }

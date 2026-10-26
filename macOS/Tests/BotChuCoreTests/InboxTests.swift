@@ -280,6 +280,39 @@ private final class InboxFixture {
         #expect(InboxState.load(from: root.appendingPathComponent("missing")) == InboxState())
     }
 
+    /// Beside Inbox, what isn't Done, read or not; the Dock keeps counting what is unread (#189).
+    @Test func theSidebarCountsWhatIsntDoneReadOrNot() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-inbox-unfinished-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let report = Delivery(botID: UUID(), title: "Report")
+        let mockup = Delivery(botID: UUID(), title: "Mockup")
+        let asking = Delivery(botID: UUID(), title: "Which?", question: Delivery.Question(text: "Which?", choices: ["A"]))
+        let all = [report, mockup, asking]
+        var state = InboxState()
+        #expect(state.unfinishedCount(all) == 3 && state.unreadCount(all) == 3)
+        #expect(state.unfinishedCount([]) == 0)
+        // Reading alone leaves it.
+        state[report.id].read = true
+        state[asking.id].repliedAt = Delivery.stamp()
+        #expect(state.unfinishedCount(all) == 3 && state.unreadCount(all) == 2)
+        // Done takes it off, read or not; moved back to the Inbox, it counts again, though read.
+        state[mockup.id].done = true
+        #expect(state.unfinishedCount(all) == 2 && state.unreadCount(all) == 1)
+        state[report.id].done = true
+        state[report.id].read = true
+        #expect(state.unfinishedCount(all) == 1)
+        state[report.id].done = false
+        #expect(state.unfinishedCount(all) == 2 && state.unreadCount(all) == 1)
+        // A delivery that is gone (its bot deleted) isn't counted, whatever was kept for it.
+        #expect(state.unfinishedCount([report, mockup]) == 1)
+        // Saved beside the index, the count comes back.
+        try state.save(to: root)
+        #expect(InboxState.load(from: root).unfinishedCount(all) == 2)
+        state[asking.id].done = true
+        state[report.id].done = true
+        #expect(state.unfinishedCount(all) == 0)
+    }
+
     @Test func theListGroupsWhatNeedsAnAnswerThenByDayWithDoneLast() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!

@@ -46,6 +46,7 @@ final class InboxModel {
     /// Newest first.
     var all: [Delivery] { deliveries.values.sorted { ($0.updatedAt, $0.id.uuidString) > ($1.updatedAt, $1.id.uuidString) } }
     var unreadCount: Int { state.unreadCount(Array(deliveries.values)) }
+    var unfinishedCount: Int { state.unfinishedCount(Array(deliveries.values)) }
     func delivery(_ id: UUID) -> Delivery? { deliveries[id] }
     func target(of delivery: Delivery) -> ChatTarget { ChatTarget(botID: delivery.botID, taskID: delivery.taskID) }
     func isUnread(_ id: UUID) -> Bool { deliveries[id].map(state.isUnread) ?? false }
