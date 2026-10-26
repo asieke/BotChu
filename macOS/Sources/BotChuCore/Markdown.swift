@@ -7,13 +7,16 @@ public struct MarkdownBlock: Identifiable, Equatable, Sendable {
     public let kind: PresentationIntent.Kind
     public var text: AttributedString = AttributedString()
     public var children: [MarkdownBlock] = []
+    /// Its place in the reply: its index among its parent's children, at each level from the top.
+    /// Kept with it, so a view of an unchanged block is given the very same value again.
+    public var path: [Int] = []
 
     public static func split(_ source: String) -> [MarkdownBlock] {
         guard !source.isEmpty else { return [] }
         MarkdownParses.record()
         let options = AttributedString.MarkdownParsingOptions(failurePolicy: .returnPartiallyParsedIfPossible)
         guard let parsed = try? AttributedString(markdown: source, options: options) else {
-            return [MarkdownBlock(id: 0, kind: .paragraph, text: AttributedString(source))]
+            return [MarkdownBlock(id: 0, kind: .paragraph, text: AttributedString(source), path: [0])]
         }
         var root = MarkdownBlock(id: 0, kind: .paragraph)
         for run in parsed.runs {
@@ -22,7 +25,16 @@ public struct MarkdownBlock: Identifiable, Equatable, Sendable {
             text.presentationIntent = nil
             root.append(text, path: path[...])
         }
-        return root.children.isEmpty && !root.text.characters.isEmpty ? [root] : root.children
+        var blocks = root.children.isEmpty && !root.text.characters.isEmpty ? [root] : root.children
+        place(&blocks, in: [])
+        return blocks
+    }
+
+    private static func place(_ blocks: inout [MarkdownBlock], in parent: [Int]) {
+        for index in blocks.indices {
+            blocks[index].path = parent + [index]
+            place(&blocks[index].children, in: blocks[index].path)
+        }
     }
 
     /// `blocks`, with each block equal to the one in `old` at its place taken from `old`, and
