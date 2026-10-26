@@ -115,22 +115,40 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     bots by name, title or provider, within their sections, and a section, Conversations among
     them, by its name, with all its bots. A bot’s own conversation continues to work without a
     project.
-  - **Providers:** one compact table of CLI profiles, a row each, under 100 points high whatever
-    its state: the logo, name and CLI family; the command, and whether the login shell finds it;
-    a line per allowance window, with its use, a bar and its reset (the reset when the column has
-    room, and at most four lines, the rest in the tooltip), whose bars, percentages and resets
-    line up from row to row, reset times on their colons; chips for what the account has besides:
-    the money left under an OpenRouter key's spending limit, and Codex's usage credits and free
-    resets of its limits (or that it has none); when it was read, marked stale or failed (with
-    the error in a tooltip and a popover); and Refresh. The name, command and freshness columns
-    have fixed widths for a compact, regular or wide table, and the allowance column takes the
-    rest, so its bars grow with the window. Readings are saved between launches (`usage.json`
-    beside the bot index; usage fields only) and kept current in the background, every 15
-    minutes for a CLI profile and hourly for Muse, and every 5 minutes while Providers shows,
-    so it opens on the last numbers and updates them in place; a conversation's **Model & Usage**
-    shows the same readings, with the same refresh limits. It searches by name or family. **Add CLI**
-    adds a named profile of Claude Code, Codex, Antigravity, Muse or Pi, with an installed command or
-    wrapper and **Test Command**. Sign in through that CLI in Terminal; BotChu does not create its
+  - **Providers:** one table of CLI profiles, a row each, with their allowance windows in columns:
+    the logo and name, with the CLI family below it, or what is wrong; the model groups the
+    profile's limits cover (All models, Fable, Gemini, Claude & GPT), each named once, a daily
+    window's saying so ("Images · Daily"); **5-hour** and **Weekly**, a meter per group in each:
+    a bar of at most 200 points, the share used, the time left and when the reset is ("in 1d 10h",
+    "Mon 5:00 PM": the time alone today, a weekday within six days, else the date), each in a slot
+    of its own so they line up down the column, and "Reset at 5:40 AM" once a window has reset, until
+    the next reading; **Credits & resets**, a line each for the money left under an OpenRouter key's
+    spending limit, Codex's usage credits and its free resets of the limits (or that it has none),
+    the amount brighter while there is some, and the soonest free reset's day when it expires
+    within three days; and **Agents**, the faces of the agents set to the profile (four at most,
+    then +N). Rows are 56 points, 74 with three groups; an OpenRouter key's limit is under Weekly
+    whatever its reset. The columns have fixed widths for a compact, regular or wide table and
+    Agents takes the rest; in a narrower window Agents goes first, then the meters' reset time and
+    time left, which their tooltips keep. Provider sorts by name, 5-hour and Weekly by the row's
+    highest share used. The heading says when the newest reading was made ("Updated 3m ago"), with
+    **Refresh**, which checks every profile again within its own limit (Muse at most every five
+    minutes); a row adds its age only when its reading is 10 minutes older than that. While all is
+    well a row's second line is its family; otherwise, in the warning colour, **Stale · 2h ago**
+    (older than the background's interval, or a later check failed; its bars and shares are
+    dimmed), **Usage unavailable** or **Command not found**, a button that shows why, with **Try
+    Again** (labelled with the time the profile's limit allows it) and, for a missing command,
+    **Change Command…**; a profile not read yet says Checking…, over empty tracks. Selecting a
+    profile shows it on the right: its allowance as **Model & Usage** shows it, the agents set to
+    it, each opening its Home, and its command, with Copy and Change… (Settings ▸ Accounts). A row's
+    menu has Refresh, Copy Command and Change Command…, and, for a profile added here, **Remove
+    Profile…**, which asks first; agents set to a removed profile keep its CLI family and command.
+    Readings are saved between launches (`usage.json` beside the bot index; usage fields only; one
+    saved before windows had model groups takes them from its windows' titles) and kept current in
+    the background, every 15 minutes for a CLI profile and hourly for Muse, and every 5 minutes
+    while Providers shows, so it opens on the last numbers and updates them in place; a
+    conversation's **Model & Usage** shows the same readings, with the same refresh limits. It
+    searches by name or family. **New Profile** adds a named profile of Claude Code, Codex,
+    Antigravity, Muse or Pi, with an installed command or wrapper and **Test Command**. Sign in through that CLI in Terminal; BotChu does not create its
     login. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
     Codex profiles can also draw pets. Bots and tasks retain a copy of their custom profile’s CLI
     family and command across relaunches. Command overrides remain editable in Settings. Pi profiles
@@ -885,7 +903,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     reading Providers and the background checks keep (every 15 minutes, hourly for Muse), so opening
     it, or another conversation while it shows, gives the last numbers at once, with when they were
     read, marked stale (older than that) or failed as on Providers, and a check made anywhere
-    updates them in place. The area checks the account itself only when it has no reading or one
+    updates them in place. Each window's reset is the time left and when ("Resets in 1d 10h,
+    Monday at 5:00 PM"), and under the windows a hairline, then the account's usage credits, its
+    free resets of the limits and when they expire, when its CLI reports them (Codex). The area checks the account itself only when it has no reading or one
     that old, after turns while it is open, or with Refresh (at most once every 30 seconds).
     Muse needs one brief `Reply with OK.` request to learn its allowance: it uses isolated,
     temporary host state, checks hourly automatically, and at most once every five minutes after
@@ -974,8 +994,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     (`ChatPin.swift`), the identity, instructions,
     team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries,
-    and the lines Providers shows, lined up across its rows and laid out across a column's width, its
-    chips, and how its columns share the table's width (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled cache,
+    with each window's model group and length, and what Providers makes of a reading: its windows by
+    group, each reset as the time left and when, the credits and resets, what a row's second line
+    says, and how its columns and meters share the table's width (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled cache,
     saved between launches (`UsageCache.swift`), per-conversation pending-message delivery, keeping a follow-up the CLI
     took until a saved transcript holds it (`MessageQueue.swift`, saved in that order by
     `Store.swift`), how tall the message box is for its draft and how far its text may scroll
@@ -1124,8 +1145,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     grows and how far its text scrolls; each account's allowance, with Muse's check through a
     stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
     answered empty, and none at all; Model & Usage showing the reading the background keeps,
-    checking only one missing or as old as its interval, and Refresh's limits; the widths that line
-    up Providers' allowance lines in every row; skills: their frontmatter, finding and making them, which a
+    checking only one missing or as old as its interval, and Refresh's limits; Providers' model
+    groups, time left and reset times, credits and free resets with their expiry, a row's status by
+    exception, and the widths of its columns and meters; skills: their frontmatter, finding and making them, which a
     bot uses, and the catalog, or (on a host) the files in full, that sessions get; the Telegram
     gateway against a stand-in Bot API: round trips, refused and revoked chats, each chat's own bot,
     busy conversations, repeated updates, cancelled batches, relaunches, forwarded input,
@@ -1195,7 +1217,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     main window's layout at its narrowest, galleries that preserve conversation state, the project
     sidebar's tabs, details and fan-out tasks, deleting an issue from the Issues table's and the
     sidebar's menus and its detail (confirmed first, through a stand-in `gh`, and refused), custom profile persistence, the Providers table's
-    rows under 100 points in every state and at its narrowest, provider logos in both
+    columns and its 56- and 74-point rows in every state, from wide to its narrowest, sorting by
+    Weekly, the selected profile's sidebar, a problem's popover, and removing an added profile from
+    its row's menu after confirming, provider logos in both
     appearances and in account menus, the report
     sheet, with a stand-in screenshot (taken of its window before the sheet opens, removed, not
     taken again on a retry, new for the next report, and a report without one when it can't be
@@ -1248,7 +1272,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     Telegram recognizing a repeated message in a Home not read yet. Set
     `BOTCHU_TEST_SNAPSHOTS=<temporary folder>` when running
     `swift test --package-path macOS --filter galleriesKeepConversationStateAndCustomProfilesPersist`
-    (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `issuesAreDeletedFromTheirMenuAndDetailAfterConfirming`, `providersTableRowsStayCompact`,
+    (or `projectSidebarShowsTabsDetailsAndFanOutTasks`, `issuesAreDeletedFromTheirMenuAndDetailAfterConfirming`, `providersTableShowsWindowsInColumns`,
     `activityChatRendersGroupsCardsAndLiveWork`, `agentsGroupsAgentsUnderTheSidebarsSectionsAndEditsThem`,
     `jobsBelongToTheirAgentAndReachHomeOnlyAsReceipts`, `aJobsRunIsANewTaskInItsAgentsTasks`, `taskActivityShowsItsRepositorysOpenIssues`, or
     `conversationColumnFollowsTheWindowAndTheOwnersChoice`)
@@ -1379,10 +1403,13 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `pets.txt` lists each pet player's clip, state and time.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
-  querying any account (`sample` gives Codex profiles credits and free resets, and the Pi
-  profile a key with a spending limit); `mixed` gives Providers a row in each state (more
-  windows than a row shows, stale, failed, stale after a failed check, no credits, and a key
-  without a limit). Usage fixtures
+  querying any account (`sample` is Providers as its mock's main state: Claude's Fable week,
+  Codex profiles' credits and free resets, and the Pi profile a key with a spending limit);
+  `mixed` is its problems: a stale reading whose 5-hour window has reset since, then a failed
+  check; a week used up, with no credits and a free reset expiring in two days; a failed check; a
+  daily window; a profile still checking; a key without a limit; and an added profile
+  (`BOTCHU_PROFILE`) whose command isn't found. `BOTCHU_PROVIDER=<account id>` selects that
+  profile, showing it on the right. Usage fixtures
   are ignored outside throwaway data runs. `BOTCHU_PROFILE="<name>|<family>|<command>"` (several
   separated by `;`, `family` one of `claude`, `codex`, `antigravity`, `muse`, `pi`) adds CLI
   profiles to the run, such as one with a long name or a command that isn't installed.

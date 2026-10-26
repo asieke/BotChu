@@ -45,244 +45,399 @@ public struct UsageResets: Equatable, Sendable, Codable {
 }
 
 public struct UsageWindow: Identifiable, Equatable, Sendable, Codable {
+    /// The group of a limit on every model the account runs.
+    public static let allModels = "All models"
+    public static let fiveHours: TimeInterval = 18_000
+    public static let day: TimeInterval = 86_400
+    public static let week: TimeInterval = 604_800
     public var id: String
     public var title: String
+    /// The models the limit covers ("All models", "Fable", "Gemini"), named once in Providers.
+    public var group: String
+    /// How long the window is, when its CLI says: Providers shows one of a day or less under
+    /// 5-hour, and any other under Weekly.
+    public var period: TimeInterval?
     public var usedPercent: Double?
     public var resetsAt: Date?
     public var resetDescription: String?
     public var detail: String?
 
+    /// Without a group or a period, the window takes the ones its title gives ("Gemini · 5-hour").
     public init(id: String, title: String, usedPercent: Double?, resetsAt: Date? = nil,
-                resetDescription: String? = nil, detail: String? = nil) {
+                resetDescription: String? = nil, detail: String? = nil, group: String? = nil, period: TimeInterval? = nil) {
+        let titled = Self.titled(title)
         self.id = id
         self.title = title
+        self.group = group ?? titled.group
+        self.period = period ?? titled.period
         self.usedPercent = usedPercent.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
         self.resetsAt = resetsAt
         self.resetDescription = resetDescription
         self.detail = detail
     }
 
+    /// A window saved before windows had a group and a period takes the ones its title gives.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(id: try container.decode(String.self, forKey: .id), title: try container.decode(String.self, forKey: .title),
+                  usedPercent: try container.decodeIfPresent(Double.self, forKey: .usedPercent),
+                  resetsAt: try container.decodeIfPresent(Date.self, forKey: .resetsAt),
+                  resetDescription: try container.decodeIfPresent(String.self, forKey: .resetDescription),
+                  detail: try container.decodeIfPresent(String.self, forKey: .detail),
+                  group: try container.decodeIfPresent(String.self, forKey: .group),
+                  period: try container.decodeIfPresent(TimeInterval.self, forKey: .period))
+    }
+
+    /// The group and period a title names: "Gemini · 5-hour" is Gemini's five hours, "Weekly" all
+    /// models' week, and "Key allowance" all models' for no set period.
+    static func titled(_ title: String) -> (group: String, period: TimeInterval?) {
+        let parts = title.components(separatedBy: " · ")
+        let group = parts.count > 1 ? parts.dropLast().joined(separator: " · ") : allModels
+        return (group, UsageParser.period(named: parts.last ?? title))
+    }
+
     public func hasReset(at now: Date) -> Bool { resetsAt.map { $0 <= now } ?? false }
 
     /// A reading from an ended window is not the new window's usage.
     public func currentPercent(at now: Date) -> Double? { hasReset(at: now) ? nil : usedPercent }
+
+    /// A window of a day or less, which Providers shows under 5-hour.
+    public var isShort: Bool { period.map { $0 <= Self.day } ?? false }
 }
 
-/// An allowance window as a line of a compact list, such as a Providers row: its title, the share
-/// used and its reset, as text.
+/// An allowance window as one line of Providers' meters and the inspector: the share used, and its
+/// reset as the time left and when it is.
 public struct UsageLine: Identifiable, Equatable, Sendable {
-    /// The parts of a line that line up with the other rows' lines: a reset is a weekday and a
-    /// time, or text.
-    public enum Part: Sendable { case title, percent, day, time, reset }
     public var id: String
     public var title: String
     public var percent: Double?
     public var percentText: String
-    /// The reset in words: its weekday and time, or what stands for them.
-    public var reset: String
-    /// A reset at a known time as its weekday and its time apart, so that times line up down the
-    /// table; nil when `reset` says something else ("Reset passed").
-    public var resetDay: String?
+    /// How long until the reset, rounded down, in its two largest units ("4h 28m", "1d 10h"), which
+    /// Providers shows after "in"; nil when the reset isn't a time ahead.
+    public var timeLeft: String?
+    /// When the reset is: the time alone today ("10:40 AM"), the weekday and time within six days
+    /// ("Mon 5:00 PM"), else the date and time ("Nov 1, 1:56 AM").
     public var resetTime: String?
+    /// The reset in words where it isn't a time ahead: "Reset at 5:40 AM" once it has passed, what
+    /// the CLI said, or "—"; for one ahead, the time left and when.
+    public var reset: String
+    /// The reset as the inspector says it: "Resets in 1d 10h, Monday at 5:00 PM".
+    public var resetSentence: String
+    /// "Weekly: 9% used. Resets in 6d 19h, Sunday, Nov 1 at 1:56 AM", and the money left under a
+    /// spending limit.
+    public var help: String
+    /// The window has reset since it was read, so its share is unknown until the next reading.
+    public var hasReset: Bool
 
     public init(_ window: UsageWindow, at now: Date) {
         id = window.id
         title = window.title
+        hasReset = window.hasReset(at: now)
         percent = window.currentPercent(at: now)
         percentText = percent.map { "\($0.formatted(.number.precision(.fractionLength(0))))%" } ?? "—"
-        if window.hasReset(at: now) {
-            reset = "Reset passed"
+        if hasReset, let date = window.resetsAt {
+            reset = "Reset at \(UsageTime.when(date, now: now))"
+            resetSentence = "\(reset), waiting for a new reading"
         } else if let date = window.resetsAt {
-            reset = date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
-            resetDay = date.formatted(.dateTime.weekday(.abbreviated))
-            resetTime = date.formatted(.dateTime.hour().minute())
+            let left = UsageTime.left(date.timeIntervalSince(now))
+            timeLeft = left
+            resetTime = UsageTime.when(date, now: now)
+            reset = "in \(left), \(resetTime!)"
+            resetSentence = "Resets in \(left), \(UsageTime.whenInWords(date, now: now))"
+        } else if let text = window.resetDescription {
+            reset = text
+            resetSentence = text == "No scheduled reset" ? text : "Resets \(text)"
         } else {
-            reset = window.resetDescription ?? "—"
+            reset = "—"
+            resetSentence = "Reset time not reported"
         }
+        let share = hasReset ? "not read since its reset" : percent == nil ? "not reported" : "\(percentText) used"
+        let money = hasReset ? nil : window.detail
+        help = "\(window.title): \(share). \(resetSentence)" + (money.map { " · \($0)" } ?? "")
     }
 }
 
+/// How Providers says when a reset is.
+enum UsageTime {
+    /// Rounded down, in its two largest units: "28m", "4h 28m", "1d 10h"; under a minute, "<1m".
+    static func left(_ interval: TimeInterval) -> String {
+        guard interval >= 60 else { return "<1m" }
+        return Duration.seconds(interval).formatted(.units(allowed: [.days, .hours, .minutes], width: .narrow, maximumUnitCount: 2,
+                                                           fractionalPart: .hide(rounded: .down)))
+    }
+
+    /// The time alone today, the weekday and time within six days, else the date and time, so no
+    /// weekday is ever a week out.
+    static func when(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
+        if calendar.isDate(date, inSameDayAs: now) { return date.formatted(date: .omitted, time: .shortened) }
+        if abs(date.timeIntervalSince(now)) < 6 * UsageWindow.day { return date.formatted(.dateTime.weekday(.abbreviated).hour().minute()) }
+        return "\(date.formatted(.dateTime.month(.abbreviated).day())), \(date.formatted(date: .omitted, time: .shortened))"
+    }
+
+    /// "today at 10:40 AM", "Monday at 5:00 PM", "Sunday, Nov 1 at 1:56 AM".
+    static func whenInWords(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if calendar.isDate(date, inSameDayAs: now) { return "today at \(time)" }
+        if date.timeIntervalSince(now) < 6 * UsageWindow.day { return "\(date.formatted(.dateTime.weekday(.wide))) at \(time)" }
+        return "\(date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())) at \(time)"
+    }
+}
+
+/// The windows of one model group, as a Providers row shows them: the short one (a day or less)
+/// under 5-hour and the long one under Weekly, beside the group's name.
+public struct UsageGroup: Identifiable, Equatable, Sendable {
+    public var id: Int
+    /// The group, and a window's length when it isn't its column's: "Gemini", "Images · Daily".
+    public var name: String
+    public var short: UsageLine?
+    public var long: UsageLine?
+}
+
 extension ProviderUsage {
-    /// A compact row's lines: every window up to `limit`, else one fewer, leaving a line to say how
-    /// many more there are.
-    public func lines(at now: Date, limit: Int = 4) -> (shown: [UsageLine], more: Int) {
-        let shown = windows.count > limit ? Array(windows.prefix(limit - 1)) : windows
-        return (shown.map { UsageLine($0, at: now) }, windows.count - shown.count)
+    /// The windows by model group, in the order the CLI first names each, every group with its short
+    /// and its long window. A group with two of either takes a second line for the other.
+    public func groups(at now: Date) -> [UsageGroup] {
+        var slots: [(group: String, short: UsageWindow?, long: UsageWindow?)] = []
+        for window in windows {
+            let short = window.isShort
+            if let index = slots.firstIndex(where: { $0.group == window.group && (short ? $0.short : $0.long) == nil }) {
+                if short { slots[index].short = window } else { slots[index].long = window }
+            } else {
+                slots.append((window.group, short ? window : nil, short ? nil : window))
+            }
+        }
+        return slots.enumerated().map { index, slot in
+            // A short window of other than five hours, or a long one of other than a week, says how long it is.
+            let lengths = [slot.short.flatMap { $0.period == UsageWindow.fiveHours ? nil : $0.period },
+                           slot.long.flatMap { $0.period == UsageWindow.week ? nil : $0.period }]
+                .compactMap { $0 }.map { UsageParser.duration($0 / 60) }
+            return UsageGroup(id: index, name: ([slot.group] + lengths).joined(separator: " · "),
+                              short: slot.short.map { UsageLine($0, at: now) }, long: slot.long.map { UsageLine($0, at: now) })
+        }
     }
 
-    /// A Providers row's lines: up to four, one fewer when its chips (`badges`) take a line.
-    public func rowLines(at now: Date) -> (shown: [UsageLine], more: Int) {
-        lines(at: now, limit: badges(at: now).isEmpty ? 4 : 3)
-    }
-
-    /// What the account has besides its windows' share, as chips: the money left in a window
-    /// that is a spending limit (an OpenRouter key's), its usage credits and its free resets.
+    /// What the account has besides its windows' share, a line each in Providers' Credits & resets:
+    /// the money left in a window that is a spending limit (an OpenRouter key's), its usage credits
+    /// and its free resets, with the soonest expiry when that is within three days.
     public func badges(at now: Date) -> [UsageBadge] {
         let spending = windows.filter { $0.detail != nil && !$0.hasReset(at: now) }
         var badges = spending.map { window in
             let detail = window.detail ?? ""
             let scope = window.title.replacingOccurrences(of: " allowance", with: "")
             return UsageBadge(id: "spend:\(window.id)", kind: .spend, text: spending.count > 1 ? "\(scope) \(detail)" : detail,
+                              amount: detail.components(separatedBy: " of ").first,
                               available: (window.currentPercent(at: now) ?? 0) < 100, help: "\(window.title): \(detail)")
         }
         if let credits {
             let balance = credits.balance.map { $0.rounded(.down).formatted(.number.precision(.fractionLength(0))) }
-            let text = credits.unlimited ? "Unlimited credits" : !credits.available ? "No credits" : balance.map { "\($0) credits" } ?? "Credits available"
-            badges.append(UsageBadge(id: "credits", kind: .credits, text: text, available: credits.available || credits.unlimited,
-                                     help: credits.available || credits.unlimited ? "Usage credits: \(text.lowercased())" : "No usage credits on this account"))
+            let amount = credits.unlimited ? "Unlimited" : credits.available ? balance : nil
+            let text = !credits.available && !credits.unlimited ? "No credits" : amount.map { "\($0) credits" } ?? "Credits available"
+            badges.append(UsageBadge(id: "credits", kind: .credits, text: text, amount: amount, available: credits.available || credits.unlimited,
+                                     help: credits.available || credits.unlimited ? "Usage credits the account can spend after its limits: \(text.lowercased())"
+                                         : "No usage credits on this account"))
         }
         if let resets {
             let count = resets.available
-            let text = count == 0 ? "No free resets" : count == 1 ? "1 free reset" : "\(count) free resets"
-            let expiry = resets.expiries.first.map { " The \(count == 1 ? "reset expires" : "first expires") \($0.formatted(date: .abbreviated, time: .shortened))." } ?? ""
-            badges.append(UsageBadge(id: "resets", kind: .resets, text: text, available: count > 0,
-                                     help: count == 0 ? "No free resets of the usage limits" : "\(text) of the usage limits.\(expiry)"))
+            var text = count == 0 ? "No free resets" : count == 1 ? "1 free reset" : "\(count) free resets"
+            if count > 0, let soonest = resets.expiries.first, soonest > now, soonest.timeIntervalSince(now) < 3 * UsageWindow.day {
+                let calendar = Calendar.current
+                let day = calendar.isDate(soonest, inSameDayAs: now) ? "today" : soonest.formatted(.dateTime.weekday(.abbreviated))
+                let that = resets.expiries.filter { calendar.isDate($0, inSameDayAs: soonest) }.count
+                text += count == 1 ? " · expires \(day)" : that >= count ? " · all expire \(day)" : " · \(that) expire\(that == 1 ? "s" : "") \(day)"
+            }
+            let expiring = resets.expiries.map { $0.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()) }
+            badges.append(UsageBadge(id: "resets", kind: .resets, text: text, amount: count > 0 ? "\(count)" : nil, available: count > 0,
+                                     help: count == 0 ? "No free resets of the usage limits"
+                                         : "\(count == 1 ? "1 free reset" : "\(count) free resets") of the usage limits"
+                                         + (expiring.isEmpty ? "" : ", expiring \(expiring.formatted(.list(type: .and)))")))
         }
         return badges
     }
 
-    /// The reading in full, a line each, for a tooltip: each window's use and reset, then the
-    /// credits, resets and note.
-    public func details(at now: Date) -> String {
-        let lines = windows.map { window in
-            let percent = window.currentPercent(at: now).map { "\($0.formatted(.number.precision(.fractionLength(0))))% used" } ?? "not reported"
-            let reset = window.hasReset(at: now) ? "reset passed, awaiting an update"
-                : window.resetsAt.map { "resets \($0.formatted(date: .complete, time: .shortened))" } ?? window.resetDescription ?? "reset time not reported"
-            return ["\(window.title): \(percent), \(reset)", window.hasReset(at: now) ? nil : window.detail].compactMap { $0 }.joined(separator: " · ")
+    /// What the inspector lists under the windows: the usage credits, the free resets and when
+    /// they expire.
+    public var facts: [UsageFact] {
+        var facts: [UsageFact] = []
+        if let credits {
+            let balance = credits.balance.map { $0.rounded(.down).formatted(.number.precision(.fractionLength(0))) }
+            facts.append(UsageFact(label: "Usage credits", value: credits.unlimited ? "Unlimited" : !credits.available ? "None" : balance ?? "Available"))
         }
-        let extras = badges(at: now).filter { $0.kind != .spend }.map(\.help)
-        return (lines + extras + [note].compactMap { $0 }).joined(separator: "\n")
+        if let resets {
+            facts.append(UsageFact(label: "Free resets", value: resets.available == 0 ? "None" : "\(resets.available)"))
+            if resets.available > 0, !resets.expiries.isEmpty {
+                facts.append(UsageFact(label: resets.expiries.count == 1 ? "It expires" : "They expire",
+                                       value: resets.expiries.map { $0.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()) }.joined(separator: " · ")))
+            }
+        }
+        return facts
     }
 }
 
-/// Something an account has besides its windows' share, as a chip in its row: money left under a
-/// spending limit, usage credits, or free resets of its limits.
+/// Something an account has besides its windows' share, a line in Providers' Credits & resets:
+/// money left under a spending limit, usage credits, or free resets of its limits.
 public struct UsageBadge: Identifiable, Equatable, Sendable {
     public enum Kind: Sendable { case spend, credits, resets }
     public var id: String
     public var kind: Kind
     public var text: String
+    /// The part of `text` that says how much ("65,292", "$24.99", "2"), shown brighter while there
+    /// is some to use.
+    public var amount: String?
     /// There is some to use: money, credits or resets left.
     public var available: Bool
     public var help: String
 }
 
-/// How wide each part of a usage line is: the widest across every row, so that each row's bars,
-/// percentages and resets start at the same place, whatever its windows are called.
-public struct UsageLineWidths: Equatable, Sendable {
-    /// A longer title is cut short, so one long name doesn't push every row's bar across.
-    public static let maxTitle = 160.0
-    /// Between a reset's weekday and its time.
-    public static let dayGap = 4.0
-    public var title: Double
-    public var percent: Double
-    public var day: Double
-    public var time: Double
-    /// The widest reset given in words.
-    public var resetText: Double
-
-    public init(title: Double = 0, percent: Double = 0, day: Double = 0, time: Double = 0, resetText: Double = 0) {
-        self.title = title
-        self.percent = percent
-        self.day = day
-        self.time = time
-        self.resetText = resetText
-    }
-
-    /// `measure` gives a text's width in the font its part is shown in.
-    public init(_ lines: some Sequence<UsageLine>, measure: (String, UsageLine.Part) -> Double) {
-        self.init()
-        for line in lines {
-            title = max(title, measure(line.title, .title).rounded(.up))
-            percent = max(percent, measure(line.percentText, .percent).rounded(.up))
-            if let day = line.resetDay, let time = line.resetTime {
-                self.day = max(self.day, measure(day, .day).rounded(.up))
-                self.time = max(self.time, measure(time, .time).rounded(.up))
-            } else {
-                resetText = max(resetText, measure(line.reset, .reset).rounded(.up))
-            }
-        }
-        title = min(title, Self.maxTitle)
-    }
-
-    /// The reset's width: a weekday and a time, or words, whichever is wider.
-    public var reset: Double { max(day + time > 0 ? day + Self.dayGap + time : 0, resetText) }
+/// A label and its value in the inspector's Usage card: "Usage credits", "65,292".
+public struct UsageFact: Identifiable, Equatable, Sendable {
+    public var label: String
+    public var value: String
+    public var id: String { label }
 }
 
-/// Where each part of a usage line goes across a width: the title, the share used, the bar in
-/// what is left, and the reset at the end. Every line in the table is laid out from the same
-/// widths, so their parts line up down it and the bars take the width the column has. Too narrow
-/// for the reset beside a bar of `minimumBar`, a line leaves the reset out (it is in the tooltip);
-/// narrower still, it cuts the title short.
-public struct UsageLineLayout: Equatable, Sendable {
-    public struct Slot: Equatable, Sendable {
-        public var x: Double
-        public var width: Double
-        public init(x: Double, width: Double) {
-            self.x = x
-            self.width = width
-        }
-    }
-
-    public static let spacing = 10.0
-    public static let minimumBar = 48.0
-    /// The bar a line asks for when it is given no width.
-    public static let idealBar = 160.0
-    public var title: Slot
-    public var percent: Slot
-    public var bar: Slot
-    public var reset: Slot?
-
-    public init(width: Double, widths: UsageLineWidths) {
-        let spacing = Self.spacing
-        let reset = widths.reset
-        let titleWidth: Double
-        if reset > 0, width >= widths.title + widths.percent + Self.minimumBar + reset + 3 * spacing {
-            titleWidth = widths.title
-            self.reset = Slot(x: width - reset, width: reset)
-        } else {
-            titleWidth = max(0, min(widths.title, width - widths.percent - Self.minimumBar - 2 * spacing))
-            self.reset = nil
-        }
-        title = Slot(x: 0, width: titleWidth)
-        percent = Slot(x: titleWidth + spacing, width: widths.percent)
-        let barStart = percent.x + percent.width + spacing
-        bar = Slot(x: barStart, width: max(0, (self.reset.map { $0.x - spacing } ?? width) - barStart))
-    }
-
-    /// A line's width when nothing proposes one: its parts with an `idealBar`.
-    public static func idealWidth(_ widths: UsageLineWidths) -> Double {
-        widths.title + widths.percent + idealBar + 2 * spacing + (widths.reset > 0 ? spacing + widths.reset : 0)
-    }
-}
-
-/// How the Providers table shares out its width: the profile, its command and when it was read
-/// take fixed widths for the table's size, and the allowance column the rest, so its bars grow
-/// with the window. Only the allowance column changes width as the window does; a table that
+/// How the Providers table shares out its width. The provider, its model groups, the 5-hour and
+/// Weekly columns and its credits take fixed widths for the table's size, and Agents takes the rest,
+/// so the two window columns stay alike and the table resizes only one column itself; a table that
 /// crosses into another size is made anew for it, never left as an earlier window size had it.
+/// The widths are the columns' pitch, the space between them included.
 public struct ProvidersColumns: Equatable, Sendable {
-    public enum Size: Sendable { case compact, regular, wide }
-    /// What the inset table adds to its columns: the space between them and at its edges.
-    public static let chrome = 84.0
-    public static let minimumAllowance = 200.0
-    /// The narrowest table, in the narrowest window: its columns and the shortest allowance.
+    public enum Size: Sendable { case tight, compact, regular, wide }
+    /// What the inset table puts between its columns (which the widths below include) and at its edges.
+    public static let spacing = 17.0
+    public static let edges = 16.0
+    /// The narrowest table, in the narrowest window.
     public static let minimumWidth = 580.0
     public var size: Size
     public var provider: Double
-    public var command: Double
-    public var updated: Double
+    public var models: Double
+    /// The 5-hour and Weekly columns, each.
+    public var window: Double
+    public var credits: Double
+    /// Whether Agents fits, after the others; under it, Credits & resets takes the rest.
+    public var showsAgents: Bool
+    public var meter: UsageMeterLayout
 
     public init(width: Double) {
-        switch width {
-        case ..<760: (size, provider, command, updated) = (.compact, 150, 58, 88)
-        case ..<1_200: (size, provider, command, updated) = (.regular, 190, 150, 96)
-        default: (size, provider, command, updated) = (.wide, 240, 240, 110)
+        let room = width - Self.edges
+        // Each size's columns, and the narrowest Agents it is used with.
+        let wide = (230.0, 110.0, 430.0, 200.0, 100.0), regular = (190.0, 96.0, 322.0, 190.0, 60.0), compact = (160.0, 96.0, 180.0, 160.0, 56.0)
+        func fixed(_ size: (Double, Double, Double, Double, Double)) -> Double { size.0 + size.1 + 2 * size.2 + size.3 }
+        let chosen: (Double, Double, Double, Double, Double)
+        if room >= fixed(wide) + wide.4 {
+            (size, chosen) = (.wide, wide)
+        } else if room >= fixed(regular) + regular.4 {
+            (size, chosen) = (.regular, regular)
+        } else if room >= fixed(compact) {
+            (size, chosen) = (.compact, compact)
+        } else {
+            // Narrower still: the meters keep their bar and share, the rest in their tooltips.
+            (size, chosen) = (.tight, (150, 80, 102, 130, 56))
         }
+        (provider, models, window, credits) = (chosen.0, chosen.1, chosen.2, chosen.3)
+        showsAgents = room >= fixed(chosen) + chosen.4
+        meter = UsageMeterLayout(column: window)
     }
 
-    /// The allowance column's width in a table this wide: all the rest.
-    public func allowance(in width: Double) -> Double {
-        max(Self.minimumAllowance, width - Self.chrome - provider - command - updated)
+    /// The column that takes the rest of a table this wide: Agents, or Credits & resets without it.
+    public func rest(in width: Double) -> Double {
+        let others = provider + models + 2 * window + (showsAgents ? credits : 0)
+        return max(showsAgents ? 56 : credits, width - Self.edges - others)
+    }
+}
+
+/// How a meter line fills its column: a bar of at most 200 points, then the share, the time left and
+/// when the reset is, each in a slot of its own so they line up down the column. In a column too
+/// narrow for a bar of 60 beside them, the reset time goes (it is in the tooltip), and then the time
+/// left; the bar is never under 40. Every meter in the table has the same.
+public struct UsageMeterLayout: Equatable, Sendable {
+    public static let spacing = 10.0
+    public static let share = 36.0
+    public static let timeLeft = 68.0
+    public static let resetTime = 104.0
+    public static let maximumBar = 200.0
+    public var bar: Double
+    public var showsTimeLeft: Bool
+    public var showsResetTime: Bool
+
+    /// `column` is the column's pitch, the 8-point insets of its cells included.
+    public init(column: Double) {
+        let room = column - 16 - Self.spacing - Self.share
+        if room - 2 * Self.spacing - Self.timeLeft - Self.resetTime >= 60 {
+            (bar, showsTimeLeft, showsResetTime) = (min(Self.maximumBar, room - 2 * Self.spacing - Self.timeLeft - Self.resetTime), true, true)
+        } else if room - Self.spacing - Self.timeLeft >= 40 {
+            (bar, showsTimeLeft, showsResetTime) = (min(Self.maximumBar, room - Self.spacing - Self.timeLeft), true, false)
+        } else {
+            (bar, showsTimeLeft, showsResetTime) = (max(40, min(Self.maximumBar, room)), false, false)
+        }
+    }
+}
+
+/// A profile's row in Providers: what line 2 under its name says, its windows by model group, what
+/// it has besides, and the shares it sorts by.
+public struct ProviderRow: Identifiable, Equatable, Sendable {
+    /// Line 2 under the name: the family while all is well, else what is wrong.
+    public enum Status: Equatable, Sendable {
+        /// Read with the page's newest: the family alone.
+        case current
+        /// Read `behindAfter` or more before the page's newest reading: the family, and when.
+        case behind(Date)
+        /// Older than the profile's background interval, or a later check failed: since when.
+        case stale(Date)
+        /// Nothing read, and the check failed.
+        case failed(String)
+        /// The login shell can't find the profile's command.
+        case missingCommand
+        /// Nothing read yet, and a check under way.
+        case checking
+
+        /// The reading shown is stale, so its bars and shares are dimmed.
+        public var isStale: Bool { if case .stale = self { true } else { false } }
+    }
+
+    /// How much older than the page's newest a reading is before its row says how old.
+    public static let behindAfter: TimeInterval = 600
+    public var account: Account
+    public var status: Status
+    public var groups: [UsageGroup]
+    public var badges: [UsageBadge]
+    /// What a reading with no windows says instead ("No key spending limit · $1.25 used").
+    public var note: String?
+    /// The highest share used of the row's short windows, and of its long ones: -1 for none.
+    public var shortShare: Double
+    public var longShare: Double
+    public var id: String { account.id }
+    public var name: String { account.name }
+
+    /// `newest` is when the page's newest reading was made; `found`, whether the login shell finds
+    /// the command, when that has been checked.
+    public init(request: UsageRequest, state: UsageState?, checking: Bool, found: Bool?, newest: Date?, now: Date) {
+        account = request.account
+        let reading = state?.reading
+        if found == false {
+            status = .missingCommand
+        } else if let reading {
+            if state?.isStale(at: now, interval: request.backgroundInterval) == true {
+                status = .stale(reading.readAt)
+            } else if let newest, newest.timeIntervalSince(reading.readAt) >= Self.behindAfter {
+                status = .behind(reading.readAt)
+            } else {
+                status = .current
+            }
+        } else if let error = state?.error, !checking {
+            status = .failed(error)
+        } else {
+            status = .checking
+        }
+        groups = reading?.groups(at: now) ?? []
+        badges = reading?.badges(at: now) ?? []
+        note = reading?.windows.isEmpty == true ? reading?.note : nil
+        shortShare = groups.compactMap { $0.short?.percent }.max() ?? -1
+        longShare = groups.compactMap { $0.long?.percent }.max() ?? -1
+    }
+
+    /// When the newest of these readings was made.
+    public static func newest(_ states: some Sequence<UsageState?>) -> Date? {
+        states.compactMap { $0?.reading?.readAt }.max()
     }
 }
 
@@ -332,6 +487,19 @@ public enum UsageParser {
         }
     }
 
+    /// A window's length from the name `duration` gives it: "Weekly", "Daily", "5-hour", "90-minute".
+    static func period(named name: String) -> TimeInterval? {
+        switch name {
+        case "Weekly": return UsageWindow.week
+        case "Daily": return UsageWindow.day
+        default:
+            for (suffix, unit) in [("-hour", 3_600.0), ("-minute", 60.0)] where name.hasSuffix(suffix) {
+                if let count = Double(name.dropLast(suffix.count)), count > 0 { return count * unit }
+            }
+            return nil
+        }
+    }
+
     static func requireWindows(_ windows: [UsageWindow], at now: Date, note: String? = nil) throws -> ProviderUsage {
         guard !windows.isEmpty else { throw UsageFailure.unrecognized }
         return ProviderUsage(windows: windows, note: note, readAt: now)
@@ -351,9 +519,11 @@ public enum UsageParser {
             let name = key == "codex" ? "" : (bucket["limitName"] as? String ?? key)
             for field in ["primary", "secondary"] {
                 guard let window = bucket[field] as? JSON else { continue }
-                let title = duration(number(window["windowDurationMins"]))
+                let minutes = number(window["windowDurationMins"])
+                let title = duration(minutes)
                 windows.append(UsageWindow(id: "\(key):\(field)", title: name.isEmpty ? title : "\(name) · \(title)",
-                    usedPercent: number(window["usedPercent"]), resetsAt: date(window["resetsAt"])))
+                    usedPercent: number(window["usedPercent"]), resetsAt: date(window["resetsAt"]),
+                    group: name.isEmpty ? UsageWindow.allModels : name, period: minutes.flatMap { $0 > 0 ? $0 * 60 : nil }))
             }
         }
         var reading = try requireWindows(windows, at: now)
@@ -390,11 +560,12 @@ public enum UsageParser {
                 return range.location == NSNotFound ? nil : ns.substring(with: range)
             }
             let session = group(1) == "session"
-            let scope = group(2)
-            let title = session ? "5-hour" : (scope == nil || scope == "all models" ? "Weekly" : "\(scope!) · Weekly")
+            let scope = group(2).flatMap { $0 == "all models" ? nil : $0 }
+            let title = session ? "5-hour" : scope.map { "\($0) · Weekly" } ?? "Weekly"
             let reset = group(4)
             windows.append(UsageWindow(id: group(1)!, title: title, usedPercent: group(3).flatMap(Double.init),
-                resetsAt: reset.flatMap { claudeReset($0, now: now) }, resetDescription: reset))
+                resetsAt: reset.flatMap { claudeReset($0, now: now) }, resetDescription: reset,
+                group: scope ?? UsageWindow.allModels, period: session ? UsageWindow.fiveHours : UsageWindow.week))
         }
         return try requireWindows(windows, at: now)
     }
@@ -435,14 +606,27 @@ public enum UsageParser {
             let prefix = name == "Gemini Models" ? "Gemini" : name == "Claude and GPT models" ? "Claude & GPT" : name
             for bucket in group["buckets"] as? [JSON] ?? [] {
                 let window = bucket["window"] as? String ?? "Allowance"
-                let title = window == "weekly" ? "Weekly" : window == "5h" ? "5-hour" : window
+                let period = antigravityPeriod(window)
+                let title = period.map { duration($0 / 60) } ?? window
                 let remaining = number(bucket["remaining_fraction"])
                 let used = remaining.flatMap { (0...1).contains($0) ? (1 - $0) * 100 : nil }
                 windows.append(UsageWindow(id: bucket["id"] as? String ?? "\(prefix):\(window)",
-                    title: "\(prefix) · \(title)", usedPercent: used, resetsAt: date(bucket["reset_time"])))
+                    title: "\(prefix) · \(title)", usedPercent: used, resetsAt: date(bucket["reset_time"]), group: prefix, period: period))
             }
         }
         return try requireWindows(windows, at: now)
+    }
+
+    /// Antigravity's window names: "weekly", "daily", "5h", "30m".
+    static func antigravityPeriod(_ window: String) -> TimeInterval? {
+        switch window {
+        case "weekly": return UsageWindow.week
+        case "daily": return UsageWindow.day
+        default:
+            guard let unit = window.last.flatMap({ ["h": 3_600.0, "m": 60.0, "d": UsageWindow.day][String($0)] }),
+                  let count = Double(window.dropLast()), count > 0 else { return nil }
+            return count * unit
+        }
     }
 
     public static func muse(_ data: Data, now: Date = .now) throws -> ProviderUsage {
@@ -459,15 +643,18 @@ public enum UsageParser {
                 reset = date(seconds)
             }
             guard used != nil || reset != nil else { continue }
-            windows.append(UsageWindow(id: key, title: key == "weekly" ? "Weekly" : duration(number(w["windowDurationMins"] ?? w["window_duration_mins"]) ?? 300),
-                usedPercent: used, resetsAt: reset))
+            let minutes = key == "weekly" ? 10_080 : number(w["windowDurationMins"] ?? w["window_duration_mins"]) ?? 300
+            windows.append(UsageWindow(id: key, title: key == "weekly" ? "Weekly" : duration(minutes),
+                usedPercent: used, resetsAt: reset, period: minutes * 60))
         }
         // Muse's clock can run a little ahead of this Mac's, and a reading is never from the future.
         let observed = number(usage["observedAtMs"]).flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0 / 1000) : nil }
         return try requireWindows(windows, at: min(observed ?? now, now))
     }
 
-    /// OpenRouter's key allowance (not a claim about the account's prepaid credit balance).
+    /// OpenRouter's key allowance (not a claim about the account's prepaid credit balance). Its
+    /// limits are spending limits, with no window length of their own, so Providers shows them
+    /// under Weekly whatever their reset; the key's is all models', a shared budget its scope's.
     public static func openRouter(_ data: Data, now: Date = .now) throws -> ProviderUsage {
         guard let body = try object(data)["data"] as? JSON else { throw UsageFailure.unrecognized }
         var windows: [UsageWindow] = []
@@ -487,7 +674,8 @@ public enum UsageParser {
             let title = scope == "key_limit" ? "Key" : scope.replacingOccurrences(of: "_", with: " ").capitalized
             windows.append(UsageWindow(id: "budget:\(index)", title: "\(title) allowance",
                 usedPercent: limit > 0 ? max(0, (limit - remaining) / limit * 100) : nil,
-                resetsAt: date(budget["resets_at"]), detail: "\(usd(max(0, remaining))) of \(usd(limit)) left"))
+                resetsAt: date(budget["resets_at"]), detail: "\(usd(max(0, remaining))) of \(usd(limit)) left",
+                group: title == "Key" ? UsageWindow.allModels : title))
         }
         if windows.isEmpty {
             guard let usage = number(body["usage"]), usage >= 0, body["limit"] is NSNull else { throw UsageFailure.unrecognized }

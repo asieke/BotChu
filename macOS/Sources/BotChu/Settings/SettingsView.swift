@@ -2,6 +2,11 @@ import AppKit
 import SwiftUI
 import BotChuCore
 
+/// A part of Settings that something can open it at.
+enum SettingsFocus: Hashable {
+    case accounts
+}
+
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var openRouterKey = Keychain.get(Keychain.openRouterAccount) ?? ""
@@ -10,6 +15,29 @@ struct SettingsView: View {
     @State private var sharedDocument: DocumentEditorRequest?
 
     var body: some View {
+        // Change Command in Providers opens Settings at Accounts.
+        ScrollViewReader { proxy in
+            form.onChange(of: model.settingsFocus, initial: true) { _, focus in
+                guard let focus else { return }
+                DispatchQueue.main.async {
+                    withAnimation { proxy.scrollTo(focus, anchor: .top) }
+                    model.settingsFocus = nil
+                }
+            }
+        }
+        .frame(width: 600, height: 840)
+        .sheet(item: $sharedDocument) { request in
+            BotDocumentEditor(request: request)
+                .frame(width: 560, height: 620)
+        }
+        .task {
+            await withTaskGroup(of: Void.self) { group in
+                for account in model.settings.accounts { group.addTask { await check(account) } }
+            }
+        }
+    }
+
+    @ViewBuilder private var form: some View {
         @Bindable var settings = model.settings
         Form {
             Section {
@@ -74,7 +102,7 @@ struct SettingsView: View {
                     }
                 }
             } header: {
-                Text("Accounts")
+                Text("Accounts").id(SettingsFocus.accounts)
             } footer: {
                 Text("Each account runs its command through your login shell (zsh -l), headless, in the bot's folder or a task's worktree, with permission prompts bypassed. Leave a command empty for the default.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -124,16 +152,6 @@ struct SettingsView: View {
             TelegramSection()
         }
         .formStyle(.grouped)
-        .frame(width: 600, height: 840)
-        .sheet(item: $sharedDocument) { request in
-            BotDocumentEditor(request: request)
-                .frame(width: 560, height: 620)
-        }
-        .task {
-            await withTaskGroup(of: Void.self) { group in
-                for account in model.settings.accounts { group.addTask { await check(account) } }
-            }
-        }
     }
 
     private func check(_ account: Account) async {

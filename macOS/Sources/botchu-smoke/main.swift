@@ -132,8 +132,15 @@ Task {
                 for window in reading.windows {
                     let percent = window.usedPercent.map { "\($0.formatted(.number.precision(.fractionLength(1))))% used" } ?? "not reported"
                     let reset = window.resetsAt?.formatted(.iso8601) ?? window.resetDescription ?? "not reported"
-                    print("    \(window.title): \(percent); reset \(reset)")
+                    let length = window.period.map { "\(($0 / 3_600).formatted())h" } ?? "no set length"
+                    print("    \(window.title) (\(window.group), \(length)): \(percent); reset \(reset)")
                 }
+                // As Providers shows them: each group's 5-hour and Weekly meters.
+                for group in reading.groups(at: .now) {
+                    print("    \(group.name): 5-hour \(group.short.map { "\($0.percentText) in \($0.timeLeft ?? $0.reset)" } ?? "—"), "
+                          + "Weekly \(group.long.map { "\($0.percentText) in \($0.timeLeft ?? $0.reset)" } ?? "—")")
+                }
+                for badge in reading.badges(at: .now) { print("    \(badge.text)") }
                 if let note = reading.note { print("    \(note)") }
                 print("    OK")
             } catch {
