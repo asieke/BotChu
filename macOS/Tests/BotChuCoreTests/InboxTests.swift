@@ -358,23 +358,33 @@ private final class InboxFixture {
         #expect(InboxList.selection(after: c, was: [a, b, c, UUID()], now: [a, b]) == b)
     }
 
-    @Test func aReplyNamesItsDeliveryAndOnlyItsExchangeShowsUnderIt() {
+    @Test func aReplyNamesItsDelivery() {
         let delivery = Delivery(botID: UUID(), title: "Should sub-agent work block Telegram?")
         #expect(InboxReply.prompt("Answer first.", delivery: delivery)
                 == "[Your owner's reply from the Inbox to your delivery “Should sub-agent work block Telegram?” (\(delivery.id.uuidString.lowercased()))]\n\nAnswer first.")
-        var reply = ChatMessage(role: .user, text: "Answer first.")
-        reply.delivery = delivery.id
-        var other = ChatMessage(role: .user, text: "Another reply")
-        other.delivery = UUID()
-        let thread = [
-            ChatMessage(role: .user, text: "Look into #118"), ChatMessage(role: .assistant, text: "Delivered."),
-            delivery.card, reply, ChatMessage(role: .tool, toolName: "Bash"),
-            ChatMessage(role: .assistant, text: "Filing it as #156."), ChatMessage(role: .note, text: "Stopped"),
-            ChatMessage(role: .user, text: "Something else"), ChatMessage(role: .assistant, text: "Unrelated"),
-            other, ChatMessage(role: .assistant, text: "Not this one"),
-        ]
-        #expect(InboxReply.exchange(for: delivery.id, in: thread).map(\.text) == ["Answer first.", "Filing it as #156."])
-        #expect(InboxReply.answered(in: thread) == [delivery.id, other.delivery!])
+    }
+
+    @Test func anAcceptedAnswerIsReadAndDoneAndAsksNothingMore() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-inbox-answer-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let asking = Delivery(botID: UUID(), title: "Which?", question: Delivery.Question(text: "Which?", choices: ["A", "B"]),
+                              sentAt: Delivery.stamp(Date(timeIntervalSinceNow: -60)))
+        var state = InboxState()
+        let now = Delivery.stamp()
+        state.answer(asking.id, at: now)
+        #expect(state[asking.id] == InboxState.Entry(read: true, done: true, repliedAt: now))
+        #expect(!state.needsAnswer(asking) && !state.isUnread(asking) && state.isAnswered(asking))
+        #expect(InboxList.section(of: asking, state: state, now: now) == .done)
+        // After a relaunch it is still answered and Done.
+        try state.save(to: root)
+        let read = InboxState.load(from: root)
+        #expect(read[asking.id].done && read[asking.id].repliedAt == now && !read.needsAnswer(asking))
+        // Out of Done again, it is answered and asks nothing until it is sent again.
+        state[asking.id].done = false
+        #expect(!state.needsAnswer(asking))
+        var again = asking
+        again.updatedAt = now.addingTimeInterval(5)
+        #expect(state.needsAnswer(again) && !state.isAnswered(again))
     }
 
     @Test func everySessionLearnsHowToDeliver() {
