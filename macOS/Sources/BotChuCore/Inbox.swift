@@ -394,8 +394,18 @@ public struct InboxState: Codable, Equatable, Sendable {
 
     /// It asks something the owner hasn't answered since it was sent.
     public func needsAnswer(_ delivery: Delivery) -> Bool {
-        guard delivery.question != nil, !self[delivery.id].done else { return false }
-        return (self[delivery.id].repliedAt.map { $0 < delivery.updatedAt }) ?? true
+        delivery.question != nil && !self[delivery.id].done && !isAnswered(delivery)
+    }
+
+    /// The owner replied to it from the Inbox since it was sent.
+    public func isAnswered(_ delivery: Delivery) -> Bool {
+        self[delivery.id].repliedAt.map { $0 >= delivery.updatedAt } ?? false
+    }
+
+    /// The owner's answer is saved in the queue of the conversation that sent the delivery: it is
+    /// answered, read and Done. What the bot does with it shows in that conversation.
+    public mutating func answer(_ id: UUID, at date: Date) {
+        self[id] = Entry(read: true, done: true, repliedAt: date)
     }
 
     public func unreadCount(_ deliveries: [Delivery]) -> Int { deliveries.filter(isUnread).count }
@@ -446,12 +456,13 @@ public enum InboxList {
     }
 
     /// `pinned` keeps a delivery in the group it was in (the one being read), whatever it has
-    /// become since, until the owner leaves it.
+    /// become since, until the owner leaves it; only Done, or moving it out of Done, moves it at once.
     public static func groups(_ deliveries: [Delivery], state: InboxState, now: Date, calendar: Calendar = .current,
                               pinned: [UUID: Section] = [:]) -> [Group] {
         var grouped: [Section: [Delivery]] = [:]
         for delivery in deliveries {
-            let section = pinned[delivery.id] ?? section(of: delivery, state: state, now: now, calendar: calendar)
+            var section = section(of: delivery, state: state, now: now, calendar: calendar)
+            if section != .done, let pin = pinned[delivery.id], pin != .done { section = pin }
             grouped[section, default: []].append(delivery)
         }
         func rank(_ section: Section) -> (Int, TimeInterval) {
@@ -467,6 +478,14 @@ public enum InboxList {
             Group(section: section, ids: grouped[section]!.sorted { ($0.updatedAt, $0.id.uuidString) > ($1.updatedAt, $1.id.uuidString) }.map(\.id))
         }
     }
+
+    /// What to select when the selected delivery leaves the list shown (`was`, now `now`), as when
+    /// it is Done while Done is closed: the next one still shown, else the one before, else none.
+    public static func selection(after selected: UUID, was: [UUID], now: [UUID]) -> UUID? {
+        guard let index = was.firstIndex(of: selected) else { return nil }
+        let shown = Set(now)
+        return was[(index + 1)...].first(where: shown.contains) ?? was[..<index].last(where: shown.contains)
+    }
 }
 
 // MARK: Replies
@@ -477,29 +496,5 @@ public enum InboxReply {
     /// What the bot reads: the reply, with the delivery it answers.
     public static func prompt(_ text: String, delivery: Delivery) -> String {
         "[Your owner's reply from the Inbox to your delivery “\(delivery.title)” (\(delivery.id.uuidString.lowercased()))]\n\n\(text)"
-    }
-
-    /// The exchange under a delivery: each reply from the Inbox to it, with what the bot answered,
-    /// up to the owner's next message.
-    public static func exchange(for id: UUID, in messages: [ChatMessage]) -> [ChatMessage] {
-        var shown: [ChatMessage] = []
-        var answering = false
-        for message in messages {
-            switch message.role {
-            case .user:
-                answering = message.delivery == id
-                if answering { shown.append(message) }
-            case .assistant, .error:
-                if answering { shown.append(message) }
-            default:
-                break
-            }
-        }
-        return shown
-    }
-
-    /// The deliveries a turn's messages answer: those its owner's messages reply to.
-    public static func answered(in turn: [ChatMessage]) -> Set<UUID> {
-        Set(turn.filter { $0.role == .user }.compactMap(\.delivery))
     }
 }

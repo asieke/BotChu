@@ -10,7 +10,6 @@ struct ProjectsView: View {
     enum Scope: String { case repositories, pulls, issues }
 
     @Environment(AppModel.self) private var model
-    @Environment(\.openSettings) private var openSettings
     @AppStorage("projectsScope") private var scope = Scope.repositories
     /// Gallery or table; a new key, so the table is where everyone starts.
     @AppStorage("projectsLayoutV2") private var layout = "table"
@@ -80,7 +79,7 @@ struct ProjectsView: View {
                 HStack {
                     Label(error, systemImage: "exclamationmark.triangle")
                     Spacer()
-                    Button("GitHub Settings") { openSettings() }
+                    Button("GitHub Settings") { model.openSettings(.github) }
                 }.font(.callout).foregroundStyle(.secondary).padding(.horizontal, 24).padding(.bottom, 12)
             }
             switch scope {

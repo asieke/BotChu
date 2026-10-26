@@ -18,6 +18,11 @@ struct BotChuApp: App {
         }
         .defaultSize(width: 1240, height: 800)
         .commands {
+            // Settings is a page of the window (#191), not a window of its own.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { model.openSettings() }
+                    .keyboardShortcut(",")
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Bot") { model.newBot() }
                     .keyboardShortcut("n")
@@ -76,11 +81,6 @@ struct BotChuApp: App {
                 Button("Report a Bug or Feature…") { model.reportIssue() }
                     .disabled(!model.canReportIssue)
             }
-        }
-
-        Settings {
-            SettingsView()
-                .environment(model)
         }
     }
 }

@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Testing
+import Vision
 import BotChuCore
 @testable import BotChu
 
@@ -145,6 +146,127 @@ extension RenderingTests {
         app.delete(bot.id)
         #expect(app.destination == .agents)
         #expect(app.visibleBotID == nil)
+    }
+
+    /// Settings is a page of the window (#191): it keeps the conversation shown, its draft and its
+    /// tab; it opens on the page asked for or the one shown last; a key typed and not saved stays
+    /// while pages change and goes when Settings closes; and its rail folds into a menu when narrow.
+    @Test func settingsIsAPageOfTheWindowThatKeepsTheConversationAndKeyDrafts() async throws {
+        _ = NSApplication.shared
+        let appearance = NSApp.appearance
+        defer { NSApp.appearance = appearance }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-settings-\(UUID().uuidString)")
+        let domain = "BotChu.SettingsTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: domain) }
+        let store = Store(root: root.appendingPathComponent("index"))
+        let bot = Bot(name: "Scout", emoji: "🦊", workspace: root.appendingPathComponent("bot").path)
+        let task = BotTask(for: bot, repo: "octocat/BotChu", checkout: root.path, work: nil, brief: "Add settings")
+        try BotHome(workspace: bot.workspace).save(bot)
+        try BotHome(workspace: bot.workspace).save(task)
+        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        let settings = AppSettings(defaults: defaults)
+        settings.botsRoot = root.appendingPathComponent("bots").path
+        // Never the owner's Keychain: every key Settings reads comes from here.
+        let app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") },
+                           openRouterKey: { "sk-or-saved" })
+        defer { app.stopAll() }
+        app.telegram.readToken = { nil }
+        app.remoteQueue.readToken = { nil }
+        let target = ChatTarget.task(task.id, of: bot.id)
+        app.show(target)
+        app.drafts[target] = "Keep this draft"
+        let host = NSHostingView(rootView: ContentView().environment(app).defaultAppStorage(defaults))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 800), styleMask: [.titled, .resizable, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.contentView = nil; window.close() }
+
+        // The gear, ⌘, and the app menu all do this: General the first time, in the window.
+        app.openSettings()
+        #expect(app.destination == .settings)
+        #expect(app.sidebarSelection == .library(.settings))
+        #expect(app.settings.settingsPage == .general)
+        #expect(app.visibleBotID == nil)
+        #expect(app.tab(of: bot.id) == target)
+        try await Task.sleep(for: .milliseconds(400))
+        var text = try await settingsText(host)
+        #expect(shows(text, "Bots folder"), "\(text.sorted())")
+        // The rail, with its pages; no status sidebar beside Settings.
+        for page in ["GitHub", "Hosts", "Run reviews", "Telegram", "Remote queue"] { #expect(shows(text, page), "\(page) in \(text.sorted())") }
+        #expect(!shows(text, "Activity"))
+        try captureLibrary(window, name: "settings-general")
+
+        // A link opens its page; a key typed there survives a change of page.
+        app.openSettings(.openRouter)
+        try await Task.sleep(for: .milliseconds(300))
+        var field = try #require(secureFields(in: host).first)
+        #expect(field.stringValue == "sk-or-saved")
+        field.stringValue = "sk-or-typed"
+        field.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+        try await Task.sleep(for: .milliseconds(150))
+        app.openSettings(.telegram)
+        try await Task.sleep(for: .milliseconds(300))
+        text = try await settingsText(host)
+        #expect(shows(text, "Reach bots from Telegram"), "\(text.sorted())")
+        app.openSettings(.openRouter)
+        try await Task.sleep(for: .milliseconds(300))
+        field = try #require(secureFields(in: host).first)
+        #expect(field.stringValue == "sk-or-typed", "Kept while pages change")
+        try captureLibrary(window, name: "settings-openrouter-unsaved")
+
+        // Back at the bot: its tab and draft as they were. Settings comes back on the last page,
+        // without the key that wasn't saved.
+        app.show(target)
+        #expect(app.destination == nil)
+        #expect(app.tab(of: bot.id) == target)
+        #expect(app.drafts[target] == "Keep this draft")
+        try await Task.sleep(for: .milliseconds(200))
+        app.openSettings()
+        #expect(app.settings.settingsPage == .openRouter)
+        #expect(AppSettings(defaults: defaults).settingsPage == .openRouter, "Remembered across launches")
+        try await Task.sleep(for: .milliseconds(300))
+        field = try #require(secureFields(in: host).first)
+        #expect(field.stringValue == "sk-or-saved")
+
+        // Narrow and dark: the rail folds into the title's menu, and nothing is cut off.
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.setContentSize(NSSize(width: 820, height: 600))
+        app.openSettings(.general)
+        try await Task.sleep(for: .milliseconds(400))
+        window.layoutIfNeeded()
+        #expect(window.frame.width >= window.contentMinSize.width)
+        text = try await settingsText(host)
+        #expect(shows(text, "General"), "\(text.sorted())")
+        #expect(!shows(text, "Remote queue"), "No rail when narrow: \(text.sorted())")
+        #expect(shows(text, "Choose."), "The folder's button is whole: \(text.sorted())")
+        try captureLibrary(window, name: "settings-compact-dark")
+    }
+
+    /// The text drawn in the window, as Vision reads its pixels (SwiftUI's text isn't consistently
+    /// exposed to in-process accessibility).
+    private func settingsText(_ host: NSView) async throws -> Set<String> {
+        host.layoutSubtreeIfNeeded()
+        let image = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: image)
+        let pixels = try #require(image.cgImage)
+        return try await Task.detached {
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.recognitionLanguages = ["en-US"]
+            request.usesLanguageCorrection = false
+            try VNImageRequestHandler(cgImage: pixels).perform([request])
+            return Set((request.results ?? []).compactMap { $0.topCandidates(1).first?.string })
+        }.value
+    }
+
+    /// Whether a line read contains `words`: Vision reads a rail item's symbol into its line.
+    private func shows(_ text: Set<String>, _ words: String) -> Bool { text.contains { $0.contains(words) } }
+
+    private func secureFields(in view: NSView) -> [NSSecureTextField] {
+        ((view as? NSSecureTextField).map { [$0] } ?? []) + view.subviews.flatMap(secureFields)
     }
 
     private func captureLibrary(_ window: NSWindow, name: String) throws {

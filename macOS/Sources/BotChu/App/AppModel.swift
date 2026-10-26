@@ -84,15 +84,18 @@ struct ChatTarget: Hashable {
 }
 
 enum LibraryDestination: String, CaseIterable {
-    case inbox, projects, agents, providers, skills, jobs
+    case inbox, projects, agents, providers, skills, jobs, settings
     var title: String { rawValue.capitalized }
     var symbol: String {
         switch self {
         case .inbox: "tray"
         case .projects: "square.grid.2x2"; case .agents: "person.2"; case .providers: "terminal"; case .skills: "wand.and.stars"
         case .jobs: "clock.arrow.circlepath"
+        case .settings: "gearshape"
         }
     }
+    /// The sidebar's Workspace rows; Settings is its gear, below the bots (#191).
+    static let sidebar: [LibraryDestination] = allCases.filter { $0 != .settings }
 }
 
 @MainActor @Observable
@@ -169,8 +172,6 @@ final class AppModel {
     var projectSelection: ProjectSelection?
     /// The profile selected in Providers, by account id, shown in its sidebar; nil hides the sidebar.
     var providerSelection: String?
-    /// Where Settings scrolls to when it next shows, such as Accounts for Change Command.
-    var settingsFocus: SettingsFocus?
     var documentEditor: DocumentEditorRequest?
     /// Report a Bug or Feature, what files its issues: gh, or a stand-in (`DevHooks`, tests), what
     /// takes its window's screenshot, and whether one is being taken, before the sheet opens.
@@ -1738,8 +1739,7 @@ final class AppModel {
                     let messages = self.thread(target)
                     let failure = outcome.failure(stopped: stopped, exitError: messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil })
                     let turn = Array(messages.suffix(from: min(turnStart, messages.count)))
-                    // The owner's message that started it is just before it.
-                    self.inbox.turnEnded(target, turn: Array(messages.suffix(from: max(0, min(turnStart, messages.count) - 1))))
+                    self.inbox.turnEnded(target)
                     self.log(TurnLog.ended(
                         at: Date(), startedAt: startedAt, status: status, stopped: stopped,
                         toolCalls: turn.filter { $0.role == .tool }.count,

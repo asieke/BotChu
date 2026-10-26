@@ -434,8 +434,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     `.botchu/inbox/<id>/` (`delivery.json` and `files/`), works from a task on a host too (its files
     are fetched over SSH), and shows as a card in the sending conversation's chat after the turn's
     reply. A reply to it goes into that conversation through its queue like any message, marked
-    with the delivery, and the bot reads which delivery it answers; the bot's answer joins the
-    delivery's thread. One unread state: reading a delivery clears its conversation's news dot,
+    with the delivery, and the bot reads which delivery it answers. Once the queue has saved it (it
+    may wait there while the bot is busy), the delivery is answered and Done, and what the bot does
+    with it shows in that conversation; its answer doesn't bring the delivery back out of Done, only
+    a new delivery asks for the owner again. One unread state: reading a delivery clears its conversation's news dot,
     and showing the conversation reads what it delivered. What the owner did with each delivery
     (read, done, replied) is in `inbox.json` beside `index.json`. Every session's instructions
     describe the helper.
@@ -457,14 +459,17 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     whom it credits, where and when; the note in the chat's Markdown; then a card for each file
     (a document's first 260 points, then **Show all**; an HTML page in a web view with its scripts on
     and the network off, links opening in the browser; an image; any other file) and for each
-    repository's pull requests or issues, read from GitHub, each opening in Projects; then the
-    exchange under it: the owner's replies, what waits in the queue, the bot's answers and the bot
-    at work. A question's choices sit above a composer that names where a reply goes; a choice is
-    sent as the reply, word for word. The toolbar opens the conversation (**Open Home**, **Open
+    repository's pull requests or issues, read from GitHub, each opening in Projects. A question's
+    choices sit above a composer that names where a reply goes; a choice (also ⌘1 to ⌘9) is sent as
+    the reply, word for word, and once its conversation's queue holds the reply the delivery is
+    Done and that conversation opens (Home, the task, opened again if it was closed, or the job's
+    run). One reply goes at a time; one the queue can't take keeps the draft and the choices and
+    says so, with **Try Again**. Answered, the question says when. The toolbar opens the conversation (**Open Home**, **Open
     Task** or **Open Run**, ⌘O) and files the delivery as **Done** (⌃⌘A); its menu marks it read or
     unread and finds the copies and the originals. With nothing left to read it says when the last
     delivery came, with **Show Done**. In the sending conversation's chat, a delivery is a card with
-    **Show in Inbox**, and a reply from the Inbox shows under a "Reply from your Inbox" line.
+    **Show in Inbox** and its question's choices until it is answered, each sent as from the Inbox,
+    and a reply from the Inbox shows under a "Reply from your Inbox" line.
   - **Jobs:** an agent can own scheduled jobs, saved instructions it runs on a schedule, such as a
     morning issue triage on weekdays at 9:00. **Jobs** in the sidebar is one table of every agent's
     jobs: the job, its agent, its schedule and time zone, its next run, its state (on, paused,
@@ -527,12 +532,19 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     to finish; at most two run at once. A run is stopped at its time limit (30 minutes by default)
     and counts as failed; three failed runs in a row pause the job, saying why. BotChu never runs one again on its own. A run
     asks for repository work as Home does, with a task request (which names the job), and BotChu
-    starts the task when the run ends. Every run is kept, with how it was started (on schedule,
+    starts the task when the run ends. A run has the helpers, mailbox and environment a turn has, as
+    its task's (#170): it can call sub-agents, ask for Tasks, message remote bots and deliver to the
+    Inbox with `botchu-inbox send`, whose deliveries are its task's (the owner's reply goes back to
+    the task), their cards after its reply. Its mailbox closes when it ends, once the deliveries
+    still in it (a helper that stopped waiting) are in the Inbox. Every run is kept, with how it was started (on schedule,
     caught up, or Run Now) and how it went: succeeded, nothing to report, failed (with what to do:
     sign in, wait for the allowance, fix the command, check the network or the disk), stopped,
     skipped or interrupted, and a line about it; the history keeps the latest 50 and always the last
     success. A run whose reply ends with `NOTHING_TO_REPORT` stays in the history and its task, with
-    nothing marked as news. A finding, a failure or an interrupted run adds one receipt to its
+    nothing marked as news, and nothing in the Inbox. A finding the run delivered nothing of itself
+    is delivered by BotChu: its whole final reply, as its task's delivery titled after the job, once
+    (its ID is the run's). Until the Inbox has it the run keeps it waiting in `job.json`; a save that
+    fails says so in the task and is tried again at each tick and launch. A finding, a failure or an interrupted run adds one receipt to its
     agent's Home, with **Open Run** (which opens the run's task), marked as news, which Home's next
     turn hears of; an empty reply counts as failed, not quiet. Before a run
     starts, its time is reserved in the job's `job.json`, in one save, so a timer, a wake or a
@@ -931,7 +943,15 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     an expired window hides its old percentage until a new reading arrives. CLI output and
     credentials are not written to disk by BotChu; of a reading, only its usage fields are
     (`usage.json`).
-  - **Settings:** **GitHub ▸ Test Connection** checks that `gh` is available and can authenticate to
+  - **Settings:** a page of the main window, beside the sidebar, opened by the sidebar's gear,
+    ⌘, or BotChu ▸ Settings…, like a gallery: the conversation shown keeps its tab, its draft and its
+    turns. Its nine pages (General, Accounts, GitHub, Hosts, Run reviews, Pets, OpenRouter, Telegram,
+    Remote queue) are in a rail that marks a page needing you (a missing command, an unsaved key, a
+    service on), which becomes a menu in the page's title when the page is under 720 points wide.
+    It opens on the page last shown, and links elsewhere (Change Command…, GitHub Settings,
+    Connection Settings…) open their page. Preferences save as you change them; the OpenRouter key
+    and Telegram token save only with Save, and a key typed and not saved stays while you change
+    pages, until you leave Settings. **GitHub ▸ Test Connection** checks that `gh` is available and can authenticate to
     github.com, then shows its version and signed-in username. Connection failures give install/login
     guidance without displaying credentials. Settings also contains the bots folder, the repositories folder, the hosts and where you chose to work
     on repositories, each account's command, the Codex account that draws pets' stills, the
@@ -1080,7 +1100,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     again, and holds what is written back. A delivery to the Inbox (`botchu-inbox send`) goes through
     it too: `Inbox.swift` reads and checks the request, keeps deliveries and their copies in a bot's
     folder, what the owner did with them (`InboxState`), the list's groups (`InboxList`) and a reply's
-    prompt and thread (`InboxReply`); the app's `InboxModel` takes them in and sends the replies.
+    prompt (`InboxReply`); the app's `InboxModel` takes them in and sends the replies, one at a time.
     `DeliveryBanner.swift` makes a delivery's banner (its text, buttons and category, the newest 20
     categories kept registered) and reads a click back into a reply or "show it"; the app's
     `InboxNotifications.swift` (`InboxNotifier`) posts banners, answers clicks and keeps the Dock
@@ -1116,8 +1136,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished turns and runs to the daily run reviews, `Evaluations.swift`),
     `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, selecting a reply's text across its blocks, `ReplySelection.swift`, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
-    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
-    the hosts, Telegram and run reviews), and
+    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (the
+    in-window Settings page with its rail and pages, with the hosts, Telegram and run reviews), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
     only to identify the CLI an account runs).
@@ -1277,7 +1297,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     queue alone, and deleted with its agent, a job's run as a new task in its agent's Tasks column
     with the job's menu, its conversation the run's, opened from Home's receipt, taking the place of
     the run before, kept open once the owner writes in it (resuming the run's session) and gone with
-    a run the history lets go, a sub-agent's handoff and a task's receipt that
+    a run the history lets go, a scheduled run's deliveries to the Inbox as its task's (its own, one
+    its helper stopped waiting for, its finding as BotChu's report, none when quiet, a report the
+    Inbox couldn't take tried again on a tick, the owner's reply back in the task, its mailbox
+    closed), a sub-agent's handoff and a task's receipt that
     don't wait for run reviews, which review each bot's own work on its own account, Activity's run
     reviews (the summary line, news rows and counts line, in light and dark, and Review now) and
     the review time in Settings, a task's Activity listing its repository's open issues:
@@ -1417,7 +1440,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   Claude Dev); the app writes a PNG of each of its windows into the printed folder every second
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor`, `BOTCHU_OPEN=task` or `BOTCHU_OPEN=settings` opens the bot editor, New
-  Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository).
+  Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository;
+  `BOTCHU_SETTINGS=<page>` picks Settings' page: `general`, `accounts`, `github`, `hosts`,
+  `run-reviews`, `pets`, `openrouter`, `telegram` or `remote-queue`).
   `BOTCHU_OPEN=projects`, `agents`, `providers`, `skills` or `jobs` opens that workspace screen;
   with `projects`, `BOTCHU_PROJECT=<owner/name>` shows that repository's sidebar, and
   `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
@@ -1425,8 +1450,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
   `BOTCHU_INBOX=sample` gives the Inbox sample deliveries from both demo bots (a report with a
   question crediting the other bot, a page from a task, pull requests, older and done ones), with the
-  first one's card in the first bot's Home; `replied` has it answered from the Inbox, with the bot's
-  answer; `done` has every one Done. `BOTCHU_OPEN=inbox` opens the Inbox, on the delivery `BOTCHU_INBOX_ITEM` names
+  first one's card in the first bot's Home; `replied` has it answered from the Inbox (Done), with the
+  bot's answer in that Home; `done` has every one Done. `BOTCHU_OPEN=inbox` opens the Inbox, on the delivery `BOTCHU_INBOX_ITEM` names
   (`00000000-0000-4000-9000-00000000000<n>`); the window's snapshot draws web views in too.
   `BOTCHU_JOBS=sample` gives the demo bots sample jobs, with a history of every kind of run, the
   latest a task beside the first bot's chat, and a receipt in the first bot's Home, and runs no job (Run Now records a failed run), so nothing starts a CLI; `BOTCHU_OPEN=job-editor`

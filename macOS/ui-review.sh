@@ -7,6 +7,7 @@
 #   macOS/ui-review.sh                     # just open it
 #   macOS/ui-review.sh "Hello"             # and send "Hello" to the first bot (a real turn)
 #   BOTCHU_OPEN=editor macOS/ui-review.sh  # or open the new-bot editor (or settings)
+#   BOTCHU_OPEN=settings BOTCHU_SETTINGS=telegram macOS/ui-review.sh  # Settings, on that page
 #   BOTCHU_PET=<pet folder> macOS/ui-review.sh           # and give the first bot this pet
 #   BOTCHU_DRAW_PET="a brass robot" macOS/ui-review.sh  # or make it one (real runs; costs OpenRouter credit)
 #   BOTCHU_TAB=1 macOS/ui-review.sh        # show the first bot's first task tab (0 is Home)
@@ -105,8 +106,8 @@ cat > "$tasks/7a0c2d4e-1b3f-4c5d-8e9f-0a1b2c3d4e60/thread.jsonl" <<'JSON'
 {"date":"2026-10-22T03:03:00Z","id":"00000000-0000-4000-8000-000000000021","role":"user","text":"Work on issue #3 “Fix the typo”."}
 {"date":"2026-10-22T03:03:05Z","id":"00000000-0000-4000-8000-000000000022","role":"error","text":"Couldn't make this task's worktree. Making the worktree for feat/3-fix-typo failed."}
 JSON
-# Sample deliveries in the Inbox (BOTCHU_INBOX=sample; replied: the first one answered from the Inbox
-# and the bot's answer under it; done: every one Done), from Scout's Home (crediting Coder), a task of Scout's, and Coder's Home.
+# Sample deliveries in the Inbox (BOTCHU_INBOX=sample; replied: the first one answered from the Inbox,
+# so Done, with the bot's answer in Scout's Home; done: every one Done), from Scout's Home (crediting Coder), a task of Scout's, and Coder's Home.
 # BOTCHU_INBOX_ITEM=<delivery id> reads that one; ids are 00000000-0000-4000-9000-00000000000<n>.
 if [ -n "${BOTCHU_INBOX:-}" ]; then
   python3 - "$data" "$BOTCHU_INBOX" <<'PY'
@@ -199,7 +200,7 @@ if mode == "replied":
       {"id": "00000000-0000-4000-9000-000000000104", "role": "user", "date": at(5), "text": "Answer first.", "delivery": did(1)},
       {"id": "00000000-0000-4000-9000-000000000105", "role": "assistant", "date": at(4), "text": "Filing it as #156, “Answer Telegram first, then send each handoff”, with the report's table as its outcome."},
     ]
-    state["entries"][did(1)] = {"read": False, "done": False, "repliedAt": at(5)}
+    state["entries"][did(1)] = {"read": True, "done": True, "repliedAt": at(5)}
 if mode == "done":
     for item in deliveries: state["entries"][item[2]] = {"read": True, "done": True}
 json.dump(thread, open(thread_path, "w"))
@@ -282,6 +283,7 @@ fi
 [ -n "${BOTCHU_JOBS:-}" ] && args+=(--env "BOTCHU_JOBS=$BOTCHU_JOBS")
 [ -n "${BOTCHU_JOB:-}" ] && args+=(--env "BOTCHU_JOB=$BOTCHU_JOB")
 [ -n "${BOTCHU_INBOX_ITEM:-}" ] && args+=(--env "BOTCHU_INBOX_ITEM=$BOTCHU_INBOX_ITEM")
+[ -n "${BOTCHU_SETTINGS:-}" ] && args+=(--env "BOTCHU_SETTINGS=$BOTCHU_SETTINGS")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
 # Without restoring windows: after any copy of BotChu crashed, macOS would otherwise stop at a
 # dialog asking whether to reopen them.

@@ -2,7 +2,8 @@ import SwiftUI
 import BotChuCore
 
 /// A delivery in the chat of the conversation that sent it: that it went to the Inbox and when,
-/// its title, what came with it, and Show in Inbox.
+/// its title, what came with it, its question's choices until the owner answers it (sent here as from
+/// the Inbox), and Show in Inbox.
 struct DeliveryCard: View {
     @Environment(AppModel.self) private var model
     let id: UUID
@@ -47,13 +48,18 @@ struct DeliveryCard: View {
                         ForEach(delivery.credits, id: \.botID) { credit in
                             Chip(symbol: "person.2", text: "with \(credit.name)")
                         }
-                        if let question = delivery.question {
-                            Label("Asked: \(question.text)", systemImage: "questionmark.circle")
-                                .labelStyle(TightLabel())
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Palette.needs)
-                                .frame(height: 20)
+                    }
+                    if let question = delivery.question {
+                        let answered = model.inbox.state.isAnswered(delivery)
+                        Label("Asked: \(question.text)", systemImage: answered ? "checkmark.circle" : "questionmark.circle")
+                            .labelStyle(TightLabel())
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(answered ? Palette.secondaryText : Palette.needs)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if !answered, !question.choices.isEmpty {
+                            DeliveryChoices(delivery: delivery, compact: true)
                         }
+                        DeliverySendFailure(delivery: delivery)
                     }
                 }
                 .padding(EdgeInsets(top: 10, leading: 12, bottom: 12, trailing: 12))
