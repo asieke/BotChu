@@ -28,8 +28,10 @@ extension RenderingTests {
                                   updatedAt: .now.addingTimeInterval(-Double(number) * 3600))
         }
         var snapshot = ProjectSnapshot(login: "octocat")
-        snapshot.takeList([ProjectSnapshot.Page(etag: "", repos: [ProjectSnapshot.Listed(nameWithOwner: orbit, description: "Orbit’s repository",
-                                                                                         pushedAt: .now, updatedAt: .now, openCount: 3)])], complete: true)
+        let listed = ProjectSnapshot.Listed(nameWithOwner: orbit, description: "Orbit’s repository", pushedAt: .now, updatedAt: .now, openCount: 3)
+        snapshot.takeList([ProjectSnapshot.Page(etag: "", repos: [listed])], complete: true)
+        // An active project, so Projects' default scope covers its issues (#186).
+        snapshot.takeRecord(orbit, .success(try activeRecord("Orbit")), under: listed.fingerprint)
         snapshot.takeWork([orbit], .success(GitHubLookup.OpenWork(items: items, counts: [orbit: .init(issues: 3, pullRequests: 0)])), under: [:], etags: [:])
         snapshot.syncedAt = .now
         snapshot.fullSyncedAt = .now
@@ -176,8 +178,9 @@ extension RenderingTests {
                                   isPullRequest: false, author: "hubot", createdAt: .now, updatedAt: .now.addingTimeInterval(-Double(number)))
         }
         var snapshot = ProjectSnapshot(login: "octocat")
-        snapshot.takeList([ProjectSnapshot.Page(etag: "", repos: [ProjectSnapshot.Listed(nameWithOwner: orbit, description: "Orbit",
-                                                                                         pushedAt: .now, updatedAt: .now, openCount: 3)])], complete: true)
+        let listed = ProjectSnapshot.Listed(nameWithOwner: orbit, description: "Orbit", pushedAt: .now, updatedAt: .now, openCount: 3)
+        snapshot.takeList([ProjectSnapshot.Page(etag: "", repos: [listed])], complete: true)
+        snapshot.takeRecord(orbit, .success(try activeRecord("Orbit")), under: listed.fingerprint)
         snapshot.takeWork([orbit], .success(GitHubLookup.OpenWork(items: items, counts: [orbit: .init(issues: 3, pullRequests: 0)])), under: [:], etags: [:])
         snapshot.syncedAt = .now
         snapshot.fullSyncedAt = .now
@@ -236,7 +239,8 @@ extension RenderingTests {
             // A detail opened while the request was being confirmed goes back to its list too.
             app.projectSelection = ProjectSelection(repo: orbit, tab: .issues, item: number)
             try #require(deletionButtons(inSheet: dialog).first { $0.title == disposition.action }).performClick(nil)
-            try await until { app.openItems?.count == 2 - offset && window.attachedSheet == nil }
+            // The catalog's update can show before the request ends and leaves the detail: wait for its end.
+            try await until { app.openItems?.count == 2 - offset && window.attachedSheet == nil && app.updatingIssues.isEmpty }
             #expect(app.projectSelection == ProjectSelection(repo: orbit, tab: .issues))
             #expect(app.repositories?.first?.openIssues == 2 - offset)
             let saved = try JSONDecoder().decode(ProjectSnapshot.self, from: Data(contentsOf: catalog))
@@ -253,6 +257,12 @@ extension RenderingTests {
         #expect(app.updatingIssues.isEmpty)
         app.issueClosure = nil
         try await until { window.attachedSheet == nil }
+    }
+
+    /// The PROJECT.md of an active app project.
+    private func activeRecord(_ name: String) throws -> ProjectRecord {
+        let metadata = ProjectMetadata(name: name, kind: .hosted, status: .active, deploy: "none", merge: "agent")
+        return ProjectRecord(text: try ProjectRecord(text: "", sha: nil).updating(metadata), sha: name)
     }
 
     /// Waits (up to five seconds) until `condition` holds.
