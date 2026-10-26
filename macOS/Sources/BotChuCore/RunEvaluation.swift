@@ -2089,11 +2089,13 @@ public final class RunEvaluator {
 /// bot), and logged in the bot's turn log as a "run review", without lines that look like secrets.
 /// A review that still reports a tool call is stopped at once and fails. Cancelled (the timeout,
 /// or BotChu quitting), its CLI is interrupted, then terminated, then killed after `killDelay`.
+/// A new task's summary runs the same way (`TaskSummary`), logged as `what` says.
 public enum EvaluationCLI {
     /// How long a cancelled review's CLI has to end before it is killed, in seconds.
     public static let killDelay: TimeInterval = 8
 
-    public static func run(_ job: EvaluationJob, command: String, model: String?, log home: BotHome?) async throws -> String {
+    public static func run(_ job: EvaluationJob, command: String, model: String?, log home: BotHome?,
+                           what: String = "run review") async throws -> String {
         let kind = job.account.kind
         guard let invocation = CommandBuilder.toolFreeInvocation(kind: kind, prompt: job.prompt, model: model,
                                                                  reasoningEffort: job.reasoningEffort) else {
@@ -2143,7 +2145,7 @@ public enum EvaluationCLI {
                             error = "\(job.account.name) exited with status \(status) without a review" + (detail.isEmpty ? "" : ":\n\(detail)")
                         }
                         try? home?.appendLog(TurnLog.ended(at: Date(), startedAt: startedAt, status: status, stopped: run.stopped,
-                                                           toolCalls: state.toolCalls, error: error, stderr: stderr, what: "run review"))
+                                                           toolCalls: state.toolCalls, error: error, stderr: stderr, what: what))
                         if state.usedTool, let error {
                             continuation.resume(throwing: EvaluationRunError(error, usedTool: true))
                         } else if run.stopped {
@@ -2156,7 +2158,7 @@ public enum EvaluationCLI {
                     }
                     try? home?.appendLog(TurnLog.started(at: startedAt, account: job.account, command: command,
                                                          arguments: invocation.arguments, prompt: job.prompt, resuming: nil,
-                                                         what: "run review", directory: folder.path))
+                                                         what: what, directory: folder.path))
                     do {
                         try run.start()
                     } catch {

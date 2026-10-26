@@ -223,7 +223,8 @@ struct ConversationColumn: View {
 }
 
 /// One tab of the column: a status dot (a close button in its place on hover, while no turn runs),
-/// the repository and issue number, then what it is doing and a time, or what it is about.
+/// the repository and issue number, then for a task what it is about (its summary, #192), then what
+/// it is doing and a time; Home's account, or what it is doing.
 struct ConversationRow: View {
     @Environment(AppModel.self) private var model
     let target: ChatTarget
@@ -252,6 +253,12 @@ struct ConversationRow: View {
                         ConversationTitle(tab: tab, selected: selected)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                        if !tab.isHome {
+                            Text(tab.label)
+                                .font(.system(size: 12))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
                         ConversationDetail(tab: tab)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -329,9 +336,9 @@ struct ConversationTitle: View {
     }
 }
 
-/// A tab's second line: what it is doing (while idle, what it is about) on the left, which shortens
-/// first, and its time on the right, in tabular digits, never cut off. A running turn's time ticks
-/// each second.
+/// A tab's last line: what it is doing (while idle, Home's account or "Idle") on the left, which
+/// shortens first, and its time on the right, in tabular digits, never cut off. A running turn's
+/// time ticks each second.
 struct ConversationDetail: View {
     let tab: ConversationTab
 
@@ -361,10 +368,10 @@ struct ConversationDetail: View {
 
     private var what: Text {
         switch tab.state {
-        case .failed: Text(tab.detail).foregroundStyle(StatusLook.error.dot)
+        case .failed: Text(tab.status).foregroundStyle(StatusLook.error.dot)
         case .news(let pullRequest?, _):
             Text("Finished · ") + Text("PR #\(pullRequest)").foregroundStyle(Palette.pathText).fontWeight(.medium)
-        default: Text(tab.detail)
+        default: Text(tab.status)
         }
     }
 }
@@ -527,7 +534,7 @@ private struct RailTile: View {
             .focused(focus, equals: target)
             .focusEffectDisabled()
             .onHover { hovering = $0 }
-            .help(railHelp(tab))
+            .help(tab.railHelp(at: .now, shortcut: ConversationTab.shortcut(forTab: index)))
             .contextMenu {
                 if let task = model.task(target) { TaskMenu(target: target, task: task) }
             }
@@ -537,13 +544,6 @@ private struct RailTile: View {
         }
     }
 
-    /// The tab's two lines, with its host and shortcut; while it works, what it is about too.
-    private func railHelp(_ tab: ConversationTab) -> String {
-        let first = tab.title + (tab.machine.map { " · \($0)" } ?? "")
-        let second = [tab.detail, tab.state.time(at: .now), ConversationTab.shortcut(forTab: index)].compactMap { $0 }
-        let about = tab.isHome || tab.state.text == nil ? [] : [tab.subject]
-        return ([first] + about + [second.joined(separator: " · ")]).joined(separator: "\n")
-    }
 }
 
 /// A task's menu, in its tab and its tile: its issue or pull request (a job's run: the run in its

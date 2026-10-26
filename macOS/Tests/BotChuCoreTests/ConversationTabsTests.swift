@@ -85,7 +85,7 @@ import Testing
         // Idle, the second line says what it is about.
         let idle = ConversationTab(task: issue, machine: nil, state: .idle(since: now.addingTimeInterval(-3_600)))
         #expect(idle.detail == "Show repository issues and their count in the Task Activity sidebar")
-        #expect(idle.spoken(at: now) == "BotChu #113, Show repository issues and their count in the Task Activity sidebar, 1 hour ago")
+        #expect(idle.spoken(at: now) == "BotChu #113, Show repository issues and their count in the Task Activity sidebar, Idle, 1 hour ago")
         // Finished with its pull request, or failed.
         #expect(ConversationTab(task: issue, machine: nil, state: .news(pullRequest: 122, at: now)).detail == "Finished · PR #122")
         // On a host, without a shortcut (past the first eight tasks).
@@ -126,6 +126,38 @@ import Testing
         let named = BotTask(title: "ScreenTimeDaddy improvements", repo: "fixture/repo", checkout: "/w",
                             work: .init(number: 41, isPullRequest: false, repo: "fixture/repo"))
         #expect(ConversationTab.subject(of: named) == "ScreenTimeDaddy improvements")
+    }
+
+    /// #192: a task's three lines: where, its saved summary (else what it is about), then its state.
+    @Test func aTaskTabShowsItsSummaryThenItsState() {
+        var task = issue
+        task.summary = " Issue count sidebar "
+        let working = ConversationTab(task: task, machine: nil, state: .working(.thinking, since: now.addingTimeInterval(-252)))
+        #expect(working.title == "BotChu #113")
+        #expect(working.label == "Issue count sidebar")
+        #expect(working.status == "Thinking…")
+        // The tooltip still has the issue's whole title; VoiceOver reads both.
+        #expect(working.help(shortcut: "⌘2").hasPrefix("Show repository issues and their count in the Task Activity sidebar\n"))
+        #expect(working.spoken(at: now) == "BotChu #113, Issue count sidebar, Show repository issues and their count in the Task Activity sidebar, "
+                + "Thinking…, 4 minutes 12 seconds")
+        #expect(working.railHelp(at: now, shortcut: "⌘2") == "BotChu #113\nIssue count sidebar\nThinking… · 4:12 · ⌘2")
+        // Idle, its state says so, rather than repeating what it is about.
+        let idle = ConversationTab(task: task, machine: "Far Mac", state: .idle(since: now.addingTimeInterval(-120)))
+        #expect(idle.status == "Idle")
+        #expect(idle.railHelp(at: now, shortcut: nil) == "BotChu #113 · Far Mac\nIssue count sidebar\nIdle · 2m")
+        #expect(ConversationTab(task: task, machine: nil, state: .failed(at: now)).status == "Turn failed")
+        // A task from before summaries, or one whose summary didn't come: what it is about, as before.
+        let old = ConversationTab(task: issue, machine: nil, state: .idle(since: nil))
+        #expect(old.summary == nil && old.label == "Show repository issues and their count in the Task Activity sidebar")
+        var blank = issue
+        blank.summary = "  "
+        #expect(ConversationTab(task: blank, machine: nil, state: .idle(since: nil)).summary == nil)
+        // Home keeps its two lines: its account, or what it is doing.
+        let home = ConversationTab.home(account: "Claude Dev", state: .idle(since: now.addingTimeInterval(-120)))
+        #expect(home.status == "Claude Dev")
+        #expect(home.railHelp(at: now, shortcut: "⌘1") == "Home\nClaude Dev · 2m · ⌘1")
+        let busyHome = ConversationTab.home(account: "Claude Dev", state: .working(.thinking, since: now.addingTimeInterval(-5)))
+        #expect(busyHome.railHelp(at: now, shortcut: "⌘1") == "Home\nThinking… · 0:05 · ⌘1")
     }
 
     @Test func homeNamesItsAccountOrItsState() {

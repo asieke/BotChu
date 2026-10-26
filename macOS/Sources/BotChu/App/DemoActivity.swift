@@ -127,8 +127,8 @@ enum DemoActivity {
 /// `BOTCHU_DEMO=tasks` on throwaway data (`macOS/ui-review.sh`): the selected bot gets six more
 /// open tasks, in memory only, so its tabs show every state at once (#128): two working, one
 /// starting, one making its worktree, one with news and its pull request, and one idle since
-/// yesterday, beside the seeded tasks (one finished with a pull request, one failed). Nothing is
-/// saved and no CLI runs.
+/// yesterday, beside the seeded tasks (one finished with a pull request, one failed); three have a
+/// summary. Nothing is saved and no CLI runs.
 @MainActor
 enum DemoTabs {
     static func install(in model: AppModel, botID: UUID) {
@@ -159,6 +159,8 @@ enum DemoTabs {
         for (index, sample) in samples.enumerated() {
             var task = sample.0
             if index == 4 { task.pullRequest = 122 }
+            // Some with a saved summary (#192), the others named as tasks from before are.
+            task.summary = [0: "Issue count sidebar", 2: "Lazy history loading", 3: "Screen in bug reports"][index]
             let target = ChatTarget.task(task.id, of: botID)
             model.tasks[botID, default: []].append(task)
             model.conversation(target).replace(sample.2)
