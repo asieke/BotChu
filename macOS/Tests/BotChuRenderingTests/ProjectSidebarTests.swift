@@ -44,6 +44,9 @@ extension RenderingTests {
                  labels: [.init(name: "bug", color: "d73a4a"), .init(name: "good first issue", color: "7057ff"), .init(name: "onboarding", color: "fbca04")]),
             item(orbit, 5, "Dark mode for the dashboard", pull: false, hours: 30),
             item(orbit, 3, "Remember the last workspace", pull: false, hours: 60),
+            // Open work in a paused project and an unclassified one, which the Active scope leaves out.
+            item("octocat/Archive", 2, "Index the old notes", pull: false, hours: 8),
+            item("octocat/Scratch", 9, "Try a new parser", pull: true, hours: 3),
         ]
         let read = Date.now.addingTimeInterval(-3000)
         let details: [String: GitHubLookup.WorkDetail] = [
@@ -79,7 +82,7 @@ extension RenderingTests {
             return .failure(TaskWorktree.Failure(step: "Couldn't read \(pull ? "pull request" : "issue") #\(number) of \(repo) with gh", output: ""))
         })
         let sample: [(String, ProjectMetadata.Kind, ProjectMetadata.Status?, Int, Int)] = [
-            ("BotChu", .local, .active, 0, 2), ("Orbit", .hosted, .active, 3, 0), ("Archive", .docs, .paused, 0, 0), ("Scratch", .library, nil, 0, 0),
+            ("BotChu", .local, .active, 0, 2), ("Orbit", .hosted, .active, 3, 0), ("Archive", .docs, .paused, 1, 0), ("Scratch", .library, nil, 0, 1),
         ]
         app.repositories = sample.map { GitHubLookup.Repo(nameWithOwner: "octocat/\($0.0)", description: "\($0.0)’s repository", openIssues: $0.3, openPullRequests: $0.4) }
         app.repositoriesReadAt = Date()
@@ -147,6 +150,23 @@ extension RenderingTests {
         defaults.set("issues", forKey: "projectsScope")
         app.selectProject(orbit, tab: .issues, item: 5)
         try await settle("projects-issues-with-sidebar")
+        // Issues and Pull Requests keep Repositories' status and type (#186): Active leaves out the
+        // paused Archive's issue and the unclassified Scratch's pull request, and their counts.
+        app.selectProject(nil)
+        try await settle("projects-issues-active")
+        defaults.set(ProjectStatusFilter.paused.rawValue, forKey: "projectsStatus")
+        try await settle("projects-issues-paused")
+        defaults.set(ProjectKindFilter.code.rawValue, forKey: "projectsKind")
+        try await settle("projects-issues-paused-code")
+        defaults.set(ProjectStatusFilter.unclassified.rawValue, forKey: "projectsStatus")
+        defaults.set("pulls", forKey: "projectsScope")
+        try await settle("projects-pulls-unclassified-code")
+        defaults.set(ProjectKindFilter.all.rawValue, forKey: "projectsKind")
+        defaults.set(ProjectStatusFilter.active.rawValue, forKey: "projectsStatus")
+        // The narrowest window fits the scope, the status, the type and the repository.
+        window.setContentSize(NSSize(width: 820, height: 600))
+        try await settle("projects-pulls-compact")
+        window.setContentSize(NSSize(width: 1340, height: 860))
         defaults.set("repositories", forKey: "projectsScope")
 
         // Fix All: one task for every issue no task works on (not #3), each with a sub-agent.
