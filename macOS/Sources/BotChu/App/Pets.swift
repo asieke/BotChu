@@ -62,7 +62,7 @@ extension AppModel {
     /// account, from its current pet's look when its appearance hasn't changed), then OpenRouter makes a
     /// looping clip from each. Stills already drawn by a stopped or failed attempt are reused.
     func makePet(_ id: UUID) {
-        guard let bot = bot(id), petJobs[id]?.isActive != true else { return }
+        guard let bot = bot(id), !bot.isRemoteQueue, petJobs[id]?.isActive != true else { return }
         let appearance = bot.appearance?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !appearance.isEmpty else {
             petJobs[id] = PetJob(phase: .failed("Describe how the bot looks first."))
@@ -72,7 +72,7 @@ extension AppModel {
             petJobs[id] = PetJob(phase: .failed("Pets are animated on OpenRouter. Add your OpenRouter API key in BotChu ▸ Settings first."))
             return
         }
-        let home = BotHome(workspace: bot.workspace)
+        let home = BotHome(workspace: bot.persistencePath)
         let staging = PetVideo.stagingURL(for: home)
         let files = FileManager.default
         let allStills = PetVideo.stills.map(\.id)

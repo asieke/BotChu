@@ -5,7 +5,7 @@ import BotChuCore
 
 extension AppModel {
     func imageURL(_ image: ImageAttachment, for target: ChatTarget) -> URL? {
-        bot(target.botID).map { BotHome(workspace: $0.workspace).imageURL(image) }
+        bot(target.botID).map { BotHome(workspace: $0.persistencePath).imageURL(image) }
     }
 
     func addImages(_ urls: [URL], to target: ChatTarget) {
@@ -34,9 +34,10 @@ extension AppModel {
 
     private func addImage(_ source: ImagePaste.Source, to target: ChatTarget) throws {
         guard let bot = bot(target.botID) else { return }
+        guard !bot.isRemoteQueue else { throw ImageDelivery.Failure("Remote queue bots accept text only.") }
         guard (draftImages[target]?.count ?? 0) < ImageAttachment.maximumCount else { throw ImageDelivery.Failure("Attach up to 8 images per message.") }
         let image = try ImagePaste.png(from: source)
-        let saved = try BotHome(workspace: bot.workspace).saveImage(image.png, name: image.name)
+        let saved = try BotHome(workspace: bot.persistencePath).saveImage(image.png, name: image.name)
         draftImages[target, default: []].append(saved)
     }
 }

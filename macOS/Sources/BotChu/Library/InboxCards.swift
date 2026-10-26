@@ -9,7 +9,7 @@ struct DeliveryCards: View {
     let delivery: Delivery
 
     var body: some View {
-        let folder = InboxFolder(home: BotHome(workspace: model.bot(delivery.botID)?.workspace ?? ""))
+        let folder = InboxFolder(home: BotHome(workspace: model.bot(delivery.botID)?.persistencePath ?? ""))
         VStack(alignment: .leading, spacing: 14) {
             ForEach(delivery.files, id: \.name) { file in
                 let url = folder.fileURL(file.name, of: delivery.id)

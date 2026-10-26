@@ -455,7 +455,7 @@ struct DeliveryMenu: View {
         if !delivery.files.isEmpty {
             Divider()
             Button("Show Copies in Finder") {
-                let folder = InboxFolder(home: BotHome(workspace: model.bot(delivery.botID)?.workspace ?? ""))
+                let folder = InboxFolder(home: BotHome(workspace: model.bot(delivery.botID)?.persistencePath ?? ""))
                 NSWorkspace.shared.activateFileViewerSelecting(delivery.files.map { folder.fileURL($0.name, of: delivery.id) })
             }
             let originals = delivery.files.compactMap(\.source).filter { FileManager.default.fileExists(atPath: $0) }

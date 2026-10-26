@@ -521,7 +521,7 @@ public struct Store: Sendable {
     /// whose folders are missing: each bot once, in its first place.
     public static func entries(for bots: [Bot], sections: [UUID: String], missing: [Entry]) -> [Entry] {
         var listed = Set<UUID>()
-        return (bots.map { Entry(id: $0.id, workspace: $0.workspace, section: sections[$0.id]) } + missing)
+        return (bots.map { Entry(id: $0.id, workspace: $0.persistencePath, section: sections[$0.id]) } + missing)
             .filter { listed.insert($0.id).inserted }
     }
 
@@ -547,7 +547,8 @@ public struct Store: Sendable {
         for entry in loadIndex() {
             let folderExists = FileManager.default.fileExists(atPath: entry.workspace)
             if var bot = BotHome(workspace: entry.workspace).loadBot() ?? (folderExists ? backedUpBot(entry.id) : nil) {
-                bot.workspace = entry.workspace
+                if bot.isRemoteQueue { bot.remoteStorage = entry.workspace; bot.workspace = "" }
+                else { bot.workspace = entry.workspace }
                 bots.append(bot)
                 sections[bot.id] = entry.section
             } else {
@@ -558,7 +559,7 @@ public struct Store: Sendable {
     }
 
     public func loadThread(for bot: Bot) -> [ChatMessage] {
-        let home = BotHome(workspace: bot.workspace)
+        let home = BotHome(workspace: bot.persistencePath)
         if FileManager.default.fileExists(atPath: home.threadURL.path) { return home.loadThread() }
         return backedUpThread(bot.id)
     }
@@ -572,7 +573,7 @@ public struct Store: Sendable {
         guard !files.fileExists(atPath: indexURL.path), let data = try? Data(contentsOf: legacyBotsURL),
               let bots = try? Self.decoder.decode([Bot].self, from: data) else { return false }
         for bot in bots {
-            let home = BotHome(workspace: bot.workspace)
+            let home = BotHome(workspace: bot.persistencePath)
             guard !home.exists else { continue }
             try? home.save(bot)
             let legacyThread = legacyThreadsURL.appendingPathComponent("\(bot.id.uuidString).json")
@@ -580,7 +581,7 @@ public struct Store: Sendable {
                 try? home.saveThread(thread)
             }
         }
-        guard (try? saveIndex(bots.map { Entry(id: $0.id, workspace: $0.workspace) })) != nil else { return false }
+        guard (try? saveIndex(bots.map { Entry(id: $0.id, workspace: $0.persistencePath) })) != nil else { return false }
         try? files.createDirectory(at: backupURL, withIntermediateDirectories: true)
         try? files.moveItem(at: legacyBotsURL, to: backupURL.appendingPathComponent("bots.json"))
         try? files.moveItem(at: legacyThreadsURL, to: backupURL.appendingPathComponent("threads", isDirectory: true))

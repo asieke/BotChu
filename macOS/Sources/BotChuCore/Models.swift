@@ -44,6 +44,13 @@ extension RunSettings {
 }
 
 public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
+    /// Nil in existing saves means a local CLI bot.
+    public var kind: Kind?
+    public enum Kind: String, Codable, Sendable { case localCLI, remoteQueue }
+    public var isRemoteQueue: Bool { kind == .remoteQueue }
+    /// App-owned history storage for a remote bot; never a CLI workspace.
+    public var remoteStorage: String?
+    public var persistencePath: String { isRemoteQueue ? (remoteStorage ?? workspace) : workspace }
     public var id: UUID
     public var name: String
     public var emoji: String

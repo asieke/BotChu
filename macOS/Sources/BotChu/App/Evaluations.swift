@@ -117,6 +117,6 @@ extension AppModel {
     private func evaluationLaunch(for job: EvaluationJob) -> EvaluationLaunch {
         EvaluationLaunch(command: settings.command(for: job.account),
                          model: GenerationOptions.effectiveModel(job.model, kind: job.account.kind, openRouterDefault: settings.openRouterModel),
-                         home: bot(job.botID).map { BotHome(workspace: $0.workspace) })
+                         home: bot(job.botID).map { BotHome(workspace: $0.persistencePath) })
     }
 }

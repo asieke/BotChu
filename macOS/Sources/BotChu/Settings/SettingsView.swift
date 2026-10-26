@@ -150,6 +150,7 @@ struct SettingsView: View {
             }
 
             TelegramSection()
+            RemoteQueueSection()
         }
         .formStyle(.grouped)
     }

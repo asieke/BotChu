@@ -32,10 +32,12 @@ struct SidebarView: View {
                             .accessibilityIdentifier("sidebar-bot-\(bot.id)")
                             .contextMenu {
                                 Button("Edit…") { model.edit(bot.id) }
+                                if !bot.isRemoteQueue {
                                 Button("New Task…") { model.newTask(for: bot.id) }
                                 Button("New Session") { model.newSession(.home(bot.id)) }
                                     .disabled(model.isRunning(.home(bot.id)))
                                 Button("Show Workspace in Finder") { model.revealWorkspace(bot.id) }
+                                }
                                 Divider()
                                 MoveToSectionMenu(botID: bot.id) { naming.ask(.new(botID: bot.id)) }
                                 Divider()
@@ -79,9 +81,13 @@ struct SidebarView: View {
             Button("Delete", role: .destructive) { model.delete(bot.id) }
         } message: { bot in
             let jobs = model.jobs.jobs(of: bot.id).count
+            if bot.isRemoteQueue {
+                Text("Its conversation and waiting remote messages are deleted. Its connection stops.")
+            } else {
             Text("Its conversation and tasks are deleted"
                  + (jobs == 0 ? "" : ", and its \(jobs == 1 ? "scheduled job stops and is" : "\(jobs) scheduled jobs stop and are") deleted with them")
                  + ". Its workspace folder, \(bot.workspace), and its tasks' worktrees are kept.")
+            }
         }
         .sectionNamingAlert($naming)
     }

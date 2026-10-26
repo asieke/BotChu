@@ -310,7 +310,7 @@ enum DevHooks {
             model.create(bot)
         }
         if let folder = env["BOTCHU_PET"], let id = model.selection, let bot = model.bot(id) {
-            let target = PetVideo.folder(for: BotHome(workspace: bot.workspace))
+            let target = PetVideo.folder(for: BotHome(workspace: bot.persistencePath))
             try? FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? FileManager.default.removeItem(at: target)
             try? FileManager.default.copyItem(at: URL(fileURLWithPath: (folder as NSString).expandingTildeInPath), to: target)
@@ -455,7 +455,7 @@ enum DevHooks {
         }
         for job in jobs {
             guard let bot = model.bot(job.botID) else { continue }
-            let home = BotHome(workspace: bot.workspace)
+            let home = BotHome(workspace: bot.persistencePath)
             try? home.save(job)
             if let last = job.runs.last(where: { $0.outcome == .succeeded && !$0.quiet && $0.taskID == nil }) {
                 try? home.saveJobThread(transcript(on: bot), job: job.id, run: last.id)

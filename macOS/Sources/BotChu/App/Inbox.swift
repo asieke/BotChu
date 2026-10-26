@@ -53,7 +53,7 @@ final class InboxModel {
 
     /// Reads every bot's deliveries off the main thread.
     func load(bots: [Bot]) {
-        let folders = bots.map { (id: $0.id, folder: InboxFolder(home: BotHome(workspace: $0.workspace))) }
+        let folders = bots.map { (id: $0.id, folder: InboxFolder(home: BotHome(workspace: $0.persistencePath))) }
         Task.detached(priority: .utility) { [weak self] in
             var read: [UUID: Delivery] = [:]
             for (id, folder) in folders {
@@ -94,7 +94,7 @@ final class InboxModel {
         let delivery = Delivery(id: existing?.id ?? UUID(), botID: target.botID, taskID: target.taskID, title: request.title,
                                 note: request.note, files: files, links: request.links, question: request.question,
                                 credits: credits, sentAt: existing?.sentAt ?? now, updatedAt: now)
-        let folder = InboxFolder(home: BotHome(workspace: bot.workspace))
+        let folder = InboxFolder(home: BotHome(workspace: bot.persistencePath))
         let saved = delivery, data = contents
         try await storage.perform(folder.url.path, label: "delivery") { try folder.save(saved, contents: data) }
         try? await transport.removeStaged(request: request.id)

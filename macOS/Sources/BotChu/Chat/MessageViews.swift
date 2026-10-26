@@ -28,7 +28,7 @@ struct MessageRow: View, Equatable {
                 VStack(alignment: .trailing, spacing: 8) {
                     if !message.images.isEmpty {
                         ForEach(message.images) { image in
-                            let url = BotHome(workspace: bot.workspace).imageURL(image)
+                            let url = BotHome(workspace: bot.persistencePath).imageURL(image)
                             if let preview = NSImage(contentsOf: url) {
                                 Image(nsImage: preview).resizable().scaledToFit().frame(maxWidth: 320, maxHeight: 240)
                                     .clipShape(RoundedRectangle(cornerRadius: 8)).help(image.name)

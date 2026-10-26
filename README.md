@@ -924,6 +924,14 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     on repositories, each account's command, the Codex account that draws pets' stills, the
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
     and default OpenRouter model, whether each bot's work gets a daily run review and at what time, and the Telegram gateway (below).
+  - **Remote queue bots:** choose **Remote queue** in New Bot to message an agent such as Danny
+    on its own computer. BotChu serves an authenticated HTTP queue, while the remote runtime
+    polls for messages and posts complete replies or errors into Home. The queue survives relaunch,
+    retains replies without truncation, and deduplicates retry acknowledgements. This bot has no
+    local workspace, CLI, account/model controls, tasks, jobs or sub-agents. Settings ▸ **Remote queue**
+    controls its address/port, generated Keychain token and connection status; the sidebar shows
+    whether a poll arrived in the last two minutes and how many messages wait. See
+    [Remote queue setup and protocol](docs/remote-queue.md).
   - **Telegram:** an opt-in gateway, in Settings ▸ **Telegram**, lets you message bots from
     Telegram through a Telegram bot of your own (made with BotFather) while BotChu runs on this
     Mac. There is no server or webhook: BotChu asks Telegram for new messages itself (long

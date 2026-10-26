@@ -16,14 +16,14 @@ extension AppModel {
     /// The shared skills, then each bot's own in sidebar order, or only `botID`'s.
     func skillEntries(of botID: UUID? = nil) -> [SkillEntry] {
         Skills.discover(in: sharedSkillsFolder, scope: .shared).map { SkillEntry(skill: $0, bot: nil) }
-            + bots.filter { botID == nil || $0.id == botID }.flatMap { bot in
+            + bots.filter { !$0.isRemoteQueue && (botID == nil || $0.id == botID) }.flatMap { bot in
                 Skills.discover(in: Skills.folder(of: bot), scope: .bot).map { SkillEntry(skill: $0, bot: bot) }
             }
     }
 
     /// The skills a session of `bot` is told about.
     func activeSkills(of bot: Bot) -> [Skill] {
-        Skills.active(for: bot, sharedFolder: sharedSkillsFolder)
+        bot.isRemoteQueue ? [] : Skills.active(for: bot, sharedFolder: sharedSkillsFolder)
     }
 
     func setSharedSkill(_ slug: String, enabled: Bool, for botID: UUID) {
@@ -38,6 +38,7 @@ extension AppModel {
 
     /// Makes a skill from the template, shared or `bot`'s own.
     func createSkill(name: String, description: String, for bot: Bot?) throws -> SkillEntry {
+        guard bot?.isRemoteQueue != true else { throw CocoaError(.featureUnsupported) }
         let folder = bot.map(Skills.folder(of:)) ?? sharedSkillsFolder
         let url = try Skills.create(name: name, description: description, in: folder)
         let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
