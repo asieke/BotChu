@@ -19,9 +19,14 @@ struct RemoteQueueSection: View {
                 }
             }
             Toggle("Serve the remote queue", isOn: $settings.remoteQueueEnabled)
-            TextField("Listen address", text: $settings.remoteQueueAddress)
-                .help("A numeric IP on this Mac, such as its Tailscale address. 127.0.0.1 is local-only.")
-            TextField("Port", value: $settings.remoteQueuePort, format: .number.grouping(.never))
+                .help("Danny polls this address while BotChu is open and this Mac is awake.")
+            LabeledContent("Listen address") {
+                TextField("Listen address", text: $settings.remoteQueueAddress).labelsHidden().settingsField()
+            }
+            .help("A numeric IP on this Mac, such as its Tailscale address, or an HTTPS tunnel's. 127.0.0.1 is local-only.")
+            LabeledContent("Port") {
+                TextField("Port", value: $settings.remoteQueuePort, format: .number.grouping(.never)).labelsHidden().settingsField()
+            }
             if let url = model.remoteQueue.servingURL {
                 LabeledContent("Base URL") { Text(url).textSelection(.enabled) }
             }
@@ -30,8 +35,9 @@ struct RemoteQueueSection: View {
                     Group {
                         if revealed { TextField("Token", text: .constant(token)) }
                         else { SecureField("Token", text: .constant(token)) }
-                    }.labelsHidden()
+                    }.labelsHidden().settingsField()
                     Button(revealed ? "Hide" : "Show") { token = model.remoteQueue.readToken() ?? ""; revealed.toggle() }
+                        .help("Hand the token to Danny through secure entry; keep it out of chats.")
                     Button("Copy") {
                         token = model.remoteQueue.readToken() ?? ""
                         guard !token.isEmpty else { return }
@@ -39,13 +45,14 @@ struct RemoteQueueSection: View {
                         NSPasteboard.general.setString(token, forType: .string)
                     }
                     Button("Regenerate…") { regenerating = true }
+                        .help("Regenerating it disconnects the old token.")
                 }
             }
             LabeledContent("Status", value: model.remoteQueue.summary)
             RemoteQueuePresence()
-            if let problem = model.remoteQueue.problem { Text(problem).foregroundStyle(.red) }
-            Text("Danny polls this address while BotChu is open and this Mac is awake. Use a Tailscale address or an HTTPS tunnel. Hand the token to Danny through secure entry; keep it out of chats. Regenerating it disconnects the old token.")
-                .font(.caption).foregroundStyle(.secondary)
+            if let problem = model.remoteQueue.problem {
+                Label(problem, systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+            }
         }
         .onAppear { if model.settings.remoteQueueEnabled { token = model.remoteQueue.readToken() ?? "" } }
         .confirmationDialog("Replace the remote queue token?", isPresented: $regenerating) {
@@ -85,7 +92,7 @@ struct RemoteQueueInspector: View {
                     .foregroundStyle(.secondary)
                 HStack {
                     Button("Edit…") { model.edit(bot.id) }
-                    SettingsLink { Text("Connection Settings…") }
+                    Button("Connection Settings…") { model.openSettings(.remoteQueue) }
                 }
                 Button("Show Conversation Files") { model.revealHistory(bot.id) }
             }.padding(20)

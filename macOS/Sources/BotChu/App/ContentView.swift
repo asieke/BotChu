@@ -5,7 +5,6 @@ import BotChuCore
 /// middle, and the shown conversation's status on the right.
 struct ContentView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.openSettings) private var openSettings
     @State private var hooksStarted = false
     @State private var contentSize = CGSize(width: 1240, height: 800)
 
@@ -56,7 +55,7 @@ struct ContentView: View {
         .task {
             guard !hooksStarted else { return }
             hooksStarted = true
-            DevHooks.start(model: model, openSettings: { openSettings() })
+            DevHooks.start(model: model)
         }
     }
 }
@@ -89,6 +88,7 @@ private struct DetailColumn: View {
             case .providers: ProvidersView()
             case .skills: SkillsView()
             case .jobs: JobsView()
+            case .settings: SettingsView()
             }
         } else if let id = model.selection, model.bot(id) != nil {
             let tab = model.tab(of: id)

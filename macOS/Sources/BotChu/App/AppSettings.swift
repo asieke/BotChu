@@ -49,6 +49,8 @@ final class AppSettings {
     var remoteQueueAddress: String { didSet { defaults.set(remoteQueueAddress, forKey: "remoteQueueAddress") } }
     var remoteQueuePort: Int { didSet { defaults.set(remoteQueuePort, forKey: "remoteQueuePort") } }
     var telegramChats: [TelegramChat] { didSet { save(telegramChats, forKey: "telegramChats") } }
+    /// The page of Settings shown last, which Settings opens on when nothing asks for another.
+    var settingsPage: SettingsPage { didSet { defaults.set(settingsPage.rawValue, forKey: "settingsPage") } }
     /// Invalidates allowance readings when the saved OpenRouter key changes, without retaining it.
     var usageCredentialRevision = 0
 
@@ -81,6 +83,7 @@ final class AppSettings {
         remoteQueuePort = defaults.object(forKey: "remoteQueuePort") as? Int ?? 18765
         telegramEnabled = defaults.bool(forKey: "telegramEnabled")
         telegramChats = Self.load([TelegramChat].self, from: defaults, forKey: "telegramChats") ?? []
+        settingsPage = defaults.string(forKey: "settingsPage").flatMap(SettingsPage.init(rawValue:)) ?? .general
         Task { [weak self, macName] in
             let name = await macName.value
             self?.thisMacName = name
