@@ -315,6 +315,7 @@ private struct FakeGH {
         #expect(lines(.providers)[2] == "Screen: Providers")
         #expect(lines(.skills)[2] == "Screen: Skills")
         #expect(lines(.jobs)[2] == "Screen: Jobs")
+        #expect(lines(.settings)[2] == "Screen: Settings")
         #expect(lines(.conversation(statusArea: nil))[2] == "Screen: conversation, status sidebar hidden")
         #expect(lines(.noBot)[2] == "Screen: no bot selected")
     }

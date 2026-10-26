@@ -47,6 +47,16 @@ extension RenderingTests {
         #expect(!model.tabs(of: bot.id).contains(target))
         model.reopenTask(target)
         #expect(model.tab(of: bot.id) == target)
+        // Settings is a page like a gallery (#191): the bot keeps its tab and draft for its return.
+        model.openSettings(.hosts)
+        #expect(model.sidebarSelection == .library(.settings))
+        #expect(model.visibleBotID == nil)
+        #expect(model.settings.settingsPage == .hosts)
+        model.selectSidebar(.bot(bot.id))
+        #expect(model.destination == nil)
+        #expect(model.tab(of: bot.id) == target)
+        #expect(model.drafts[target] == "Task draft")
+        #expect(!LibraryDestination.sidebar.contains(.settings))
     }
 
     /// One row per bot (#128): no task rows or disclosure arrow, at the sidebar's narrowest and
@@ -110,6 +120,17 @@ extension RenderingTests {
         model.showTab(offset: 1, of: bot.id)
         try await Task.sleep(for: .milliseconds(100))
         #expect(table.numberOfRows == firstBotRow + 2)
+        #expect(table.selectedRow == firstBotRow)
+        // Settings (the gear's) selects no row of the list, and adds none (#191).
+        model.openSettings()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(table.numberOfRows == firstBotRow + 2)
+        #expect(table.selectedRow == -1)
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("sidebar-settings"))
+        }
+        model.selectSidebar(.bot(bot.id))
+        try await Task.sleep(for: .milliseconds(100))
         #expect(table.selectedRow == firstBotRow)
     }
 
@@ -484,7 +505,7 @@ extension RenderingTests {
     }
 
     /// The first bot's row, below the Workspace heading, its galleries and the Conversations heading.
-    private var firstBotRow: Int { LibraryDestination.allCases.count + 2 }
+    private var firstBotRow: Int { LibraryDestination.sidebar.count + 2 }
 
     /// The context menu a right click on the row shows, as AppKit asks the views under the pointer for it.
     private func sidebarMenu(row: Int, of table: NSTableView, in host: NSView) throws -> NSMenu {

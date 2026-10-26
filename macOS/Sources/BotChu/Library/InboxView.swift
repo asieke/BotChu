@@ -518,6 +518,17 @@ private struct InboxEmpty: View {
     let showDone: () -> Void
 
     var body: some View {
+        // In a scroll view, like the list and the reader, so the window draws the rule under its
+        // header across the whole page, as on the other workspace pages.
+        ScrollView {
+            message
+                .frame(maxWidth: .infinity)
+                .containerRelativeFrame(.vertical)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    private var message: some View {
         VStack(spacing: 8) {
             Image(systemName: "tray")
                 .font(.system(size: 40, weight: .light))
