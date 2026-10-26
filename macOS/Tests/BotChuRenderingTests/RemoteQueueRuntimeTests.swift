@@ -167,6 +167,63 @@ extension RenderingTests {
         settings.remoteQueueEnabled = false
     }
 
+    @Test func remoteQueueCarriesDocumentsBothWaysOverHTTP() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-remote-files-\(UUID())")
+        let domain = "local.BotChu.RemoteFileTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: domain)!
+        defer { defaults.removePersistentDomain(forName: domain); try? FileManager.default.removeItem(at: root) }
+        let settings = AppSettings(defaults: defaults)
+        settings.remoteQueuePort = Int(try remoteTestAvailablePort())
+        let app = AppModel(store: Store(root: root), settings: settings, usage: UsageCache { _, _ in throw UsageFailure("fixture") }, openRouterKey: { nil })
+        defer { app.stopAll() }
+        let token = "fixture-token-for-files-only"
+        app.remoteQueue.readToken = { token }
+        app.remoteQueue.saveToken = { _ in true }
+        var bot = Bot(name: "Danny fixture", workspace: "")
+        bot.kind = .remoteQueue
+        app.create(bot)
+        let target = ChatTarget.home(bot.id)
+        settings.remoteQueueEnabled = true
+        app.remoteQueue.restart()
+        try await remoteEventually { app.remoteQueue.servingURL != nil }
+        let base = try #require(app.remoteQueue.servingURL)
+
+        let source = root.appendingPathComponent("schedule.pdf")
+        let pdf = Data("%PDF-1.7 fixture schedule".utf8)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try pdf.write(to: source)
+        app.addFiles([source], to: target)
+        let files = try #require(app.draftFiles[target])
+        #expect(files.map(\.name) == ["schedule.pdf"])
+        #expect(files.first?.type == "application/pdf")
+        let sent: Bool = await withCheckedContinuation { continuation in
+            if !app.send("", to: target, files: files, accepted: { continuation.resume(returning: $0) }) { continuation.resume(returning: false) }
+        }
+        #expect(sent)
+        let next = try await remoteCurl(base + "/v1/queue/next", token: token)
+        let message = try #require(JSONSerialization.jsonObject(with: next.body) as? [String: Any])
+        let listed = try #require((message["files"] as? [[String: Any]])?.first)
+        #expect(listed["name"] as? String == "schedule.pdf")
+        let fileID = try #require(listed["id"] as? String)
+        let download = try await remoteCurl(base + RemoteQueueEndpoint.filesPath + fileID, token: token)
+        #expect(download.status == 200)
+        #expect(download.body == pdf)
+        #expect(try await remoteCurl(base + RemoteQueueEndpoint.filesPath + fileID, token: nil).status == 401)
+
+        let roster = Data("%PDF-1.7 bald eagles roster".utf8)
+        let reply = try JSONSerialization.data(withJSONObject: ["id": try #require(message["id"] as? String), "text": "Here's the roster.",
+            "files": [["name": "bald-eagles-roster-2026-27.pdf", "type": "application/pdf", "data": roster.base64EncodedString()]]])
+        #expect(try await remoteCurl(base + "/v1/queue/reply", token: token, body: reply).status == 200)
+        let answer = try #require(app.thread(target).last)
+        #expect(answer.role == .assistant)
+        #expect(answer.text == "Here's the roster.")
+        let received = try #require(answer.documents.first)
+        #expect(received.name == "bald-eagles-roster-2026-27.pdf")
+        #expect(try Data(contentsOf: try #require(app.fileURL(received, for: target))) == roster)
+        #expect(try await remoteCurl(base + RemoteQueueEndpoint.filesPath + fileID, token: token).status == 404)
+        settings.remoteQueueEnabled = false
+    }
+
     @Test func remoteQueueFullShowsNoticeAndKeepsTheUnacceptedDraft() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-remote-full-\(UUID())")
         let domain = "local.BotChu.RemoteFullTests.\(UUID())"

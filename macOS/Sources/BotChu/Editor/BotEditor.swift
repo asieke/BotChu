@@ -71,6 +71,7 @@ struct BotEditor: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                }
                 Section {
                     HStack(alignment: .top, spacing: 12) {
                         petPreview
@@ -106,6 +107,7 @@ struct BotEditor: View {
                          : "The pet stands in for the emoji and acts out what the bot is doing. A remake with the same appearance keeps its look.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                if !bot.isRemoteQueue {
                 Section {
                     Picker("Account", selection: Binding(get: { bot.accountID }, set: { bot.selectAccount(model.settings.account($0)) })) {
                         ForEach(model.settings.accounts) { account in
@@ -236,7 +238,7 @@ struct BotEditor: View {
     }
 
     private func save() {
-        if isNew, !bot.isRemoteQueue, !(bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if isNew, !(bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             confirmCreatePet = true
             return
         }

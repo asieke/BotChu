@@ -83,6 +83,79 @@ struct RemoteQueueTests {
         #expect(await endpoint.handle(.init(method: "POST", path: request.path, authorization: request.authorization, body: Data())).status == 400)
     }
 
+    @Test func filesGoOutWithAWaitingMessageAndComeBackWithItsReply() async throws {
+        let (root, bot, queue) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let endpoint = RemoteQueueEndpoint(queue: queue, token: "fixture")
+        let auth = "Bearer fixture"
+        let pdf = Data("%PDF-1.7 fixture".utf8)
+        let sent = try BotHome(url: root).saveFile(pdf, name: "roster.pdf", type: "application/pdf")
+        let message = try await queue.enqueue("", files: [sent])
+        let next = await endpoint.handle(.init(method: "GET", path: "/v1/queue/next", authorization: auth))
+        let listed = try #require(try JSONSerialization.jsonObject(with: next.body) as? [String: Any])
+        let files = try #require(listed["files"] as? [[String: Any]])
+        #expect(files.count == 1)
+        #expect(files.first?["name"] as? String == "roster.pdf")
+        #expect(files.first?["type"] as? String == "application/pdf")
+        #expect(files.first?["size"] as? Int == pdf.count)
+        let path = RemoteQueueEndpoint.filesPath + sent.id.uuidString
+        let download = await endpoint.handle(.init(method: "GET", path: path, authorization: auth))
+        #expect(download.status == 200)
+        #expect(download.body == pdf)
+        #expect(String(decoding: RemoteQueueHTTP.encode(download), as: UTF8.self).contains("Content-Type: application/pdf\r\n"))
+        #expect(await endpoint.handle(.init(method: "GET", path: path, authorization: nil)).status == 401)
+        #expect(await endpoint.handle(.init(method: "GET", path: RemoteQueueEndpoint.filesPath + UUID().uuidString, authorization: auth)).status == 404)
+        #expect(await endpoint.handle(.init(method: "GET", path: RemoteQueueEndpoint.filesPath + "../queue.json", authorization: auth)).status == 404)
+
+        let csv = Data("name\nAlex\n".utf8)
+        let body = try JSONSerialization.data(withJSONObject: ["id": message.id.uuidString, "text": "Here it is.",
+            "files": [["name": "../../bald eagles.csv", "type": "text/csv\r\nX-Injected: 1", "data": csv.base64EncodedString()]]])
+        #expect(await endpoint.handle(.init(method: "POST", path: "/v1/queue/reply", authorization: auth, body: body)).status == 200)
+        // Answered, so its files aren't offered any more.
+        #expect(await endpoint.handle(.init(method: "GET", path: path, authorization: auth)).status == 404)
+        let reloaded = try RemoteQueue(botID: bot, file: root.appendingPathComponent("queue.json"))
+        let reply = try #require(await reloaded.snapshot().messages.last)
+        let received = try #require(reply.documents.first)
+        #expect(reply.text == "Here it is.")
+        #expect(received.name == "-..-bald eagles.csv")
+        #expect(received.type == nil)
+        #expect(received.size == csv.count)
+        let saved = BotHome(url: root).fileURL(received)
+        #expect(saved.deletingLastPathComponent().deletingLastPathComponent() == root.appendingPathComponent("attachments", isDirectory: true))
+        #expect(try Data(contentsOf: saved) == csv)
+    }
+
+    @Test func filesAloneMakeAMessageOrReplyButNotAnError() async throws {
+        let (root, _, queue) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        await #expect(throws: RemoteQueue.Failure.emptyText) { try await queue.enqueue(" ") }
+        let first = try await queue.enqueue("Send the roster")
+        let file = RemoteQueue.IncomingFile(name: "roster.pdf", type: "application/pdf", data: Data("pdf".utf8))
+        await #expect(throws: RemoteQueue.Failure.invalidReply) { try await queue.reply(to: first.id, text: nil, error: "failed", files: [file]) }
+        await #expect(throws: RemoteQueue.Failure.invalidReply) {
+            try await queue.reply(to: first.id, text: "", error: nil, files: Array(repeating: file, count: FileAttachment.maximumCount + 1))
+        }
+        await #expect(throws: RemoteQueue.Failure.invalidReply) {
+            try await queue.reply(to: first.id, text: "", error: nil, files: [.init(name: "empty.txt", data: Data())])
+        }
+        #expect(try await queue.reply(to: first.id, text: "", error: nil, files: [file]))
+        #expect(await queue.snapshot().messages.last?.documents.map(\.name) == ["roster.pdf"])
+        let missing = try JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "text": "", "files": [["name": "x", "data": "not base64!"]]])
+        let endpoint = RemoteQueueEndpoint(queue: queue, token: "fixture")
+        #expect(await endpoint.handle(.init(method: "POST", path: "/v1/queue/reply", authorization: "Bearer fixture", body: missing)).status == 400)
+    }
+
+    @Test func fileNamesStayInsideTheirFolder() {
+        #expect(FileAttachment.safeName("report.pdf") == "report.pdf")
+        #expect(FileAttachment.safeName("../../etc/passwd") == "-..-etc-passwd")
+        #expect(FileAttachment.safeName("...hidden") == "hidden")
+        #expect(FileAttachment.safeName("a\u{202E}fdp.exe") == "a fdp.exe")
+        #expect(FileAttachment.safeName("\n") == "file")
+        let long = FileAttachment.safeName(String(repeating: "x", count: 300) + ".pdf")
+        #expect(long.count == 120)
+        #expect(long.hasSuffix(".pdf"))
+    }
+
     @Test func httpFramingHandlesFragmentsAndRejectsAmbiguity() throws {
         let body = Data("{\"text\":\"🍍\"}".utf8)
         let header = "POST /v1/queue/reply HTTP/1.1\r\nAuthorization: Bearer fixture\r\nContent-Length: \(body.count)\r\n\r\n"

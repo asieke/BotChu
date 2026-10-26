@@ -21,17 +21,27 @@ public actor RemoteQueue {
     public enum Failure: Error, Equatable {
         case full, emptyText, unknownMessage, invalidReply, wrongBot, invalidJournal
     }
+    /// A file a reply brings, before it is saved beside the journal.
+    public struct IncomingFile: Sendable {
+        public var name: String
+        public var type: String?
+        public var data: Data
+        public init(name: String, type: String? = nil, data: Data) { self.name = name; self.type = type; self.data = data }
+    }
     private struct Journal: Codable {
         var botID: UUID
         var entries: [Entry]
         var order: [UUID]
     }
     private let file: URL
+    /// Where files are kept: the journal's folder, the bot's `.botchu`.
+    private nonisolated let home: BotHome
     private var journal: Journal
     private var lastPoll: Date?
 
     public init(botID: UUID, file: URL) throws {
         self.file = file
+        home = BotHome(url: file.deletingLastPathComponent())
         if FileManager.default.fileExists(atPath: file.path) {
             journal = try Store.decoder.decode(Journal.self, from: Data(contentsOf: file))
             guard journal.botID == botID else { throw Failure.wrongBot }
@@ -54,11 +64,13 @@ public actor RemoteQueue {
         (journal.entries.lazy.filter { $0.reply == nil }.count, lastPoll)
     }
 
-    @discardableResult public func enqueue(_ text: String, id: UUID = UUID(), at date: Date = Date()) throws -> ChatMessage {
+    /// `files` are already saved in the bot's folder (`BotHome.saveFile`).
+    @discardableResult public func enqueue(_ text: String, files: [FileAttachment] = [], id: UUID = UUID(), at date: Date = Date()) throws -> ChatMessage {
         if let existing = journal.entries.first(where: { $0.message.id == id }) { return existing.message }
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure.emptyText }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !files.isEmpty else { throw Failure.emptyText }
         guard journal.entries.filter({ $0.reply == nil }).count < Self.capacity else { throw Failure.full }
-        let message = ChatMessage(id: id, role: .user, text: text, date: date)
+        var message = ChatMessage(id: id, role: .user, text: text, date: date)
+        message.files = files.isEmpty ? nil : files
         var next = journal
         next.entries.append(Entry(message: message))
         next.order.append(message.id)
@@ -71,17 +83,39 @@ public actor RemoteQueue {
         return journal.entries.first { $0.reply == nil }?.message
     }
 
+    /// A file of a message still waiting for its reply, and where it is kept; answered messages'
+    /// files can't be read through the queue any more.
+    public func waitingFile(_ id: UUID) -> (file: FileAttachment, url: URL)? {
+        for entry in journal.entries where entry.reply == nil {
+            if let file = entry.message.documents.first(where: { $0.id == id }) { return (file, home.fileURL(file)) }
+        }
+        return nil
+    }
+
     /// The stable reply ID is generated and saved once. Retries with an already-answered request
     /// are no-ops, including a retry whose text differs; the first accepted answer wins.
-    @discardableResult public func reply(to id: UUID, text: String?, error: String?, at now: Date = Date()) throws -> Bool {
+    /// A reply's files are saved before the journal names them, and removed again if it can't.
+    @discardableResult public func reply(to id: UUID, text: String?, error: String?, files: [IncomingFile] = [],
+                                         at now: Date = Date()) throws -> Bool {
         guard let i = journal.entries.firstIndex(where: { $0.message.id == id }) else { throw Failure.unknownMessage }
         if journal.entries[i].reply != nil { return false }
         guard (text != nil) != (error != nil), let value = text ?? error,
-              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure.invalidReply }
-        var next = journal
-        next.entries[i].reply = ChatMessage(role: error == nil ? .assistant : .error, text: value, date: now)
-        next.order.append(next.entries[i].reply!.id)
-        try commit(next)
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (error == nil && !files.isEmpty),
+              error == nil || files.isEmpty, files.count <= FileAttachment.maximumCount,
+              files.allSatisfy({ !$0.data.isEmpty && $0.data.count <= FileAttachment.maximumBytes }) else { throw Failure.invalidReply }
+        var saved: [FileAttachment] = []
+        do {
+            for file in files { saved.append(try home.saveFile(file.data, name: file.name, type: file.type)) }
+            var reply = ChatMessage(role: error == nil ? .assistant : .error, text: value, date: now)
+            reply.files = saved.isEmpty ? nil : saved
+            var next = journal
+            next.entries[i].reply = reply
+            next.order.append(reply.id)
+            try commit(next)
+        } catch {
+            saved.forEach(home.removeFile)
+            throw error
+        }
         return true
     }
 
@@ -106,6 +140,7 @@ public struct RemoteQueueResponse: Sendable {
     public var status: Int
     public var body: Data
     public var retryAfter: Int?
+    public var contentType = "application/json"
     public init(_ status: Int, body: Data = Data(), retryAfter: Int? = nil) {
         self.status = status; self.body = body; self.retryAfter = retryAfter
     }
@@ -130,12 +165,20 @@ public actor RemoteQueueEndpoint {
             switch (request.method, request.path) {
             case ("GET", "/v1/queue/next"):
                 guard let message = await queue.next() else { return .init(204) }
-                return .json(200, Next(id: message.id, text: message.text, sent_at: message.date))
+                let files = message.documents.map { NextFile(id: $0.id, name: $0.name, type: $0.type, size: $0.size) }
+                return .json(200, Next(id: message.id, text: message.text, sent_at: message.date, files: files.isEmpty ? nil : files))
+            case ("GET", let path) where path.hasPrefix(Self.filesPath):
+                guard let id = UUID(uuidString: String(path.dropFirst(Self.filesPath.count))),
+                      let found = await queue.waitingFile(id), let data = try? Data(contentsOf: found.url) else { return .init(404) }
+                var response = RemoteQueueResponse(200, body: data)
+                response.contentType = found.file.type.flatMap(Self.headerSafe) ?? "application/octet-stream"
+                return response
             case ("GET", "/v1/health"):
                 return .json(200, Health(ok: true, pending: await queue.status().pending))
             case ("POST", "/v1/queue/reply"):
                 guard let reply = try? Store.decoder.decode(Reply.self, from: request.body) else { return .init(400) }
-                try await queue.reply(to: reply.id, text: reply.text, error: reply.error)
+                let files = (reply.files ?? []).map { RemoteQueue.IncomingFile(name: $0.name, type: $0.type.flatMap(Self.headerSafe), data: $0.data) }
+                try await queue.reply(to: reply.id, text: reply.text, error: reply.error, files: files)
                 return .json(200, Accepted(ok: true))
             default: return .init(404)
             }
@@ -144,8 +187,18 @@ public actor RemoteQueueEndpoint {
         catch { return .init(503) }
     }
 
-    private struct Next: Encodable { var id: UUID; var text: String; var sent_at: Date }
-    private struct Reply: Decodable { var id: UUID; var text: String?; var error: String? }
+    /// A waiting message's files are read one at a time, as `<filesPath><file id>`.
+    public static let filesPath = "/v1/queue/files/"
+    /// A MIME type as a header value: printable ASCII only, so a reply can't add header lines.
+    private static func headerSafe(_ type: String) -> String? {
+        let trimmed = type.trimmingCharacters(in: .whitespaces)
+        return !trimmed.isEmpty && trimmed.count <= 127 && trimmed.utf8.allSatisfy({ $0 > 32 && $0 < 127 }) ? trimmed : nil
+    }
+    private struct Next: Encodable { var id: UUID; var text: String; var sent_at: Date; var files: [NextFile]? }
+    private struct NextFile: Encodable { var id: UUID; var name: String; var type: String?; var size: Int }
+    private struct Reply: Decodable { var id: UUID; var text: String?; var error: String?; var files: [ReplyFile]? }
+    /// `data` is base64, as JSON carries bytes.
+    private struct ReplyFile: Decodable { var name: String; var type: String?; var data: Data }
     private struct Health: Encodable { var ok: Bool; var pending: Int }
     private struct Accepted: Encodable { var ok: Bool }
     /// Only this small locked value crosses executors synchronously. The transport can reject
@@ -253,7 +306,7 @@ public struct RemoteQueueHTTP {
     public static func encode(_ response: RemoteQueueResponse) -> Data {
         let reason = [200: "OK", 204: "No Content", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found", 413: "Content Too Large", 429: "Too Many Requests", 503: "Service Unavailable"][response.status] ?? "Error"
         let retry = response.retryAfter.map { "Retry-After: \(max(1, $0))\r\n" } ?? ""
-        var data = Data("HTTP/1.1 \(response.status) \(reason)\r\nContent-Length: \(response.body.count)\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\(retry)Connection: close\r\n\r\n".utf8)
+        var data = Data("HTTP/1.1 \(response.status) \(reason)\r\nContent-Length: \(response.body.count)\r\nContent-Type: \(response.contentType)\r\nCache-Control: no-store\r\n\(retry)Connection: close\r\n\r\n".utf8)
         data.append(response.body)
         return data
     }

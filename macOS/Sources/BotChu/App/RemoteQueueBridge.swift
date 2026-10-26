@@ -156,12 +156,13 @@ import BotChuCore
         clock?.cancel(); clock = nil
     }
 
-    func enqueue(_ text: String, id: UUID, for botID: UUID, accepted: (@MainActor @Sendable (Bool) -> Void)?) -> Bool {
+    func enqueue(_ text: String, files: [FileAttachment] = [], id: UUID, for botID: UUID,
+                 accepted: (@MainActor @Sendable (Bool) -> Void)?) -> Bool {
         guard !stopped, self.botID == botID, let queue else { problem = "The remote queue isn't available."; return false }
         Task { [weak self] in
             guard let self, self.botID == botID, let model = self.model else { accepted?(false); return }
             do {
-                try await queue.enqueue(text, id: id)
+                try await queue.enqueue(text, files: files, id: id)
                 self.problem = nil
                 await self.reconcile()
                 accepted?(true)
@@ -194,6 +195,8 @@ import BotChuCore
         for message in added { model.append(message, to: target) }
         if added.contains(where: { $0.role == .assistant || $0.role == .error }), !model.isShown(target) { model.unread.insert(target) }
         model.runStates[target] = snapshot.firstPending.map { RunState(startedAt: $0.date, hasOutput: true) }
+        // Its pet thinks while a message waits, and is pleased when the last reply lands.
+        if added.contains(where: { $0.role == .assistant }) { model.react(.done, for: target, seconds: 3) }
         if !added.isEmpty { model.saveThread(target) }
     }
 

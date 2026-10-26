@@ -163,6 +163,8 @@ actor RemoteQueueServer {
                     switch (parsed.method, parsed.path) {
                     case ("GET", "/v1/health"), ("GET", "/v1/queue/next"):
                         guard parsed.contentLength == 0 else { respond(.init(400)); return }
+                    case ("GET", let path) where path.hasPrefix(RemoteQueueEndpoint.filesPath):
+                        guard parsed.contentLength == 0 else { respond(.init(400)); return }
                     case ("POST", "/v1/queue/reply"):
                         guard await server?.admitUpload(id) == true else { if !closed { respond(.init(429, retryAfter: 1)) }; return }
                         guard !closed else { await server?.finished(id); return }

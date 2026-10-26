@@ -13,6 +13,11 @@ struct Composer<Controls: View>: View {
     var onPasteImages: (NSPasteboard) -> Bool = { _ in false }
     /// Whether it offers to add images (+); the Inbox's replies are text.
     var addsImages = true
+    /// The draft's documents, for a remote queue bot, whose + takes any file (`addsImages` off).
+    var files: [FileAttachment] = []
+    var fileURL: (FileAttachment) -> URL? = { _ in nil }
+    var onRemoveFile: (UUID) -> Void = { _ in }
+    var addsFiles = false
     var attachmentError: String?
     /// The agents and projects chosen in the draft from `@` and `#` completion.
     var references: Binding<[MessageReference]> = .constant([])
@@ -30,16 +35,19 @@ struct Composer<Controls: View>: View {
     let onStop: () -> Void
     @ViewBuilder let controls: Controls
 
-    private var isEmpty: Bool { draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty }
+    private var isEmpty: Bool { draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty && files.isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if !images.isEmpty {
+            if !images.isEmpty || !files.isEmpty {
                 AttachmentStrip {
                     ForEach(images) { image in
                         AttachmentThumbnail(image: image, url: imageURL(image)) {
                             onRemoveImage(image.id)
                         }
+                    }
+                    ForEach(files) { file in
+                        AttachmentThumbnail(file: file, url: fileURL(file)) { onRemoveFile(file.id) }
                     }
                 }
             }
@@ -65,6 +73,7 @@ struct Composer<Controls: View>: View {
             if let attachmentError { Text(attachmentError).font(.caption).foregroundStyle(.red) }
             HStack(spacing: 8) {
                 if addsImages { AddImagesButton(add: onAddImages) }
+                if addsFiles { AddImagesButton(add: onAddImages, files: true) }
                 controls
                 if running && canStop {
                     button("stop.fill", label: "Stop", help: "Stop (⌘.)", action: onStop)
@@ -175,14 +184,16 @@ struct AttachmentStrip<Content: View>: View {
 /// The + that chooses images from files.
 struct AddImagesButton: View {
     let add: ([URL]) -> Void
+    /// Any files rather than images.
+    var files = false
     @State private var choosing = false
 
     var body: some View {
         Button { choosing = true } label: {
             Image(systemName: "plus").font(.system(size: 18)).frame(width: 28, height: 32)
         }
-        .buttonStyle(.plain).help("Attach images").accessibilityLabel("Attach images")
-        .fileImporter(isPresented: $choosing, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
+        .buttonStyle(.plain).help(files ? "Attach files" : "Attach images").accessibilityLabel(files ? "Attach files" : "Attach images")
+        .fileImporter(isPresented: $choosing, allowedContentTypes: files ? [.item] : [.image], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result {
                 let accessed = urls.filter { $0.startAccessingSecurityScopedResource() }
                 defer { accessed.forEach { $0.stopAccessingSecurityScopedResource() } }
@@ -224,6 +235,8 @@ struct AttachmentThumbnail: View {
     let name: String
     let preview: NSImage?
     var remove: (() -> Void)?
+    /// A document shows its icon over its name.
+    var isFile = false
 
     init(name: String, preview: NSImage?, remove: (() -> Void)? = nil) {
         self.name = name
@@ -235,9 +248,22 @@ struct AttachmentThumbnail: View {
         self.init(name: image.name, preview: url.flatMap { NSImage(contentsOf: $0) }, remove: remove)
     }
 
+    init(file: FileAttachment, url: URL?, remove: (() -> Void)? = nil) {
+        let isImage = file.type?.hasPrefix("image/") == true
+        self.init(name: file.name, preview: url.flatMap { isImage ? NSImage(contentsOf: $0) : NSWorkspace.shared.icon(forFile: $0.path) },
+                  remove: remove)
+        isFile = !isImage
+    }
+
     var body: some View {
         Group {
-            if let preview {
+            if isFile {
+                VStack(spacing: 2) {
+                    if let preview { Image(nsImage: preview).resizable().frame(width: 32, height: 32) }
+                    Text(name).font(.caption2).lineLimit(2).truncationMode(.middle).multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 4)
+            } else if let preview {
                 Image(nsImage: preview).resizable().scaledToFit()
             } else { Image(systemName: "photo").foregroundStyle(.secondary) }
         }
