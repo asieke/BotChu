@@ -3,6 +3,30 @@ import SwiftUI
 extension EnvironmentValues {
     /// Scrolls the status sidebar's selected area, to show something in it (a sub-agent the chat opened).
     @Entry var inspectorScroll: ScrollViewProxy?
+    /// The selected area's scrolling: its size, and a bar it can pin above what scrolls.
+    @Entry var inspectorArea: InspectorScrollArea?
+}
+
+/// What the selected area pins above its scrolling contents (a sub-agent's Back and Stop), and how
+/// big the part that scrolls is. Contents place themselves in `space`, which is the visible part.
+@MainActor @Observable
+final class InspectorScrollArea {
+    nonisolated static let space = "inspector-scroll"
+    private(set) var bar: AnyView?
+    @ObservationIgnored private var owner: UUID?
+    @ObservationIgnored var viewport: CGSize = .zero
+
+    func pin(_ bar: some View, owner: UUID) {
+        self.owner = owner
+        self.bar = AnyView(bar)
+    }
+
+    /// Only its own: the next area may have pinned its bar already.
+    func unpin(owner: UUID) {
+        guard self.owner == owner else { return }
+        self.owner = nil
+        bar = nil
+    }
 }
 
 enum InspectorTab: String, CaseIterable, Identifiable {
@@ -40,6 +64,7 @@ struct InspectorPanel<Header: View, Content: View, Actions: View>: View {
     @ViewBuilder let header: Header
     @ViewBuilder var content: (InspectorTab) -> Content
     @ViewBuilder let actions: Actions
+    @State private var area = InspectorScrollArea()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -48,6 +73,9 @@ struct InspectorPanel<Header: View, Content: View, Actions: View>: View {
                 InspectorTabBar(selection: $selection, badgeCounts: badgeCounts)
             }
             .padding(EdgeInsets(top: 8, leading: 16, bottom: 16, trailing: 16))
+            if let bar = area.bar {
+                bar.padding(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
@@ -56,9 +84,12 @@ struct InspectorPanel<Header: View, Content: View, Actions: View>: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(EdgeInsets(top: 4, leading: 16, bottom: 24, trailing: 16))
                 }
+                .coordinateSpace(.named(InspectorScrollArea.space))
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { area.viewport = $0 }
                 // Start each area at the top without recreating the character or moving keyboard focus.
                 .id(selection)
                 .environment(\.inspectorScroll, proxy)
+                .environment(\.inspectorArea, area)
             }
             actions
         }
