@@ -139,11 +139,43 @@ enum TelegramPresentation {
         var prose: [String] = []
         var code: [String]?
         var language = ""
+        var envelope: String?
+        var jsonDepth = 0
+        var jsonString = false
+        var jsonEscape = false
         func flushProse() {
             if !prose.isEmpty { pieces.append((prose.joined(separator: "\n"), false)); prose = [] }
         }
+        func skipPayload(_ line: String) -> Bool {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            // Suppress the payload as well as its envelope. Removing only a <system> line or
+            // the first line of pretty-printed JSON would turn its contents into ordinary prose.
+            if let tag = envelope {
+                if trimmed.contains("</\(tag)>") { envelope = nil }
+                return true
+            }
+            if trimmed.hasPrefix("<"), let tag = trimmed.dropFirst().split(whereSeparator: { $0 == ">" || $0.isWhitespace }).first,
+               ["system", "tool", "assistant", "analysis", "tool_call", "tool_result", "function_call", "function_result"].contains(String(tag)) {
+                if !trimmed.contains("</\(tag)>") { envelope = String(tag) }
+                return true
+            }
+            if jsonDepth > 0 || trimmed.hasPrefix("{") || trimmed == "[" || trimmed.hasPrefix("[{") || trimmed.hasPrefix("[\"") {
+                for character in line {
+                    if jsonString {
+                        if jsonEscape { jsonEscape = false }
+                        else if character == "\\" { jsonEscape = true }
+                        else if character == "\"" { jsonString = false }
+                    } else if character == "\"" { jsonString = true }
+                    else if character == "{" || character == "[" { jsonDepth += 1 }
+                    else if character == "}" || character == "]" { jsonDepth = max(0, jsonDepth - 1) }
+                }
+                return true
+            }
+            return false
+        }
         for line in text.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if envelope != nil || jsonDepth > 0 { _ = skipPayload(line); continue }
             if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
                 if let block = code {
                     if block.count <= 6, block.joined(separator: "\n").utf16.count <= 320,
@@ -159,6 +191,7 @@ enum TelegramPresentation {
                 continue
             }
             if code != nil { code?.append(line); continue }
+            if skipPayload(line) { continue }
             if !noise(trimmed) { prose.append(line) }
         }
         flushProse()

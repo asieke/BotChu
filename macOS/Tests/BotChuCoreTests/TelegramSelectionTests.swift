@@ -149,9 +149,12 @@ struct TelegramSelectionTests {
         // telegram.json as #60 wrote it: no choices, and a reply's bot was the chat's bot in Settings.
         let old = #"{"botUserID":123,"offset":11,"pending":[{"id":"\#(message)","botID":"\#(bot)","chat":42,"replyTo":7,"sent":1}]}"#
         let state = try JSONDecoder().decode(TelegramState.self, from: Data(old.utf8))
-        #expect(state.pending == [TelegramPendingReply(id: message, botID: bot, chat: 42, replyTo: 7, sent: 1)])
+        var legacy = TelegramPendingReply(id: message, botID: bot, chat: 42, replyTo: 7, sent: 1)
+        legacy.presentationVersion = 0
+        #expect(state.pending == [legacy])
         #expect(state.pending.first?.mapped == bot)
-        #expect(state.selections.isEmpty && state.offset == 11)
+        #expect(state.pending.first?.presentationVersion == 0)
+        #expect(state.selections.isEmpty && state.details.isEmpty && state.offset == 11)
 
         // A chat with no bot in Settings that chose one: nil stays nil.
         let chosen = TelegramState(botUserID: 123, offset: 12,
@@ -160,6 +163,7 @@ struct TelegramSelectionTests {
         let decoded = try JSONDecoder().decode(TelegramState.self, from: JSONEncoder().encode(chosen))
         #expect(decoded == chosen)
         #expect(decoded.pending.first?.mapped == nil)
+        #expect(decoded.pending.first?.presentationVersion == 1)
         #expect(decoded.selections.first?.recipient == bot)
     }
 }

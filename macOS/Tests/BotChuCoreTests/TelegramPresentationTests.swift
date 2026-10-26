@@ -84,6 +84,16 @@ import Testing
         #expect(!text.contains("raw_payload") && !text.contains("noisy log"))
     }
 
+    @Test func multilineSystemAndJSONPayloadsAreRemovedWhole() throws {
+        let source = "Updated the settings.\n<system>\ninternal system payload\n```text\nsecret instruction\n```\n</system>\n{\n  \"tool_result\": {\n    \"payload\": \"secret raw data with } a brace\"\n  }\n}\nNext step: restart the app."
+        let text = try reply([ChatMessage(role: .assistant, text: source)])
+        #expect(text.contains("Updated the settings.") && text.contains("restart the app"))
+        #expect(!text.contains("internal system") && !text.contains("secret raw data") && !text.contains("tool_result") && !text.contains("secret instruction"))
+        let rawOnly = try reply([ChatMessage(role: .assistant, text: "<system>\ninternal payload\n</system>")])
+        #expect(rawOnly.contains("ended without a final answer"))
+        #expect(!rawOnly.contains("internal payload"))
+    }
+
     @Test func codeIndentationAndOperatorsArePreservedInDigestAndDetails() throws {
         let code = "if ready:\n    print(value | mask)\n    print(\"**literal**\")"
         let source = "Use `value | mask` with `__name__`.\n```python\n" + code + "\n```"
