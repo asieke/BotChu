@@ -933,9 +933,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     BotChu reads it or says anything, and Settings lists the chats it refused since launch, with
     **Allow** for your own. A message goes into the Home through its queue, as one typed in BotChu
     does, so it resumes the Home's CLI session and waits behind a turn under way (the chat is told).
-    While a turn works, Telegram shows "typing…". When it ends, the turn's reply goes back to that
-    chat as plain text, in messages of up to 4,096 characters (at most eight, then "the rest is in
-    BotChu"). A failed or stopped turn says so, without its error. It takes text only: photos, files
+    While a turn works, Telegram shows "typing…". When it ends, a concise digest of its final answer
+    goes back as readable plain text, keeping the result, caveats and decisions; progress chatter
+    and raw tool/log output stay in BotChu. `/details` retrieves the complete assistant reply one
+    page at a time, without another turn. Failed, stopped and incomplete turns say so and give a
+    next action, without exposing raw errors. It takes text only: photos, files
     and edits get a reply saying so, and `/start` or `/help` says where messages go. Where its
     updates are up to and the replies it owes are kept in `telegram.json`, so a relaunch neither
     misses a message nor starts a turn twice: a message Telegram sends again has the same ID in

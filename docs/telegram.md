@@ -44,14 +44,34 @@ polling, `getUpdates`), so nothing on this Mac has to be reachable from the inte
   gateway**, can be waiting for replies. Further messages aren't queued: send them again once
   replies arrive. The gateway says "Too many messages are waiting" at most once per minute per
   chat while it runs. Pending replies still count toward these limits after a relaunch.
-- **Replies:** what the turn wrote after your message, up to your next message. It goes as plain
-  text, so Markdown shows as written and nothing in a reply can break its formatting, without link
-  previews. A reply longer than 4,096 UTF-16 units is split where a paragraph, line or word
-  ends; after eight messages it says the rest is in BotChu. An individual character that exceeds
-  that limit (for example, thousands of combining accents) is replaced with `�`; the original stays
-  in BotChu. A failed or stopped turn says so, and
-  the error itself stays in BotChu. What you type in BotChu in the same conversation, and its
-  replies, stay in BotChu.
+- **Replies:** a short digest of the turn's final written answer, up to your next message. It
+  selects complete sentences and bullets directly from that answer, leading with the result and
+  reserving room for decisions, blockers, failed checks and uncertainty, even at the end of a long
+  answer. Caveats and questions from earlier assistant updates are retained with an explicit
+  "Earlier in this turn" label; a short final answer cannot silently erase them. It usually fits
+  in one message (about 1,400 UTF-16 units). Progress chatter, tool events,
+  raw payloads and long log/code dumps are left out. If important caveats cannot all fit, the
+  digest explicitly says it is incomplete and points to `/details`; it never calls a shortened
+  answer successful just because its beginning did. Failed and stopped turns lead with that state
+  and a safe next action; raw error text stays in BotChu. A turn ending with tools and no final
+  answer says so instead of presenting earlier progress as a result.
+- **Formatting:** replies use plain text without link previews or a Markdown parse mode. Headings
+  and emphasis become ordinary text, bullets stay readable, links retain their label and real
+  address, and short code examples are kept. Special characters cannot break Telegram formatting.
+  All messages remain within 4,096 UTF-16 units, split at paragraph, line or word boundaries when
+  necessary. A character that itself exceeds that limit is replaced with `�`; the original stays
+  in BotChu.
+- **Full detail:** the complete exchange stays unchanged in the bot's Home in BotChu. `/details`
+  retrieves the last reply successfully delivered to this chat, one page at a time; `/details 2`
+  retrieves page 2, and so on. Each page says the bot's name and page count and offers the next
+  command. It reads the saved assistant text, including its intermediate explanations, without
+  starting a CLI turn or adding a message to Home. Tools and raw errors remain in BotChu. The
+  pointer survives relaunches and belongs to this allowed chat and its mapping in Settings; another
+  chat cannot retrieve it. Changing the chat's bot in Settings or removing the chat discards it.
+  Choosing another bot with `@` keeps the last delivered reply until the new bot answers. A
+  `/details` request is best effort like `/help`; send it again if the gateway is temporarily busy.
+  A multipart reply partly sent by the older gateway finishes in its original format on upgrade.
+  What you type in BotChu in the same conversation, and its replies, stay in BotChu.
 - **Text only:** a photo, file, voice note, sticker or location gets a reply saying only text
   reaches the bot. Editing a sent message gets a reply saying the bot has it as first sent.
   Forwarded messages, including forwarded channel posts, and messages sent via another bot are
@@ -159,7 +179,8 @@ Home stays there, and an outgoing request already in flight may finish.
   Settings deletes it from the Keychain; `/revoke` in BotFather makes it useless everywhere.
 - **`telegram.json`**, in `~/Library/Application Support/BotChu/`, keeps the Telegram bot's numeric
   ID, where its updates are up to, the replies owed (IDs only, no message text), and what each chat
-  chose with `@` and `#`: a bot's ID and name, and a repository's `owner/repo`. The offset, pending
+  chose with `@` and `#`: a bot's ID and name, and a repository's `owner/repo`. It also keeps the IDs
+  of each chat's last delivered reply so `/details` can read it from Home. The offset, pending
   replies and choices belong to that Telegram identity. Replacing its token with another token for
   the same bot preserves them; a token for a different bot starts clean. A replacement gateway
   waits for the previous run to finish before loading this file.
@@ -266,3 +287,24 @@ Then choosing, with inline mode on (setup step 5), in each Telegram app you use:
 **Clients checked by hand:** none yet. The steps above need checking in Telegram for iOS,
 Android, macOS, Desktop (Windows/Linux) and Web. Write down which ones you checked, and anything
 that differs, such as whether typing `@` offers your bot.
+
+### Readability check for concise replies (#164)
+
+Run this only when the owner authorizes a real exchange with their Telegram bot. Implementation
+checks use a stand-in; no real Telegram messages were sent for #164.
+
+1. Ask for a result with a long explanation and a decision at its end. Confirm the phone receives
+   one useful digest with the result, uncertainty and question visible, rather than multiple raw
+   output messages. Compare it with the full Home answer.
+2. Ask for a tool-heavy task with a final summary. Confirm no commands, raw payloads or logs arrive
+   by default, while the final finding and next action do.
+3. Check a partial failure, a blocked decision, and a turn stopped in BotChu. Confirm each says
+   what is incomplete and what to do next, without leaking raw error text.
+4. Include bullets, an ordinary link, a short code example, emoji, `&`, `<`, underscores and
+   punctuation. Confirm they remain readable in the Telegram client used.
+5. Send `/details`, then its offered next-page command. Confirm the original answer is available
+   in order, one page per request, including after relaunch, with no extra Home turn. Check that
+   another chat cannot retrieve it and that remapping the chat clears it.
+
+Record the client/version, the digest and Home comparison, and any readability problem before
+claiming a real-device check. This remains an owner-authorized check to perform after deployment.
