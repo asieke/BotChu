@@ -334,6 +334,17 @@ import Testing
         #expect(await fixture.sync.state.openItems?.contains { $0.id == "asieke/Orbit#4" } == true)
     }
 
+    @Test func closureFailuresDistinguishAMissingCLIFromAMissingIssue() {
+        func failure(_ status: Int32, _ errors: String) -> String {
+            ProjectSync.closureFailure(Shell.Result(status: status, output: "", errors: errors), number: 12, repo: "asieke/Orbit").message
+        }
+        #expect(failure(127, "/bin/sh: gh: command not found").contains("Install the GitHub CLI"))
+        #expect(failure(4, "please run: gh auth login").contains("isn't signed in"))
+        #expect(failure(1, "Issue not found").contains("no issue #12"))
+        #expect(failure(1, "Resource not accessible by integration").contains("permission to close"))
+        #expect(failure(1, "connection timeout").contains("Couldn't reach GitHub"))
+    }
+
     /// What gh prints when it can't delete an issue, as the owner reads it.
     @Test func deletionFailuresSayWhy() {
         func failure(_ status: Int32, _ errors: String) -> String {

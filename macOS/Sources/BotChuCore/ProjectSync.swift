@@ -443,15 +443,15 @@ public actor ProjectSync {
         let printed = [run.errors, run.output].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }.joined(separator: "\n")
         let said = printed.lowercased()
+        if run.status == 127 || said.contains("command not found") || said.contains("gh auth login")
+            || ["error connecting", "could not resolve host", "no such host", "timeout", "network is unreachable"].contains(where: said.contains) {
+            return ClosureFailure(deletionFailure(run, number: number, repo: repo).message)
+        }
         if said.contains("permission") || said.contains("not accessible") || said.contains("not authorized") {
             return ClosureFailure("gh's account doesn't have permission to close issue #\(number) in \(repo). The issue is still on GitHub.")
         }
         if said.contains("could not resolve to") || said.contains("not found") {
             return ClosureFailure("GitHub has no issue #\(number) in \(repo) for gh's account. Refresh to update Projects.")
-        }
-        if run.status == 127 || said.contains("command not found") || said.contains("gh auth login")
-            || ["error connecting", "could not resolve host", "no such host", "timeout", "network is unreachable"].contains(where: said.contains) {
-            return ClosureFailure(deletionFailure(run, number: number, repo: repo).message)
         }
         return ClosureFailure(printed.isEmpty ? "gh couldn't close it (exit \(run.status)) and printed nothing." : "gh couldn't close it: \(printed)")
     }
