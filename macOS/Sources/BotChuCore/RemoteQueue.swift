@@ -49,6 +49,11 @@ public actor RemoteQueue {
         return Snapshot(entries: journal.entries, lastPoll: lastPoll, messages: journal.order.compactMap { messages[$0] })
     }
 
+    /// Polling and health checks need no copy of the conversation or completed replies.
+    public func status() -> (pending: Int, lastPoll: Date?) {
+        (journal.entries.lazy.filter { $0.reply == nil }.count, lastPoll)
+    }
+
     @discardableResult public func enqueue(_ text: String, id: UUID = UUID(), at date: Date = Date()) throws -> ChatMessage {
         if let existing = journal.entries.first(where: { $0.message.id == id }) { return existing.message }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure.emptyText }
@@ -100,7 +105,10 @@ public struct RemoteQueueRequest: Sendable {
 public struct RemoteQueueResponse: Sendable {
     public var status: Int
     public var body: Data
-    public init(_ status: Int, body: Data = Data()) { self.status = status; self.body = body }
+    public var retryAfter: Int?
+    public init(_ status: Int, body: Data = Data(), retryAfter: Int? = nil) {
+        self.status = status; self.body = body; self.retryAfter = retryAfter
+    }
     public static func json<T: Encodable>(_ status: Int, _ value: T) -> Self {
         Self(status, body: (try? Store.encoder.encode(value)) ?? Data())
     }
@@ -109,20 +117,22 @@ public struct RemoteQueueResponse: Sendable {
 /// Authentication precedes routing, queue reads and decoding. Responses never echo credentials,
 /// request bodies or file errors. Each endpoint instance binds its token to one bot's journal.
 public actor RemoteQueueEndpoint {
-    private var token: String
-    public let queue: RemoteQueue
-    public init(queue: RemoteQueue, token: String) { self.queue = queue; self.token = token }
-    public func replaceToken(_ token: String) { self.token = token }
+    private nonisolated let credential: Credential
+    public nonisolated let queue: RemoteQueue
+    public init(queue: RemoteQueue, token: String) { self.queue = queue; credential = Credential(token) }
+    public nonisolated func replaceToken(_ token: String) { credential.replace(token) }
+    public nonisolated func isAuthorized(_ authorization: String?) -> Bool { credential.matches(authorization) }
 
     public func handle(_ request: RemoteQueueRequest) async -> RemoteQueueResponse {
-        guard !token.isEmpty, Self.matches(request.authorization ?? "", "Bearer " + token) else { return .init(401) }
+        // Recheck after the upload, so rotating a token also invalidates partially sent requests.
+        guard isAuthorized(request.authorization) else { return .init(401) }
         do {
             switch (request.method, request.path) {
             case ("GET", "/v1/queue/next"):
                 guard let message = await queue.next() else { return .init(204) }
                 return .json(200, Next(id: message.id, text: message.text, sent_at: message.date))
             case ("GET", "/v1/health"):
-                return .json(200, Health(ok: true, pending: await queue.snapshot().pending))
+                return .json(200, Health(ok: true, pending: await queue.status().pending))
             case ("POST", "/v1/queue/reply"):
                 guard let reply = try? Store.decoder.decode(Reply.self, from: request.body) else { return .init(400) }
                 try await queue.reply(to: reply.id, text: reply.text, error: reply.error)
@@ -138,12 +148,45 @@ public actor RemoteQueueEndpoint {
     private struct Reply: Decodable { var id: UUID; var text: String?; var error: String? }
     private struct Health: Encodable { var ok: Bool; var pending: Int }
     private struct Accepted: Encodable { var ok: Bool }
-    private static func matches(_ a: String, _ b: String) -> Bool {
-        let aa = Array(a.utf8), bb = Array(b.utf8)
-        guard aa.count == bb.count else { return false }
-        var difference: UInt8 = 0
-        for i in aa.indices { difference |= aa[i] ^ bb[i] }
-        return difference == 0
+    /// Only this small locked value crosses executors synchronously. The transport can reject
+    /// headers without waiting behind JSON decoding, journal I/O or the main actor.
+    private final class Credential: @unchecked Sendable {
+        private let lock = NSLock()
+        private var expected: [UInt8]
+        init(_ token: String) { expected = token.isEmpty ? [] : Array(("Bearer " + token).utf8) }
+        func replace(_ token: String) {
+            lock.lock(); defer { lock.unlock() }
+            expected = token.isEmpty ? [] : Array(("Bearer " + token).utf8)
+        }
+        func matches(_ authorization: String?) -> Bool {
+            let actual = Array((authorization ?? "").utf8)
+            lock.lock(); defer { lock.unlock() }
+            guard !expected.isEmpty, actual.count == expected.count else { return false }
+            var difference: UInt8 = 0
+            for i in actual.indices { difference |= actual[i] ^ expected[i] }
+            return difference == 0
+        }
+    }
+}
+
+/// Global admission budget: a reverse proxy makes peer-IP throttling unreliable. Call with a
+/// monotonic timestamp; backward clock values never create more capacity.
+public struct RemoteQueueRateLimiter: Sendable {
+    private let burst: Double
+    private let perSecond: Double
+    private var available: Double
+    private var previous: TimeInterval
+    public init(burst: Int = 20, perSecond: Double = 2, now: TimeInterval) {
+        self.burst = Double(max(1, burst)); self.perSecond = max(0.01, perSecond)
+        available = Double(max(1, burst)); previous = now
+    }
+    /// Nil admits one request; otherwise the caller should send Retry-After with this value.
+    public mutating func admit(at now: TimeInterval) -> Int? {
+        available = min(burst, available + max(0, now - previous) * perSecond)
+        previous = max(now, previous)
+        guard available >= 1 else { return max(1, Int(ceil((1 - available) / perSecond))) }
+        available -= 1
+        return nil
     }
 }
 
@@ -151,32 +194,66 @@ public actor RemoteQueueEndpoint {
 /// pollers send Content-Length, and every response closes the connection.
 public struct RemoteQueueHTTP {
     public static let maximumBody = 16 * 1024 * 1024
+    public static let maximumHeader = 16 * 1024
+    public struct Header: Sendable {
+        public var method: String
+        public var path: String
+        public var authorization: String?
+        public var contentLength: Int
+        public var byteCount: Int
+    }
+    public enum HeaderDecode { case incomplete, header(Header), invalid }
     public enum Decode { case incomplete, request(RemoteQueueRequest), invalid }
-    public static func decode(_ data: Data) -> Decode {
+    /// Headers are parsed once, before any body read or allocation is authorized.
+    public static func decodeHeader(_ data: Data) -> HeaderDecode {
         let delimiter = Data("\r\n\r\n".utf8)
-        guard let boundary = data.range(of: delimiter) else { return data.count > 16_384 ? .invalid : .incomplete }
-        guard boundary.lowerBound <= 16_384, let header = String(data: data[..<boundary.lowerBound], encoding: .utf8) else { return .invalid }
+        guard let boundary = data.range(of: delimiter) else { return data.count >= maximumHeader ? .invalid : .incomplete }
+        guard boundary.upperBound <= maximumHeader, let header = String(data: data[..<boundary.lowerBound], encoding: .utf8) else { return .invalid }
         let lines = header.components(separatedBy: "\r\n")
-        let first = (lines.first ?? "").split(separator: " ")
-        guard first.count == 3, first[2] == "HTTP/1.1" || first[2] == "HTTP/1.0" else { return .invalid }
+        let first = (lines.first ?? "").split(separator: " ", omittingEmptySubsequences: false)
+        guard first.count == 3, !first[0].isEmpty, first[1].hasPrefix("/"),
+              first[0].utf8.allSatisfy(isTokenByte), first[1].utf8.allSatisfy({ $0 > 32 && $0 < 127 }),
+              first[2] == "HTTP/1.1" || first[2] == "HTTP/1.0" else { return .invalid }
         var headers: [String: String] = [:]
         for line in lines.dropFirst() {
             guard let colon = line.firstIndex(of: ":") else { return .invalid }
             let name = line[..<colon].lowercased()
-            guard headers[name] == nil else { return .invalid }
-            headers[name] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            let value = line[line.index(after: colon)...]
+            guard !name.isEmpty, name.utf8.allSatisfy(isTokenByte), headers[name] == nil,
+                  value.utf8.allSatisfy({ $0 == 9 || ($0 >= 32 && $0 < 127) }) else { return .invalid }
+            headers[name] = value.trimmingCharacters(in: .whitespaces)
         }
+        let lengthText = headers["content-length"] ?? "0"
         guard headers["transfer-encoding"] == nil,
-              let length = Int(headers["content-length"] ?? "0"), (0...maximumBody).contains(length) else { return .invalid }
-        let end = boundary.upperBound + length
+              !lengthText.isEmpty, lengthText.utf8.allSatisfy({ (48...57).contains($0) }),
+              let length = Int(lengthText) else { return .invalid }
+        return .header(Header(method: String(first[0]), path: String(first[1]), authorization: headers["authorization"],
+                              contentLength: length, byteCount: boundary.upperBound))
+    }
+
+    public static func decode(_ data: Data) -> Decode {
+        let header: Header
+        switch decodeHeader(data) {
+        case .incomplete: return .incomplete
+        case .invalid: return .invalid
+        case .header(let value): header = value
+        }
+        guard header.contentLength <= maximumBody else { return .invalid }
+        let end = header.byteCount + header.contentLength
         guard data.count >= end else { return .incomplete }
-        return .request(RemoteQueueRequest(method: String(first[0]), path: String(first[1]), authorization: headers["authorization"],
-                                          body: Data(data[boundary.upperBound..<end])))
+        return .request(RemoteQueueRequest(method: header.method, path: header.path, authorization: header.authorization,
+                                          body: Data(data[header.byteCount..<end])))
+    }
+
+    private static func isTokenByte(_ byte: UInt8) -> Bool {
+        (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
+            || "!#$%&'*+-.^_`|~".utf8.contains(byte)
     }
 
     public static func encode(_ response: RemoteQueueResponse) -> Data {
-        let reason = [200: "OK", 204: "No Content", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found", 503: "Service Unavailable"][response.status] ?? "Error"
-        var data = Data("HTTP/1.1 \(response.status) \(reason)\r\nContent-Length: \(response.body.count)\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".utf8)
+        let reason = [200: "OK", 204: "No Content", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found", 413: "Content Too Large", 429: "Too Many Requests", 503: "Service Unavailable"][response.status] ?? "Error"
+        let retry = response.retryAfter.map { "Retry-After: \(max(1, $0))\r\n" } ?? ""
+        var data = Data("HTTP/1.1 \(response.status) \(reason)\r\nContent-Length: \(response.body.count)\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\(retry)Connection: close\r\n\r\n".utf8)
         data.append(response.body)
         return data
     }
