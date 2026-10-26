@@ -71,7 +71,10 @@ public struct ClaudeParser: StreamParser {
         if let parent = obj["parent_tool_use_id"] as? String, !parent.isEmpty { return [] }
         switch type {
         case "system":
-            if obj["subtype"] as? String == "init", let id = obj["session_id"] as? String { return [.session(id)] }
+            // The init also says which connectors the session has, as they stood when it started.
+            if obj["subtype"] as? String == "init", let id = obj["session_id"] as? String {
+                return [.session(id)] + (ConnectorParser.claudeInit(obj).map { [.connectors($0)] } ?? [])
+            }
         case "stream_event":
             guard let event = obj["event"] as? JSON, let eventType = event["type"] as? String else { return [] }
             switch eventType {

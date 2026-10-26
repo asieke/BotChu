@@ -30,7 +30,7 @@ public enum BotActivity: String, CaseIterable, Codable, Sendable {
         switch event {
         case .textDelta, .text, .toolFinished: .thinking
         case let .toolStarted(_, name, input, _): classify(toolName: name, input: input)
-        case .session, .model, .textEnd, .failed, .finished, .inputTaken: nil
+        case .session, .model, .textEnd, .failed, .finished, .inputTaken, .connectors: nil
         }
     }
 
