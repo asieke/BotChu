@@ -71,7 +71,7 @@ extension RenderingTests {
         /// Chooses Delete Issue… in the menu of the table's row, and returns the dialog it opens.
         func askToDelete(row: Int) async throws -> NSWindow {
             let menu = try deletionMenu(at: try table().rowView(atRow: row, makeIfNecessary: false), in: host)
-            #expect(menu.items.map(\.title) == ["Open on GitHub", "Copy Link", "", "Start Task with", "", "Delete Issue…"])
+            #expect(menu.items.map(\.title) == ["Open on GitHub", "Copy Link", "", "Start Task with", "", "Archive Issue…", "Mark Obsolete…", "Delete Issue…"])
             menu.performActionForItem(at: menu.indexOfItem(withTitle: "Delete Issue…"))
             try await Task.sleep(for: .milliseconds(400))
             return try #require(window.attachedSheet)
@@ -155,10 +155,99 @@ extension RenderingTests {
         window.contentView = list
         try await Task.sleep(for: .milliseconds(350))
         let menu = try deletionMenu(at: NSPoint(x: 120, y: list.isFlipped ? 80 : list.bounds.height - 80), in: list)
-        #expect(menu.items.map(\.title) == ["Open on GitHub", "Copy Link", "", "Start Task with", "", "Delete Issue…"])
+        #expect(menu.items.map(\.title) == ["Open on GitHub", "Copy Link", "", "Start Task with", "", "Archive Issue…", "Mark Obsolete…", "Delete Issue…"])
         menu.performActionForItem(at: menu.indexOfItem(withTitle: "Delete Issue…"))
         #expect(app.issueDeletion == IssueDeletion(repo: orbit, number: 5, title: "Dark mode for the dashboard"))
         app.issueDeletion = nil
+    }
+
+    /// #162: the non-destructive actions keep GitHub history, update all open-work views and
+    /// surface a denied close without removing anything. Neither path can call issue delete.
+    @Test func issuesCanBeArchivedOrMarkedObsoleteWithoutDeletingThem() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-issue-closure-\(UUID().uuidString)")
+        let domain = "BotChu.IssueClosureTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: domain) }
+        let store = Store(root: root)
+        let orbit = "octocat/Orbit"
+        let items = [3, 4, 5].map { number in
+            GitHubLookup.OpenItem(repo: orbit, number: number, title: "Old idea \(number)", url: URL(string: "https://github.com/\(orbit)/issues/\(number)")!,
+                                  isPullRequest: false, author: "hubot", createdAt: .now, updatedAt: .now.addingTimeInterval(-Double(number)))
+        }
+        var snapshot = ProjectSnapshot(login: "octocat")
+        snapshot.takeList([ProjectSnapshot.Page(etag: "", repos: [ProjectSnapshot.Listed(nameWithOwner: orbit, description: "Orbit",
+                                                                                         pushedAt: .now, updatedAt: .now, openCount: 3)])], complete: true)
+        snapshot.takeWork([orbit], .success(GitHubLookup.OpenWork(items: items, counts: [orbit: .init(issues: 3, pullRequests: 0)])), under: [:], etags: [:])
+        snapshot.syncedAt = .now
+        snapshot.fullSyncedAt = .now
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let catalog = root.appendingPathComponent("projects.json")
+        try JSONEncoder().encode(snapshot).write(to: catalog)
+        let gh = Requests()
+        let app = AppModel(store: store, settings: AppSettings(defaults: defaults), usage: UsageCache { _, _ in ProviderUsage(windows: []) },
+                           openRouterKey: { nil }, projectGitHub: ProjectGitHub { arguments, _ in
+            await gh.add(arguments)
+            #expect(arguments.starts(with: ["gh", "issue", "close"]))
+            #expect(Array(arguments.suffix(2)) == ["--reason", "not planned"])
+            if arguments[3] == "5" {
+                return await ProjectGitHub.command(["/bin/sh", "-c", "echo 'Resource not accessible by integration (closeIssue)' >&2; exit 1"], body: nil)
+            }
+            return await ProjectGitHub.command(["/usr/bin/true"], body: nil)
+        })
+        defer { app.stopAll() }
+        app.destination = .projects
+        defaults.set("issues", forKey: "projectsScope")
+        let host = NSHostingView(rootView: ContentView().environment(app).defaultAppStorage(defaults))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1340, height: 860), styleMask: [.titled, .resizable, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        try await until { app.openItems?.count == 3 && deletionTables(in: host).contains { $0.numberOfRows == 3 } }
+
+        func ask(_ action: String) async throws -> NSWindow {
+            let table = try #require(deletionTables(in: host).first { $0.tableColumns.contains { $0.title == "Title" } })
+            let menu = try deletionMenu(at: table.rowView(atRow: 0, makeIfNecessary: true), in: host)
+            let index = menu.indexOfItem(withTitle: action + "…")
+            #expect(index >= 0)
+            menu.performActionForItem(at: index)
+            try await until { window.attachedSheet != nil }
+            return try #require(window.attachedSheet)
+        }
+
+        var dialog = try await ask("Archive Issue")
+        #expect(deletionTexts(in: dialog).joined().contains("comments and link stay on GitHub"))
+        try #require(deletionButtons(inSheet: dialog).first { $0.title == "Cancel" }).performClick(nil)
+        try await until { window.attachedSheet == nil }
+        #expect(await gh.all.isEmpty)
+        #expect(app.openItems?.count == 3)
+
+        for (offset, disposition) in IssueClosure.Disposition.allCases.enumerated() {
+            let number = 3 + offset
+            dialog = try await ask(disposition.action)
+            #expect(app.issueClosure?.number == number)
+            #expect(app.issueClosure?.disposition == disposition)
+            // A detail opened while the request was being confirmed goes back to its list too.
+            app.projectSelection = ProjectSelection(repo: orbit, tab: .issues, item: number)
+            try #require(deletionButtons(inSheet: dialog).first { $0.title == disposition.action }).performClick(nil)
+            try await until { app.openItems?.count == 2 - offset && window.attachedSheet == nil }
+            #expect(app.projectSelection == ProjectSelection(repo: orbit, tab: .issues))
+            #expect(app.repositories?.first?.openIssues == 2 - offset)
+            let saved = try JSONDecoder().decode(ProjectSnapshot.self, from: Data(contentsOf: catalog))
+            #expect(!saved.openItems.contains { $0.number == number })
+            app.projectSelection = nil
+            try await until { deletionTables(in: host).first { $0.tableColumns.contains { $0.title == "Title" } }?.numberOfRows == 2 - offset }
+        }
+        #expect(await gh.all.map { $0[3] } == ["3", "4"])
+        dialog = try await ask("Mark Obsolete")
+        try #require(deletionButtons(inSheet: dialog).first { $0.title == "Mark Obsolete" }).performClick(nil)
+        try await until { app.issueClosure?.failure != nil }
+        #expect(app.issueClosure?.failure?.contains("permission to close") == true)
+        #expect(app.openItems?.map(\.number) == [5])
+        #expect(app.updatingIssues.isEmpty)
+        app.issueClosure = nil
+        try await until { window.attachedSheet == nil }
     }
 
     /// Waits (up to five seconds) until `condition` holds.

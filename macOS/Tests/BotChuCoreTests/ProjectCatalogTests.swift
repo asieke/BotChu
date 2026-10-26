@@ -270,6 +270,70 @@ import Testing
         #expect(ProjectSync.read(fixture.file)?.openItems.contains { $0.id == "asieke/Orbit#4" } == false)
     }
 
+    @Test func closedIssuesLeaveOpenWorkAndStayClosedAcrossRelaunch() async throws {
+        let github = StandInGitHub(repos: StandInGitHub.sample)
+        let fixture = try Fixture(github)
+        defer { fixture.remove() }
+        await fixture.sync.sync(.full)
+        try await fixture.sync.closeIssue(4, of: "asieke/Orbit").get()
+        #expect(await github.closures == [["gh", "issue", "close", "4", "--repo", "asieke/Orbit", "--reason", "not planned"]])
+        #expect(await github.deletions.isEmpty)
+        #expect(await fixture.sync.state.openItems?.map(\.id).sorted() == ["asieke/BotChu#7", "asieke/Orbit#3"])
+        #expect(await fixture.sync.state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 1)
+        let relaunched = fixture.relaunch()
+        #expect(await relaunched.load().openItems?.contains { $0.id == "asieke/Orbit#4" } == false)
+        await relaunched.sync(.full)
+        #expect(await relaunched.state.openItems?.contains { $0.id == "asieke/Orbit#4" } == false)
+        // Reopening on GitHub is reflected by an ordinary sync: no permanent local tombstone.
+        await github.update("asieke/Orbit") { $0.issues.append(4) }
+        await relaunched.sync(.changes)
+        #expect(await relaunched.state.openItems?.contains { $0.id == "asieke/Orbit#4" } == true)
+    }
+
+    @Test func aSyncUnderWayKeepsAClosedIssueOut() async throws {
+        let github = StandInGitHub(repos: StandInGitHub.sample)
+        let fixture = try Fixture(github)
+        defer { fixture.remove() }
+        await fixture.sync.sync(.full)
+        await github.update("asieke/Orbit") { $0.activity += 1 }
+        await github.holdWork(1)
+        let syncing = Task { await fixture.sync.sync(.changes) }
+        try await github.waitUntilHeld(1)
+        try await fixture.sync.closeIssue(4, of: "asieke/Orbit").get()
+        await github.release()
+        await syncing.value
+        #expect(await fixture.sync.state.openItems?.contains { $0.id == "asieke/Orbit#4" } == false)
+        #expect(await fixture.sync.state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 1)
+        #expect(ProjectSync.read(fixture.file)?.openItems.contains { $0.id == "asieke/Orbit#4" } == false)
+    }
+
+    @Test func refusingToCloseKeepsTheCatalogAndExplainsWhy() async throws {
+        let github = StandInGitHub(repos: StandInGitHub.sample)
+        let fixture = try Fixture(github)
+        defer { fixture.remove() }
+        await fixture.sync.sync(.full)
+        let before = ProjectSync.read(fixture.file)
+        await github.set(denyCloses: true)
+        guard case .failure(let denied) = await fixture.sync.closeIssue(4, of: "asieke/Orbit") else {
+            Issue.record("Closed without permission"); return
+        }
+        #expect(denied.message.contains("permission to close"))
+        #expect(!denied.message.contains("admin"))
+        await github.set(denyCloses: false)
+        await github.set(offline: true)
+        guard case .failure(let offline) = await fixture.sync.closeIssue(4, of: "asieke/Orbit") else {
+            Issue.record("Closed offline"); return
+        }
+        #expect(offline.message.contains("Couldn't reach GitHub"))
+        await github.set(offline: false)
+        for (number, repo) in [(0, "asieke/Orbit"), (3, "asieke/Orbit --admin"), (3, "-R")] {
+            guard case .failure = await fixture.sync.closeIssue(number, of: repo) else { Issue.record("Closed unsafe issue"); return }
+        }
+        #expect(await github.closures.count == 2)
+        #expect(ProjectSync.read(fixture.file) == before)
+        #expect(await fixture.sync.state.openItems?.contains { $0.id == "asieke/Orbit#4" } == true)
+    }
+
     /// What gh prints when it can't delete an issue, as the owner reads it.
     @Test func deletionFailuresSayWhy() {
         func failure(_ status: Int32, _ errors: String) -> String {
@@ -590,6 +654,8 @@ private actor StandInGitHub {
     private var workDown = false
     private var denyDeletes = false
     private(set) var deletions: [[String]] = []
+    private var denyCloses = false
+    private(set) var closures: [[String]] = []
     private var worksToHold = 0
     private var listStatus: Int?
     private var userStatus: Int?
@@ -616,6 +682,7 @@ private actor StandInGitHub {
     }
     func set(listStatus: Int?, userStatus: Int? = nil) { self.listStatus = listStatus; self.userStatus = userStatus }
     func set(denyDeletes: Bool) { self.denyDeletes = denyDeletes }
+    func set(denyCloses: Bool) { self.denyCloses = denyCloses }
     func update(_ name: String, _ change: (inout Repo) -> Void) {
         guard let index = repos.firstIndex(where: { $0.name == name }) else { return }
         change(&repos[index])
@@ -661,6 +728,7 @@ private actor StandInGitHub {
             if isRecord { recordActive -= 1; recordCompleted += 1 }
         }
         if arguments.starts(with: ["gh", "issue", "delete"]) { return delete(arguments) }
+        if arguments.starts(with: ["gh", "issue", "close"]) { return close(arguments) }
         if offline { return Shell.Result(status: 1, output: "", errors: "error connecting to api.github.com") }
         if arguments.starts(with: ["gh", "api", "graphql"]) {
             let read = work(arguments.last ?? "")
@@ -715,6 +783,19 @@ private actor StandInGitHub {
         calls.append("delete:\(arguments[5])#\(number)")
         repos[index].issues.removeAll { $0 == number }
         return Shell.Result(status: 0, output: "", errors: "")
+    }
+
+    private func close(_ arguments: [String]) -> Shell.Result {
+        closures.append(arguments)
+        if offline { return Shell.Result(status: 1, output: "", errors: "error connecting to api.github.com") }
+        guard arguments.count == 8, arguments[4] == "--repo", Array(arguments.suffix(2)) == ["--reason", "not planned"],
+              let number = Int(arguments[3]), let index = repos.firstIndex(where: { $0.name == arguments[5] }) else {
+            return Shell.Result(status: 1, output: "", errors: "Issue not found")
+        }
+        if denyCloses { return Shell.Result(status: 1, output: "", errors: "Resource not accessible by integration (closeIssue)") }
+        repos[index].issues.removeAll { $0 == number }
+        repos[index].activity += 1
+        return Shell.Result(status: 0, output: "Closed issue as not planned", errors: "")
     }
 
     private func conditional(_ asked: String?, current: String, body: String, link: String? = nil) -> Shell.Result {

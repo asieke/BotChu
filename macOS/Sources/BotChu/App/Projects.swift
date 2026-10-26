@@ -151,17 +151,21 @@ extension AppModel {
     /// `issueDeletion` says why.
     func deleteIssue(_ number: Int, of repo: String, title: String) async {
         let id = "\(repo)#\(number)"
-        guard deletingIssues.insert(id).inserted else { return }
-        defer { deletingIssues.remove(id) }
+        guard updatingIssues.insert(id).inserted else { return }
+        defer { updatingIssues.remove(id) }
         switch await projectSync.deleteIssue(number, of: repo) {
         case .success:
             showProjects(await projectSync.state)
-            workDetails[id] = nil
-            if let shown = projectSelection, shown.tab == .issues, shown.item == number, shown.repo.caseInsensitiveCompare(repo) == .orderedSame {
-                selectProject(shown.repo, tab: .issues)
-            }
+            leaveIssueDetail(number, of: repo)
         case .failure(let failure):
             issueDeletion = IssueDeletion(repo: repo, number: number, title: title, failure: failure.message)
+        }
+    }
+
+    func leaveIssueDetail(_ number: Int, of repo: String) {
+        workDetails["\(repo)#\(number)"] = nil
+        if let shown = projectSelection, shown.tab == .issues, shown.item == number, shown.repo.caseInsensitiveCompare(repo) == .orderedSame {
+            selectProject(shown.repo, tab: .issues)
         }
     }
 
