@@ -5,6 +5,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 test_root=$PWD
+if [ "${BOTCHU_WINDOWLESS_ROOT:-}" != "$test_root" ]; then
+  exec "$test_root/scripts/coord/botchu-windowless.sh" "$test_root/scripts/test.sh" "$@"
+fi
+scripts/coord/install.sh
 source scripts/test-support.sh
 tier=full
 case "${1:-}" in
@@ -34,8 +38,8 @@ if [ "$tier" = fast ]; then
   echo "test: ok (fast)"
   exit
 fi
-test_step 'macOS tests' macOS/test.sh
-
+test_step 'test builds' macOS/test.sh --build
 out=$(mktemp -d)
 test_step 'app build' macOS/build.sh "$out"
+test_step 'macOS tests' macOS/test.sh --prebuilt
 echo "test: ok"
