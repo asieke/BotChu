@@ -525,12 +525,19 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     to finish; at most two run at once. A run is stopped at its time limit (30 minutes by default)
     and counts as failed; three failed runs in a row pause the job, saying why. BotChu never runs one again on its own. A run
     asks for repository work as Home does, with a task request (which names the job), and BotChu
-    starts the task when the run ends. Every run is kept, with how it was started (on schedule,
+    starts the task when the run ends. A run has the helpers, mailbox and environment a turn has, as
+    its task's (#170): it can call sub-agents, ask for Tasks, message remote bots and deliver to the
+    Inbox with `botchu-inbox send`, whose deliveries are its task's (the owner's reply goes back to
+    the task), their cards after its reply. Its mailbox closes when it ends, once the deliveries
+    still in it (a helper that stopped waiting) are in the Inbox. Every run is kept, with how it was started (on schedule,
     caught up, or Run Now) and how it went: succeeded, nothing to report, failed (with what to do:
     sign in, wait for the allowance, fix the command, check the network or the disk), stopped,
     skipped or interrupted, and a line about it; the history keeps the latest 50 and always the last
     success. A run whose reply ends with `NOTHING_TO_REPORT` stays in the history and its task, with
-    nothing marked as news. A finding, a failure or an interrupted run adds one receipt to its
+    nothing marked as news, and nothing in the Inbox. A finding the run delivered nothing of itself
+    is delivered by BotChu: its whole final reply, as its task's delivery titled after the job, once
+    (its ID is the run's). Until the Inbox has it the run keeps it waiting in `job.json`; a save that
+    fails says so in the task and is tried again at each tick and launch. A finding, a failure or an interrupted run adds one receipt to its
     agent's Home, with **Open Run** (which opens the run's task), marked as news, which Home's next
     turn hears of; an empty reply counts as failed, not quiet. Before a run
     starts, its time is reserved in the job's `job.json`, in one save, so a timer, a wake or a
@@ -1275,7 +1282,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     queue alone, and deleted with its agent, a job's run as a new task in its agent's Tasks column
     with the job's menu, its conversation the run's, opened from Home's receipt, taking the place of
     the run before, kept open once the owner writes in it (resuming the run's session) and gone with
-    a run the history lets go, a sub-agent's handoff and a task's receipt that
+    a run the history lets go, a scheduled run's deliveries to the Inbox as its task's (its own, one
+    its helper stopped waiting for, its finding as BotChu's report, none when quiet, a report the
+    Inbox couldn't take tried again on a tick, the owner's reply back in the task, its mailbox
+    closed), a sub-agent's handoff and a task's receipt that
     don't wait for run reviews, which review each bot's own work on its own account, Activity's run
     reviews (the summary line, news rows and counts line, in light and dark, and Review now) and
     the review time in Settings, a task's Activity listing its repository's open issues:

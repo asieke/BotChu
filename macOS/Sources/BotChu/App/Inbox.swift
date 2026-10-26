@@ -102,6 +102,25 @@ final class InboxModel {
         try await storage.perform(folder.url.path, label: "delivery") { try folder.save(saved, contents: data) }
         try? await transport.removeStaged(request: request.id)
         titles[target, default: [:]][request.title] = delivery.id
+        show(delivery, isNew: existing == nil)
+        return (delivery, existing != nil)
+    }
+
+    /// Puts a delivery BotChu makes for a conversation in the Inbox (a job run's report, #170): saved
+    /// in its bot's folder, then shown as one from `botchu-inbox send` is. The same delivery again
+    /// replaces it.
+    func post(_ delivery: Delivery) async throws {
+        guard let bot = model?.bot(delivery.botID) else { throw InboxRequest.Problem("its bot is gone") }
+        let folder = InboxFolder(home: BotHome(workspace: bot.persistencePath))
+        try await storage.perform(folder.url.path, label: "delivery") { try folder.save(delivery, contents: [:]) }
+        show(delivery, isNew: deliveries[delivery.id] == nil)
+    }
+
+    /// A delivery saved: it is news, unless it arrives in the conversation the owner is looking at,
+    /// and a new one is announced, its card in the conversation (after the turn under way's reply).
+    private func show(_ delivery: Delivery, isNew: Bool) {
+        guard let model else { return }
+        let target = target(of: delivery)
         deliveries[delivery.id] = delivery
         var entry = state[delivery.id]
         entry.done = false
@@ -109,7 +128,7 @@ final class InboxModel {
         entry.read = model.isShown(target)
         state[delivery.id] = entry
         saveState()
-        if existing == nil {
+        if isNew {
             model.notifier?.arrived(delivery)
             if model.isRunning(target) {
                 cards[target, default: []].append(delivery.id)
@@ -118,7 +137,6 @@ final class InboxModel {
                 model.saveThread(target)
             }
         }
-        return (delivery, existing != nil)
     }
 
     /// The cards of what the conversation delivered in the turn that is ending.

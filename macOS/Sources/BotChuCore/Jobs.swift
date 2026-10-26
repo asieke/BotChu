@@ -292,6 +292,9 @@ public struct JobRun: Identifiable, Codable, Hashable, Sendable {
     /// The task of its agent's whose conversation it is (`JobTasks`); nil for runs from before runs
     /// were tasks, whose transcript is `runs/<id>.jsonl`, and for runs that never started.
     public var taskID: UUID?
+    /// Its report waits to reach the owner's Inbox (`JobReport`): BotChu couldn't save it there yet,
+    /// and tries again. Nil once it is there, and for runs with no report of BotChu's to deliver.
+    public var reportPending: Bool?
 
     public init(id: UUID = UUID(), trigger: JobTrigger, scheduledFor: Date?, timeZone: String, reservedAt: Date,
                 outcome: JobOutcome = .waiting, summary: String = "", coalesced: Int = 0) {
@@ -654,6 +657,27 @@ public struct JobRunLink: Codable, Hashable, Sendable {
     }
 }
 
+/// A run's report in the owner's Inbox (#170). A run that found something for the owner and sent
+/// nothing to the Inbox itself (`botchu-inbox send`) has its final reply delivered by BotChu, as a
+/// delivery of the run's task whose ID is the run's, so delivering it again (after a failed save,
+/// or at the next launch) replaces it rather than adding another.
+public enum JobReport {
+    /// Whether BotChu delivers the run's report: it succeeded with a finding, and sent nothing itself.
+    public static func isDue(_ result: JobResult.Classified, delivered: Bool) -> Bool {
+        result.outcome == .succeeded && !result.quiet && !delivered
+    }
+
+    /// The delivery of a run's final reply, without what it asked to remember; nil for an empty one.
+    public static func delivery(job: Job, run: JobRun, reply: String, at date: Date = Date()) -> Delivery? {
+        let text = MemoryNotes.handoffText(reply)
+        guard !text.isEmpty else { return nil }
+        var bytes = 0
+        let limit = InboxRequest.maxNoteBytes - 3
+        let note = text.utf8.count <= InboxRequest.maxNoteBytes ? text : text.prefix { bytes += $0.utf8.count; return bytes <= limit } + "…"
+        return Delivery(id: run.id, botID: job.botID, taskID: run.taskID, title: job.title, note: note, sentAt: Delivery.stamp(date))
+    }
+}
+
 /// What Home hears of a run: one line, with the run to open.
 public enum JobReceipt {
     public static func text(job: Job, run: JobRun, locale: Locale = .current) -> String {
@@ -774,11 +798,12 @@ public enum JobLaunch {
     }
 
     /// The run's context: who it is (identity, instructions, playbook, personality and memory),
-    /// what the run is and when it was meant for, how to ask for repository work, and how to say
-    /// it found nothing. No Home conversation: a job run starts clean.
+    /// what the run is and when it was meant for, how to ask for repository work, how to reach other
+    /// bots and the owner's Inbox (`availableBots`, as a turn's), and how its report reaches the owner
+    /// or says it found nothing. No Home conversation: a job run starts clean.
     public static func preamble(bot: Bot, job: Job, run: JobRun, startedAt: Date, memory: String, sharedMemory: String,
                                 soul: String = "", instructions: String = "", team: String = "", skills: [Skill] = [],
-                                locale: Locale = Locale(identifier: "en_US_POSIX")) -> String {
+                                availableBots: [BotRosterEntry] = [], locale: Locale = Locale(identifier: "en_US_POSIX")) -> String {
         let folder = (bot.workspace as NSString).appendingPathComponent(BotHome.folderName)
         var parts = ["""
             You are \(bot.name)\(bot.title.isEmpty ? "" : " — \(bot.title)"), a persistent bot in BotChu, running one of your \
@@ -801,11 +826,16 @@ public enum JobLaunch {
             AGENTS.md explains (a request in \(folder)/dispatch/), and say in its brief that job “\(job.title)” \
             (run \(run.id.uuidString.lowercased().prefix(8))) asked for it: BotChu starts it, in its own worktree, after this run.
             """)
+        let tools = BotContext.subagentsSection(availableBots: availableBots)
+        if !tools.isEmpty { parts.append(tools) }
         parts.append("""
-            End with a short report for your owner: what you found or did. If there is nothing that needs their attention, \
-            end your reply with a line that says only \(JobResult.quietMarker): the run stays in the job's history and your \
-            owner isn't notified. Otherwise BotChu puts your report's first lines in your Home conversation. A failed run \
-            always reaches them. The job's instructions follow.
+            End with a report for your owner: what you found or did. If there is nothing that needs their attention, \
+            end your reply with a line that says only \(JobResult.quietMarker): the run stays in the job's history, your \
+            owner isn't notified, and you send nothing to their Inbox. Otherwise your report reaches their Inbox, linked to \
+            this run's task, where their reply comes back to it: deliver it yourself with `botchu-inbox send` when it has \
+            files, pull requests or a question for them, or BotChu delivers your final reply there when you sent nothing. \
+            Either way its first lines go in your Home conversation. A failed run always reaches them. The job's \
+            instructions follow.
             """)
         return "<botchu_job_context>\n\(parts.joined(separator: "\n\n"))\n</botchu_job_context>"
     }

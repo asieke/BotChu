@@ -234,6 +234,23 @@ private final class InboxFixture {
         #expect(entries.count == 2, "No temporary folders are left: \(entries)")
     }
 
+    /// A scheduled run's report (#170) is its task's delivery, read again at launch with its
+    /// origin, and delivering it again (a retry) replaces it rather than adding another.
+    @Test func aJobRunsReportIsItsTasksDeliveryOnce() throws {
+        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-inbox-job-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let folder = InboxFolder(home: BotHome(workspace: workspace.path))
+        let job = Job(botID: UUID(), title: "10x Product Analysis", prompt: "x", schedule: JobSchedule(kind: .daily))
+        var run = JobRun(trigger: .scheduled, scheduledFor: Date(), timeZone: "America/New_York", reservedAt: Date())
+        run.taskID = UUID()
+        let report = try #require(JobReport.delivery(job: job, run: run, reply: "20 recommendations"))
+        try folder.save(report, contents: [:])
+        try folder.save(report, contents: [:])
+        let kept = folder.load()
+        #expect(kept == [report])
+        #expect(kept.first?.botID == job.botID && kept.first?.taskID == run.taskID && kept.first?.id == run.id)
+    }
+
     @Test func readDoneAndAnsweredAreKeptBesideTheIndex() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-inbox-state-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
