@@ -2,11 +2,11 @@ import SwiftUI
 import BotChuCore
 
 /// Settings ▸ Telegram: the owner's private Telegram chats, each reaching a bot's Home (see
-/// `TelegramBridge`), and the bot token, kept in the Keychain.
+/// `TelegramBridge`), and the bot token, kept in the Keychain. The token typed stays in Settings'
+/// drafts while its pages change.
 struct TelegramSection: View {
     @Environment(AppModel.self) private var model
-    @State private var token = Keychain.get(Keychain.telegramAccount) ?? ""
-    @State private var savedToken = Keychain.get(Keychain.telegramAccount) ?? ""
+    @Binding var token: SettingsKeyDraft
     @State private var chatID = ""
 
     var body: some View {
@@ -14,16 +14,20 @@ struct TelegramSection: View {
         let telegram: TelegramBridge = model.telegram
         Section {
             Toggle("Reach bots from Telegram", isOn: $settings.telegramEnabled)
+                .help("Your private chat with your own Telegram bot reaches the bot chosen here, in its Home, while BotChu runs, or another bot it chooses with @; anyone else is ignored.")
             LabeledContent("Bot token") {
                 HStack {
-                    SecureField("Bot token", text: $token, prompt: Text("123456789:AA…"))
+                    SecureField("Bot token", text: Binding(get: { token.text ?? "" }, set: { token.text = $0 }), prompt: Text("123456789:AA…"))
                         .labelsHidden()
+                        .settingsField()
                         .onSubmit(saveToken)
+                        .help("Kept in your Keychain")
                     Button("Save", action: saveToken)
-                        .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines) == savedToken)
-                    if !savedToken.isEmpty {
+                        .disabled(!token.isUnsaved)
+                        .buttonStyle(.borderedProminentIf(token.isUnsaved))
+                    if !token.saved.isEmpty {
                         Button("Remove") {
-                            token = ""
+                            token.text = ""
                             saveToken()
                         }
                         .help("Delete the token from the Keychain")
@@ -31,15 +35,16 @@ struct TelegramSection: View {
                 }
             }
             LabeledContent("Status") {
-                HStack(spacing: 6) {
+                Label {
                     Text(telegram.summary)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.trailing)
-                    Circle()
-                        .fill(color(for: telegram.state))
-                        .frame(width: 8, height: 8)
+                } icon: {
+                    Image(systemName: symbol(for: telegram.state)).foregroundStyle(color(for: telegram.state))
                 }
             }
+        }
+        Section("Chats") {
             ForEach(settings.telegramChats) { chat in
                 LabeledContent {
                     HStack {
@@ -54,6 +59,7 @@ struct TelegramSection: View {
                         }
                         .labelsHidden()
                         .fixedSize()
+                        .help("The bot this chat reaches, in its Home, or another bot it chooses with @")
                         Button {
                             settings.telegramChats.removeAll { $0.id == chat.id }
                         } label: {
@@ -65,8 +71,10 @@ struct TelegramSection: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(verbatim: chat.label.isEmpty ? "Chat \(chat.id)" : chat.label)
-                        Text(verbatim: "Chat \(chat.id) · reaches this bot's Home, or another bot chosen with @")
-                            .font(.caption).foregroundStyle(.secondary)
+                        if !chat.label.isEmpty {
+                            Text(verbatim: "Chat \(chat.id)")
+                                .font(.system(size: 11.5, design: .monospaced)).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -75,12 +83,18 @@ struct TelegramSection: View {
                     Image(systemName: "hand.raised").foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(verbatim: "Refused \(refusal.name)")
-                        Text(verbatim: refusal.isPrivate ? "Chat \(refusal.id)" : "Chat \(refusal.id) · only your private chat can be allowed")
-                            .font(.caption).foregroundStyle(.secondary)
+                        Text(verbatim: "Chat \(refusal.id)")
+                            .font(.system(size: 11.5, design: .monospaced)).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if refusal.isPrivate {
                         Button("Allow") { telegram.allow(refusal) }
+                    } else {
+                        Text("Group")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 4))
+                            .help("Only your private chat can be allowed")
                     }
                 }
             }
@@ -88,20 +102,14 @@ struct TelegramSection: View {
                 HStack {
                     TextField("Chat ID", text: $chatID, prompt: Text("123456789"))
                         .labelsHidden()
+                        .settingsField()
                         .onSubmit(addChat)
                     Button("Allow Chat", action: addChat)
                         .disabled(newChatID == nil)
                 }
             }
-        } header: {
-            Text("Telegram")
-        } footer: {
-            HStack(spacing: 4) {
-                Text("Your private chat with your own Telegram bot reaches the bot chosen here, in its Home, while BotChu runs, or another bot it chooses with @; anyone else is ignored. The token is kept in your Keychain.")
-                Link("Set up", destination: URL(string: "https://github.com/asieke/BotChu/blob/main/docs/telegram.md")!)
-            }
-            .font(.caption).foregroundStyle(.secondary)
         }
+        .onAppear { token.seed(saved: model.telegram.readToken()) }
     }
 
     private var newChatID: Int64? {
@@ -124,17 +132,24 @@ struct TelegramSection: View {
     }
 
     private func saveToken() {
-        let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        Keychain.set(value, for: Keychain.telegramAccount)
-        token = value
-        savedToken = value
+        guard token.isUnsaved else { return }
+        Keychain.set(token.save(), for: Keychain.telegramAccount)
         model.telegram.restart()
+    }
+
+    private func symbol(for state: TelegramBridge.State) -> String {
+        switch state {
+        case .off: "minus.circle"
+        case .needsToken, .running(.connecting), .running(.retrying): "exclamationmark.triangle.fill"
+        case .running(.connected): "checkmark.circle.fill"
+        case .running(.stopped): "xmark.octagon.fill"
+        }
     }
 
     private func color(for state: TelegramBridge.State) -> Color {
         switch state {
-        case .off: .gray.opacity(0.4)
-        case .needsToken, .running(.connecting), .running(.retrying): .orange
+        case .off: .secondary
+        case .needsToken, .running(.connecting), .running(.retrying): Palette.warning
         case .running(.connected): .green
         case .running(.stopped): .red
         }

@@ -75,7 +75,17 @@ struct InboxView: View {
             inbox.isShowing = false
             pinned = [:]
         }
-        .onChange(of: inbox.selected) { _, selected in read(selected, in: groups) }
+        .onChange(of: inbox.selected) { _, selected in
+            // Choosing a Done delivery (from a notification or a card) opens Done to show it.
+            if let selected, inbox.isDone(selected) { showsDone = true }
+            read(selected, in: groups)
+        }
+        // Done while Done is closed: the selection moves on rather than staying hidden.
+        .onChange(of: visible) { was, now in
+            if let selected = inbox.selected, was.contains(selected), !now.contains(selected) {
+                inbox.selected = InboxList.selection(after: selected, was: was, now: now)
+            }
+        }
         // Deliveries read after the page showed: the first is chosen.
         .onChange(of: deliveries.count) { _, _ in
             if inbox.selected == nil { inbox.selected = groups.first { $0.section != .done }?.ids.first }
@@ -508,6 +518,17 @@ private struct InboxEmpty: View {
     let showDone: () -> Void
 
     var body: some View {
+        // In a scroll view, like the list and the reader, so the window draws the rule under its
+        // header across the whole page, as on the other workspace pages.
+        ScrollView {
+            message
+                .frame(maxWidth: .infinity)
+                .containerRelativeFrame(.vertical)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    private var message: some View {
         VStack(spacing: 8) {
             Image(systemName: "tray")
                 .font(.system(size: 40, weight: .light))

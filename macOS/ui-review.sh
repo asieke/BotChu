@@ -7,6 +7,7 @@
 #   macOS/ui-review.sh                     # just open it
 #   macOS/ui-review.sh "Hello"             # and send "Hello" to the first bot (a real turn)
 #   BOTCHU_OPEN=editor macOS/ui-review.sh  # or open the new-bot editor (or settings)
+#   BOTCHU_OPEN=settings BOTCHU_SETTINGS=telegram macOS/ui-review.sh  # Settings, on that page
 #   BOTCHU_PET=<pet folder> macOS/ui-review.sh           # and give the first bot this pet
 #   BOTCHU_DRAW_PET="a brass robot" macOS/ui-review.sh  # or make it one (real runs; costs OpenRouter credit)
 #   BOTCHU_TAB=1 macOS/ui-review.sh        # show the first bot's first task tab (0 is Home)
@@ -286,6 +287,7 @@ fi
 [ -n "${BOTCHU_JOBS:-}" ] && args+=(--env "BOTCHU_JOBS=$BOTCHU_JOBS")
 [ -n "${BOTCHU_JOB:-}" ] && args+=(--env "BOTCHU_JOB=$BOTCHU_JOB")
 [ -n "${BOTCHU_INBOX_ITEM:-}" ] && args+=(--env "BOTCHU_INBOX_ITEM=$BOTCHU_INBOX_ITEM")
+[ -n "${BOTCHU_SETTINGS:-}" ] && args+=(--env "BOTCHU_SETTINGS=$BOTCHU_SETTINGS")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
 # Without restoring windows: after any copy of BotChu crashed, macOS would otherwise stop at a
 # dialog asking whether to reopen them.

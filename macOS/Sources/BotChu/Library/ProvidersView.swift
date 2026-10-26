@@ -10,7 +10,6 @@ import BotChuCore
 /// launches, so the table opens on them without checking. Selecting a profile shows it on the right.
 struct ProvidersView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.openSettings) private var openSettings
     @State private var query = ""
     @State private var adding = false
     @State private var sortOrder: [KeyPathComparator<ProviderRow>] = []
@@ -85,8 +84,7 @@ struct ProvidersView: View {
 
     /// Settings, at Accounts, where each profile's command is.
     private func changeCommand() {
-        model.settingsFocus = .accounts
-        openSettings()
+        model.openSettings(.accounts)
     }
 
     private func refresh(_ requests: [UsageRequest]) {

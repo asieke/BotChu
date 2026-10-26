@@ -21,8 +21,11 @@ extension RenderingTests {
         try BotHome(workspace: bot.workspace).save(bot)
         let store = Store(root: root.appendingPathComponent("Support", isDirectory: true))
         try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        // Settings' pages read their keys through these, never the owner's Keychain.
         let model = AppModel(store: store, settings: AppSettings(defaults: defaults),
-                             usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
+                             usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") }, openRouterKey: { nil })
+        model.telegram.readToken = { nil }
+        model.remoteQueue.readToken = { nil }
 
         // Restored at the old fixed minimum, with the status shown.
         let host = NSHostingView(rootView: ContentView().environment(model).defaultAppStorage(defaults))
@@ -58,6 +61,19 @@ extension RenderingTests {
         window.setFrame(NSRect(x: 0, y: 0, width: 600, height: 600), display: true)
         try await settle(window)
         defaults.set(true, forKey: "showsStatus")
+        try await settle(window)
+        #expect(window.frame.width >= window.contentMinSize.width)
+
+        // Settings (#191) on each page, narrow with its menu, then wide with its rail.
+        for size in [NSSize(width: 820, height: 600), NSSize(width: 1240, height: 800)] {
+            window.setFrame(NSRect(origin: .zero, size: size), display: true)
+            for page in SettingsPage.allCases {
+                model.openSettings(page)
+                try await settle(window)
+                #expect(window.frame.width >= window.contentMinSize.width, "\(page) at \(size)")
+            }
+        }
+        model.show(.home(bot.id))
         try await settle(window)
         #expect(window.frame.width >= window.contentMinSize.width)
     }

@@ -446,12 +446,13 @@ public enum InboxList {
     }
 
     /// `pinned` keeps a delivery in the group it was in (the one being read), whatever it has
-    /// become since, until the owner leaves it.
+    /// become since, until the owner leaves it; only Done, or moving it out of Done, moves it at once.
     public static func groups(_ deliveries: [Delivery], state: InboxState, now: Date, calendar: Calendar = .current,
                               pinned: [UUID: Section] = [:]) -> [Group] {
         var grouped: [Section: [Delivery]] = [:]
         for delivery in deliveries {
-            let section = pinned[delivery.id] ?? section(of: delivery, state: state, now: now, calendar: calendar)
+            var section = section(of: delivery, state: state, now: now, calendar: calendar)
+            if section != .done, let pin = pinned[delivery.id], pin != .done { section = pin }
             grouped[section, default: []].append(delivery)
         }
         func rank(_ section: Section) -> (Int, TimeInterval) {
@@ -466,6 +467,14 @@ public enum InboxList {
         return grouped.keys.sorted { rank($0) < rank($1) }.map { section in
             Group(section: section, ids: grouped[section]!.sorted { ($0.updatedAt, $0.id.uuidString) > ($1.updatedAt, $1.id.uuidString) }.map(\.id))
         }
+    }
+
+    /// What to select when the selected delivery leaves the list shown (`was`, now `now`), as when
+    /// it is Done while Done is closed: the next one still shown, else the one before, else none.
+    public static func selection(after selected: UUID, was: [UUID], now: [UUID]) -> UUID? {
+        guard let index = was.firstIndex(of: selected) else { return nil }
+        let shown = Set(now)
+        return was[(index + 1)...].first(where: shown.contains) ?? was[..<index].last(where: shown.contains)
     }
 }
 
