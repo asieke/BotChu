@@ -86,7 +86,6 @@ struct InboxView: View {
     private func read(_ id: UUID?, in groups: [InboxList.Group]) {
         guard let id else { pinned = [:]; return }
         pinned = groups.first { $0.ids.contains(id) }.map { [id: $0.section] } ?? [:]
-        if model.inbox.isUnread(id) { model.inbox.openedAsNews.insert(id) }
         model.inbox.markRead(id)
     }
 }

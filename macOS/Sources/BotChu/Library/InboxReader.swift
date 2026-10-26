@@ -2,8 +2,9 @@ import SwiftUI
 import BotChuCore
 
 /// A delivery being read: where it is about and who sent it, its note, what came with it as cards,
-/// the exchange under it, and a composer that replies into the conversation that sent it, with its
-/// question's choices above it.
+/// and a composer that replies into the conversation that sent it, with its question's choices above
+/// it. What the bot does with a reply shows in that conversation, which opens once the reply is in
+/// its queue.
 struct InboxReader: View {
     @Environment(AppModel.self) private var model
     let delivery: Delivery
@@ -13,38 +14,23 @@ struct InboxReader: View {
     static let column: CGFloat = 800
 
     var body: some View {
-        let target = model.inbox.target(of: delivery)
-        let exchange = InboxReply.exchange(for: delivery.id, in: model.thread(target))
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    header
-                    if !delivery.note.isEmpty {
-                        MarkdownText(text: delivery.note)
-                            .padding(.top, 16)
-                    }
-                    DeliveryCards(delivery: delivery)
-                        .padding(.top, 6)
-                    InboxThread(delivery: delivery, exchange: exchange)
-                    Color.clear.frame(height: 24).id("end")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                if !delivery.note.isEmpty {
+                    MarkdownText(text: delivery.note)
+                        .padding(.top, 16)
                 }
-                .frame(maxWidth: Self.column, alignment: .leading)
-                .padding(.horizontal, 32)
-                .padding(.top, 26)
-                .frame(maxWidth: .infinity)
+                DeliveryCards(delivery: delivery)
+                    .padding(.top, 6)
+                Color.clear.frame(height: 24)
             }
-            .onChange(of: exchange.count) { _, _ in withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("end", anchor: .bottom) } }
-            // Opened for a new answer: at the exchange's end.
-            .task(id: delivery.id) {
-                try? await Task.sleep(for: .milliseconds(150))
-                guard model.inbox.openedAsNews.remove(delivery.id) != nil,
-                      !InboxReply.exchange(for: delivery.id, in: model.thread(target)).isEmpty else { return }
-                proxy.scrollTo("end", anchor: .bottom)
-            }
+            .frame(maxWidth: Self.column, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.top, 26)
+            .frame(maxWidth: .infinity)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { dock(target: target) }
-        // The conversation's history holds the exchange: read it if it isn't in memory.
-        .onAppear { model.hydrate(target) }
+        .safeAreaInset(edge: .bottom, spacing: 0) { dock }
         .accessibilityIdentifier("inbox-reader")
     }
 
@@ -107,16 +93,17 @@ struct InboxReader: View {
 
     // MARK: Dock
 
-    private func dock(target: ChatTarget) -> some View {
+    private var dock: some View {
         VStack(spacing: 10) {
-            if let question = delivery.question, model.inbox.state.needsAnswer(delivery) {
-                QuestionBar(question: question) { choice in _ = model.inbox.reply(choice, to: delivery.id) }
+            if let question = delivery.question {
+                QuestionBar(delivery: delivery, question: question)
             }
+            DeliverySendFailure(delivery: delivery)
             let sender = model.bot(delivery.botID)?.name ?? "the bot"
             let origin = InboxOrigin(model: model, delivery: delivery)
             Composer(draft: Binding(get: { model.inbox.drafts[delivery.id] ?? "" }, set: { model.inbox.drafts[delivery.id] = $0 }),
                      focused: $composerFocused, addsImages: false, placeholder: "Reply to \(sender)", running: false,
-                     onSend: send, onStop: {}) {
+                     onSend: { model.inbox.reply(model.inbox.drafts[delivery.id] ?? "", to: delivery.id) }, onStop: {}) {
                 Spacer(minLength: 0)
                 Label(origin.name, systemImage: origin.symbol)
                     .labelStyle(TightLabel())
@@ -125,6 +112,8 @@ struct InboxReader: View {
                     .lineLimit(1)
                     .accessibilityLabel("To \(origin.name)")
             }
+            // One reply at a time: the box waits while the queue takes it.
+            .disabled(model.inbox.sending.contains(delivery.id))
         }
         .frame(maxWidth: Self.column)
         .padding(.horizontal, 32)
@@ -133,55 +122,113 @@ struct InboxReader: View {
         .frame(maxWidth: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
     }
-
-    private func send() {
-        let id = delivery.id, inbox = model.inbox!
-        let draft = inbox.drafts[id] ?? ""
-        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        // Should the queue not save it, it comes back to the box.
-        if inbox.reply(draft, to: id, accepted: { accepted in
-            if !accepted { inbox.drafts[id] = draft + (inbox.drafts[id].map { $0.isEmpty ? "" : "\n\n" + $0 } ?? "") }
-        }) {
-            inbox.drafts[id] = nil
-        }
-    }
 }
 
-/// The bot's question, answered in one click: each choice is sent as the reply, word for word.
+/// The bot's question, with its choices until the owner answers it (the reader's ⌘1 to ⌘9 send them),
+/// then when it was answered.
 private struct QuestionBar: View {
+    @Environment(AppModel.self) private var model
+    let delivery: Delivery
     let question: Delivery.Question
-    let choose: (String) -> Void
 
     var body: some View {
+        let answered = model.inbox.state.isAnswered(delivery) ? model.inbox.state[delivery.id].repliedAt : nil
         VStack(alignment: .leading, spacing: 9) {
-            Label {
-                Text(question.text).font(.system(size: 13, weight: .semibold))
-            } icon: {
-                Image(systemName: "questionmark.circle").foregroundStyle(Palette.needs)
-            }
-            if !question.choices.isEmpty {
-                FlowRow(spacing: 8) {
-                    ForEach(question.choices, id: \.self) { choice in
-                        Button { choose(choice) } label: {
-                            Text(choice)
-                                .font(.system(size: 13, weight: .medium))
-                                .padding(.horizontal, 14)
-                                .frame(height: 30)
-                                .background(Capsule().fill(Palette.card))
-                                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
-                                .shadow(color: .black.opacity(0.05), radius: 1, y: 1)
-                                .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("inbox-choice-\(choice)")
-                    }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Label {
+                    Text(question.text).font(.system(size: 13, weight: .semibold))
+                } icon: {
+                    Image(systemName: answered == nil ? "questionmark.circle" : "checkmark.circle")
+                        .foregroundStyle(answered == nil ? Palette.needs : Palette.secondaryText)
                 }
-                .padding(.leading, 23)
+                Spacer(minLength: 0)
+                if let answered {
+                    Text("Answered \(answered.formatted(date: .omitted, time: .shortened))")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Palette.secondaryText)
+                        .accessibilityIdentifier("inbox-answered")
+                }
+            }
+            if answered == nil, !question.choices.isEmpty {
+                DeliveryChoices(delivery: delivery, shortcuts: true)
+                    .padding(.leading, 23)
             }
         }
         .padding(EdgeInsets(top: 11, leading: 14, bottom: 12, trailing: 14))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.needsBackground))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(answered == nil ? Palette.needsBackground : Palette.card))
+    }
+}
+
+/// A question's choices, each sent as the reply word for word in one click; none while a reply to the
+/// delivery is being taken. With `shortcuts`, ⌘1 to ⌘9 send the first nine.
+struct DeliveryChoices: View {
+    @Environment(AppModel.self) private var model
+    let delivery: Delivery
+    var shortcuts = false
+    var compact = false
+
+    var body: some View {
+        let sending = model.inbox.sending.contains(delivery.id)
+        let choices = Array((delivery.question?.choices ?? []).enumerated())
+        FlowRow(spacing: compact ? 6 : 8) {
+            ForEach(choices, id: \.offset) { index, choice in
+                Button { model.inbox.reply(choice, to: delivery.id) } label: {
+                    Text(choice)
+                        .font(.system(size: compact ? 12 : 13, weight: .medium))
+                        .padding(.horizontal, compact ? 11 : 14)
+                        .frame(height: compact ? 26 : 30)
+                        .background(Capsule().fill(compact ? Palette.needsBackground : Palette.card))
+                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+                        .shadow(color: .black.opacity(compact ? 0 : 0.05), radius: 1, y: 1)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .modifier(ChoiceShortcut(index: shortcuts && index < 9 ? index : nil))
+                .accessibilityLabel(choice)
+                .accessibilityIdentifier("\(compact ? "delivery" : "inbox")-choice-\(choice)")
+            }
+        }
+        .disabled(sending)
+        .opacity(sending ? 0.5 : 1)
+    }
+}
+
+/// ⌘ and the choice's number.
+private struct ChoiceShortcut: ViewModifier {
+    let index: Int?
+
+    func body(content: Content) -> some View {
+        if let index {
+            content.keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+        } else {
+            content
+        }
+    }
+}
+
+/// A reply the conversation's queue didn't take, with Try Again, which sends it again.
+struct DeliverySendFailure: View {
+    @Environment(AppModel.self) private var model
+    let delivery: Delivery
+
+    var body: some View {
+        if let text = model.inbox.failed[delivery.id] {
+            HStack(spacing: 8) {
+                Label("Couldn't send to \(InboxOrigin(model: model, delivery: delivery).name)", systemImage: "exclamationmark.triangle.fill")
+                    .labelStyle(TightLabel())
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Button("Try Again") { model.inbox.reply(text, to: delivery.id) }
+                    .controlSize(.small)
+                    .disabled(model.inbox.sending.contains(delivery.id))
+                    .accessibilityIdentifier("delivery-retry-\(delivery.id)")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
@@ -220,101 +267,5 @@ struct FlowRow: Layout {
             }
         }
         return rows
-    }
-}
-
-/// The exchange under a delivery: the owner's replies as the chat's bubbles, the bot's answers as
-/// its replies, what waits in the queue, and the bot at work on it.
-private struct InboxThread: View {
-    @Environment(AppModel.self) private var model
-    let delivery: Delivery
-    let exchange: [ChatMessage]
-
-    var body: some View {
-        let target = model.inbox.target(of: delivery)
-        let origin = InboxOrigin(model: model, delivery: delivery)
-        let bot = model.bot(delivery.botID)
-        let queued = (model.messageQueues[target]?.pending ?? []).filter { $0.delivery == delivery.id }
-        let answering = model.isRunning(target) && model.thread(target).last(where: { $0.role == .user })?.delivery == delivery.id
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(exchange) { message in
-                switch message.role {
-                case .user:
-                    OwnerReply(text: message.text, meta: "Sent to \(origin.name) · \(message.date.formatted(date: .omitted, time: .shortened))",
-                               symbol: origin.symbol)
-                case .error:
-                    Label(message.text, systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.red)
-                        .padding(.top, 14)
-                default:
-                    if let bot { BotAnswer(bot: bot, text: message.text, date: message.date) }
-                }
-            }
-            ForEach(queued) { message in
-                OwnerReply(text: message.text, meta: model.isRunning(target) ? "Queued for \(origin.name)" : "Sending to \(origin.name)",
-                           symbol: "clock")
-            }
-            if answering, let bot {
-                HStack(spacing: 10) {
-                    BotAvatar(bot: bot, size: 28, activity: .thinking, animates: true)
-                    Text(bot.name).font(.system(size: 13, weight: .semibold))
-                    + Text(" · " + (model.status(of: target)?.activity.doing ?? "Working…")).foregroundStyle(Palette.secondaryText)
-                    Spacer(minLength: 0)
-                    ProgressView().controlSize(.small)
-                }
-                .font(.system(size: 13))
-                .padding(.top, 18)
-                .accessibilityIdentifier("inbox-working")
-            }
-        }
-    }
-}
-
-private struct OwnerReply: View {
-    let text: String
-    let meta: String
-    let symbol: String
-
-    var body: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            Text(text)
-                .font(.system(size: 13.5))
-                .textSelection(.enabled)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.accentColor))
-            Label(meta, systemImage: symbol)
-                .labelStyle(TightLabel())
-                .font(.system(size: 11))
-                .foregroundStyle(Palette.tertiaryText)
-        }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(.leading, 120)
-        .padding(.top, 16)
-    }
-}
-
-private struct BotAnswer: View {
-    let bot: Bot
-    let text: String
-    let date: Date
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            BotAvatar(bot: bot, size: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(bot.name).font(.system(size: 13, weight: .semibold))
-                    Text(date.formatted(date: .omitted, time: .shortened))
-                        .font(.system(size: 12))
-                        .foregroundStyle(Palette.secondaryText)
-                }
-                .frame(height: 28)
-                MarkdownText(text: text)
-            }
-        }
-        .padding(.top, 18)
     }
 }

@@ -87,4 +87,55 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(!app.inbox.isReading(report.id))
     }
+
+    /// A question's choice answers it from the keyboard, once; the delivery is Done and its
+    /// conversation opens. Its card in the chat offers the choices until then.
+    @Test func aChoiceAnswersTheQuestionAndOpensItsConversation() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-inbox-choice-\(UUID().uuidString)")
+        let domain = "BotChu.InboxPageTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: domain) }
+        let store = Store(root: root.appendingPathComponent("index"))
+        let bot = Bot(name: "Fox", emoji: "🦊", workspace: root.appendingPathComponent("fox").path)
+        try BotHome(workspace: bot.workspace).save(bot)
+        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        let asking = Delivery(botID: bot.id, title: "Which should I file?", note: "Two options.",
+                              question: Delivery.Question(text: "Which?", choices: ["Answer first", "Hold, but say so"]))
+        try InboxFolder(home: BotHome(workspace: bot.workspace)).save(asking, contents: [:])
+        let settings = AppSettings(defaults: defaults)
+        // The turn the answer starts runs nothing.
+        settings.commands[bot.accountID] = "/usr/bin/true"
+        let app = AppModel(store: store, settings: settings, openRouterKey: { nil }, projectGitHub: ProjectGitHub { _, _ in
+            await ProjectGitHub.command(["/usr/bin/false"], body: nil)
+        }, openWorkLookup: { _ in .success(GitHubLookup.OpenWork(items: [])) })
+        defer { app.stopAll() }
+        for _ in 0..<100 where app.inbox.all.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+
+        let card = NSHostingView(rootView: DeliveryCard(id: asking.id, fallback: "").environment(app).frame(width: 520))
+        let asked = card.fittingSize.height
+
+        app.destination = .inbox
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 760), styleMask: [.titled, .closable, .resizable],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: InboxView().environment(app).defaultAppStorage(defaults))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(400))
+        window.layoutIfNeeded()
+        #expect(app.inbox.isReading(asking.id))
+
+        let command1 = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+                                                     windowNumber: window.windowNumber, context: nil, characters: "1",
+                                                     charactersIgnoringModifiers: "1", isARepeat: false, keyCode: 18))
+        #expect(window.performKeyEquivalent(with: command1))
+        for _ in 0..<100 where !app.inbox.isDone(asking.id) { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(app.inbox.isDone(asking.id) && app.inbox.state.isAnswered(asking))
+        #expect(app.destination == nil && app.isShown(.home(bot.id)))
+        #expect(app.thread(.home(bot.id)).filter { $0.delivery == asking.id && $0.role == .user }.map(\.text) == ["Answer first"])
+        // Answered, the card's choices are gone.
+        card.layoutSubtreeIfNeeded()
+        #expect(card.fittingSize.height < asked - 20)
+    }
 }

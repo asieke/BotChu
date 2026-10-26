@@ -1738,8 +1738,7 @@ final class AppModel {
                     let messages = self.thread(target)
                     let failure = outcome.failure(stopped: stopped, exitError: messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil })
                     let turn = Array(messages.suffix(from: min(turnStart, messages.count)))
-                    // The owner's message that started it is just before it.
-                    self.inbox.turnEnded(target, turn: Array(messages.suffix(from: max(0, min(turnStart, messages.count) - 1))))
+                    self.inbox.turnEnded(target)
                     self.log(TurnLog.ended(
                         at: Date(), startedAt: startedAt, status: status, stopped: stopped,
                         toolCalls: turn.filter { $0.role == .tool }.count,
