@@ -28,9 +28,9 @@ extension RenderingTests {
         window.makeKeyAndOrderFront(nil)
         try await Task.sleep(for: .milliseconds(300))
 
-        // Rows, from the top: Home, the heading, then each task, two lines each.
+        // Rows, from the top: Home's two lines, the heading, then each task's three (#192).
         let home = NSPoint(x: 120, y: 33), heading: CGFloat = 77
-        func row(_ index: Int) -> NSPoint { NSPoint(x: 120, y: 124 + CGFloat(index) * 52) }
+        func row(_ index: Int) -> NSPoint { NSPoint(x: 120, y: 134 + CGFloat(index) * 70) }
         func click(_ point: NSPoint, in view: NSView? = nil) async throws {
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] { send(type, at: point, in: view ?? host) }
             try await Task.sleep(for: .milliseconds(150))
@@ -338,6 +338,81 @@ extension RenderingTests {
         #expect(model.openTasks(of: bot.id).map(\.id) == [fixture.tasks[1].id, fixture.tasks[2].id])
     }
 
+    /// #192: a task's row has three lines, its summary on the second, at every width of the column
+    /// (one line each, never wrapped), and Home's keeps two. Drawing them asks no model.
+    @Test func taskRowsHaveThreeLinesAtEveryColumnWidth() async throws {
+        _ = NSApplication.shared
+        let fixture = try TabsFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot
+        let jobs = SummaryJobs()
+        model.summaryRunner = { job in jobs.add(job); return "Never asked for" }
+        model.settings.quickTaskAccountID = "claude-dev"
+        model.settings.quickTaskModel = "haiku"
+        let task = ChatTarget.task(fixture.tasks[0].id, of: bot.id), other = ChatTarget.task(fixture.tasks[1].id, of: bot.id)
+        model.tasks[bot.id]?[0].summary = "Typo in the README"
+        model.runStates[task] = RunState(startedAt: Date().addingTimeInterval(-252), hasOutput: true, activity: .thinking)
+        model.runStates[other] = RunState(startedAt: Date().addingTimeInterval(-60), hasOutput: true, activity: .thinking)
+        // Two tasks thinking in the same repository still read apart.
+        #expect(model.conversationTab(of: task)?.label == "Typo in the README")
+        #expect(model.conversationTab(of: other)?.label == "Add a filter bar")
+        #expect(model.conversationTab(of: task)?.status == "Thinking…")
+        func height(_ target: ChatTarget, column: CGFloat) async throws -> CGFloat {
+            let host = NSHostingView(rootView: PlainRow(target: target).frame(width: column - 2 * ConversationColumn.rowInset)
+                .environment(model).defaultAppStorage(fixture.defaults))
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+            return host.fittingSize.height
+        }
+        let narrow = ConversationColumnLayout.widths.lowerBound, wide = ConversationColumnLayout.widths.upperBound
+        let rows = try await [height(task, column: narrow), height(task, column: wide), height(other, column: narrow)]
+        let home = try await height(.home(bot.id), column: narrow)
+        #expect(rows.allSatisfy { abs($0 - rows[0]) <= 0.5 }, "every task row is as tall at 200 and 320 points: \(rows)")
+        #expect(rows[0] - home >= 12 && rows[0] <= 72, "a third line, compact: \(rows[0]) against Home's \(home)")
+        #expect(jobs.all.isEmpty)
+    }
+
+    /// #192: a new task's summary is asked for once, in the background, on the Quick tasks profile
+    /// and model, only once they are chosen; a reply that isn't a label of three or four words
+    /// leaves the task named as before. A saved one is in its task.json.
+    @Test func aNewTasksSummaryIsAskedForOnceOnTheQuickTasksProfile() async throws {
+        let fixture = try TabsFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot
+        let targets = fixture.tasks.map { ChatTarget.task($0.id, of: bot.id) }
+        let jobs = SummaryJobs()
+        model.summaryRunner = { job in
+            jobs.add(job)
+            return job.prompt.contains("Fix the typo") ? "“Typo fix in README.”" : "Sure! Here is a label for this task: Add a filter"
+        }
+        // Off until a profile and model are chosen: nothing is asked.
+        model.summarizeNewTask(targets[0])
+        #expect(model.summaryRuns.isEmpty)
+        model.settings.quickTaskAccountID = "google"
+        model.settings.quickTaskModel = "gemini-4-argon-medium"
+        model.summarizeNewTask(targets[0])
+        #expect(model.summaryRuns.isEmpty, "Antigravity can't run without tools, and no other account stands in")
+        model.settings.quickTaskAccountID = "claude-dev"
+        model.settings.quickTaskModel = "haiku"
+        model.summarizeNewTask(targets[0])
+        model.summarizeNewTask(targets[1])
+        #expect(model.summaryRuns.count == 2)
+        await model.lastSummaryRun?.value
+        #expect(jobs.all.map(\.account.id) == ["claude-dev", "claude-dev"])
+        #expect(jobs.all.allSatisfy { $0.model == "haiku" })
+        #expect(model.task(targets[0])?.summary == "Typo fix in README")
+        #expect(model.task(targets[1])?.summary == nil)
+        #expect(model.conversationTab(of: targets[1])?.label == "Add a filter bar")
+        // Once: never asked again.
+        model.summarizeNewTask(targets[0])
+        #expect(model.summaryRuns.isEmpty && jobs.all.count == 2)
+        let home = BotHome(workspace: bot.workspace)
+        for _ in 0..<100 where home.loadTasks().first(where: { $0.id == targets[0].taskID })?.summary == nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(home.loadTasks().first { $0.id == targets[0].taskID }?.summary == "Typo fix in README")
+    }
+
     /// Home's status sidebar lists only closed tasks, to open again: none while none is closed.
     @Test func homeStatusListsOnlyClosedTasks() async throws {
         _ = NSApplication.shared
@@ -423,6 +498,25 @@ extension RenderingTests {
                                      context: nil, characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: code)!
         window.sendEvent(event)
     }
+}
+
+/// A tab as the column draws it, not hovered nor selected.
+private struct PlainRow: View {
+    let target: ChatTarget
+    @FocusState private var focus: ChatTarget?
+
+    var body: some View {
+        ConversationRow(target: target, index: 1, selected: false, hovered: false, focus: $focus) { _ in }
+    }
+}
+
+/// The summaries a test's runner was asked for.
+private final class SummaryJobs: @unchecked Sendable {
+    private let lock = NSLock()
+    private var jobs: [EvaluationJob] = []
+
+    func add(_ job: EvaluationJob) { lock.withLock { jobs.append(job) } }
+    var all: [EvaluationJob] { lock.withLock { jobs } }
 }
 
 /// A task's tab as the column draws it under the pointer.

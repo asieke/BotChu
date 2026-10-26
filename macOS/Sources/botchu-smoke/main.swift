@@ -5,11 +5,14 @@
 // Prints each thread and exits non-zero when an account fails. Needs the CLIs signed in.
 // `--usage` reads each account's allowance instead; `--review` runs one turn the way a run review
 // does, without tools, asking the CLI to read a file outside its folder: it must answer, without
-// a tool call and without the file's word.
+// a tool call and without the file's word. `--summary` names a new task the way Quick tasks do
+// (#192), on each account's smallest model unless BOTCHU_SMOKE_MODEL names one: it must reply with
+// a label of three or four words.
 //
 //   swift run --package-path macOS botchu-smoke claude-personal codex-dev
 //   OPENROUTER_API_KEY=… swift run --package-path macOS botchu-smoke openrouter
 //   swift run --package-path macOS botchu-smoke --review claude-dev codex-dev muse
+//   swift run --package-path macOS botchu-smoke --summary claude-dev codex-dev
 import Foundation
 import BotChuCore
 
@@ -21,7 +24,8 @@ let smokeImage = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_IMAGE"].map {
 let imageExpected = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_IMAGE_EXPECT"]
 let usageOnly = CommandLine.arguments.dropFirst().first == "--usage"
 let reviewOnly = CommandLine.arguments.dropFirst().first == "--review"
-let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly ? 2 : 1))
+let summaryOnly = CommandLine.arguments.dropFirst().first == "--summary"
+let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly || summaryOnly ? 2 : 1))
 let accounts = requested.isEmpty ? Accounts.all : requested.map { Accounts.account(id: $0) }
 let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-smoke-\(UUID().uuidString)")
 
@@ -176,6 +180,23 @@ Task {
                 print("    FAIL: \(failure?.message ?? error.localizedDescription)\(failure?.usedTool == true ? " (it reported a tool call)" : "")")
                 failures.append(account.id)
             }
+            continue
+        }
+        if summaryOnly {
+            print("== \(account.name) task summary, without tools")
+            let model = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_MODEL"] ?? QuickTasks.suggestedModel(for: account.kind)
+            guard let quick = QuickTasks(accountID: account.id, model: model, accounts: Accounts.all) else {
+                print("    skipped: \(RunEvaluator.unavailable(account.kind))")
+                continue
+            }
+            let task = BotTask(repo: "asieke/BotChu", checkout: root.path,
+                               brief: "Show three-line Task labels with saved summaries and a Quick tasks setting in the conversation column")
+            let started = Date()
+            let label = await TaskSummary.run(TaskSummary.job(for: task, botID: UUID(), quick: quick)!, with: { job in
+                try await EvaluationCLI.run(job, command: account.defaultCommand, model: job.model, log: nil, what: "task summary")
+            })
+            print("    \(label.map { "OK: “\($0)” on \(model)" } ?? "FAIL: no label of three or four words on \(model)") in \(Int(Date().timeIntervalSince(started)))s")
+            if label == nil { failures.append(account.id) }
             continue
         }
         let word = "ZEBRA\(Int.random(in: 100...999))"

@@ -333,13 +333,14 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     pinned at the top, then a **Tasks** heading with their count, **+** (New Task, ⌘T) and **«**
     (collapse), then the open tasks in the order they were opened, which scroll. A tab's first,
     prominent line is the repository it works in and its issue's or pull request's number
-    ("BotChu #113"; a review's with an eye, a host's name after it); its second says what it is
-    doing, with a time on the right that is never cut off: making the worktree or starting (a
+    ("BotChu #113"; a review's with an eye, a host's name after it); a task's second says what it
+    is about: its summary, a label of three or four words saved when it started (see Quick tasks,
+    below), or for a task without one its issue's title or a brief's words; its third says what it
+    is doing, with a time on the right that is never cut off: making the worktree or starting (a
     violet ring), working (violet, what it is doing and its elapsed time, ticking each second),
     finished since it was last shown (blue, with its pull request), or its last turn failed (red,
-    until its next turn starts); while idle (a faint ring), what it is about (its issue's title, or
-    a brief's words) and its last activity (2m, 1h, 1d). Home's tab names its account, or its own
-    turn's state. The rows are inset 8 points from both of the column's edges, and the selected
+    until its next turn starts); while idle (a faint ring), **Idle** and its last activity (2m, 1h,
+    1d). Home's tab has two lines: Home, then its account, or its own turn's state. The rows are inset 8 points from both of the column's edges, and the selected
     one is a card with its edge all round, as the rail's selected tile is. Dots hold still; when a
     turn ends, its dot pops once (with Reduce Motion, it only crossfades). A click, **⌘1** (Home) to **⌘9** (the first eight tasks, in the Bot menu), ⌃Tab,
     and ↑ and ↓ while a tab has keyboard focus switch conversations. Hovering a task's tab turns its
@@ -349,7 +350,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     The column is 240 points wide; drag its edge to make it 200 to 320, which is remembered. **«**
     or **View ▸ Collapse Tasks** folds it into a 56-point rail of tiles (a house for Home, each
     task's number, or a checklist for a brief, then **+**), with a dot in the corner of each tile
-    that isn't idle and the tab's two lines on hover; **»** or **View ▸ Expand Tasks** brings it
+    that isn't idle and the tab's lines on hover; **»** or **View ▸ Expand Tasks** brings it
     back, and the choice survives a relaunch. The column also becomes the rail by itself while the
     chat beside it would be less than 600 points wide to read, and comes back when the window
     widens; as the chat's text never grows past 760 points, on windows of 1,680 points and wider
@@ -967,6 +968,17 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     on repositories, each account's command, the Codex account that draws pets' stills, the
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
     and default OpenRouter model, whether each bot's work gets a daily run review and at what time, and the Telegram gateway (below).
+  - **Quick tasks:** Settings ▸ General ▸ **Quick tasks** picks the profile and model of small
+    background asks: for now, each new task's summary, the label of three or four words on its
+    tab's second line. It is **Off** until you pick a profile (Claude Code, Codex or Muse, which
+    BotChu can run without tools); picking one starts on its family's smallest model (Haiku, GPT-6
+    Luna, Muse Spark), which you can change. Each task started afterwards is summarized once, in the
+    background (its turn doesn't wait), from its issue's or pull request's title once looked up, else
+    its brief, in a fresh session with every tool turned off by the CLI itself, in an empty folder,
+    as a run review is, on that profile's allowance and never another's, and logged in its bot's
+    turn log as a "task summary". A reply that isn't a label of three or four words, a failure, or
+    none within 90 seconds leaves the task named as before. The summary is saved in its
+    `task.json`; nothing is asked at launch, while drawing tabs, or for tasks from before.
   - **Remote queue bots:** choose **Remote queue** in New Bot to message an agent such as Danny
     on its own computer. BotChu serves an authenticated HTTP queue, while the remote runtime
     polls for messages and posts complete replies or errors into Home. Documents go both ways: attach
@@ -1062,8 +1074,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     (`ComposerLayout.swift`), what
     the status sidebar shows about a bot, from a summary of its thread kept as the thread grows, and
     its `MEMORY.md` (`BotStatus.swift`), what a conversation's tab and its bot's row say: its state,
-    the tab's two lines, the row's dots and subtitle, and when the column folds into the rail
-    (`ConversationTabs.swift`), replies' parsed Markdown, cached by their text within a
+    the tab's lines, the row's dots and subtitle, and when the column folds into the rail
+    (`ConversationTabs.swift`), a new task's summary on the Quick tasks profile: what it is made
+    from, its prompt and which replies are kept (`TaskSummaries.swift`), replies' parsed Markdown, cached by their text within a
     budget of bytes (`MarkdownCache.swift`), and parsed off the main thread as they are written, one
     revision at a time for each reply (`MarkdownPreparation.swift`), a reply's text as it is selected
     and copied: its texts in reading order, what goes between them, words and paragraphs
@@ -1584,6 +1597,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   folder, and passes when the CLI answers without a tool call and without the file's word. Accounts
   whose CLI has no tool-free mode are skipped. It spends a little of each account's allowance and
   isn't part of `check`; run it after changing how reviews run a CLI.
+- Task summaries (Quick tasks) without tools: `swift run --package-path macOS botchu-smoke --summary
+  [account id …]` names a sample task on each account the way a new task's summary is asked for, on
+  its family's smallest model (or `BOTCHU_SMOKE_MODEL`), and passes when the reply is a label of
+  three or four words. It spends a little of each account's allowance; run it after changing how
+  summaries are asked for.
 - Telegram end to end: the gateway's tests use stand-ins for Telegram, so a real exchange is
   checked by hand, with your own Telegram bot: see
   [Checking it end to end](docs/telegram.md#checking-it-end-to-end).
