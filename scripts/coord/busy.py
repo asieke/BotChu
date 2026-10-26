@@ -46,6 +46,28 @@ def busy_lines(snapshot):
             yield line[:200]
 
 
+def in_gate(snapshot, pid):
+    ancestors = {}
+    for line in snapshot.splitlines():
+        fields = line.split(None, 3)
+        if len(fields) != 4:
+            continue
+        try:
+            ancestors[int(fields[0])] = int(fields[1]), os.path.basename(fields[2]), shlex.split(fields[3])
+        except ValueError:
+            continue
+    seen = set()
+    while pid in ancestors and pid not in seen:
+        seen.add(pid)
+        parent, base, args = ancestors[pid]
+        if base in ("bash", "sh", "zsh"):
+            for index, argument in enumerate(args[:2]):
+                if os.path.basename(argument) == "gate.sh" and args[index + 1:index + 2] == ["_run"]:
+                    return True
+        pid = parent
+    return False
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["--stdin"]:
         snapshot = sys.stdin.read()
@@ -63,5 +85,7 @@ if __name__ == "__main__":
                 pid, parent, executable = fields
                 rows.append(f"{pid} {parent} {os.path.basename(executable)} {argv[pid]}")
         snapshot = "\n".join(rows)
+    if sys.argv[1:] == ["--in-gate"]:
+        sys.exit(0 if in_gate(snapshot, os.getppid()) else 1)
     for line in busy_lines(snapshot):
         print(line)

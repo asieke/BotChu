@@ -47,3 +47,9 @@ test_run() {
   if [ "$result" != 0 ]; then python3 "$test_root/scripts/test-report.py" --failed "$xml"; fi
   return "$result"
 }
+
+# A pre-upgrade /tmp gate does not export the marker yet. Recognize its real ancestor too,
+# so the formerly documented outer-gate command cannot deadlock on the first upgraded run.
+test_inside_gate() {
+  [ -n "${BOTCHU_GATE_RUN_ID:-}" ] || python3 "$test_root/scripts/coord/busy.py" --in-gate
+}

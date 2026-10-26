@@ -36,6 +36,25 @@ class WorkflowTests(unittest.TestCase):
 """
         self.assertEqual([int(line.split()[0]) for line in busy.busy_lines(snapshot)], [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17])
 
+    def test_legacy_gate_ancestor_is_detected_without_a_marker(self):
+        snapshot = """1 0 launchd launchd
+2 1 bash /bin/bash /tmp/botchu-coord/gate.sh _run 1234
+3 2 bash bash scripts/test.sh
+4 3 python3 python3 busy.py --in-gate
+5 1 zsh zsh -c 'mention gate.sh _run in a message'
+6 5 python3 python3 busy.py --in-gate
+"""
+        self.assertTrue(busy.in_gate(snapshot, 4))
+        self.assertFalse(busy.in_gate(snapshot, 6))
+        with tempfile.TemporaryDirectory() as temporary:
+            gate = Path(temporary) / "gate.sh"
+            gate.write_text('#!/bin/bash\nshift\n"$@"\n')
+            environment = dict(os.environ)
+            environment.pop("BOTCHU_GATE_RUN_ID", None)
+            check = f'test_root="{ROOT}"; source "{ROOT}/scripts/test-support.sh"; test_inside_gate'
+            self.assertEqual(subprocess.run(["bash", str(gate), "_run", "bash", "-c", check], env=environment).returncode, 0)
+            self.assertEqual(subprocess.run(["bash", "-c", check], env=environment).returncode, 1)
+
     def test_failed_test_command_keeps_build_and_only_failed_selection(self):
         with tempfile.TemporaryDirectory() as temporary:
             xml = Path(temporary) / "core.xml"
