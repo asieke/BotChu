@@ -42,9 +42,10 @@ struct PetJob: Equatable {
 }
 
 extension AppModel {
-    /// The Codex account that draws a bot's stills: its own when it runs on Codex, else the one in Settings.
+    /// The Codex account that draws a bot's stills: its own when it runs on Codex, else (and for a remote
+    /// queue bot, which runs no CLI here) the one in Settings.
     func petAccount(for bot: Bot) -> Account {
-        bot.account.kind == .codex ? bot.account : settings.account(settings.petAccountID)
+        !bot.isRemoteQueue && bot.account.kind == .codex ? bot.account : settings.account(settings.petAccountID)
     }
 
     /// Saves a bot's appearance (the editor's text) without the rest of the editor's changes.
@@ -62,7 +63,7 @@ extension AppModel {
     /// account, from its current pet's look when its appearance hasn't changed), then OpenRouter makes a
     /// looping clip from each. Stills already drawn by a stopped or failed attempt are reused.
     func makePet(_ id: UUID) {
-        guard let bot = bot(id), !bot.isRemoteQueue, petJobs[id]?.isActive != true else { return }
+        guard let bot = bot(id), petJobs[id]?.isActive != true else { return }
         let appearance = bot.appearance?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !appearance.isEmpty else {
             petJobs[id] = PetJob(phase: .failed("Describe how the bot looks first."))

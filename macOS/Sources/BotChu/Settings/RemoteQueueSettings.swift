@@ -76,6 +76,7 @@ struct RemoteQueueInspector: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 BotIntro(bot: bot)
+                PetJobStatus(botID: bot.id)
                 Text("Remote queue bot").font(.headline)
                 RemoteQueuePresence()
                 Text(model.remoteQueue.summary).foregroundStyle(.secondary)

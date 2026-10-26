@@ -136,9 +136,13 @@ struct ChatView: View {
                          images: model.draftImages[target] ?? [],
                          imageURL: { model.imageURL($0, for: target) },
                          onRemoveImage: { id in model.draftImages[target]?.removeAll { $0.id == id } },
-                         onAddImages: { model.addImages($0, to: target) },
-                         onPasteImages: { model.pasteImages($0, to: target) },
+                         onAddImages: { bot.isRemoteQueue ? model.addFiles($0, to: target) : model.addImages($0, to: target) },
+                         onPasteImages: { bot.isRemoteQueue ? model.pasteFiles($0, to: target) : model.pasteImages($0, to: target) },
                          addsImages: !bot.isRemoteQueue,
+                         files: model.draftFiles[target] ?? [],
+                         fileURL: { model.fileURL($0, for: target) },
+                         onRemoveFile: { id in model.draftFiles[target]?.removeAll { $0.id == id } },
+                         addsFiles: bot.isRemoteQueue,
                          attachmentError: model.attachmentErrors[target],
                          references: Binding(get: { model.draftReferences[target] ?? [] },
                                              set: { model.draftReferences[target] = $0.isEmpty ? nil : $0 }),
@@ -186,16 +190,18 @@ struct ChatView: View {
     private func send() {
         let draft = model.drafts[target] ?? ""
         let images = model.draftImages[target] ?? []
-        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
+        let files = model.draftFiles[target] ?? []
+        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !files.isEmpty else { return }
         let references = model.draftReferences[target] ?? []
         let target = target, model = model
         // The message shows queued at once; should the queue not save, it comes back to the draft.
-        if model.send(draft, to: target, images: images, references: references, accepted: { accepted in
-            if !accepted { model.returnToDraft(draft, references: references, images: images, in: target) }
+        if model.send(draft, to: target, images: images, files: files, references: references, accepted: { accepted in
+            if !accepted { model.returnToDraft(draft, references: references, images: images, files: files, in: target) }
         }) {
             model.drafts[target] = nil
             model.draftReferences[target] = nil
             model.draftImages[target] = nil
+            model.draftFiles[target] = nil
             model.attachmentErrors[target] = nil
             // Sending takes the reader to their message and what follows it, wherever they were.
             transcript.follow(.sent)

@@ -23,6 +23,8 @@ struct MessageRow: View, Equatable {
         case .user:
             VStack(alignment: .trailing, spacing: 6) {
             if let delivery = message.delivery { InboxReplyLine(delivery: delivery) }
+            if !message.documents.isEmpty { MessageFiles(files: message.documents, bot: bot, alignment: .trailing) }
+            if !message.text.isEmpty || !message.images.isEmpty {
             HStack {
                 Spacer(minLength: 80)
                 VStack(alignment: .trailing, spacing: 8) {
@@ -45,20 +47,26 @@ struct MessageRow: View, Equatable {
                     .background(RoundedRectangle(cornerRadius: Theme.bubbleRadius).fill(Color.accentColor))
             }
             }
+            }
             .padding(.top, 6)
         case .assistant:
             BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
-                MarkdownText(text: message.text)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 13)
-                    .background {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(Theme.replyBackground)
+                VStack(alignment: .leading, spacing: 8) {
+                    if !message.text.isEmpty || message.documents.isEmpty {
+                        MarkdownText(text: message.text, fitsText: true)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 13)
+                            .background {
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .fill(Theme.replyBackground)
+                            }
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .strokeBorder(Color.primary.opacity(0.045))
+                            }
                     }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.045))
-                    }
+                    if !message.documents.isEmpty { MessageFiles(files: message.documents, bot: bot, alignment: .leading) }
+                }
             }
         case .tool:
             BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
@@ -87,6 +95,75 @@ struct MessageRow: View, Equatable {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 2)
         }
+    }
+}
+
+/// A message's documents, each opening in its app, an image as its picture.
+struct MessageFiles: View {
+    let files: [FileAttachment]
+    let bot: Bot
+    let alignment: HorizontalAlignment
+
+    var body: some View {
+        let home = BotHome(workspace: bot.persistencePath)
+        VStack(alignment: alignment, spacing: 6) {
+            ForEach(files) { file in
+                let url = home.fileURL(file)
+                if file.type?.hasPrefix("image/") == true, let preview = NSImage(contentsOf: url) {
+                    Image(nsImage: preview).resizable().scaledToFit().frame(maxWidth: 320, maxHeight: 240)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .onTapGesture { NSWorkspace.shared.open(url) }
+                        .fileActions(url)
+                        .help(file.name).accessibilityLabel(file.name)
+                } else {
+                    MessageFileCard(file: file, url: url)
+                }
+            }
+        }
+    }
+}
+
+/// A document's icon, name and size; it opens in its app and drags out as itself.
+struct MessageFileCard: View {
+    let file: FileAttachment
+    let url: URL
+
+    var body: some View {
+        let exists = FileManager.default.fileExists(atPath: url.path)
+        Button { NSWorkspace.shared.open(url) } label: {
+            HStack(spacing: 10) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                    .resizable().frame(width: 32, height: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(file.name).lineLimit(1).truncationMode(.middle)
+                    Text(exists ? ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file) : "Unavailable")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: 320, alignment: .leading)
+            .fixedSize(horizontal: true, vertical: false)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.replyBackground))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!exists)
+        .fileActions(url)
+        .help(file.name)
+        .accessibilityLabel("Open \(file.name)")
+    }
+}
+
+extension View {
+    /// Drags out as the file, with Open and Show in Finder on a right click.
+    func fileActions(_ url: URL) -> some View {
+        onDrag { NSItemProvider(contentsOf: url) ?? NSItemProvider() }
+            .contextMenu {
+                Button("Open") { NSWorkspace.shared.open(url) }
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            }
     }
 }
 

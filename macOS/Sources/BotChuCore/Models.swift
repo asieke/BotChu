@@ -156,6 +156,10 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     public var toolDuration: Double?
     public var attachments: [ImageAttachment]?
     public var images: [ImageAttachment] { attachments ?? [] }
+    /// Documents sent with the message (`FileAttachment`); a remote queue bot's messages carry
+    /// them both ways. Nil in messages without any, and in threads saved before.
+    public var files: [FileAttachment]?
+    public var documents: [FileAttachment] { files ?? [] }
     /// On the owner's message, the agents and projects chosen in it from `@` and `#` completion
     /// (`MessageReference`). Nil in messages without any, and in threads saved before.
     public var references: [MessageReference]?

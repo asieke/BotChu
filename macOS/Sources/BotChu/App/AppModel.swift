@@ -140,6 +140,8 @@ final class AppModel {
     /// The agents and projects chosen in each draft from `@` and `#` completion (`Mentions.swift`).
     var draftReferences: [ChatTarget: [MessageReference]] = [:]
     var draftImages: [ChatTarget: [ImageAttachment]] = [:]
+    /// Documents in a remote queue bot's draft (`addFiles`).
+    var draftFiles: [ChatTarget: [FileAttachment]] = [:]
     var attachmentErrors: [ChatTarget: String] = [:]
     /// How many notes each bot asked to remember that BotChu couldn't save yet (`MemoryWriter`).
     var unsavedMemory: [UUID: Int] = [:]
@@ -601,6 +603,7 @@ final class AppModel {
         drafts = drafts.filter { $0.key.botID != id }
         draftReferences = draftReferences.filter { $0.key.botID != id }
         draftImages = draftImages.filter { $0.key.botID != id }
+        draftFiles = draftFiles.filter { $0.key.botID != id }
         attachmentErrors = attachmentErrors.filter { $0.key.botID != id }
         openTask[id] = nil
         pets[id] = nil
@@ -1189,12 +1192,14 @@ final class AppModel {
     /// saved, the message leaves the queue again (for the composer to put back into its draft), the
     /// queue pauses and the conversation says why.
     @discardableResult
-    func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [], id: UUID = UUID(),
-              references: [MessageReference] = [], delivery: UUID? = nil, accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
+    func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [], files: [FileAttachment] = [],
+              id: UUID = UUID(), references: [MessageReference] = [], delivery: UUID? = nil,
+              accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
         let (text, references) = MessageReference.trimming(text, references: references)
         if bot(target.botID)?.isRemoteQueue == true {
-            guard visible, target.taskID == nil, !text.isEmpty, images.isEmpty else { return false }
-            return remoteQueue.enqueue(text, id: id, for: target.botID, accepted: accepted)
+            guard visible, target.taskID == nil, !text.isEmpty || !files.isEmpty, images.isEmpty,
+                  files.count <= FileAttachment.maximumCount else { return false }
+            return remoteQueue.enqueue(text, files: files, id: id, for: target.botID, accepted: accepted)
         }
         guard images.count <= ImageAttachment.maximumCount else {
             attachmentErrors[target] = "Attach up to 8 images per message. Remove an image before sending."
@@ -1260,11 +1265,13 @@ final class AppModel {
     }
 
     /// Puts a message that couldn't be queued back into the composer, before what was typed since.
-    func returnToDraft(_ text: String, references: [MessageReference], images: [ImageAttachment], in target: ChatTarget) {
+    func returnToDraft(_ text: String, references: [MessageReference], images: [ImageAttachment], files: [FileAttachment] = [],
+                       in target: ChatTarget) {
         let draft = MessageReference.joining((text, references), (drafts[target] ?? "", draftReferences[target] ?? []))
         drafts[target] = draft.text
         draftReferences[target] = draft.references.isEmpty ? nil : draft.references
         draftImages[target] = images + (draftImages[target] ?? [])
+        if !files.isEmpty { draftFiles[target] = files + (draftFiles[target] ?? []) }
     }
 
     /// Resume a paused queue: its next message goes out now, or, during a turn, as a follow-up.

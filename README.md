@@ -229,7 +229,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     delta.) Rich replies, in WebKit, select as web pages do. A table's cells stay on
     one line, each row ruled straight across whatever its cells hold (empty, or inline code), and a
     table wider than the chat scrolls sideways. Replies have soft rounded
-    bubbles. Inline and display math use bundled KaTeX; Mermaid code fences display diagrams with
+    bubbles, as wide as their text up to the chat's width (a table, code block or rich reply
+    fills it). Inline and display math use bundled KaTeX; Mermaid code fences display diagrams with
     source/copy and fit/actual-size controls. Both render offline in system WebKit, including inside
     tables and lists; a reply's web view is made as it nears the visible part of the chat, with only
     the renderer it uses, and shows once the reply has rendered, at its final height, so neither a
@@ -931,7 +932,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     and default OpenRouter model, whether each bot's work gets a daily run review and at what time, and the Telegram gateway (below).
   - **Remote queue bots:** choose **Remote queue** in New Bot to message an agent such as Danny
     on its own computer. BotChu serves an authenticated HTTP queue, while the remote runtime
-    polls for messages and posts complete replies or errors into Home. The queue survives relaunch,
+    polls for messages and posts complete replies or errors into Home. Documents go both ways: attach
+    them with +, a drop or a paste, and the remote runtime's files show under its reply, opening in
+    their apps. It can have a pet like any bot's. The queue survives relaunch,
     retains replies without truncation, and deduplicates retry acknowledgements. This bot has no
     local workspace, CLI, account/model controls, tasks, jobs or sub-agents. Settings ▸ **Remote queue**
     controls its address/port, generated Keychain token and connection status; the sidebar shows

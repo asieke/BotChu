@@ -2,8 +2,10 @@
 
 A remote queue bot runs on its own computer. BotChu keeps its Home conversation and a durable
 queue; the remote runtime polls for messages and posts one reply or error per message. Nothing
-starts a CLI on this Mac. V1 supports one remote bot, text messages, and ten waiting messages.
-It has no local workspace, provider/model settings, tasks, scheduled jobs or sub-agent runs.
+starts a CLI on this Mac. It supports one remote bot, text messages with documents attached both
+ways, and ten waiting messages. It can have a pet, made as any bot's is (Edit ▸ Appearance), which
+thinks while a message waits and is pleased when a reply lands. It has no local workspace,
+provider/model settings, tasks, scheduled jobs or sub-agent runs.
 
 ## Setup
 
@@ -58,12 +60,24 @@ Every request includes `Authorization: Bearer <token>`. Missing or incorrect cre
 
 | Request | Response |
 | --- | --- |
-| `GET /v1/queue/next` | 200 with `{"id":"UUID","text":"message","sent_at":"ISO 8601"}`, or 204 when empty |
+| `GET /v1/queue/next` | 200 with `{"id":"UUID","text":"message","sent_at":"ISO 8601"}`, plus `"files":[{"id":"UUID","name":"roster.pdf","type":"application/pdf","size":12345}]` when documents are attached; or 204 when empty |
+| `GET /v1/queue/files/<file id>` | 200 with the file's bytes and its `Content-Type`, while its message waits; 404 once it is answered |
 | `POST /v1/queue/reply` with `{"id":"UUID","text":"reply"}` | 200 with `{"ok":true}` after the reply is saved |
+| `POST /v1/queue/reply` with `{"id":"UUID","text":"reply","files":[{"name":"roster.pdf","type":"application/pdf","data":"<base64>"}]}` | Same; the files show under the reply in Home |
 | `POST /v1/queue/reply` with `{"id":"UUID","error":"reason"}` | Same acknowledgement; Home displays the error and the message stops waiting |
 | `GET /v1/health` | 200 with `{"ok":true,"pending":0}` |
 
-Send exactly one of `text` and `error`, nonempty. Malformed JSON or an invalid reply receives
+Files attach to a message from the composer's +, by dropping them, or by pasting them (a pasted
+picture goes as PNG). In Home, each opens in its app, drags out as itself, and shows in Finder
+from its menu.
+
+Send exactly one of `text` and `error`, nonempty; `text` may be empty when `files` has at least
+one file. An error carries no files. A message's `text` is empty when the owner sent only files.
+Up to 8 files go each way, each at most 10 MB. A reply's files travel inside its body, so
+together they must fit its 16 MiB limit after base64 (about 12 MB). Download a message's files
+when you start its work: they stay readable until its reply is accepted. File names are reduced
+to one safe path component (no separators, control characters or leading dots). `type` is a MIME
+type and optional. Malformed JSON or an invalid reply receives
 400, an unknown message ID receives 404, and a save failure receives 503 so the client can retry.
 Use `Content-Length`; chunked request bodies are not supported. Each connection handles one
 request and closes. BotChu parses up to 16 KiB of headers, then authenticates before reading
@@ -127,7 +141,8 @@ AppModel, plus token rotation, errors, full queues and recovery from a missing t
 
 The bot's records live under the app data folder in `remote-bots/<bot-id>/.botchu/`, with an empty
 workspace field. `remote-queue.json` is an atomic journal of requests, replies and their event
-order, keyed to this bot ID. A reply's stable ID and its acknowledgement are committed together
+order, keyed to this bot ID. Files, sent and received, are kept beside it in
+`attachments/<file id>/<name>`; a reply's files are saved before the journal names them. A reply's stable ID and its acknowledgement are committed together
 before success is returned. Home reconciles from that journal by ID, so a crash between the
 journal and Home saves cannot lose or duplicate the exchange. Replies are stored whole.
 Completed receipts remain in the journal to recognize old retries indefinitely.

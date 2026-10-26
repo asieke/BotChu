@@ -42,6 +42,48 @@ extension AppModel {
     }
 }
 
+extension AppModel {
+    func fileURL(_ file: FileAttachment, for target: ChatTarget) -> URL? {
+        bot(target.botID).map { BotHome(workspace: $0.persistencePath).fileURL(file) }
+    }
+
+    /// Adds documents to a remote queue bot's draft, copied as they are into its folder.
+    func addFiles(_ urls: [URL], to target: ChatTarget) {
+        attachmentErrors[target] = nil
+        for url in urls {
+            do {
+                let values = try url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey, .contentTypeKey])
+                guard values.isDirectory != true else { throw ImageDelivery.Failure("Choose files, not folders.") }
+                guard (values.fileSize ?? 0) <= FileAttachment.maximumBytes else { throw ImageDelivery.Failure("Choose files no larger than 10 MB.") }
+                try addFile(Data(contentsOf: url), name: url.lastPathComponent, type: values.contentType?.preferredMIMEType, to: target)
+            } catch { attachmentErrors[target] = error.localizedDescription }
+        }
+    }
+
+    /// A paste or drop for a remote queue bot's draft: files as they are, an image as PNG. False
+    /// when it holds something else, such as text, which then pastes as usual.
+    @discardableResult
+    func pasteFiles(_ pasteboard: NSPasteboard, to target: ChatTarget) -> Bool {
+        let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        if !urls.isEmpty { addFiles(urls, to: target); return true }
+        guard let images = ImagePaste.images(on: pasteboard) else { return false }
+        attachmentErrors[target] = nil
+        for image in images {
+            do {
+                let png = try ImagePaste.png(from: image)
+                try addFile(png.png, name: png.name.hasSuffix(".png") ? png.name : png.name + ".png", type: "image/png", to: target)
+            } catch { attachmentErrors[target] = error.localizedDescription }
+        }
+        return true
+    }
+
+    private func addFile(_ data: Data, name: String, type: String?, to target: ChatTarget) throws {
+        guard let bot = bot(target.botID) else { return }
+        guard (draftFiles[target]?.count ?? 0) < FileAttachment.maximumCount else { throw ImageDelivery.Failure("Attach up to 8 files per message.") }
+        draftFiles[target, default: []].append(try BotHome(workspace: bot.persistencePath).saveFile(data, name: name, type: type))
+    }
+}
+
 /// The images a draft takes from a paste, a drop or a file, decoded here and kept as PNG, at most
 /// 2048 pixels on the longest edge. Re-encoding leaves the original's metadata behind, such as
 /// where a photo was taken.

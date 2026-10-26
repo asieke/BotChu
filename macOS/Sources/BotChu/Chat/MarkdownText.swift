@@ -8,6 +8,9 @@ import BotChuCore
 /// so a rich reply keeps its web view. Its text is selected across its blocks (`ReplySelection`).
 struct MarkdownText: View {
     let text: String
+    /// As wide as its text, up to the width it is given, as a chat's reply bubble is; otherwise it
+    /// fills that width.
+    var fitsText = false
     @State private var preparation = PreparedMarkdown()
     @State private var selection = ReplySelectionController()
     /// How many times a long reply's chunk was laid out, for tests.
@@ -18,7 +21,7 @@ struct MarkdownText: View {
         let display = preparation.core.display(for: text)
         let blocks = if case .blocks(let blocks) = display.rendering { blocks } else { [MarkdownBlock]() }
         let _ = selection.show(blocks, pending: display.pending)
-        ReplyStack(spacing: 10) {
+        ReplyStack(spacing: 10, fitsText: fitsText) {
             switch display.rendering {
             case .rich(let html):
                 RichMarkdownText(html: html)
@@ -38,11 +41,12 @@ struct MarkdownText: View {
                 Text(pending)
                     .replyPiece(ReplyText.Key(path: [blocks.count], part: .pending))
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: fitsText ? nil : .infinity, alignment: .leading)
             }
         }
         .selectableReplyText()
         .environment(\.replySelection, selection)
+        .environment(\.replyFitsText, fitsText)
         .onChange(of: text, initial: true) { preparation.core.update(text) }
     }
 }
@@ -54,6 +58,8 @@ struct MarkdownText: View {
 /// of its chunks out again at a width it is never shown at (about 80 ms for 128 KB).
 private struct ReplyStack: Layout {
     var spacing: CGFloat
+    /// Narrower than it is offered when its widest part is (`MarkdownText.fitsText`).
+    var fitsText = false
 
     struct Cache {
         var width: CGFloat?
@@ -73,7 +79,8 @@ private struct ReplyStack: Layout {
             height += size.height + (index > 0 ? spacing : 0)
             widest = max(widest, size.width)
         }
-        return CGSize(width: width ?? widest, height: height)
+        guard let width else { return CGSize(width: widest, height: height) }
+        return CGSize(width: fitsText ? min(width, ceil(widest)) : width, height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
@@ -162,7 +169,13 @@ private struct SeparateBlocks: NSViewRepresentable {
     }
 }
 
+extension EnvironmentValues {
+    /// A reply's blocks are as wide as their text rather than filling (`MarkdownText.fitsText`).
+    @Entry var replyFitsText = false
+}
+
 private struct MarkdownBlocks: View {
+    @Environment(\.replyFitsText) private var fitsText
     let blocks: [MarkdownBlock]
     var spacing: CGFloat = 10
 
@@ -172,7 +185,7 @@ private struct MarkdownBlocks: View {
                 MarkdownBlockView(block: block)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: fitsText ? nil : .infinity, alignment: .leading)
     }
 }
 
