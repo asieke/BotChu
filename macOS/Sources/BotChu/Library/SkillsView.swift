@@ -88,7 +88,7 @@ private struct SkillCard: View {
 
     private var skill: Skill { entry.skill }
     /// The bots that keep a shared skill on.
-    private var users: [Bot] { model.bots.filter { $0.usesSharedSkill(skill.slug) } }
+    private var users: [Bot] { model.bots.filter { !$0.isRemoteQueue && $0.usesSharedSkill(skill.slug) } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -131,14 +131,14 @@ private struct SkillCard: View {
 
     private var scope: String {
         if let bot = entry.bot { return "\(bot.name)'s own" }
-        if users.count == model.bots.count { return "Shared · every bot" }
-        return "Shared · \(users.count) of \(model.bots.count) bots"
+        if users.count == model.bots.filter({ !$0.isRemoteQueue }).count { return "Shared · every bot" }
+        return "Shared · \(users.count) of \(model.bots.filter { !$0.isRemoteQueue }.count) bots"
     }
 
     /// Which bots keep a shared skill on.
     private var botsMenu: some View {
         Menu("Bots") {
-            ForEach(model.bots) { bot in
+            ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in
                 Toggle(isOn: Binding(get: { bot.usesSharedSkill(skill.slug) },
                                      set: { model.setSharedSkill(skill.slug, enabled: $0, for: bot.id) })) {
                     Text("\(bot.emoji) \(bot.name)")
@@ -169,7 +169,7 @@ struct NewSkillSheet: View {
                     .lineLimit(2...4)
                 Picker("For", selection: $botID) {
                     Text("Every bot (shared)").tag(UUID?.none)
-                    ForEach(model.bots) { bot in Text("\(bot.emoji) \(bot.name) only").tag(Optional(bot.id)) }
+                    ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in Text("\(bot.emoji) \(bot.name) only").tag(Optional(bot.id)) }
                 }
             }
             .formStyle(.grouped)

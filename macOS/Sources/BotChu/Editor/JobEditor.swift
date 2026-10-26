@@ -75,7 +75,7 @@ struct JobEditor: View {
             Form {
                 Section {
                     Picker("Agent", selection: $job.botID) {
-                        ForEach(model.bots) { bot in Text("\(bot.emoji) \(bot.name)").tag(bot.id) }
+                        ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in Text("\(bot.emoji) \(bot.name)").tag(bot.id) }
                     }
                     .disabled(!request.isNew)
                     .help(request.isNew ? "The agent that runs the job, as itself" : "A job stays with the agent that owns it.")

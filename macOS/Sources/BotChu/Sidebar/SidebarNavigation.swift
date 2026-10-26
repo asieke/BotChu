@@ -46,13 +46,15 @@ extension AppModel {
                                    state: tabState(of: target))
         }
         guard target.taskID == nil, let bot = bot(target.botID) else { return nil }
-        return .home(account: bot.account.name, state: tabState(of: target))
+        return .home(account: bot.isRemoteQueue ? "Remote queue · \(remoteQueue.presence)" : bot.account.name, state: tabState(of: target))
     }
 
     /// The bot's row in the bot list: a dot for each conversation that isn't idle, and what it does.
     func botRowSummary(of bot: Bot) -> BotRowSummary {
-        BotRowSummary(account: bot.account.name, home: tabState(of: .home(bot.id)),
+        var result = BotRowSummary(account: bot.account.name, home: tabState(of: .home(bot.id)),
                       tasks: openTasks(of: bot.id).map { ($0, tabState(of: .task($0.id, of: bot.id))) })
+        if bot.isRemoteQueue { result.subtitle = "\(remoteQueue.presence) · \(remoteQueue.pending) waiting" }
+        return result
     }
 
     /// Shows the bot's conversation at `index` in its tabs (⌘1 for Home, ⌘2 to ⌘9 for its tasks).

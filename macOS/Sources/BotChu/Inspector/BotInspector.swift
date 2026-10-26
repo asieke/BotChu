@@ -8,7 +8,9 @@ struct BotInspector: View {
     let botID: UUID
 
     var body: some View {
-        if let bot = model.bot(botID), let status = model.status(of: .home(botID)) {
+        if let bot = model.bot(botID), bot.isRemoteQueue {
+            RemoteQueueInspector(bot: bot)
+        } else if let bot = model.bot(botID), let status = model.status(of: .home(botID)) {
             InspectorPanel(badgeCounts: [.subagents: model.delegation.activeCount(.home(botID), includeTasks: true)]) {
                 InspectorSection("Status") {
                     AvatarCard(bot: bot, status: status, title: bot.name, subtitle: bot.title, account: bot.account) { model.edit(botID) }

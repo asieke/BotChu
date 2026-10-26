@@ -109,15 +109,18 @@ struct AgentCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(bot.name).font(.title3.weight(.semibold))
                 Text(bot.title.isEmpty ? "Ready for your next idea." : bot.title).font(.callout).foregroundStyle(.secondary).lineLimit(2).frame(height: 36, alignment: .topLeading)
-                ProviderLabel(bot.account).font(.caption).foregroundStyle(.secondary)
+                if bot.isRemoteQueue { Text("Remote queue · \(model.remoteQueue.presence)").font(.caption).foregroundStyle(.secondary) }
+                else { ProviderLabel(bot.account).font(.caption).foregroundStyle(.secondary) }
             }
             Divider()
             HStack {
+                if !bot.isRemoteQueue {
                 Text(tasks == 1 ? "1 task" : "\(tasks) tasks").font(.caption).foregroundStyle(.secondary)
                 Text("·").font(.caption).foregroundStyle(.tertiary)
                 Button(jobs == 1 ? "1 job" : "\(jobs) jobs") { jobs == 0 ? model.jobs.newJob(for: bot.id) : model.showJobs(for: bot.id) }
                     .buttonStyle(.link).font(.caption)
                     .help(jobs == 0 ? "New Job… for \(bot.name)" : "Show \(bot.name)'s jobs in Jobs")
+                }
                 Spacer()
                 Menu { MoveToSectionItems(botID: bot.id, newSection: newSection) } label: { Image(systemName: "folder") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
@@ -132,8 +135,10 @@ struct AgentCard: View {
             Button("Open Chat") { model.show(model.tab(of: bot.id)) }
             Button("Edit…") { model.edit(bot.id) }
             Divider()
+            if !bot.isRemoteQueue {
             Button("New Job…") { model.jobs.newJob(for: bot.id) }
             Button("Show Jobs") { model.showJobs(for: bot.id) }
+            }
             Divider()
             MoveToSectionMenu(botID: bot.id, newSection: newSection)
         }

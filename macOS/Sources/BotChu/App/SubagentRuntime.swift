@@ -87,7 +87,7 @@ final class SubagentRuntime {
     /// Each run's turn while it runs, by run.
     var states: SubagentStates { SubagentStates(runtime: self) }
 
-    var roster: [BotRosterEntry] { (model?.bots ?? []).map { BotRosterEntry(bot: $0) } }
+    var roster: [BotRosterEntry] { (model?.bots ?? []).filter { !$0.isRemoteQueue }.map { BotRosterEntry(bot: $0) } }
     /// Every conversation's runs. For the runtime's own work and tests: a view reads one
     /// conversation's (`records[target]`), which observes only that conversation.
     var all: [SubagentRun] { roots.values.flatMap(\.runs) }
@@ -305,7 +305,7 @@ final class SubagentRuntime {
                 throw DelegationFailure("Provide a nonempty brief smaller than 128 KB.")
             }
             guard let model else { throw DelegationFailure("BotChu is shutting down.") }
-            let targetBot = try SubagentResolver.resolve(request.targetAgent, bots: model.bots)
+            let targetBot = try SubagentResolver.resolve(request.targetAgent, bots: model.bots.filter { !$0.isRemoteQueue })
             let mode = request.workspaceMode ?? .sharedCallerWorkspace
             let hostID = mode == .sharedCallerWorkspace ? caller.hostID : nil
             let directory = mode == .sharedCallerWorkspace ? caller.directory : targetBot.workspace
@@ -369,7 +369,7 @@ final class SubagentRuntime {
             let subagent = caller.parent.flatMap { run($0) }.map { Delivery.Credit(botID: $0.targetBotID, name: $0.targetBotName) }
             var credits = subagent.map { [$0] } ?? []
             for name in request.credits {
-                let bot = try SubagentResolver.resolve(name, bots: model.bots, list: "botchu-subagent list")
+                let bot = try SubagentResolver.resolve(name, bots: model.bots.filter { !$0.isRemoteQueue }, list: "botchu-subagent list")
                 credits.append(Delivery.Credit(botID: bot.id, name: bot.name))
             }
             var seen: Set<UUID> = [caller.target.botID]
@@ -741,7 +741,7 @@ final class SubagentRuntime {
     private func restore() {
         guard let model else { return }
         for bot in model.bots {
-            let home = BotHome(workspace: bot.workspace)
+            let home = BotHome(workspace: bot.persistencePath)
             for taskID in [nil] + (model.tasks[bot.id] ?? []).map({ Optional($0.id) }) {
                 let target = ChatTarget(botID: bot.id, taskID: taskID)
                 let runs = home.loadSubagents(taskID: taskID)

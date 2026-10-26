@@ -60,7 +60,7 @@ final class JobRuntime {
         self.runs = runs
         engine = makeEngine(jobs: [], now: now)
         var interrupted: [JobEngine.Launch] = []
-        for bot in model.bots { interrupted += engine.load(BotHome(workspace: bot.workspace).loadJobs(of: bot.id)) }
+        for bot in model.bots where !bot.isRemoteQueue { interrupted += engine.load(BotHome(workspace: bot.persistencePath).loadJobs(of: bot.id)) }
         refresh()
         for launch in interrupted {
             deliver(launch.job, run: launch.run)
@@ -138,13 +138,13 @@ final class JobRuntime {
         if let live = lives[run] { return live.messages }
         if let saved = saving[run] { return saved }
         guard let bot = model?.bot(job.botID) else { return [] }
-        return BotHome(workspace: bot.workspace).loadJobThread(job: job.id, run: run)
+        return BotHome(workspace: bot.persistencePath).loadJobThread(job: job.id, run: run)
     }
 
     // MARK: Owner actions
 
     func newJob(for botID: UUID?) {
-        guard let model, let botID = botID ?? model.bots.first?.id else { return }
+        guard let model, let botID = botID ?? model.bots.first(where: { !$0.isRemoteQueue })?.id, model.bot(botID)?.isRemoteQueue == false else { return }
         var schedule = JobSchedule()
         // Intervals start at the next whole hour.
         let hour = Calendar.current.dateInterval(of: .hour, for: Date())?.end ?? Date()
@@ -164,7 +164,7 @@ final class JobRuntime {
     /// Saves a new or edited job; throws why it couldn't.
     func save(_ job: Job) throws {
         defer { refresh() }
-        guard model?.bot(job.botID) != nil else { throw JobEngine.Problem.invalid("Choose an agent.") }
+        guard model?.bot(job.botID)?.isRemoteQueue == false else { throw JobEngine.Problem.invalid("Choose an agent.") }
         // A job stays with the agent that owns it, with its history in that agent's folder.
         if let old = self.job(job.id), old.botID != job.botID { throw JobEngine.Problem.invalid("A job stays with its agent.") }
         try engine.save(job)
@@ -263,7 +263,7 @@ final class JobRuntime {
     /// instructions as its first message, then its CLI's output as it streams, live in the task's tab.
     private func start(_ launch: JobEngine.Launch) {
         let job = launch.job, runID = launch.run.id
-        guard let model, let bot = model.bot(job.botID), BotHome(workspace: bot.workspace).exists else {
+        guard let model, let bot = model.bot(job.botID), BotHome(workspace: bot.persistencePath).exists else {
             return finish(runID, outcome: .failed, summary: "The agent's folder is missing, so the run didn't start.")
         }
         // The job's own account, model and effort, or its agent's.
@@ -305,7 +305,7 @@ final class JobRuntime {
         var assembler = ThreadAssembler()
         var outcome = TurnOutcome()
         var lastSave = Date()
-        let home = BotHome(workspace: bot.workspace)
+        let home = BotHome(workspace: bot.persistencePath)
         let what = "job “\(job.title)” run"
 
         runner.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak runner] events in
@@ -449,7 +449,7 @@ final class JobRuntime {
     /// takes the place of one not written yet, and none is written twice. A failure is noted on the job.
     private func saveThread(_ runID: UUID, of job: Job) {
         guard let live = lives[runID], let model, let bot = model.bot(job.botID) else { return }
-        let home = BotHome(workspace: bot.workspace), jobID = job.id, messages = live.messages
+        let home = BotHome(workspace: bot.persistencePath), jobID = job.id, messages = live.messages
         model.storage.replace(home.jobRunLane(job: jobID, run: runID), slot: "transcript", value: messages,
                               write: { try home.saveJobThread($0, job: jobID, run: runID) }) { [weak self] result in
             guard let self else { return }
@@ -464,7 +464,7 @@ final class JobRuntime {
 
     private func write(_ job: Job) throws {
         guard let bot = model?.bot(job.botID) else { throw JobEngine.Problem.invalid("The job's agent is gone.") }
-        let home = BotHome(workspace: bot.workspace)
+        let home = BotHome(workspace: bot.persistencePath)
         // A folder that went away (unmounted, moved outside BotChu) doesn't keep firing jobs from memory.
         guard home.exists else {
             throw JobEngine.Problem.storage("\((bot.workspace as NSString).abbreviatingWithTildeInPath) doesn't hold \(bot.name) any more")
@@ -474,7 +474,7 @@ final class JobRuntime {
 
     private func erase(_ job: Job) throws {
         guard let bot = model?.bot(job.botID) else { return }
-        try BotHome(workspace: bot.workspace).removeJob(job.id)
+        try BotHome(workspace: bot.persistencePath).removeJob(job.id)
     }
 
     private func refresh() {

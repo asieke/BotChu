@@ -21,7 +21,7 @@ struct BotEditor: View {
     init(request: EditorRequest) {
         _bot = State(initialValue: request.bot)
         isNew = request.isNew
-        if !request.isNew {
+        if !request.isNew && !request.bot.isRemoteQueue {
             do {
                 _instructions = State(initialValue: try BotDocumentDraft(bot: request.bot, document: .instructions))
             } catch {
@@ -37,6 +37,12 @@ struct BotEditor: View {
                 .padding(.top, 16)
             Form {
                 Section {
+                    if isNew {
+                        Picker("Kind", selection: Binding(get: { bot.kind ?? .localCLI }, set: { bot.kind = $0 })) {
+                            Text("Local CLI").tag(Bot.Kind.localCLI)
+                            Text("Remote queue").tag(Bot.Kind.remoteQueue)
+                        }
+                    }
                     HStack(spacing: 12) {
                         TextField("Emoji", text: $bot.emoji)
                             .labelsHidden()
@@ -47,6 +53,7 @@ struct BotEditor: View {
                     }
                     TextField("Title", text: $bot.title, prompt: Text("What it's for, in one line"))
                 }
+                if !bot.isRemoteQueue {
                 Section {
                     TextEditor(text: instructionsText)
                         .font(.system(size: 13, design: .monospaced))
@@ -132,6 +139,12 @@ struct BotEditor: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                } else {
+                    Section {
+                        Text("Messages wait in BotChu for this bot's own runtime to collect them. Set its connection in Settings ▸ Remote queue.")
+                        if let problem = workspaceProblem { Text(problem).foregroundStyle(.red) }
+                    }
+                }
             }
             .formStyle(.grouped)
 
@@ -151,7 +164,7 @@ struct BotEditor: View {
         }
         .frame(width: 520, height: 680)
         .onChange(of: bot.name) {
-            guard isNew, bot.workspace == autoWorkspace else { return }
+            guard isNew, !bot.isRemoteQueue, bot.workspace == autoWorkspace else { return }
             autoWorkspace = bot.name.trimmingCharacters(in: .whitespaces).isEmpty ? "" : model.defaultWorkspace(for: bot.name)
             bot.workspace = autoWorkspace
         }
@@ -175,7 +188,7 @@ struct BotEditor: View {
                 dismiss()
             }
         } message: {
-            Text("Its conversation is deleted. Its workspace folder is kept.")
+            Text(bot.isRemoteQueue ? "Its conversation and waiting remote messages are deleted. Its connection stops." : "Its conversation is deleted. Its workspace folder is kept.")
         }
     }
 
@@ -184,7 +197,10 @@ struct BotEditor: View {
     }
 
     private var workspaceProblem: String? {
-        model.workspaceProblem(bot.workspace, for: bot.id)
+        if bot.isRemoteQueue {
+            return model.bots.contains { $0.isRemoteQueue && $0.id != bot.id } ? "Only one remote queue bot is supported." : nil
+        }
+        return model.workspaceProblem(bot.workspace, for: bot.id)
     }
 
     private var modelLabel: ModelPickerData {
@@ -220,7 +236,7 @@ struct BotEditor: View {
     }
 
     private func save() {
-        if isNew, !(bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if isNew, !bot.isRemoteQueue, !(bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             confirmCreatePet = true
             return
         }

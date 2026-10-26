@@ -38,18 +38,19 @@ struct BotChuApp: App {
                 // The shown conversation, the selected bot's Home or its open task tab, as the menu
                 // was drawn; the actions look again when chosen.
                 let tab = model.visibleBotID.map { model.tab(of: $0) }
+                let remote = model.visibleBotID.flatMap(model.bot)?.isRemoteQueue == true
                 Button("Edit Bot…") { if let id = model.visibleBotID { model.edit(id) } }
                     .keyboardShortcut("e")
                     .disabled(model.visibleBotID == nil)
                 Button("New Task…") { if let id = model.visibleBotID { model.newTask(for: id) } }
                     .keyboardShortcut("t")
-                    .disabled(model.visibleBotID == nil)
+                    .disabled(model.visibleBotID == nil || remote)
                 Button("New Session") { if let id = model.visibleBotID { model.newSession(model.tab(of: id)) } }
                     .keyboardShortcut("k")
-                    .disabled(tab.map { model.isRunning($0) } ?? true)
+                    .disabled(remote || (tab.map { model.isRunning($0) } ?? true))
                 Button("Stop") { if let id = model.visibleBotID { model.stop(model.tab(of: id)) } }
                     .keyboardShortcut(".")
-                    .disabled(tab.map { !model.isRunning($0) } ?? true)
+                    .disabled(remote || (tab.map { !model.isRunning($0) } ?? true))
                 Divider()
                 Button("Show Next Tab") { if let id = model.visibleBotID { model.showTab(offset: 1, of: id) } }
                     .keyboardShortcut(.tab, modifiers: .control)
@@ -69,7 +70,7 @@ struct BotChuApp: App {
                 Divider()
                 Button("Show Workspace in Finder") { if let id = model.visibleBotID { model.revealWorkspace(id) } }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
-                    .disabled(model.visibleBotID == nil)
+                    .disabled(model.visibleBotID == nil || remote)
             }
             CommandGroup(after: .help) {
                 Button("Report a Bug or Feature…") { model.reportIssue() }

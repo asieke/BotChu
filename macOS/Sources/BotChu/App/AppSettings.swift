@@ -45,6 +45,9 @@ final class AppSettings {
     /// Whether the Telegram gateway runs (`TelegramBridge`), and the private chats it lets reach a
     /// bot's Home.
     var telegramEnabled: Bool { didSet { defaults.set(telegramEnabled, forKey: "telegramEnabled") } }
+    var remoteQueueEnabled: Bool { didSet { defaults.set(remoteQueueEnabled, forKey: "remoteQueueEnabled") } }
+    var remoteQueueAddress: String { didSet { defaults.set(remoteQueueAddress, forKey: "remoteQueueAddress") } }
+    var remoteQueuePort: Int { didSet { defaults.set(remoteQueuePort, forKey: "remoteQueuePort") } }
     var telegramChats: [TelegramChat] { didSet { save(telegramChats, forKey: "telegramChats") } }
     /// Invalidates allowance readings when the saved OpenRouter key changes, without retaining it.
     var usageCredentialRevision = 0
@@ -73,6 +76,9 @@ final class AppSettings {
         evaluateRuns = defaults.object(forKey: "evaluateRuns") as? Bool ?? true
         reviewTime = (defaults.object(forKey: "reviewHour") as? Int).map { ReviewTime(hour: $0, minute: defaults.integer(forKey: "reviewMinute")) }
             ?? .standard
+        remoteQueueEnabled = defaults.bool(forKey: "remoteQueueEnabled")
+        remoteQueueAddress = defaults.string(forKey: "remoteQueueAddress") ?? "127.0.0.1"
+        remoteQueuePort = defaults.object(forKey: "remoteQueuePort") as? Int ?? 18765
         telegramEnabled = defaults.bool(forKey: "telegramEnabled")
         telegramChats = Self.load([TelegramChat].self, from: defaults, forKey: "telegramChats") ?? []
         Task { [weak self, macName] in

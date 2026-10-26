@@ -23,6 +23,7 @@ struct Composer<Controls: View>: View {
     /// "Message Scout", or for a task, "Message Scout about GitChu #48".
     let placeholder: String
     let running: Bool
+    var canStop = true
     /// Follow-ups reach the bot at its next tool call rather than when the turn ends.
     var midTurn = false
     let onSend: () -> Void
@@ -65,7 +66,7 @@ struct Composer<Controls: View>: View {
             HStack(spacing: 8) {
                 if addsImages { AddImagesButton(add: onAddImages) }
                 controls
-                if running {
+                if running && canStop {
                     button("stop.fill", label: "Stop", help: "Stop (⌘.)", action: onStop)
                 }
                 button("arrow.up", label: running ? "Queue message" : "Send", enabled: !isEmpty,

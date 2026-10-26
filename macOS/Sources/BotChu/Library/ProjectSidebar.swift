@@ -188,7 +188,7 @@ struct ProjectOverviewTab: View {
                     Button("Open on GitHub") { NSWorkspace.shared.open(repo.webURL) }
                 }
                 .buttonStyle(InspectorButtonStyle(fill: true))
-                if model.bots.isEmpty {
+                if !model.bots.contains(where: { !$0.isRemoteQueue }) {
                     Text("Create an agent to work on this project.").font(.system(size: 11)).foregroundStyle(Palette.secondaryText)
                 }
             }
@@ -811,13 +811,13 @@ struct BotMenu: View {
 
     var body: some View {
         Menu {
-            ForEach(model.bots) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id) } }
+            ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id) } }
         } label: {
             MenuLabel(title: title, systemImage: systemImage)
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .disabled(model.bots.isEmpty)
+        .disabled(!model.bots.contains { !$0.isRemoteQueue })
     }
 }
 
@@ -831,17 +831,17 @@ struct ReviewMenu: View {
     var body: some View {
         Menu {
             Section("Review with") {
-                ForEach(model.bots) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id, false) } }
+                ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id, false) } }
             }
             Section("Review and comment with") {
-                ForEach(model.bots) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id, true) } }
+                ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id, true) } }
             }
         } label: {
             MenuLabel(title: title, systemImage: "eye")
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .disabled(model.bots.isEmpty)
+        .disabled(!model.bots.contains { !$0.isRemoteQueue })
     }
 }
 

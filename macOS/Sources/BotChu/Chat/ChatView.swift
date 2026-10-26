@@ -138,12 +138,14 @@ struct ChatView: View {
                          onRemoveImage: { id in model.draftImages[target]?.removeAll { $0.id == id } },
                          onAddImages: { model.addImages($0, to: target) },
                          onPasteImages: { model.pasteImages($0, to: target) },
+                         addsImages: !bot.isRemoteQueue,
                          attachmentError: model.attachmentErrors[target],
                          references: Binding(get: { model.draftReferences[target] ?? [] },
                                              set: { model.draftReferences[target] = $0.isEmpty ? nil : $0 }),
-                         mentions: model.mentionSources(for: target),
+                         mentions: bot.isRemoteQueue ? nil : model.mentionSources(for: target),
                          placeholder: Self.placeholder(bot: bot, task: task),
-                         running: running, midTurn: model.takesFollowUpsMidTurn(target), onSend: send, onStop: { model.stop(target) }) {
+                         running: running, canStop: !bot.isRemoteQueue, midTurn: model.takesFollowUpsMidTurn(target), onSend: send, onStop: { model.stop(target) }) {
+                        if !bot.isRemoteQueue {
                         ModelMenu(settings: current, disabled: running,
                                   onModel: { model.setModel($0, for: target) },
                                   onEffort: { model.setReasoningEffort($0, for: target) })
@@ -154,6 +156,10 @@ struct ChatView: View {
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                             .lineLimit(1).truncationMode(.tail)
                             .help(task == nil ? "Current account. Change it in Edit Bot." : "This task's account. Change it in the status sidebar.")
+                        } else {
+                            Text("\(model.remoteQueue.presence) · \(model.remoteQueue.pending) waiting").font(.caption).foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                        }
                     }
                 }
                 .id(target)
@@ -173,7 +179,7 @@ struct ChatView: View {
             // Opening the conversation again starts from its newest items.
             .onDisappear { transcript.windowStart = nil }
             // Notes left waiting by an earlier launch.
-            .task(id: target.botID) { model.refreshUnsavedMemory(of: target.botID) }
+            .task(id: target.botID) { if !bot.isRemoteQueue { model.refreshUnsavedMemory(of: target.botID) } }
         }
     }
 
@@ -257,7 +263,7 @@ struct ChatToolbar: ViewModifier {
                 }
                 .help("How much tool work the chat shows: Compact (headers), Detailed (files and errors) or Raw (every call)")
                 // Once the bot has a task, New Task is the + in the tasks' column (#128).
-                if let id = model.visibleBotID, model.openTasks(of: id).isEmpty {
+                if let id = model.visibleBotID, model.bot(id)?.isRemoteQueue != true, model.openTasks(of: id).isEmpty {
                     Button { model.newTask(for: id) } label: {
                         Label("New Task", systemImage: "plus.rectangle.on.rectangle")
                     }

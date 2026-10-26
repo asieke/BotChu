@@ -104,6 +104,7 @@ final class AppModel {
     var delegation: SubagentRuntime!
     /// Messages from Telegram, into bots' Homes, and their replies back (Settings ▸ Telegram).
     var telegram: TelegramBridge!
+    var remoteQueue: RemoteQueueBridge!
     /// The bots' scheduled jobs, run while BotChu is open (Jobs).
     var jobs: JobRuntime!
     /// What the bots deliver to the owner with `botchu-inbox send` (Inbox).
@@ -286,12 +287,12 @@ final class AppModel {
         // the main thread, with its transcript only when messages wait in it; the others have nothing
         // to recover, and their digests are read from their indexes. The shown conversation is read first.
         for bot in bots {
-            tasks[bot.id] = BotHome(workspace: bot.workspace).loadTasks()
+            tasks[bot.id] = BotHome(workspace: bot.persistencePath).loadTasks()
             reloadPet(bot.id)
         }
         let shown = bots.first.map { ChatTarget.home($0.id) }
         for bot in bots {
-            let home = BotHome(workspace: bot.workspace)
+            let home = BotHome(workspace: bot.persistencePath)
             for target in [ChatTarget.home(bot.id)] + openTasks(of: bot.id).map({ .task($0.id, of: bot.id) }) {
                 if target == shown || home.hasQueueFiles(task: target.taskID) {
                     recover(target, load: target == shown)
@@ -314,6 +315,7 @@ final class AppModel {
         }
         delegation = SubagentRuntime(model: self, root: (store != nil || DevHooks.dataDir != nil)
             ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot, archive: SubagentArchive(storage: storage))
+        remoteQueue = RemoteQueueBridge(model: self)
         telegram = TelegramBridge(model: self, stateURL: self.store.root.appendingPathComponent("telegram.json"))
         jobs = JobRuntime(model: self, runs: DevHooks.runsJobs)
         inbox = InboxModel(model: self, root: self.store.root, storage: storage)
@@ -325,8 +327,8 @@ final class AppModel {
             MainActor.assumeIsolated { self?.stopAll() }
         }
         // Requests left while BotChu wasn't running.
-        for bot in bots { takeDispatches(for: bot.id) }
-        evaluator.load(bots: bots.map { ($0.id, $0.workspace) })
+        for bot in bots where !bot.isRemoteQueue { takeDispatches(for: bot.id) }
+        evaluator.load(bots: bots.filter { !$0.isRemoteQueue }.map { ($0.id, $0.workspace) })
         evaluationRecords = evaluator.records
         reviewStates = evaluator.states
         // Follow-ups left queued when BotChu quit go out on their own, unless Stop or a failure
@@ -372,7 +374,7 @@ final class AppModel {
     func thread(_ target: ChatTarget) -> [ChatMessage] { conversation(target).messages }
     /// Whether the conversation is the one in the window now.
     func isShown(_ target: ChatTarget) -> Bool { visibleBotID == target.botID && tab(of: target.botID) == target }
-    func isRunning(_ target: ChatTarget) -> Bool { runStates[target] != nil || (delegation?.activeCount(target) ?? 0) > 0 }
+    func isRunning(_ target: ChatTarget) -> Bool { (target.taskID == nil && remoteQueue?.isWorking(target.botID) == true) || runStates[target] != nil || (delegation?.activeCount(target) ?? 0) > 0 }
     /// Whether any of the bot's conversations has a turn under way. Reading its Home's and its
     /// tasks' turns by name observes them, also a task's that is made later.
     func isBusy(_ botID: UUID) -> Bool {
@@ -444,7 +446,7 @@ final class AppModel {
     }
 
     func editDocument(_ document: BotDocument, for id: UUID) {
-        guard let bot = bot(id) else { return }
+        guard let bot = bot(id), !bot.isRemoteQueue else { return }
         documentEditor = DocumentEditorRequest(bot: bot, document: document)
     }
 
@@ -478,7 +480,13 @@ final class AppModel {
     func create(_ draft: Bot) {
         var bot = draft
         bot.name = bot.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if bot.workspace.trimmingCharacters(in: .whitespaces).isEmpty { bot.workspace = defaultWorkspace(for: bot.name) }
+        if bot.isRemoteQueue {
+            guard !bots.contains(where: \.isRemoteQueue) else { return }
+            bot.workspace = ""
+            bot.accountID = ""
+            bot.model = ""
+            bot.remoteStorage = store.root.appendingPathComponent("remote-bots/\(bot.id.uuidString.lowercased())").path
+        } else if bot.workspace.trimmingCharacters(in: .whitespaces).isEmpty { bot.workspace = defaultWorkspace(for: bot.name) }
         bot.workspace = (bot.workspace as NSString).expandingTildeInPath
         if bot.emoji.isEmpty { bot.emoji = "🤖" }
         // In no section: last among the bots in none, above the sections.
@@ -490,6 +498,7 @@ final class AppModel {
         save(bot)
         destination = nil
         selection = bot.id
+        if bot.isRemoteQueue { remoteQueue.reloadBot(); return }
         prepareWorkspace(bot)
         send(BotContext.introPrompt, to: .home(bot.id), visible: false)
     }
@@ -497,6 +506,10 @@ final class AppModel {
     func update(_ edited: Bot) {
         guard let i = bots.firstIndex(where: { $0.id == edited.id }) else { return }
         var bot = edited
+        if bots[i].isRemoteQueue {
+            bot.kind = .remoteQueue; bot.workspace = ""; bot.remoteStorage = bots[i].remoteStorage
+            bots[i] = bot; save(bot); return
+        }
         bot.workspace = (bot.workspace as NSString).expandingTildeInPath
         if bot.emoji.isEmpty { bot.emoji = "🤖" }
         if let problem = workspaceProblem(bot.workspace, for: bot.id) {
@@ -565,11 +578,12 @@ final class AppModel {
         if let bot = bot(id) {
             // What waits to be saved in its folder (its memory too) is dropped, and what is being
             // written finishes first, so nothing makes the folder again once it is in the Trash.
-            storage.retire(bot.workspace, timeout: Self.saveTimeout)
-            BotHome(workspace: bot.workspace).trash()
-            storage.reopen(bot.workspace)
+            storage.retire(bot.persistencePath, timeout: Self.saveTimeout)
+            BotHome(workspace: bot.persistencePath).trash()
+            storage.reopen(bot.persistencePath)
         }
         bots.removeAll { $0.id == id }
+        remoteQueue?.reloadBot()
         sections[id] = nil
         tasks[id] = nil
         // Its threads, turns, queues and reactions, and how its chats were shown; what waited for
@@ -598,7 +612,7 @@ final class AppModel {
 
     /// Starts the conversation's next turn in a fresh CLI session (with the identity, memory and recap again).
     func newSession(_ target: ChatTarget) {
-        guard !isRunning(target), runSettings(of: target) != nil else { return }
+        guard bot(target.botID)?.isRemoteQueue != true, !isRunning(target), runSettings(of: target) != nil else { return }
         change(target) {
             $0.sessionID = nil
             $0.sessionAccountID = nil
@@ -608,7 +622,7 @@ final class AppModel {
     }
 
     func revealWorkspace(_ id: UUID) {
-        guard let bot = bot(id) else { return }
+        guard let bot = bot(id), !bot.isRemoteQueue else { return }
         prepareWorkspace(bot)
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: bot.workspace)])
     }
@@ -616,7 +630,7 @@ final class AppModel {
     /// Opens the bot's `.botchu` folder (its settings, thread, tasks and logs) in Finder.
     func revealHistory(_ id: UUID) {
         guard let bot = bot(id) else { return }
-        let home = BotHome(workspace: bot.workspace)
+        let home = BotHome(workspace: bot.persistencePath)
         try? FileManager.default.createDirectory(at: home.logsURL, withIntermediateDirectories: true)
         NSWorkspace.shared.open(home.url)
     }
@@ -624,7 +638,7 @@ final class AppModel {
     // MARK: Tasks
 
     func newTask(for botID: UUID, repo: String? = nil, work: BotTask.Work? = nil, purpose: NewTaskSheet.Purpose = .work, brief: String = "") {
-        guard bot(botID) != nil else { return }
+        guard let bot = bot(botID), !bot.isRemoteQueue else { return }
         taskSheet = TaskSheetRequest(botID: botID, repo: repo, work: work, purpose: work?.isPullRequest == true ? purpose : .work, brief: brief)
     }
 
@@ -633,7 +647,7 @@ final class AppModel {
     /// `saved` hears whether its record was saved, with the error when it wasn't.
     func startTask(_ task: BotTask, for botID: UUID, show: Bool, images: [ImageAttachment] = [],
                    saved: (@MainActor @Sendable (Error?) -> Void)? = nil) {
-        guard bot(botID) != nil else {
+        guard let bot = bot(botID), !bot.isRemoteQueue else {
             saved?(CocoaError(.fileNoSuchFile))
             return
         }
@@ -651,7 +665,7 @@ final class AppModel {
     /// failure), and nothing is sent. The job's earlier runs' tasks close, so the job keeps one open
     /// task beside the chat, unless the owner took one over or it is busy or shown.
     func startJobTask(_ task: BotTask, for botID: UUID) -> ChatTarget? {
-        guard bot(botID) != nil, task.jobRun != nil else { return nil }
+        guard let bot = bot(botID), !bot.isRemoteQueue, task.jobRun != nil else { return nil }
         let target = ChatTarget.task(task.id, of: botID)
         tasks[botID, default: []].append(task)
         conversation(target).start()
@@ -686,7 +700,7 @@ final class AppModel {
     /// written there is done.
     func removeJobTasks(_ ids: [UUID], of botID: UUID) {
         guard let bot = bot(botID) else { return }
-        let home = BotHome(workspace: bot.workspace)
+        let home = BotHome(workspace: bot.persistencePath)
         for id in ids {
             let target = ChatTarget.task(id, of: botID)
             guard let task = task(id, of: botID), task.jobRun != nil, task.isArchived, !isRunning(target) else { continue }
@@ -787,7 +801,7 @@ final class AppModel {
     /// Starts the tasks a bot asked for: the requests in its `.botchu/dispatch/`, from its Home or any
     /// other conversation that writes there.
     func takeDispatches(for botID: UUID) {
-        guard let bot = bot(botID), !dispatching.contains(botID), BotHome(workspace: bot.workspace).hasDispatches() else { return }
+        guard let bot = bot(botID), !bot.isRemoteQueue, !dispatching.contains(botID), BotHome(workspace: bot.persistencePath).hasDispatches() else { return }
         dispatching.insert(botID)
         let root = settings.expandedReposRoot
         Task {
@@ -795,7 +809,7 @@ final class AppModel {
             let checkouts = await Task.detached { Repositories.scan(root: root) }.value
             await loadRepositories()
             if let bot = self.bot(botID) {
-                for request in BotHome(workspace: bot.workspace).peekDispatches() {
+                for request in BotHome(workspace: bot.persistencePath).peekDispatches() {
                     await startTask(requestedIn: request.file, data: request.data, checkouts: checkouts, for: botID)
                 }
             }
@@ -823,7 +837,7 @@ final class AppModel {
                 postReceipt(TaskReceipt.handedOff(task, to: owner.name), task: task.id, of: owner.id, in: .home(botID))
             }
         } catch {
-            guard let bot = bot(botID), BotHome(workspace: bot.workspace).take(dispatch: file) else { return }
+            guard let bot = bot(botID), BotHome(workspace: bot.persistencePath).take(dispatch: file) else { return }
             let reason = (error as? TaskRequest.Problem)?.message ?? error.localizedDescription
             postReceipt(TaskReceipt.couldNotStart(name, reason: reason), task: nil, for: botID)
         }
@@ -831,13 +845,14 @@ final class AppModel {
 
     /// The bot a request hands its task to, by name, slug or ID.
     func resolveTaskBot(_ name: String) throws -> Bot {
-        do { return try SubagentResolver.resolve(name, bots: bots, list: "botchu-task list") }
+        do { return try SubagentResolver.resolve(name, bots: bots.filter { !$0.isRemoteQueue }, list: "botchu-task list") }
         catch { throw TaskRequest.Problem(message: error.localizedDescription) }
     }
 
     /// The task a request asks `bot` for, where its repository lives (or on the machine it names),
     /// or why it can't be: a repository BotChu can't find, or another open task already on it.
     func plannedTask(_ wanted: TaskRequest, for bot: Bot, checkouts: [RepoCheckout], origin: BotTask.Origin) async throws -> BotTask {
+        guard !bot.isRemoteQueue else { throw TaskRequest.Problem(message: "Remote queue bots do not run local tasks.") }
         let found = try repository(named: wanted.repo, checkouts: checkouts).get()
         var location: RepoLocation
         if let checkout = found.checkout {
@@ -879,7 +894,7 @@ final class AppModel {
     }
 
     private func takeAllDispatches() {
-        for bot in bots { takeDispatches(for: bot.id) }
+        for bot in bots where !bot.isRemoteQueue { takeDispatches(for: bot.id) }
     }
 
     /// Adds a receipt to the bot's Home thread. A newer word on the task the last receipt is about
@@ -1148,7 +1163,7 @@ final class AppModel {
     /// Reads the bot's pet again (its manifest; clips load when they play).
     func reloadPet(_ id: UUID) {
         guard let bot = bot(id) else { return }
-        pets[id] = PetVideoPackage.load(from: PetVideo.folder(for: BotHome(workspace: bot.workspace)))
+        pets[id] = PetVideoPackage.load(from: PetVideo.folder(for: BotHome(workspace: bot.persistencePath)))
     }
 
     /// Shows a short reaction, unless a turn is running, then goes back to what the bot shows otherwise.
@@ -1177,6 +1192,10 @@ final class AppModel {
     func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [], id: UUID = UUID(),
               references: [MessageReference] = [], delivery: UUID? = nil, accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
         let (text, references) = MessageReference.trimming(text, references: references)
+        if bot(target.botID)?.isRemoteQueue == true {
+            guard visible, target.taskID == nil, !text.isEmpty, images.isEmpty else { return false }
+            return remoteQueue.enqueue(text, id: id, for: target.botID, accepted: accepted)
+        }
         guard images.count <= ImageAttachment.maximumCount else {
             attachmentErrors[target] = "Attach up to 8 images per message. Remove an image before sending."
             return false
@@ -1332,7 +1351,7 @@ final class AppModel {
             if !message.images.isEmpty {
                 guard let bot = bot(target.botID) else { break }
                 do {
-                    let urls = message.images.map { BotHome(workspace: bot.workspace).imageURL($0) }
+                    let urls = message.images.map { BotHome(workspace: bot.persistencePath).imageURL($0) }
                     let invocation = try ImageDelivery.attaching(urls, to: Invocation(arguments: [], input: [textLine]),
                                                                 kind: input.kind, prompt: text.isEmpty ? "Please describe the attached images." : text)
                     guard let imageLine = invocation.input?.first else { break }
@@ -1361,6 +1380,7 @@ final class AppModel {
     }
 
     private func beginTurn(_ text: String, for target: ChatTarget, message: ChatMessage?) -> Bool {
+        guard bot(target.botID)?.isRemoteQueue != true else { return false }
         guard !isRunning(target), conversation(target).isLoaded, let bot = bot(target.botID), let current = runSettings(of: target) else { return false }
         let history = thread(target)
         // Every conversation hears what became of the notes it asked to remember (and Home what its
@@ -1459,7 +1479,7 @@ final class AppModel {
         runStates[target] = RunState()
         Task {
             do {
-                var urls = images.map { BotHome(workspace: bot.workspace).imageURL($0) }
+                var urls = images.map { BotHome(workspace: bot.persistencePath).imageURL($0) }
                 // Inline image input travels over SSH for Claude. File-based providers
                 // need copies on the host before their CLI can open the attachments.
                 if let task = task(target), task.isRemote, current.account.kind != .claude {
@@ -1586,7 +1606,7 @@ final class AppModel {
                     ? AgentRun(command: command, invocation: invocation, on: machine, folder: directory)
                     : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: directory, isDirectory: true))
                 let place = task.map { machineName($0.hostID, fallback: $0.hostName) } ?? "This Mac"
-                let home = BotHome(workspace: bot.workspace)
+                let home = BotHome(workspace: bot.persistencePath)
                 let what = task.map { "\($0.title) turn" } ?? "turn"
                 let startedAt = Date()
                 let turnStart = thread(target).count
@@ -1861,6 +1881,7 @@ final class AppModel {
     }
 
     func stop(_ target: ChatTarget) {
+        guard bot(target.botID)?.isRemoteQueue != true else { return }
         delegation.stopRoot(target)
         pauseQueue(target)
         inputs[target]?.ledger.close()
@@ -1883,6 +1904,7 @@ final class AppModel {
     /// writes still under way; what isn't written by then is listed in `unsavedAtQuit` and the
     /// system log, and its files stay as they were (with any messages the CLI took in their queue).
     func stopAll() {
+        remoteQueue?.stop()
         terminating = true
         // What waits for a conversation's history or its recovery is done now, so quitting loses
         // none of it: read here, in order with its writes, in the place of a read under way.
@@ -1914,7 +1936,7 @@ final class AppModel {
         guard let bot = bot(target.botID), runSettings(of: target) != nil else { return }
         var closed = thread(target)
         ThreadAssembler.closeRunningTools(&closed)
-        let home = BotHome(workspace: bot.workspace), taskID = target.taskID, messages = closed
+        let home = BotHome(workspace: bot.persistencePath), taskID = target.taskID, messages = closed
         storage.submit(home.conversationLane(task: taskID), label: "unfinished", work: { try home.writeTranscript(messages, task: taskID) })
     }
 
@@ -2249,6 +2271,7 @@ final class AppModel {
     /// Changes what a conversation runs on, its task's or its bot's, and saves it off the main
     /// thread (the index of bot folders doesn't change with it).
     private func change(_ target: ChatTarget, _ edit: (inout any RunSettings) -> Void) {
+        guard bot(target.botID)?.isRemoteQueue != true else { return }
         if let i = taskIndex(target), var task: any RunSettings = tasks[target.botID]?[i] {
             edit(&task)
             guard let task = task as? BotTask else { return }
@@ -2264,6 +2287,7 @@ final class AppModel {
     }
 
     private func prepareWorkspace(_ bot: Bot) {
+        guard !bot.isRemoteQueue else { return }
         do {
             // Instructions from an older bot.json move into INSTRUCTIONS.md once.
             var bot = bot
@@ -2273,7 +2297,7 @@ final class AppModel {
             }
             try Workspace.prepare(bot: bot, sharedMemoryPath: settings.sharedMemoryPath, repositoriesPath: settings.expandedReposRoot,
                                   machines: settings.hosts.map(\.nickname), availableBots: delegation.roster)
-            try BotHome(workspace: bot.workspace).prepareDispatch()
+            try BotHome(workspace: bot.persistencePath).prepareDispatch()
         } catch {
             append(ChatMessage(role: .error, text: "Couldn't prepare \(bot.workspace): \(error.localizedDescription)"), to: .home(bot.id))
         }
@@ -2287,7 +2311,7 @@ final class AppModel {
 
     /// Writes the bot's `.botchu/bot.json` off the main thread, after its earlier saves.
     private func saveSettings(_ bot: Bot) {
-        let home = BotHome(workspace: bot.workspace), id = bot.id, workspace = bot.workspace
+        let home = BotHome(workspace: bot.persistencePath), id = bot.id, workspace = bot.workspace
         storage.replace(home.botLane, slot: "bot", value: bot, write: { try home.save($0); return 0 }) { [weak self] result in
             guard case .failure(let error) = result, (error as? StorageQueue.Failure) == nil, let self, self.bot(id) != nil else { return }
             self.append(ChatMessage(role: .error, text: "Couldn't save this bot in \(workspace): \(error.localizedDescription)"), to: .home(id))
@@ -2300,7 +2324,7 @@ final class AppModel {
             saved?(CocoaError(.fileNoSuchFile))
             return
         }
-        let home = BotHome(workspace: bot.workspace), workspace = bot.workspace, target = ChatTarget.task(task.id, of: botID)
+        let home = BotHome(workspace: bot.persistencePath), workspace = bot.workspace, target = ChatTarget.task(task.id, of: botID)
         storage.replace(home.taskLane(task.id), slot: "task", value: task, write: { try home.save($0); return 0 }) { [weak self] result in
             if let saved {
                 if case .failure(let error) = result { saved(error) } else { saved(nil) }
@@ -2327,7 +2351,7 @@ final class AppModel {
     private func files(_ target: ChatTarget) -> ConversationStorage? {
         guard let bot = bot(target.botID) else { return nil }
         if let taskID = target.taskID, task(taskID, of: bot.id) == nil { return nil }
-        return ConversationStorage(storage: storage, home: BotHome(workspace: bot.workspace), task: target.taskID)
+        return ConversationStorage(storage: storage, home: BotHome(workspace: bot.persistencePath), task: target.taskID)
     }
 
     private func queueAccess(_ target: ChatTarget) -> ConversationStorage.Queue {

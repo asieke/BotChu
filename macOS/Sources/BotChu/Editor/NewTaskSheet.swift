@@ -262,7 +262,7 @@ struct NewTaskSheet: View {
         if location.hostID == nil { location.path = (location.path as NSString).expandingTildeInPath }
         let attachments: [ImageAttachment]
         do {
-            let home = BotHome(workspace: bot.workspace)
+            let home = BotHome(workspace: bot.persistencePath)
             attachments = try images.images.map { try home.saveImage($0.png, name: $0.name) }
         } catch {
             images.problem = "Couldn't keep the images in \(bot.name)'s folder: \(error.localizedDescription)"
