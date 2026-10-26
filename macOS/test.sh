@@ -2,29 +2,16 @@
 # Run the core unit tests and isolated WebKit rendering tests. Needs full Xcode.
 set -euo pipefail
 dir=$(cd "$(dirname "$0")" && pwd)
-(cd "$dir/Sources/BotChu/Resources/ChatRenderer" && shasum -a 256 -c SHA256SUMS --status)
-# SwiftPM can return success after a test bundle fails or exits before finishing. Retain the
-# runner's status, run each bundle separately, and require a successful completion summary.
-test_output=$(mktemp)
-trap 'rm -f "$test_output"' EXIT
-run_tests() {
-  swift test --package-path "$dir" "$@" 2>&1 | tee "$test_output" | { grep -vE '^\[[0-9]+ ?/ ?[0-9]+\]| started\.$' || true; }
-  if grep -Eq 'Some test targets reported failures:|Test run with .* failed after|Test .* failed after .* issue' "$test_output"; then
-    echo "test: a test target reported failures" >&2
-    return 1
-  fi
-  if ! grep -Eq 'Test run with [1-9][0-9]* tests? .*passed after' "$test_output"; then
-    echo "test: the test bundle did not finish successfully" >&2
-    return 1
-  fi
-}
-run_tests --filter BotChuCoreTests
-# Native clicks on the tasks' column can leave a window-animation callback that stops Swift's
-# outer run loop in a later test. Keep every native-click assertion, but contain that global
-# AppKit state in its own process. Neither invocation may omit its completion summary.
+test_root=$(dirname "$dir")
+source "$test_root/scripts/test-support.sh"
+test_begin macOS
+trap 'test_end $?' EXIT
+renderer_checksums() { (cd "$dir/Sources/BotChu/Resources/ChatRenderer" && shasum -a 256 -c SHA256SUMS --status); }
+test_step 'renderer checksums' renderer_checksums
+test_step 'core tests' test_run core --filter BotChuCoreTests
+# Native clicks leave AppKit animation state: keep their assertions in a separate process.
 click_test=conversationColumnSwitchesClosesAndCollapsesByNativeClicks
-run_tests --filter BotChuRenderingTests --skip "$click_test"
-run_tests --filter "$click_test"
-# The Swift 6.4 task-group regression only appears under optimization; a release build alone
-# cannot detect lost results or children completing after their group has been destroyed.
-run_tests --configuration release --filter "projectLoading|RunEvaluationTests"
+test_step 'window tests' test_run windows --filter BotChuRenderingTests --skip "$click_test"
+test_step 'native clicks' test_run clicks --filter "$click_test"
+# Optimization is required to catch Swift 6.4's task-group regression.
+test_step 'release tests' test_run release --configuration release --filter 'projectLoading|RunEvaluationTests'
