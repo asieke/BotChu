@@ -62,7 +62,7 @@ struct RemoteQueuePresence: View {
         let queue = model.remoteQueue!
         VStack(alignment: .leading, spacing: 6) {
             Label("\(queue.presence) · \(queue.pending) waiting", systemImage: queue.online ? "circle.fill" : "circle")
-                .foregroundStyle(queue.online ? .green : .secondary)
+                .foregroundStyle(queue.online ? .green : queue.unreachable ? .orange : .secondary)
             Text(queue.lastPoll.map { "Last poll: \($0.formatted(date: .abbreviated, time: .standard))" } ?? "No poll received yet.")
                 .font(.caption).foregroundStyle(.secondary)
         }

@@ -24,6 +24,13 @@ import BotChuCore
     private(set) var summary = "Off."
     private(set) var servingURL: String?
     private(set) var problem: String?
+    /// The queue is served through Tailscale, which is disconnected on this Mac, so the remote
+    /// runtime can't reach it. Only reported; reconnecting stays the owner's choice.
+    private(set) var tailscaleOff = false
+    @ObservationIgnored var tailscaleDisconnected: (String) -> Bool = { address in
+        TailscaleLink.isDisconnected(listenAddress: address, installed: TailscaleLink.isInstalled,
+                                     addresses: TailscaleLink.interfaceAddresses())
+    }
     @ObservationIgnored var readToken: () -> String? = { Keychain.get(Keychain.remoteQueueAccount) }
     @ObservationIgnored var saveToken: (String) -> Bool = { value in
         Keychain.setChecked(value, for: Keychain.remoteQueueAccount)
@@ -38,13 +45,21 @@ import BotChuCore
                 try? await Task.sleep(for: .seconds(15))
                 guard !Task.isCancelled, let self else { return }
                 self.now = Date()
+                self.checkTailscale()
             }
         }
     }
 
     var online: Bool { servingURL != nil && lastPoll.map { (0..<120).contains(now.timeIntervalSince($0)) } == true }
     func isWorking(_ id: UUID) -> Bool { botID == id && pending > 0 }
-    var presence: String { online ? "Online" : "Offline" }
+    /// Offline because Tailscale is disconnected (see `tailscaleOff`).
+    var unreachable: Bool { !online && servingURL != nil && tailscaleOff }
+    var presence: String { online ? "Online" : unreachable ? "Tailscale off" : "Offline" }
+
+    func checkTailscale() {
+        let off = servingURL != nil && !online && model.map { tailscaleDisconnected($0.settings.remoteQueueAddress) } == true
+        if off != tailscaleOff { tailscaleOff = off }
+    }
 
     func reloadBot() {
         let bot = model?.bots.first(where: \.isRemoteQueue)
@@ -129,6 +144,7 @@ import BotChuCore
                 guard let self, self.generation == expected else { return }
                 self.servingURL = "http://\(address.contains(":") ? "[\(address)]" : address):\(port)"
                 self.summary = "Listening."
+                self.checkTailscale()
             }, onFailure: { [weak self] error in
                 guard let self, self.generation == expected else { return }
                 self.servingURL = nil; self.server = nil; self.binding = nil
