@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Everything BotChu tests: shell syntax, the unit and rendering tests, and a build into a throwaway
-# folder (so it never touches an installed or running copy). Needs full Xcode. On a Mac where other
-# agents test too, run it through the shared test gate: /tmp/botchu-coord/gate.sh start scripts/test.sh
+# folder (so it never touches an installed or running copy). Needs full Xcode. Run directly:
+# only the prebuilt window phase takes the shared test gate.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 test_root=$PWD
@@ -10,6 +10,8 @@ if [ "${BOTCHU_WINDOWLESS_ROOT:-}" != "$test_root" ]; then
 fi
 scripts/coord/install.sh
 source scripts/test-support.sh
+source scripts/test-passes.sh
+test_capture_tree
 tier=full
 case "${1:-}" in
   '') ;;
@@ -17,6 +19,10 @@ case "${1:-}" in
   *) echo "usage: scripts/test.sh [--fast]" >&2; exit 2 ;;
 esac
 [ $# = 0 ] || { echo "usage: scripts/test.sh [--fast]" >&2; exit 2; }
+if [ "$tier" = full ] && [ -n "${BOTCHU_GATE_RUN_ID:-}" ]; then
+  echo "test: run scripts/test.sh directly, not inside gate.sh; it gates its own window tests" >&2
+  exit 2
+fi
 test_begin "$tier"
 out=
 trap 'result=$?; [ -z "$out" ] || rm -rf "$out"; test_end "$result"' EXIT
@@ -27,6 +33,7 @@ test_step toolchain xcodebuild -version
 # Shell syntax for every script in the repository.
 shell_syntax() { git ls-files -z '*.sh' | xargs -0 -n1 bash -n; }
 test_step 'shell syntax' shell_syntax
+test_step 'workflow checks' python3 -m unittest discover -s scripts/tests
 
 # The app's scripts (README.md under Architecture) exist and are executable.
 for f in macOS/build.sh macOS/install.sh macOS/test.sh; do
@@ -42,4 +49,5 @@ test_step 'test builds' macOS/test.sh --build
 out=$(mktemp -d)
 test_step 'app build' macOS/build.sh "$out"
 test_step 'macOS tests' macOS/test.sh --prebuilt
+test_record_pass
 echo "test: ok"

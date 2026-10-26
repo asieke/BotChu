@@ -1371,6 +1371,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
 - Release tests build with testability in `macOS/.build/release-tests/`, separate from the app's
   release build. `RunEvaluationTests` runs only in release in the full tier; the fast tier keeps
   running it in debug. This avoids the two release build modes evicting each other's artifacts.
+- A full pass on a tree that stayed clean and unchanged records `<tree> <commit> <UTC time>` in
+  the shared Git directory's `test-passes`. Worktrees and merge commits with that same tree share
+  the result; a dirty tree or an edit during testing cannot receive a receipt.
 - `macOS/test.sh` requires every test bundle to finish and rejects explicit failure summaries,
   even if SwiftPM returns success. The native-click test of the tasks' column runs in its own process because
   AppKit's window-animation callbacks can stop the Swift test runner's event loop during later
@@ -1537,7 +1540,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
 ## Deploy
 - **Live checkout:** `Alexs-MacBook-Pro-92440` runs the app from `~/Desktop/WORKSPACE/BotChu`, which stays on `main` and is never edited; the app is installed to `~/Applications/BotChu.app`.
 - **Secrets:** None in the repository or `.env`. The OpenRouter key and the Telegram bot token live in the Keychain, entered in Settings.
-- **Deploy:** `scripts/deploy.sh`, run in `~/Desktop/WORKSPACE/BotChu`, fast-forwards it to `origin/main`, runs `macOS/test.sh`, installs the app with `macOS/install.sh` (which restarts BotChu if it was open and smoke-tests that it starts), and appends `<UTC time> <commit> ok|failed` to `.git/deploys`. `scripts/deploy.sh --skip-tests` leaves out `macOS/test.sh`, for a commit already tested as merged; the build and the install's smoke test still run. Success: it exits 0, the last line of `.git/deploys` is that commit with `ok`, and `BotChuCommit` in `~/Applications/BotChu.app/Contents/Info.plist` is that commit. Nothing else deploys. Restarting BotChu stops every turn under way, its bots' tasks and sub-agents included, so deploy only when the owner asks and no turns are running. It refuses if `~/Desktop/WORKSPACE/BotChu` has local edits or commits; fix those through a pull request.
+- **Deploy:** `scripts/deploy.sh`, run in `~/Desktop/WORKSPACE/BotChu`, fast-forwards it to `origin/main`, reuses a full-suite pass recorded for that exact tree (or runs `scripts/test.sh` when none exists), installs the app with `macOS/install.sh` (which restarts BotChu if it was open and smoke-tests that it starts), and appends `<UTC time> <commit> ok|failed` to `.git/deploys`. `scripts/deploy.sh --tests` forces the full suite even when a pass is recorded; `--skip-tests` still explicitly skips it. The build and the install's smoke test always run. Success: it exits 0, the last line of `.git/deploys` is that commit with `ok`, and `BotChuCommit` in `~/Applications/BotChu.app/Contents/Info.plist` is that commit. Nothing else deploys. Restarting BotChu stops every turn under way, its bots' tasks and sub-agents included, so deploy only when the owner asks and no turns are running. It refuses if `~/Desktop/WORKSPACE/BotChu` has local edits or commits; fix those through a pull request.
 - **Recovery:** After a failed deploy, fix it (or revert the change) through a pull request and deploy again; `scripts/deploy.sh` retries, and reinstalls what is checked out when nothing new merged.
 - **Scheduled jobs:** none.
 - **Development:** On this Mac, in task worktrees of `~/Desktop/WORKSPACE/BotChu` (`.claude/worktrees/<type>-<slug>`, from `origin/main`). Changes reach the live app only by merging a pull request to `main` and deploying it.
