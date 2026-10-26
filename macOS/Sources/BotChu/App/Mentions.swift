@@ -37,6 +37,11 @@ extension AppModel {
     /// The text a message reaches its bot with: what its mentions point at (`ReferenceContext`), then
     /// the message. A message without mentions goes as it is.
     func deliveredText(of message: ChatMessage, for target: ChatTarget) -> String {
+        // A remote bot's answer to the bot's message says whose it is, and where its files are.
+        if let link = message.fromAgent, let bot = bot(target.botID) {
+            let home = BotHome(workspace: bot.persistencePath)
+            return AgentMessage.prompt(message.text, from: link, files: message.documents.map(home.fileURL))
+        }
         // A reply from the Inbox says which delivery it answers.
         if let id = message.delivery, let delivery = inbox?.delivery(id) {
             var plain = message

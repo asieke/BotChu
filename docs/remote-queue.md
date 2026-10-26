@@ -4,8 +4,26 @@ A remote queue bot runs on its own computer. BotChu keeps its Home conversation 
 queue; the remote runtime polls for messages and posts one reply or error per message. Nothing
 starts a CLI on this Mac. It supports one remote bot, text messages with documents attached both
 ways, and ten waiting messages. It can have a pet, made as any bot's is (Edit ▸ Appearance), which
-thinks while a message waits and is pleased when a reply lands. It has no local workspace,
-provider/model settings, tasks, scheduled jobs or sub-agent runs.
+thinks while a message waits and is pleased when a reply lands. Other bots can message it too
+(below). It has no local workspace, provider/model settings, tasks, scheduled jobs or sub-agent runs.
+
+## Messages from other bots
+
+Any bot's turn can message the remote bot with `botchu-message send --agent "Danny" --text "…"
+[--file <path>]…` (up to 8 files of 10 MB each; `botchu-message list` names the remote bots). The
+message joins the same queue, with `from` naming the bot, and shows in the remote bot's Home as
+"From <bot>". The remote runtime answers it like any other message. BotChu then hands the answer
+(its text, or its error, and its files, copied into the sending bot's folder) back to the
+conversation that sent the message. It arrives as a message from the remote bot, framed for the bot
+as another agent's words rather than the owner's instructions, with its files' paths. It starts a
+turn there, or waits in that conversation's queue while a turn runs. A message from a sub-agent
+run goes as its caller's conversation's. Each answer goes back once, recognized by its ID after a
+relaunch. If that conversation is gone, the remote bot's Home says so.
+
+Remote bots only answer: no endpoint lets the remote runtime start a conversation with a bot or
+list them. Its token still can't make a local bot do anything a bot didn't ask it about first,
+though an answer it posts does reach the bot that asked as text to read (prompt injection is the
+risk to weigh, as with any web page a bot reads).
 
 ## Setup
 
@@ -60,7 +78,7 @@ Every request includes `Authorization: Bearer <token>`. Missing or incorrect cre
 
 | Request | Response |
 | --- | --- |
-| `GET /v1/queue/next` | 200 with `{"id":"UUID","text":"message","sent_at":"ISO 8601"}`, plus `"files":[{"id":"UUID","name":"roster.pdf","type":"application/pdf","size":12345}]` when documents are attached; or 204 when empty |
+| `GET /v1/queue/next` | 200 with `{"id":"UUID","text":"message","sent_at":"ISO 8601"}`, plus `"files":[{"id":"UUID","name":"roster.pdf","type":"application/pdf","size":12345}]` when documents are attached and `"from":{"id":"UUID","name":"10x Engineer Bot"}` when a bot sent it rather than the owner; or 204 when empty |
 | `GET /v1/queue/files/<file id>` | 200 with the file's bytes and its `Content-Type`, while its message waits; 404 once it is answered |
 | `POST /v1/queue/reply` with `{"id":"UUID","text":"reply"}` | 200 with `{"ok":true}` after the reply is saved |
 | `POST /v1/queue/reply` with `{"id":"UUID","text":"reply","files":[{"name":"roster.pdf","type":"application/pdf","data":"<base64>"}]}` | Same; the files show under the reply in Home |

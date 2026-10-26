@@ -16,6 +16,8 @@ import BotChuCore
     private var appliedRevision = -1
     private var stopped = false
     private var clock: Task<Void, Never>?
+    /// Bots' messages whose replies are being handed back to their conversations.
+    private var forwarding = Set<UUID>()
     private(set) var pending = 0
     private(set) var lastPoll: Date?
     private(set) var now = Date()
@@ -178,6 +180,18 @@ import BotChuCore
         return true
     }
 
+    /// A bot's message (`botchu-message send`), queued as from its conversation; returns once the
+    /// journal holds it. The same ID again queues nothing more.
+    func send(_ text: String, files: [FileAttachment], id: UUID, to botID: UUID, from sender: AgentLink) async throws {
+        guard !stopped, self.botID == botID, let queue else { throw InboxRequest.Problem("the remote bot's queue isn't available") }
+        do {
+            try await queue.enqueue(text, files: files, from: sender, id: id)
+        } catch RemoteQueue.Failure.full {
+            throw InboxRequest.Problem("its queue is full (\(RemoteQueue.capacity) waiting messages); try again after it answers")
+        }
+        await reconcile()
+    }
+
     /// Journal first, transcript second. Stable IDs fill any crash gap without duplicates. Home's
     /// normal transcript persistence stays ordered with its other changes by ConversationStorage.
     func reconcile() async {
@@ -195,9 +209,48 @@ import BotChuCore
         for message in added { model.append(message, to: target) }
         if added.contains(where: { $0.role == .assistant || $0.role == .error }), !model.isShown(target) { model.unread.insert(target) }
         model.runStates[target] = snapshot.firstPending.map { RunState(startedAt: $0.date, hasOutput: true) }
+        for entry in snapshot.entries where entry.awaitsForwarding { await forward(entry, from: id) }
         // Its pet thinks while a message waits, and is pleased when the last reply lands.
         if added.contains(where: { $0.role == .assistant }) { model.react(.done, for: target, seconds: 3) }
         if !added.isEmpty { model.saveThread(target) }
+    }
+
+    /// Hands a remote bot's answer to a bot's message back to the conversation that sent it, as a
+    /// message from the remote bot, under the answer's own ID: one already there or in its queue is
+    /// recognized, so a relaunch between the two saves delivers it once. A conversation that is gone
+    /// gets nothing, and the remote bot's Home says so.
+    private func forward(_ entry: RemoteQueue.Entry, from remoteID: UUID) async {
+        guard let sender = entry.message.fromAgent, let reply = entry.reply, let queue, let model, let remote = model.bot(remoteID),
+              forwarding.insert(entry.message.id).inserted else { return }
+        let target = sender.taskID.map { ChatTarget.task($0, of: sender.botID) } ?? .home(sender.botID)
+        let messageID = entry.message.id
+        guard let bot = model.bot(sender.botID), sender.taskID.map({ model.task($0, of: sender.botID) != nil }) ?? true else {
+            try? await queue.markForwarded(messageID)
+            forwarding.remove(messageID)
+            model.note("\(sender.name)'s conversation is gone, so this reply stays here.", in: .home(remoteID))
+            return
+        }
+        _ = await model.loadedThread(target)
+        if model.messageQueues[target]?.messages.contains(where: { $0.id == reply.id }) == true
+            || model.thread(target).contains(where: { $0.id == reply.id }) {
+            try? await queue.markForwarded(messageID)
+            forwarding.remove(messageID)
+            return
+        }
+        // Its files go into the sending bot's folder, under the same IDs, for the bot to read.
+        let from = BotHome(workspace: remote.persistencePath), into = BotHome(workspace: bot.persistencePath)
+        let files = reply.documents.compactMap { file in
+            (try? Data(contentsOf: from.fileURL(file))).flatMap { try? into.saveFile($0, name: file.name, type: file.type, id: file.id) }
+        }
+        if let task = model.task(target), task.isArchived { model.reopenTask(target) }
+        let link = AgentLink(botID: remote.id, name: remote.name, messageID: messageID, failed: reply.role == .error)
+        let started = model.send(reply.text, to: target, files: files, id: reply.id, fromAgent: link) { [weak self] accepted in
+            Task { @MainActor in
+                if accepted { try? await queue.markForwarded(messageID) }
+                self?.forwarding.remove(messageID)
+            }
+        }
+        if !started { forwarding.remove(messageID) }
     }
 
     private func observeSettings() {

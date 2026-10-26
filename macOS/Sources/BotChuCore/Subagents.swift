@@ -188,6 +188,9 @@ public struct BotRosterEntry: Identifiable, Codable, Equatable, Sendable {
     public var name: String
     public var title: String
     public var emoji: String
+    /// A remote queue bot, which is messaged (`botchu-message`) rather than delegated to.
+    public var remote: Bool?
+    public var isRemote: Bool { remote == true }
 
     public init(bot: Bot) {
         id = bot.id
@@ -195,6 +198,7 @@ public struct BotRosterEntry: Identifiable, Codable, Equatable, Sendable {
         name = bot.name
         title = bot.title
         emoji = bot.emoji
+        remote = bot.isRemoteQueue ? true : nil
     }
 }
 

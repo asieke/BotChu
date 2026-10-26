@@ -5,8 +5,8 @@ import Foundation
 public enum SubagentHookInstaller {
     /// The helper's commands, each a copy of `script`, which acts by the name it is run as:
     /// `botchu-subagent` starts sub-agent runs, `botchu-task` creates Tasks (#111), and
-    /// `botchu-inbox` delivers to the owner's Inbox.
-    public static let commands = ["botchu-subagent", "botchu-task", "botchu-inbox"]
+    /// `botchu-inbox` delivers to the owner's Inbox, and `botchu-message` messages remote queue bots.
+    public static let commands = ["botchu-subagent", "botchu-task", "botchu-inbox", "botchu-message"]
 
     @discardableResult public static func install(binDirectory: URL = SubagentIPC.defaultBinDirectory) throws -> URL {
         try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true,
@@ -169,6 +169,8 @@ def wait_for(ids):
 
 def roster():
     for bot in read_json(ROOT / "roster.json"):
+        if bot.get("remote"):
+            continue
         print(str(bot.get("emoji", "")) + " " + bot["slug"] + " — " + bot["name"] + " — " + bot.get("title", "") + " (" + bot["id"] + ")")
     return 0
 
@@ -408,7 +410,110 @@ def inbox_main():
         fail("--wait must be between 0 and 600 seconds.")
     return inbox_send(args)
 
+MESSAGE_FILE_BYTES = 10 << 20
+MESSAGE_TEXT_BYTES = 100000
+
+def message_roster():
+    remotes = [bot for bot in read_json(ROOT / "roster.json") if bot.get("remote")]
+    if not remotes:
+        print("No remote bots are set up in BotChu.")
+    for bot in remotes:
+        print(str(bot.get("emoji", "")) + " " + bot["slug"] + " — " + bot["name"] + " — " + bot.get("title", "") + " (" + bot["id"] + ")")
+    return 0
+
+def message_send(args):
+    import shutil
+    live()
+    if not args.agent.strip() or len(args.agent) > 256:
+        fail("Name the remote bot: its name, slug or UUID (botchu-message list).")
+    if args.text is not None and args.text_file:
+        fail("Use --text or --text-file, not both.")
+    text = args.text or ""
+    if args.text_file:
+        try:
+            text = pathlib.Path(args.text_file).expanduser().read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            fail("Couldn't read the text file: " + str(error))
+    if len(text.encode("utf-8")) > MESSAGE_TEXT_BYTES:
+        fail("The message must be at most 100 KB; send a longer text as a file (--file).")
+    sources = []
+    for path in args.file or []:
+        source = pathlib.Path(path).expanduser().resolve()
+        if not source.is_file():
+            fail("Not a file: " + path)
+        if source.name.startswith("."):
+            fail("Send " + path + " under a name that doesn't start with a dot.")
+        if not 0 < source.stat().st_size <= MESSAGE_FILE_BYTES:
+            fail(path + " is empty or larger than 10 MB.")
+        if source.name in (other.name for other in sources):
+            fail("Two files are called " + source.name + "; send one under another name.")
+        sources.append(source)
+    if len(sources) > 8:
+        fail("Send at most 8 files.")
+    if not text.strip() and not sources:
+        fail("Send some text (--text) or a file (--file).")
+    request_id = str(uuid.uuid4())
+    staged = ROOT / "inbox" / request_id
+    files = []
+    if sources:
+        staged.mkdir(parents=True, mode=0o700)
+        for source in sources:
+            copy = staged / source.name
+            shutil.copyfile(source, copy)
+            size = copy.stat().st_size
+            if not 0 < size <= MESSAGE_FILE_BYTES:
+                fail(str(source) + " changed size while it was copied.")
+            files.append({"name": source.name, "staged": "inbox/" + request_id + "/" + source.name, "bytes": size, "source": str(source)})
+    atomic_json(ROOT / "requests" / (request_id + ".json"), {
+        "kind": "message",
+        "id": request_id,
+        "invocationID": caller_uuid("BOTCHU_INVOCATION_ID", True),
+        "callerBotID": caller_uuid("BOTCHU_CALLER_BOT_ID", True),
+        "callerTaskID": caller_uuid("BOTCHU_CALLER_TASK_ID"),
+        "parentSubagentID": caller_uuid("BOTCHU_CALLER_SUBAGENT_ID"),
+        "createdAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "message": {"agent": args.agent, "text": text, "files": files},
+    })
+    started = time.monotonic()
+    path = ROOT / "results" / (request_id + ".result.json")
+    while not path.exists():
+        if time.monotonic() - started > args.wait:
+            print("Pending — BotChu has the message and hasn't queued it yet. Message: " + request_id, flush=True)
+            return 1
+        live()
+        time.sleep(0.25)
+    result = read_json(path)
+    if result.get("kind") != "message" or canonical(result.get("id")) != request_id:
+        fail("Mismatched message result: " + request_id)
+    if not result.get("queued"):
+        fail("Not sent: " + str(result.get("errorMessage") or "BotChu couldn't take it."))
+    name = str(result.get("targetBotName") or args.agent)
+    print("Sent to " + name + ". Its reply will arrive in this conversation as a new message, which starts a turn if this one "
+          "has ended; don't wait for it.", flush=True)
+    print("Message: " + request_id, flush=True)
+    return 0
+
+def message_main():
+    parser = argparse.ArgumentParser(prog="botchu-message", description="Message a remote queue bot (one that runs on its own "
+        "computer): it answers in its own time, and its reply comes back into this conversation as a new message.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("list", help="List the remote bots you can message")
+    send = commands.add_parser("send", help="Send a remote bot a message")
+    send.add_argument("--agent", required=True, help="The remote bot: its name, slug or UUID")
+    send.add_argument("--text", help="The message")
+    send.add_argument("--text-file", help="A file whose text is the message")
+    send.add_argument("--file", action="append", help="A file to send with it, up to 10 MB (repeatable, at most 8)")
+    send.add_argument("--wait", type=float, default=60, help="Seconds to wait for BotChu to queue it (default 60)")
+    args = parser.parse_args()
+    if args.command == "list":
+        return message_roster()
+    if not 0 <= args.wait <= 600:
+        fail("--wait must be between 0 and 600 seconds.")
+    return message_send(args)
+
 def main():
+    if os.path.basename(sys.argv[0]) == "botchu-message":
+        return message_main()
     if os.path.basename(sys.argv[0]) == "botchu-task":
         return task_main()
     if os.path.basename(sys.argv[0]) == "botchu-inbox":

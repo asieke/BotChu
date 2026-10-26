@@ -934,7 +934,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     on its own computer. BotChu serves an authenticated HTTP queue, while the remote runtime
     polls for messages and posts complete replies or errors into Home. Documents go both ways: attach
     them with +, a drop or a paste, and the remote runtime's files show under its reply, opening in
-    their apps. It can have a pet like any bot's. The queue survives relaunch,
+    their apps. It can have a pet like any bot's. Other bots message it with `botchu-message send`, and
+    its answer comes back into the asking conversation as a message from it, starting a turn; it only
+    answers, never starts a conversation itself. The queue survives relaunch,
     retains replies without truncation, and deduplicates retry acknowledgements. This bot has no
     local workspace, CLI, account/model controls, tasks, jobs or sub-agents. Settings ▸ **Remote queue**
     controls its address/port, generated Keychain token and connection status; the sidebar shows

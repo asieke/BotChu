@@ -23,6 +23,7 @@ struct MessageRow: View, Equatable {
         case .user:
             VStack(alignment: .trailing, spacing: 6) {
             if let delivery = message.delivery { InboxReplyLine(delivery: delivery) }
+            if let link = message.fromAgent { AgentMessageLine(link: link) }
             if !message.documents.isEmpty { MessageFiles(files: message.documents, bot: bot, alignment: .trailing) }
             if !message.text.isEmpty || !message.images.isEmpty {
             HStack {
@@ -43,8 +44,15 @@ struct MessageRow: View, Equatable {
                 }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
-                    .foregroundStyle(.white)
-                    .background(RoundedRectangle(cornerRadius: Theme.bubbleRadius).fill(Color.accentColor))
+                    // Another bot's words aren't the owner's: they keep the reply's colors.
+                    .foregroundStyle(message.fromAgent == nil ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                    .background(RoundedRectangle(cornerRadius: Theme.bubbleRadius)
+                        .fill(message.fromAgent == nil ? Color.accentColor : Theme.replyBackground))
+                    .overlay {
+                        if message.fromAgent != nil {
+                            RoundedRectangle(cornerRadius: Theme.bubbleRadius).strokeBorder(Color.primary.opacity(0.08))
+                        }
+                    }
             }
             }
             }
@@ -95,6 +103,26 @@ struct MessageRow: View, Equatable {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 2)
         }
+    }
+}
+
+/// Over a message between bots: the bot it is from (or whose reply it is), opening that bot's side.
+struct AgentMessageLine: View {
+    @Environment(AppModel.self) private var model
+    let link: AgentLink
+
+    var body: some View {
+        let target = link.taskID.map { ChatTarget.task($0, of: link.botID) } ?? .home(link.botID)
+        let title = link.messageID == nil ? "From \(link.name)" : link.failed == true ? "\(link.name) couldn't answer" : "\(link.name) replied"
+        Button { if model.bot(link.botID) != nil { model.show(target) } } label: {
+            Label(title, systemImage: link.messageID == nil ? "arrow.down.left" : "arrowshape.turn.up.left")
+                .labelStyle(TightLabel())
+                .font(.system(size: 11))
+                .foregroundStyle(Palette.secondaryText)
+                .lineLimit(1)
+        }
+        .buttonStyle(.plain)
+        .help(link.messageID == nil ? "Open the conversation it came from" : "Open \(link.name)")
     }
 }
 
