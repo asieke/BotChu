@@ -1193,7 +1193,7 @@ final class AppModel {
     /// queue pauses and the conversation says why.
     @discardableResult
     func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [], files: [FileAttachment] = [],
-              id: UUID = UUID(), references: [MessageReference] = [], delivery: UUID? = nil,
+              id: UUID = UUID(), references: [MessageReference] = [], delivery: UUID? = nil, fromAgent: AgentLink? = nil,
               accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
         let (text, references) = MessageReference.trimming(text, references: references)
         if bot(target.botID)?.isRemoteQueue == true {
@@ -1205,7 +1205,7 @@ final class AppModel {
             attachmentErrors[target] = "Attach up to 8 images per message. Remove an image before sending."
             return false
         }
-        guard (!text.isEmpty || !images.isEmpty), runSettings(of: target) != nil else { return false }
+        guard (!text.isEmpty || !images.isEmpty || !files.isEmpty), runSettings(of: target) != nil else { return false }
         if !visible {
             return beginTurn(text, for: target, message: nil)
         }
@@ -1222,22 +1222,27 @@ final class AppModel {
             runStates[target] = RunState(preparing: true)
         }
         // The queue changes once it is recovered after the launch, so what was saved in it isn't lost.
-        if later(target, needs: .recovery, { [weak self] in self?.enqueue(text, to: target, images: images, id: id, references: references,
-                                                                         delivery: delivery, reserved: ticket, accepted: accepted) },
+        if later(target, needs: .recovery, { [weak self] in self?.enqueue(text, to: target, images: images, files: files, id: id,
+                                                                         references: references, delivery: delivery, fromAgent: fromAgent,
+                                                                         reserved: ticket, accepted: accepted) },
                  cancel: { accepted?(false) }) {
             return true
         }
-        enqueue(text, to: target, images: images, id: id, references: references, delivery: delivery, reserved: ticket, accepted: accepted)
+        enqueue(text, to: target, images: images, files: files, id: id, references: references, delivery: delivery, fromAgent: fromAgent,
+                reserved: ticket, accepted: accepted)
         return true
     }
 
     /// Queues a message being sent, saves the queue, then sends it (`send`); `reserved` is the
     /// ticket that keeps the conversation busy meanwhile.
-    private func enqueue(_ text: String, to target: ChatTarget, images: [ImageAttachment], id: UUID, references: [MessageReference],
-                         delivery: UUID? = nil, reserved ticket: UUID?, accepted: (@MainActor @Sendable (Bool) -> Void)?) {
+    private func enqueue(_ text: String, to target: ChatTarget, images: [ImageAttachment], files: [FileAttachment] = [], id: UUID,
+                         references: [MessageReference], delivery: UUID? = nil, fromAgent: AgentLink? = nil, reserved ticket: UUID?,
+                         accepted: (@MainActor @Sendable (Bool) -> Void)?) {
         var queue = messageQueues[target] ?? MessageQueue()
         var message = ChatMessage(id: id, role: .user, text: text, images: images, references: references)
         message.delivery = delivery
+        message.files = files.isEmpty ? nil : files
+        message.fromAgent = fromAgent
         queue.enqueue(message, unsaved: true)
         messageQueues[target] = queue
         saveQueue(for: target) { [weak self] saved in

@@ -160,6 +160,10 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     /// them both ways. Nil in messages without any, and in threads saved before.
     public var files: [FileAttachment]?
     public var documents: [FileAttachment] { files ?? [] }
+    /// A message between bots rather than from the owner (`AgentLink`): in a remote queue bot's Home,
+    /// the bot that sent it and from which conversation; in that conversation, the remote bot whose
+    /// reply it is. Nil otherwise, and in threads saved before.
+    public var fromAgent: AgentLink?
     /// On the owner's message, the agents and projects chosen in it from `@` and `#` completion
     /// (`MessageReference`). Nil in messages without any, and in threads saved before.
     public var references: [MessageReference]?

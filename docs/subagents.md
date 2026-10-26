@@ -8,6 +8,11 @@ mention only names the bot; what is asked for decides which:
 | "New task @bot", "hand this off to @bot as a new task" | a **Task**, with `botchu-task create` | under the bot in the left sidebar | the bot's own; goes on after the asking turn ends or stops |
 | "New subagent @bot", "delegate this to @bot as a sub-agent" | a **sub-agent run**, with `botchu-subagent call` or `spawn` | the asking conversation's Sub-agents inspector | a child of the asking turn; its handoff comes back, and Stop cascades |
 
+A remote queue bot, which runs on its own computer, is neither: a turn messages it with
+`botchu-message send`, and its answer comes back into the asking conversation as a new message
+([Remote queue: messages from other bots](remote-queue.md#messages-from-other-bots)). The roster
+marks remote bots (`"remote": true`); `botchu-subagent list` leaves them out.
+
 BotChu supplies both commands to every Home, task and delegated turn. They work through shell
 tools on all five CLI families. Python 3 is required on the execution machine.
 
@@ -109,8 +114,9 @@ Records and transcripts stay with the owning conversation:
 <owner workspace>/.botchu/tasks/<task id>/subagents/<run id>/{run.json,thread.jsonl}
 ```
 
-The standalone helper is installed in `~/.botchu/bin`, as `botchu-subagent`, `botchu-task` and
-`botchu-inbox` (one script that acts by the name it is run as). Each turn also receives private copies in
+The standalone helper is installed in `~/.botchu/bin`, as `botchu-subagent`, `botchu-task`,
+`botchu-inbox` and `botchu-message` (one script that acts by the name it is run as). A message
+(`"kind": "message"`) stages its files as a delivery does. Each turn also receives private copies in
 its mailbox's `bin` directory, prepended to PATH after login-shell initialization. Local mailboxes
 are under `~/.botchu/ipc/subagents/<invocation id>`. A remote mailbox is under
 `~/.botchu/ipc/subagents/<app namespace>/<invocation id>` on the host. Each contains `roster.json`,

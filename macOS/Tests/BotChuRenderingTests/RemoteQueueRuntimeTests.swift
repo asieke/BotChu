@@ -88,7 +88,7 @@ extension RenderingTests {
         #expect(bot.workspace.isEmpty)
         #expect(bot.accountID.isEmpty)
         #expect(app.thread(target).isEmpty)
-        #expect(!app.delegation.roster.contains { $0.id == bot.id })
+        #expect(app.delegation.roster.first { $0.id == bot.id }?.isRemote == true)
         app.newTask(for: bot.id)
         app.jobs.newJob(for: bot.id)
         #expect(app.taskSheet == nil)

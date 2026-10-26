@@ -145,6 +145,32 @@ struct RemoteQueueTests {
         #expect(await endpoint.handle(.init(method: "POST", path: "/v1/queue/reply", authorization: "Bearer fixture", body: missing)).status == 400)
     }
 
+    @Test func aBotsMessageSaysWhoSentItAndItsReplyIsForwardedOnce() async throws {
+        let (root, bot, queue) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let endpoint = RemoteQueueEndpoint(queue: queue, token: "fixture")
+        let sender = AgentLink(botID: UUID(), name: "10x Engineer Bot", taskID: UUID())
+        let message = try await queue.enqueue("Is the roster final?", from: sender)
+        let next = await endpoint.handle(.init(method: "GET", path: "/v1/queue/next", authorization: "Bearer fixture"))
+        let listed = try #require(try JSONSerialization.jsonObject(with: next.body) as? [String: Any])
+        let from = try #require(listed["from"] as? [String: Any])
+        #expect(from["name"] as? String == "10x Engineer Bot")
+        #expect((from["id"] as? String)?.lowercased() == sender.botID.uuidString.lowercased())
+        #expect(await queue.snapshot().entries.allSatisfy { !$0.awaitsForwarding })
+        try await queue.reply(to: message.id, text: "Yes", error: nil)
+        #expect(await queue.snapshot().entries.first?.awaitsForwarding == true)
+        try await queue.markForwarded(message.id)
+        let reloaded = try RemoteQueue(botID: bot, file: root.appendingPathComponent("queue.json"))
+        let entry = try #require(await reloaded.snapshot().entries.first)
+        #expect(!entry.awaitsForwarding && entry.message.fromAgent == sender)
+        // The owner's own messages carry no sender and are never forwarded.
+        let owners = try await reloaded.enqueue("From the owner")
+        try await reloaded.reply(to: owners.id, text: "ok", error: nil)
+        #expect(await reloaded.snapshot().entries.last?.awaitsForwarding == false)
+        let plain = await RemoteQueueEndpoint(queue: reloaded, token: "fixture").handle(.init(method: "GET", path: "/v1/queue/next", authorization: "Bearer fixture"))
+        #expect(plain.status == 204)
+    }
+
     @Test func fileNamesStayInsideTheirFolder() {
         #expect(FileAttachment.safeName("report.pdf") == "report.pdf")
         #expect(FileAttachment.safeName("../../etc/passwd") == "-..-etc-passwd")

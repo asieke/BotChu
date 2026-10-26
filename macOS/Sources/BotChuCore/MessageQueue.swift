@@ -51,7 +51,7 @@ public struct MessageQueue: Equatable, Sendable {
 
     /// Adds a message; `unsaved` holds it back until a saved queue holds it (`accepted`).
     public mutating func enqueue(_ message: ChatMessage, unsaved: Bool = false) {
-        guard message.role == .user, (!message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !message.images.isEmpty),
+        guard message.role == .user, (!message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !message.images.isEmpty || !message.documents.isEmpty),
               !messages.contains(where: { $0.id == message.id }) else { return }
         messages.append(message)
         if unsaved { self.unsaved.append(message.id) }

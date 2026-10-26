@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 import Observation
 import BotChuCore
 
@@ -34,6 +35,7 @@ final class SubagentRuntime {
     @ObservationIgnored private var handoffs: [UUID: TaskHandoffResult] = [:]
     /// What each delivery (`botchu-inbox send`) came to, by request.
     @ObservationIgnored private var inboxResults: [UUID: InboxResult] = [:]
+    @ObservationIgnored private var messageResults: [UUID: AgentMessageResult] = [:]
     @ObservationIgnored private var pendingFinishes: [UUID: (SubagentPhase, String?)] = [:]
     @ObservationIgnored private var requestCounts: [ChatTarget: Int] = [:]
     /// Runs whose end is being saved: still active until it is, so their caller waits for them.
@@ -87,7 +89,8 @@ final class SubagentRuntime {
     /// Each run's turn while it runs, by run.
     var states: SubagentStates { SubagentStates(runtime: self) }
 
-    var roster: [BotRosterEntry] { (model?.bots ?? []).filter { !$0.isRemoteQueue }.map { BotRosterEntry(bot: $0) } }
+    /// Every bot; remote queue bots are marked (`BotRosterEntry.remote`), to be messaged rather than delegated to.
+    var roster: [BotRosterEntry] { (model?.bots ?? []).map { BotRosterEntry(bot: $0) } }
     /// Every conversation's runs. For the runtime's own work and tests: a view reads one
     /// conversation's (`records[target]`), which observes only that conversation.
     var all: [SubagentRun] { roots.values.flatMap(\.runs) }
@@ -274,6 +277,11 @@ final class SubagentRuntime {
             await receiveDelivery(data, id: fileID, filename: filename, from: caller)
             return
         }
+        // A message to a remote queue bot, whose reply comes back to the conversation at the top.
+        if AgentMessageRequest.isMessage(data) {
+            await receiveMessage(data, id: fileID, filename: filename, from: caller)
+            return
+        }
         if let rejected = rejections[caller.id]?[fileID] {
             do {
                 try await caller.transport.writeResult(id: fileID, data: SubagentIPC.encode(rejected))
@@ -386,6 +394,57 @@ final class SubagentRuntime {
             try await caller.transport.writeResult(id: id, data: SubagentIPC.encode(result))
             try await caller.transport.acknowledge(filename: filename)
         } catch { if isWatching(caller.id) { report("Couldn't answer a delivery: \(error.localizedDescription)") } }
+    }
+
+    // MARK: Messages to remote bots
+
+    /// Takes a `botchu-message send` request: copies its staged files into the remote bot's folder
+    /// and queues it there as the conversation's (the top of the chain), whose reply comes back to
+    /// it (`RemoteQueueBridge.forward`). The request's ID is the message's, so asking again queues
+    /// nothing more.
+    private func receiveMessage(_ data: Data, id: UUID, filename: String, from caller: Caller) async {
+        if let known = messageResults[id] {
+            try? await caller.transport.writeResult(id: id, data: SubagentIPC.encode(known))
+            try? await caller.transport.acknowledge(filename: filename)
+            return
+        }
+        var result: AgentMessageResult
+        do {
+            guard let model, let sender = model.bot(caller.target.botID) else { throw InboxRequest.Problem("BotChu is shutting down") }
+            let request = try AgentMessageRequest.parse(data)
+            guard request.id == id else { throw InboxRequest.Problem("the request's ID doesn't match its file") }
+            try request.validate(SubagentCallerContext(invocationID: caller.id, botID: caller.target.botID, taskID: caller.target.taskID,
+                                                       parentSubagentID: caller.parent, depth: caller.depth,
+                                                       workingDirectory: caller.directory, hostID: caller.hostID))
+            guard contexts[caller.id] != nil else { throw InboxRequest.Problem("the sending turn has ended") }
+            let remote = try SubagentResolver.resolve(request.agent, bots: model.bots.filter(\.isRemoteQueue), list: "botchu-message list")
+            let home = BotHome(workspace: remote.persistencePath)
+            var files: [FileAttachment] = []
+            do {
+                for file in request.files {
+                    let contents = try await caller.transport.readStaged(file.staged, request: request.id, limit: FileAttachment.maximumBytes)
+                    files.append(try home.saveFile(contents, name: file.name, type: Self.mimeType(of: file.name)))
+                }
+                try await model.remoteQueue.send(request.text, files: files, id: request.id, to: remote.id,
+                                                 from: AgentLink(botID: sender.id, name: sender.name, taskID: caller.target.taskID))
+            } catch {
+                files.forEach(home.removeFile)
+                throw error
+            }
+            try? await caller.transport.removeStaged(request: request.id)
+            result = AgentMessageResult(id: id, targetBotName: remote.name)
+        } catch {
+            result = AgentMessageResult(id: id, errorMessage: (error as? InboxRequest.Problem)?.message ?? error.localizedDescription)
+        }
+        messageResults[id] = result
+        do {
+            try await caller.transport.writeResult(id: id, data: SubagentIPC.encode(result))
+            try await caller.transport.acknowledge(filename: filename)
+        } catch { if isWatching(caller.id) { report("Couldn't answer a message: \(error.localizedDescription)") } }
+    }
+
+    private static func mimeType(of name: String) -> String? {
+        UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType
     }
 
     // MARK: Tasks handed to bots (#111)

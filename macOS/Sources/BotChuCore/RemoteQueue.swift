@@ -7,6 +7,11 @@ public actor RemoteQueue {
     public struct Entry: Codable, Equatable, Sendable {
         public var message: ChatMessage
         public var reply: ChatMessage?
+        /// A bot's message (`ChatMessage.fromAgent`) whose reply has been handed to the conversation
+        /// that sent it.
+        public var forwarded: Bool?
+        /// A bot's message answered and not yet handed back to its conversation.
+        public var awaitsForwarding: Bool { message.fromAgent != nil && reply != nil && forwarded != true }
     }
     public struct Snapshot: Sendable {
         public var entries: [Entry]
@@ -65,12 +70,15 @@ public actor RemoteQueue {
     }
 
     /// `files` are already saved in the bot's folder (`BotHome.saveFile`).
-    @discardableResult public func enqueue(_ text: String, files: [FileAttachment] = [], id: UUID = UUID(), at date: Date = Date()) throws -> ChatMessage {
+    /// `from` is the bot and conversation sending it, for a message between bots.
+    @discardableResult public func enqueue(_ text: String, files: [FileAttachment] = [], from: AgentLink? = nil, id: UUID = UUID(),
+                                           at date: Date = Date()) throws -> ChatMessage {
         if let existing = journal.entries.first(where: { $0.message.id == id }) { return existing.message }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !files.isEmpty else { throw Failure.emptyText }
         guard journal.entries.filter({ $0.reply == nil }).count < Self.capacity else { throw Failure.full }
         var message = ChatMessage(id: id, role: .user, text: text, date: date)
         message.files = files.isEmpty ? nil : files
+        message.fromAgent = from
         var next = journal
         next.entries.append(Entry(message: message))
         next.order.append(message.id)
@@ -81,6 +89,14 @@ public actor RemoteQueue {
     public func next(at now: Date = Date()) -> ChatMessage? {
         lastPoll = now
         return journal.entries.first { $0.reply == nil }?.message
+    }
+
+    /// Records that a bot's message's reply reached the conversation that sent it.
+    public func markForwarded(_ id: UUID) throws {
+        guard let i = journal.entries.firstIndex(where: { $0.message.id == id }), journal.entries[i].awaitsForwarding else { return }
+        var next = journal
+        next.entries[i].forwarded = true
+        try commit(next)
     }
 
     /// A file of a message still waiting for its reply, and where it is kept; answered messages'
@@ -166,7 +182,8 @@ public actor RemoteQueueEndpoint {
             case ("GET", "/v1/queue/next"):
                 guard let message = await queue.next() else { return .init(204) }
                 let files = message.documents.map { NextFile(id: $0.id, name: $0.name, type: $0.type, size: $0.size) }
-                return .json(200, Next(id: message.id, text: message.text, sent_at: message.date, files: files.isEmpty ? nil : files))
+                let from = message.fromAgent.map { NextSender(id: $0.botID, name: $0.name) }
+                return .json(200, Next(id: message.id, text: message.text, sent_at: message.date, files: files.isEmpty ? nil : files, from: from))
             case ("GET", let path) where path.hasPrefix(Self.filesPath):
                 guard let id = UUID(uuidString: String(path.dropFirst(Self.filesPath.count))),
                       let found = await queue.waitingFile(id), let data = try? Data(contentsOf: found.url) else { return .init(404) }
@@ -194,7 +211,9 @@ public actor RemoteQueueEndpoint {
         let trimmed = type.trimmingCharacters(in: .whitespaces)
         return !trimmed.isEmpty && trimmed.count <= 127 && trimmed.utf8.allSatisfy({ $0 > 32 && $0 < 127 }) ? trimmed : nil
     }
-    private struct Next: Encodable { var id: UUID; var text: String; var sent_at: Date; var files: [NextFile]? }
+    private struct Next: Encodable { var id: UUID; var text: String; var sent_at: Date; var files: [NextFile]?; var from: NextSender? }
+    /// The bot that sent a message, when the owner didn't.
+    private struct NextSender: Encodable { var id: UUID; var name: String }
     private struct NextFile: Encodable { var id: UUID; var name: String; var type: String?; var size: Int }
     private struct Reply: Decodable { var id: UUID; var text: String?; var error: String?; var files: [ReplyFile]? }
     /// `data` is base64, as JSON carries bytes.
