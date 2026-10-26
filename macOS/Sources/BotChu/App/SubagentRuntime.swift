@@ -35,6 +35,8 @@ final class SubagentRuntime {
     @ObservationIgnored private var handoffs: [UUID: TaskHandoffResult] = [:]
     /// What each delivery (`botchu-inbox send`) came to, by request.
     @ObservationIgnored private var inboxResults: [UUID: InboxResult] = [:]
+    /// The deliveries each caller's are being taken, by request, so none is taken twice at once.
+    @ObservationIgnored private var receiving: [UUID: Set<UUID>] = [:]
     @ObservationIgnored private var messageResults: [UUID: AgentMessageResult] = [:]
     @ObservationIgnored private var pendingFinishes: [UUID: (SubagentPhase, String?)] = [:]
     @ObservationIgnored private var requestCounts: [ChatTarget: Int] = [:]
@@ -365,6 +367,8 @@ final class SubagentRuntime {
             try? await caller.transport.acknowledge(filename: filename)
             return
         }
+        guard receiving[caller.id, default: []].insert(id).inserted else { return }
+        defer { receiving[caller.id]?.remove(id) }
         var result: InboxResult
         do {
             guard let model, let inbox = model.inbox else { throw InboxRequest.Problem("BotChu is shutting down") }
@@ -655,10 +659,27 @@ final class SubagentRuntime {
         for context in Array(contexts.values) where context.target.botID == id { endCaller(context.id) }
     }
 
+    /// Ends a caller once what it sent to the Inbox is in, so the end of its turn sees every delivery:
+    /// those still in its mailbox (a helper that stopped waiting for its answer, or was stopped) are
+    /// taken, and those being taken finish first. A job's run ends this way (#170).
+    func finishCaller(_ id: UUID) async {
+        guard let caller = contexts[id] else { return }
+        watchers.removeValue(forKey: id)?.cancel()
+        for envelope in (try? await caller.transport.poll()) ?? [] where InboxRequest.isDelivery(envelope.data) {
+            guard contexts[id] != nil, let fileID = UUID(uuidString: String(envelope.filename.dropLast(5))) else { continue }
+            await receiveDelivery(envelope.data, id: fileID, filename: envelope.filename, from: caller)
+        }
+        for _ in 0..<400 where contexts[id] != nil && !(receiving[id]?.isEmpty ?? true) {
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        endCaller(id)
+    }
+
     func endCaller(_ id: UUID) {
         guard let caller = contexts.removeValue(forKey: id) else { return }
         watchers.removeValue(forKey: id)?.cancel()
         rejections[id] = nil
+        receiving[id] = nil
         for record in root(caller.target).runs where record.callerInvocationID == id && record.phase.isActive { stop(record.id) }
         Task { try? await caller.transport.close() }
     }

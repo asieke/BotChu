@@ -22,7 +22,9 @@ struct JobHistoryRequest: Identifiable {
 /// follow each job's policy when it is open again. `JobEngine` decides what starts; this starts each
 /// run as a fresh CLI session of its agent's, in its workspace, apart from Home (its session,
 /// queue, draft and receipts), as a new task of the agent's whose conversation is the run (#146),
-/// and tells Home only of findings and failures.
+/// with the helpers and mailbox a turn has (`SubagentRuntime.prepareCaller`), so it can reach other
+/// bots and the owner's Inbox as its task (#170). A finding's report goes to the Inbox, and Home
+/// hears only of findings and failures.
 @MainActor @Observable
 final class JobRuntime {
     /// Every agent's jobs, as the engine keeps them; reassigned after each change.
@@ -45,6 +47,11 @@ final class JobRuntime {
     /// Finished runs' transcripts until their last save is written, so their history shows them.
     @ObservationIgnored private var saving: [UUID: [ChatMessage]] = [:]
     @ObservationIgnored private var runners: [UUID: AgentRun] = [:]
+    /// Runs whose helpers and mailbox are being prepared, before their CLI starts.
+    @ObservationIgnored private var preparing: [UUID: Task<Void, Never>] = [:]
+    /// Runs whose report is being saved in the Inbox, and those whose report couldn't be, as noted.
+    @ObservationIgnored private var reporting: Set<UUID> = []
+    @ObservationIgnored private var failedReports: Set<UUID> = []
     @ObservationIgnored private var timedOut: Set<UUID> = []
     @ObservationIgnored private var quitting = false
     /// False in a review copy with sample jobs: nothing starts, not even with Run Now.
@@ -70,6 +77,7 @@ final class JobRuntime {
         }
         guard runs else { return }
         loadCatalog(for: jobs)
+        deliverPendingReports()
         // Nothing starts before every job is loaded; then due jobs, at once and on each tick.
         DispatchQueue.main.async { [weak self] in self?.tick() }
         timer = Timer.scheduledTimer(withTimeInterval: Self.tickInterval, repeats: true) { [weak self] _ in
@@ -186,17 +194,26 @@ final class JobRuntime {
 
     /// Stops a run: one under way stops its CLI; one waiting doesn't start. The job keeps its schedule.
     func stop(run runID: UUID) {
-        if let runner = runners[runID] {
-            runner.stop()
+        if runners[runID] != nil || preparing[runID] != nil {
+            halt(runID)
         } else {
             engine.cancel(runID)
             refresh()
         }
     }
 
+    /// Stops a run under way: its CLI, or its start while its helpers are prepared.
+    private func halt(_ runID: UUID) {
+        if let runner = runners[runID] { return runner.stop() }
+        guard let preparation = preparing.removeValue(forKey: runID) else { return }
+        preparation.cancel()
+        if let target = targets[runID] { model?.conversation(target).append(ChatMessage(role: .note, text: "Stopped")) }
+        finish(runID, outcome: .stopped, summary: "Stopped.")
+    }
+
     func delete(_ id: UUID) {
         do {
-            if let running = try engine.delete(id) { runners[running.id]?.stop() }
+            if let running = try engine.delete(id) { halt(running.id) }
             if history?.jobID == id { history = nil }
         } catch { notes[id] = error.localizedDescription }
         refresh()
@@ -206,7 +223,7 @@ final class JobRuntime {
 
     /// An agent is being deleted: its runs stop, and its jobs go with its folder.
     func removeBot(_ botID: UUID) {
-        for run in engine.forget(botID: botID) { runners[run.id]?.stop() }
+        for run in engine.forget(botID: botID) { halt(run.id) }
         if agentFilter == botID { agentFilter = nil }
         if let history, job(history.jobID)?.botID == botID { self.history = nil }
         refresh()
@@ -218,6 +235,11 @@ final class JobRuntime {
     func stopAll() {
         quitting = true
         timer?.invalidate()
+        for (runID, preparation) in preparing {
+            preparation.cancel()
+            if let target = targets[runID] { model?.saveUnfinishedTurn(target) }
+        }
+        preparing = [:]
         for (runID, runner) in runners {
             runner.flushOutput()
             if let target = targets[runID] {
@@ -244,6 +266,7 @@ final class JobRuntime {
     func tick() {
         guard !quitting else { return }
         launch(engine.tick(busy: busy))
+        deliverPendingReports()
         refresh()
         // The same tick, wake and clock change make the daily run reviews due (#138).
         model?.evaluator.pump()
@@ -297,9 +320,37 @@ final class JobRuntime {
             bot: bot, job: job, run: launch.run, startedAt: startedAt, memory: Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.memoryFile)),
             sharedMemory: Workspace.read(model.settings.sharedMemoryPath), soul: Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.soulFile)),
             instructions: Workspace.read(BotDocument.instructions.url(for: bot).path), team: Workspace.read(model.settings.teamPath),
-            skills: model.activeSkills(of: bot), locale: .current)
+            skills: model.activeSkills(of: bot), availableBots: model.delegation.roster, locale: .current)
         let prompt = BotContext.prompt(for: job.prompt, preamble: preamble)
-        let invocation = JobLaunch.invocation(for: agent, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key)
+        // Its helpers and mailbox first, as a turn's in its task, so `botchu-inbox send` and the
+        // others work in it (#170); its CLI starts once they are ready.
+        preparing[runID] = Task { [weak self] in
+            let caller: SubagentRuntime.Caller
+            do {
+                caller = try await model.delegation.prepareCaller(target: target, directory: bot.workspace, machine: .thisMac, hostID: nil)
+            } catch {
+                guard let self, !Task.isCancelled, self.preparing.removeValue(forKey: runID) != nil else { return }
+                return self.finish(runID, outcome: .failed, summary: "Couldn't prepare the run's helpers: \(error.localizedDescription)")
+            }
+            guard let self, !Task.isCancelled, self.preparing.removeValue(forKey: runID) != nil, !self.quitting else {
+                return model.delegation.endCaller(caller.id)
+            }
+            var invocation = JobLaunch.invocation(for: agent, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key)
+            invocation.environment.merge(caller.environment) { _, new in new }
+            self.run(launch, prompt: prompt, invocation: invocation, caller: caller, account: account, agent: agent, target: target)
+        }
+    }
+
+    /// Runs a prepared run's CLI, streaming into its task's conversation, and ends the run when it exits.
+    private func run(_ launch: JobEngine.Launch, prompt: String, invocation: Invocation, caller: SubagentRuntime.Caller,
+                     account: Account, agent: Bot, target: ChatTarget) {
+        let job = launch.job, runID = launch.run.id
+        guard let model, let bot = model.bot(job.botID) else {
+            model?.delegation.endCaller(caller.id)
+            return finish(runID, outcome: .failed, summary: "The agent is gone, so the run didn't start.")
+        }
+        let conversation = model.conversation(target)
+        let startedAt = launch.run.startedAt ?? Date()
         let command = model.settings.command(for: account)
         let runner = AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: bot.workspace, isDirectory: true))
         var assembler = ThreadAssembler()
@@ -372,19 +423,30 @@ final class JobRuntime {
             self.model?.log(TurnLog.ended(at: Date(), startedAt: startedAt, status: status, stopped: runner.stopped,
                                           toolCalls: messages.filter { $0.role == .tool }.count,
                                           error: result.outcome == .failed ? result.summary : nil, stderr: stderr, what: what), in: home)
-            let finish: @MainActor @Sendable () -> Void = { [weak self] in
-                guard let self else { return }
-                self.finish(runID, outcome: result.outcome, quiet: result.quiet, summary: result.summary)
-                // Tasks the run asked for start now, as Home's do after its turns.
-                self.model?.takeDispatches(for: job.botID)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.model?.takeDispatches(for: job.botID) }
-            }
-            // What the run asked to remember goes into the agent's memory, as for its other sessions,
-            // saved off the main thread, and the task hears how it went; the run ends once that is done.
-            guard result.outcome == .succeeded, let model = self.model, let bot = model.bot(job.botID) else { return finish() }
-            model.saveMemory(from: messages, of: bot, reportTo: target) { lines in
-                for line in lines { conversation.append(line) }
-                finish()
+            let reply = messages.last(where: { $0.role == .assistant })?.text
+            // What it sent to the Inbox is all in before it ends (#170): those deliveries' cards follow
+            // its reply, as a turn's do, and a finding it sent nothing of goes there as its report.
+            Task { [weak self] in
+                await self?.model?.delegation.finishCaller(caller.id)
+                guard let self, !self.quitting, let model = self.model else { return }
+                let cards = model.inbox.takeCards(for: target)
+                for card in cards { conversation.append(card) }
+                model.inbox.turnEnded(target, turn: [])
+                let report = JobReport.isDue(result, delivered: !cards.isEmpty) ? reply : nil
+                let finish: @MainActor @Sendable () -> Void = { [weak self] in
+                    guard let self else { return }
+                    self.finish(runID, outcome: result.outcome, quiet: result.quiet, summary: result.summary, report: report)
+                    // Tasks the run asked for start now, as Home's do after its turns.
+                    self.model?.takeDispatches(for: job.botID)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.model?.takeDispatches(for: job.botID) }
+                }
+                // What the run asked to remember goes into the agent's memory, as for its other sessions,
+                // saved off the main thread, and the task hears how it went; the run ends once that is done.
+                guard result.outcome == .succeeded, let bot = model.bot(job.botID) else { return finish() }
+                model.saveMemory(from: messages, of: bot, reportTo: target) { lines in
+                    for line in lines { conversation.append(line) }
+                    finish()
+                }
             }
         }
         do {
@@ -398,13 +460,14 @@ final class JobRuntime {
                 runner.stop()
             }
         } catch {
+            model.delegation.endCaller(caller.id)
             finish(runID, outcome: .failed, summary: JobFailure.explain("Couldn't start \(account.name): \(error.localizedDescription)", accountName: account.name))
         }
     }
 
     /// Records how a run ended, saves its transcript (its task's conversation, which is idle again),
-    /// tells Home when it should hear, and starts what waited for it.
-    private func finish(_ runID: UUID, outcome: JobOutcome, quiet: Bool = false, summary: String) {
+    /// delivers its `report` to the Inbox, tells Home when it should hear, and starts what waited for it.
+    private func finish(_ runID: UUID, outcome: JobOutcome, quiet: Bool = false, summary: String, report: String? = nil) {
         // Its task is idle before the engine looks for what to start next, so a run waiting for the
         // agent isn't held up by it.
         let target = targets.removeValue(forKey: runID)
@@ -416,6 +479,8 @@ final class JobRuntime {
             conversation.run = nil
             model.saveThread(target)
         }
+        // Waiting for the Inbox until it is there, so a save that fails is tried again.
+        if report != nil { engine.amend(runID) { $0.reportPending = true } }
         let next = engine.finish(runID, outcome: outcome, quiet: quiet, summary: summary, busy: busy)
         // Run reviews on its account wait a while after it.
         if let accountID = engine.jobs.lazy.flatMap(\.runs).first(where: { $0.id == runID })?.accountID { model?.evaluator.accountActivity(accountID) }
@@ -432,6 +497,7 @@ final class JobRuntime {
         }
         let run = job?.runs.first(where: { $0.id == runID })
         if let job, let run { deliver(job, run: run) }
+        if let job, let run, let report { deliverReport(report, of: job, run: run) }
         if let target { model?.endJobRun(in: target, news: run?.needsReceipt ?? false) }
         lives[runID] = nil
         refresh()
@@ -443,6 +509,56 @@ final class JobRuntime {
     private func deliver(_ job: Job, run: JobRun) {
         guard run.needsReceipt else { return }
         model?.postJobReceipt(JobReceipt.text(job: job, run: run), job: job.id, run: run.id, to: job.botID)
+    }
+
+    /// Puts a run's report in the owner's Inbox as its task's delivery (`JobReport`). Until it is
+    /// saved there the run says it waits (`JobRun.reportPending`), and a save that fails is noted in
+    /// the task once and tried again at each tick and launch.
+    private func deliverReport(_ reply: String, of job: Job, run: JobRun) {
+        guard let model, !reporting.contains(run.id) else { return }
+        guard let delivery = JobReport.delivery(job: job, run: run, reply: reply) else {
+            engine.amend(run.id) { $0.reportPending = nil }
+            return
+        }
+        reporting.insert(run.id)
+        Task { [weak self] in
+            var failure: Error?
+            do { try await model.inbox.post(delivery) } catch { failure = error }
+            guard let self else { return }
+            self.reporting.remove(run.id)
+            if let failure {
+                guard self.failedReports.insert(run.id).inserted, let target = self.target(of: run.id, in: job) else { return }
+                model.append(ChatMessage(role: .error, text: "Couldn't deliver the report to your Inbox: \(failure.localizedDescription). BotChu tries again."), to: target)
+                model.saveThread(target)
+            } else {
+                self.failedReports.remove(run.id)
+                self.engine.amend(run.id) { $0.reportPending = nil }
+                self.refresh()
+            }
+        }
+    }
+
+    /// Tries again the reports waiting for the Inbox, read from their tasks' conversations.
+    private func deliverPendingReports() {
+        guard runs, let model else { return }
+        for job in jobs {
+            for run in job.runs where run.reportPending == true && !reporting.contains(run.id) {
+                guard let target = target(of: run.id, in: job) else {
+                    // Its task is gone, and the report with it.
+                    engine.amend(run.id) { $0.reportPending = nil }
+                    continue
+                }
+                reporting.insert(run.id)
+                Task { [weak self] in
+                    let thread = await model.loadedThread(target)
+                    guard let self else { return }
+                    self.reporting.remove(run.id)
+                    guard let reply = thread?.last(where: { $0.role == .assistant })?.text, let job = self.job(job.id),
+                          let run = job.runs.first(where: { $0.id == run.id }) else { return }
+                    self.deliverReport(reply, of: job, run: run)
+                }
+            }
+        }
     }
 
     /// Saves the run's transcript as it is now, off the main thread, in its own lane: a newer state

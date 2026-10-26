@@ -23,7 +23,7 @@ Alex, on one Mac, who has several signed-in agent accounts (three Claude, three 
 - Each bot can have an animated pet, made from a free-text description (stills drawn by Codex, looping clips made on OpenRouter), that acts out what the bot is doing.
 - A bot such as a "10x engineer" keeps its identity and memory while it works on several repositories in parallel: each task in its own worktree and CLI session, started by the owner or by the bot from its Home conversation, which hears back how each task went.
 - A bot's Home can be messaged from Telegram, through an opt-in gateway in the app that needs no server, with its replies coming back there and the exchange kept in the Home conversation.
-- An agent can own scheduled jobs, such as a morning triage on weekdays, each run in a fresh session of its own as a new task beside its Home, with its history in Jobs and only findings and failures in its Home.
+- An agent can own scheduled jobs, such as a morning triage on weekdays, each run in a fresh session of its own as a new task beside its Home, with its history in Jobs, only findings and failures in its Home, and its findings delivered to the Inbox as its task's.
 - Any Home or task conversation can delegate to another configured bot, inspect its nested activity in the right sidebar, and receive its handoff without mixing the bots’ Home sessions.
 - First milestone: the macOS MVP — bot list and creation, chat, a minimal Settings window — built, tested and installed into `~/Applications` from `main`.
 
