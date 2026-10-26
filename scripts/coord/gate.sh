@@ -50,7 +50,7 @@ _run)
   date > "$run/started"
   date +%s > "$run/started-at"
   set -m
-  (cd "$(cat "$run/cwd")" && eval "$(cat "$run/cmd")") > "$run/log" 2>&1 &
+  (export BOTCHU_GATE_RUN_ID="$id"; cd "$(cat "$run/cwd")" && eval "$(cat "$run/cmd")") > "$run/log" 2>&1 &
   pid=$!
   start=$SECONDS
   while kill -0 "$pid" 2> /dev/null; do

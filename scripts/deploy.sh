@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Deploys BotChu on this Mac, in ~/Desktop/WORKSPACE/BotChu: tests it, installs it into ~/Applications
-# and smoke-tests it (README, Deploy). --skip-tests leaves out macOS/test.sh; the install's smoke test
-# still runs.
+# and smoke-tests it (README, Deploy). Reuse a full-suite pass for this tree unless --tests is given.
+# --skip-tests bypasses the suite explicitly. The install's smoke test always runs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-skip_tests=false
+test_mode=auto
 for arg in "$@"; do
   case "$arg" in
-    --skip-tests) skip_tests=true ;;
-    *) echo "usage: scripts/deploy.sh [--skip-tests]" >&2; exit 2 ;;
+    --skip-tests|--tests)
+      [ "$test_mode" = auto ] || { echo "deploy: choose only one of --skip-tests and --tests" >&2; exit 2; }
+      test_mode=$arg ;;
+    *) echo "usage: scripts/deploy.sh [--skip-tests|--tests]" >&2; exit 2 ;;
   esac
 done
 # Deploys only what is merged: a clean main, fast-forwarded to origin/main, runs the version that arrived.
@@ -26,9 +28,13 @@ unset DEPLOY_UPDATED; export DEPLOY_FROM   # the commit that was here before thi
 # Every attempt appends `<UTC time> <commit> ok|failed` to .git/deploys, which GitChu reads.
 trap 'rc=$?; echo "$(date -u +%FT%TZ) $(git rev-parse HEAD) $([ $rc -eq 0 ] && echo ok || echo failed)" >>"$(git rev-parse --git-path deploys)"' EXIT
 # Restarting BotChu stops every turn under way: deploy only when the owner asks and no turns run.
-if [ "$skip_tests" = true ]; then
+source scripts/test-passes.sh
+if [ "$test_mode" = --skip-tests ]; then
   echo "deploy: skipping macOS/test.sh (--skip-tests)"
+elif [ "$test_mode" != --tests ] && test_tree_passed; then
+  echo "deploy: skipping macOS/test.sh: full suite already passed for tree $(git rev-parse 'HEAD^{tree}')"
 else
-  macOS/test.sh
+  echo "deploy: running full tests ($test_mode)"
+  scripts/test.sh
 fi
 macOS/install.sh
