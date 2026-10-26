@@ -307,6 +307,111 @@ import Testing
         #expect(ProjectSync.read(fixture.file)?.openItems.contains { $0.id == "asieke/Orbit#4" } == false)
     }
 
+    @Test func aClosingIssueLeavesAtOnceAndAskingAgainWaitsForTheSameRequest() async throws {
+        let github = StandInGitHub(repos: StandInGitHub.sample)
+        let fixture = try Fixture(github)
+        defer { fixture.remove() }
+        await fixture.sync.sync(.full)
+        await github.holdCloses(1)
+        let first = Task { await fixture.sync.closeIssue(4, of: "asieke/Orbit") }
+        try await github.waitUntilClosing(1)
+        let second = Task { await fixture.sync.closeIssue(4, of: "ASIEKE/orbit") }
+        for _ in 0..<400 where await fixture.sync.waiting(toClose: 4, of: "asieke/Orbit") < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(await fixture.sync.waiting(toClose: 4, of: "asieke/Orbit") == 2)
+        // Gone from what is shown before GitHub answers, but still saved: a relaunch now asks GitHub again.
+        var state = await fixture.sync.state
+        #expect(state.openItems?.map(\.id).sorted() == ["asieke/BotChu#7", "asieke/Orbit#3"])
+        #expect(state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 1)
+        #expect(ProjectSync.read(fixture.file)?.openItems.contains { $0.id == "asieke/Orbit#4" } == true)
+        let relaunched = fixture.relaunch()
+        #expect(await relaunched.load().openItems?.contains { $0.id == "asieke/Orbit#4" } == true)
+        await github.releaseCloses()
+        #expect((try? await first.value.get()) != nil)
+        #expect((try? await second.value.get()) != nil)
+        #expect(await github.closures.count == 1)
+        state = await fixture.sync.state
+        #expect(state.openItems?.map(\.id).sorted() == ["asieke/BotChu#7", "asieke/Orbit#3"])
+        #expect(state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 1)
+        #expect(ProjectSync.read(fixture.file)?.openItems.contains { $0.id == "asieke/Orbit#4" } == false)
+        await relaunched.sync(.full)
+        #expect(await relaunched.state.openItems?.contains { $0.id == "asieke/Orbit#4" } == false)
+    }
+
+    @Test func aRefusedClosureComesBackWithWhatASyncTookMeanwhile() async throws {
+        let github = StandInGitHub(repos: StandInGitHub.sample)
+        let fixture = try Fixture(github)
+        defer { fixture.remove() }
+        await fixture.sync.sync(.full)
+        await github.set(denyCloses: true)
+        await github.holdCloses(1)
+        let closing = Task { await fixture.sync.closeIssue(4, of: "asieke/Orbit") }
+        try await github.waitUntilClosing(1)
+        await github.update("asieke/Orbit") { $0.issues.append(5) }
+        await fixture.sync.sync(.changes)
+        #expect(await fixture.sync.state.openItems?.map(\.id).sorted() == ["asieke/BotChu#7", "asieke/Orbit#3", "asieke/Orbit#5"])
+        #expect(await fixture.sync.state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 2)
+        await github.releaseCloses()
+        guard case .failure(let denied) = await closing.value else { Issue.record("Closed without permission"); return }
+        #expect(denied.message.contains("permission to close"))
+        let state = await fixture.sync.state
+        #expect(state.openItems?.map(\.id).sorted() == ["asieke/BotChu#7", "asieke/Orbit#3", "asieke/Orbit#4", "asieke/Orbit#5"])
+        #expect(state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 3)
+        #expect(ProjectSync.read(fixture.file)?.openItems.contains { $0.id == "asieke/Orbit#4" } == true)
+    }
+
+    /// A sync that read the issue before GitHub closed it can't bring it back or count it out twice,
+    /// whichever answers first.
+    @Test(arguments: [false, true]) func aSyncUnderWayKeepsAClosingIssueOut(closedFirst: Bool) async throws {
+        let github = StandInGitHub(repos: StandInGitHub.sample)
+        let fixture = try Fixture(github)
+        defer { fixture.remove() }
+        await fixture.sync.sync(.full)
+        await github.update("asieke/Orbit") { $0.activity += 1 }
+        await github.holdWork(1)
+        let syncing = Task { await fixture.sync.sync(.changes) }
+        try await github.waitUntilHeld(1)
+        await github.holdCloses(1)
+        let closing = Task { await fixture.sync.closeIssue(4, of: "asieke/Orbit") }
+        try await github.waitUntilClosing(1)
+        #expect(await fixture.sync.state.openItems?.contains { $0.id == "asieke/Orbit#4" } == false)
+        if closedFirst {
+            await github.releaseCloses()
+            #expect((try? await closing.value.get()) != nil)
+            await github.release()
+            await syncing.value
+        } else {
+            await github.release()
+            await syncing.value
+            #expect(await fixture.sync.state.openItems?.contains { $0.id == "asieke/Orbit#4" } == false)
+            #expect(await fixture.sync.state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 1)
+            await github.releaseCloses()
+            #expect((try? await closing.value.get()) != nil)
+        }
+        let state = await fixture.sync.state
+        #expect(state.openItems?.map(\.id).sorted() == ["asieke/BotChu#7", "asieke/Orbit#3"])
+        #expect(state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 1)
+        #expect(ProjectSync.read(fixture.file)?.openItems.contains { $0.id == "asieke/Orbit#4" } == false)
+    }
+
+    @Test func aLateClosureLeavesAnotherAccountsCatalogAlone() async throws {
+        let github = StandInGitHub(repos: StandInGitHub.sample)
+        let fixture = try Fixture(github)
+        defer { fixture.remove() }
+        await fixture.sync.sync(.full)
+        await github.holdCloses(1)
+        let closing = Task { await fixture.sync.closeIssue(4, of: "asieke/Orbit") }
+        try await github.waitUntilClosing(1)
+        await github.signIn("octocat", repos: StandInGitHub.sample)
+        await fixture.sync.sync(.full)
+        #expect(await fixture.sync.state.login == "octocat")
+        #expect(await fixture.sync.state.openItems?.contains { $0.id == "asieke/Orbit#4" } == true)
+        await github.releaseCloses()
+        #expect((try? await closing.value.get()) != nil)
+        #expect(await fixture.sync.state.openItems?.contains { $0.id == "asieke/Orbit#4" } == true)
+        #expect(await fixture.sync.state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 2)
+        #expect(ProjectSync.read(fixture.file)?.openItems.contains { $0.id == "asieke/Orbit#4" } == true)
+    }
+
     @Test func refusingToCloseKeepsTheCatalogAndExplainsWhy() async throws {
         let github = StandInGitHub(repos: StandInGitHub.sample)
         let fixture = try Fixture(github)
@@ -667,6 +772,8 @@ private actor StandInGitHub {
     private(set) var deletions: [[String]] = []
     private var denyCloses = false
     private(set) var closures: [[String]] = []
+    private var closesToHold = 0
+    private var heldCloses: [CheckedContinuation<Void, Never>] = []
     private var worksToHold = 0
     private var listStatus: Int?
     private var userStatus: Int?
@@ -710,6 +817,18 @@ private actor StandInGitHub {
     func holdRecords(_ count: Int) { recordsToHold = count }
     /// Holds the next `count` answers to the open work query, as read then.
     func holdWork(_ count: Int) { worksToHold = count }
+    /// Holds the next `count` closures before GitHub closes anything, until `releaseCloses`.
+    func holdCloses(_ count: Int) { closesToHold = count }
+    func releaseCloses() {
+        closesToHold = 0
+        let waiting = heldCloses
+        heldCloses = []
+        for continuation in waiting { continuation.resume() }
+    }
+    func waitUntilClosing(_ count: Int) async throws {
+        for _ in 0..<400 where heldCloses.count < count { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(heldCloses.count >= count)
+    }
     func release() {
         holding = false
         recordsToHold = 0
@@ -739,7 +858,13 @@ private actor StandInGitHub {
             if isRecord { recordActive -= 1; recordCompleted += 1 }
         }
         if arguments.starts(with: ["gh", "issue", "delete"]) { return delete(arguments) }
-        if arguments.starts(with: ["gh", "issue", "close"]) { return close(arguments) }
+        if arguments.starts(with: ["gh", "issue", "close"]) {
+            if closesToHold > 0 {
+                closesToHold -= 1
+                await withCheckedContinuation { heldCloses.append($0) }
+            }
+            return close(arguments)
+        }
         if offline { return Shell.Result(status: 1, output: "", errors: "error connecting to api.github.com") }
         if arguments.starts(with: ["gh", "api", "graphql"]) {
             let read = work(arguments.last ?? "")
