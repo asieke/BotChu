@@ -498,6 +498,64 @@ import Testing
             .contains("Your owner started this run with Run Now"))
     }
 
+    /// A scheduled run reaches other bots and the owner's Inbox as a turn does (#170), and its
+    /// context says how its report gets there.
+    @Test func itsContextTeachesTheInboxAndHowItsReportReachesIt() {
+        let bot = bot()
+        let job = Job(botID: bot.id, title: "10x Product Analysis", prompt: "Recommend features",
+                      schedule: JobSchedule(kind: .daily, hour: 6, minute: 0, timeZone: JobScheduleTests.newYork))
+        let run = JobRun(trigger: .scheduled, scheduledFor: at("2026-10-26T10:00:00Z"), timeZone: JobScheduleTests.newYork, reservedAt: Date())
+        let roster = [BotRosterEntry(bot: bot), BotRosterEntry(bot: Bot(name: "Worker", workspace: "/tmp/worker"))]
+        let text = JobSchedule.plainText(JobLaunch.preamble(bot: bot, job: job, run: run, startedAt: at("2026-10-26T10:00:05Z"),
+                                                            memory: "", sharedMemory: "", availableBots: roster))
+        for expected in ["botchu-inbox send --title", "botchu-subagent call", "--ask", "names the delivery it answers",
+                         "your report reaches their Inbox, linked to this run's task", "BotChu delivers your final reply there when you sent nothing",
+                         "you send nothing to their Inbox", JobResult.quietMarker] {
+            #expect(text.contains(expected), "Missing \(expected)")
+        }
+        #expect(!text.contains("You are a sub-agent run"))
+        #expect(text.hasSuffix("The job's instructions follow.\n</botchu_job_context>"))
+    }
+
+    /// A finding the run sent nothing of goes to the Inbox as its task's, with the whole reply and
+    /// the run's ID, so delivering it again never adds another; nothing else does (#170).
+    @Test func aFindingItSentNothingOfIsItsReport() {
+        let job = Job(botID: UUID(), title: "10x Product Analysis", prompt: "x", schedule: JobSchedule(kind: .daily, timeZone: JobScheduleTests.newYork))
+        var run = JobRun(trigger: .scheduled, scheduledFor: at("2026-10-26T10:00:00Z"), timeZone: JobScheduleTests.newYork, reservedAt: Date())
+        run.taskID = UUID()
+        let finding = JobResult.Classified(outcome: .succeeded, quiet: false, summary: "20 recommendations")
+        #expect(JobReport.isDue(finding, delivered: false))
+        #expect(!JobReport.isDue(finding, delivered: true))
+        #expect(!JobReport.isDue(JobResult.Classified(outcome: .succeeded, quiet: true, summary: "Nothing to report."), delivered: false))
+        for outcome in [JobOutcome.failed, .stopped, .interrupted] {
+            #expect(!JobReport.isDue(JobResult.Classified(outcome: outcome, quiet: false, summary: "x"), delivered: false))
+        }
+        let reply = "## 20 recommendations\n\n1. Saved searches\n2. Bulk close\n\n<remember>- Owner likes tables</remember>"
+        let delivery = JobReport.delivery(job: job, run: run, reply: reply, at: at("2026-10-26T10:06:20Z"))
+        #expect(delivery?.id == run.id && delivery?.botID == job.botID && delivery?.taskID == run.taskID)
+        #expect(delivery?.title == "10x Product Analysis")
+        #expect(delivery?.note == "## 20 recommendations\n\n1. Saved searches\n2. Bulk close")
+        #expect(delivery?.sentAt == at("2026-10-26T10:06:20Z") && delivery?.files.isEmpty == true && delivery?.question == nil)
+        #expect(JobReport.delivery(job: job, run: run, reply: "<remember>- private</remember>") == nil)
+        // A reply too long for a note is cut at a character, within the limit.
+        let long = try! #require(JobReport.delivery(job: job, run: run, reply: String(repeating: "é", count: InboxRequest.maxNoteBytes))).note
+        #expect(long.utf8.count <= InboxRequest.maxNoteBytes && long.hasSuffix("é…"))
+    }
+
+    /// A report waiting for the Inbox is kept with its run; runs saved before reports went there
+    /// read as waiting for nothing, so none is delivered late.
+    @Test func aReportWaitingForTheInboxIsSavedWithItsRun() throws {
+        var run = JobRun(trigger: .manual, scheduledFor: nil, timeZone: JobScheduleTests.newYork, reservedAt: at("2026-10-26T10:00:00Z"))
+        run.outcome = .succeeded
+        run.reportPending = true
+        let data = try Store.encoder.encode(run)
+        #expect(try Store.decoder.decode(JobRun.self, from: data).reportPending == true)
+        var object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object["reportPending"] = nil
+        let older = try Store.decoder.decode(JobRun.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(older.reportPending == nil && older.outcome == .succeeded)
+    }
+
     @Test func quietEmptyAndFailedResults() {
         func classify(_ reply: String?, failure: String? = nil, status: Int32 = 0, finished: Bool = true, stopped: Bool = false,
                       timedOut: Bool = false) -> JobResult.Classified {
