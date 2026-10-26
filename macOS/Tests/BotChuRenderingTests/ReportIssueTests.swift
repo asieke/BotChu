@@ -83,7 +83,10 @@ extension RenderingTests {
         window.contentView = host
         defer { window.contentView = nil; window.close() }
         window.makeKeyAndOrderFront(nil)
-        try await Task.sleep(for: .milliseconds(300))
+        try await waitForReport {
+            window.isKeyWindow && window.toolbar?.items.contains { $0.label == "Report a Bug or Feature" } == true
+                && model.thread(.home(bot.id)).count == 2
+        }
 
         // The toolbar's button opens the sheet.
         let item = try #require(window.toolbar?.items.first { $0.label == "Report a Bug or Feature" })
@@ -95,7 +98,7 @@ extension RenderingTests {
                                                 windowNumber: window.windowNumber, context: nil, eventNumber: 1,
                                                 clickCount: 1, pressure: 1)!)
         }
-        try await Task.sleep(for: .milliseconds(400))
+        try await waitForReport { window.attachedSheet?.isKeyWindow == true && window.attachedSheet?.firstResponder is NSTextView }
         let sheet = try #require(window.attachedSheet)
         let request = try #require(model.issueReport)
         #expect(!model.canReportIssue)
@@ -118,7 +121,7 @@ extension RenderingTests {
         let editor = try #require(sheet.firstResponder as? NSTextView)
         let report = "The sidebar flickers.\n\nIt happens when a task starts."
         editor.insertText(report, replacementRange: NSRange(location: NSNotFound, length: 0))
-        try await Task.sleep(for: .milliseconds(100))
+        try await waitForReport { request.text == report && request.canSubmit }
         #expect(request.text == report)
         #expect(request.title == "The sidebar flickers")
         // Only a screenshot on the pasteboard: Edit ▸ Paste stays on, and the image goes after the text.
@@ -132,12 +135,14 @@ extension RenderingTests {
         editor.paste(nil)
         #expect(request.images.images.count == 2)
         #expect(editor.string == report)
-        try await Task.sleep(for: .milliseconds(200))
+        try await waitForReport { request.images.images.count == 2 && editor.isEditable }
         if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
             DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("report-sheet"))
         }
         Self.sendKey("\r", code: 36, modifiers: .command, to: sheet)
-        try await Task.sleep(for: .milliseconds(300))
+        try await waitForReport {
+            request.state == .failed("gh couldn't create the issue:\nHTTP 401: Bad credentials") && editor.isEditable
+        }
         #expect(request.state == .failed("gh couldn't create the issue:\nHTTP 401: Bad credentials"))
         #expect(editor.string == report)
         #expect(window.attachedSheet === sheet)
@@ -164,7 +169,10 @@ extension RenderingTests {
             return partly
         }
         Self.sendKey("\r", code: 36, modifiers: .command, to: sheet)
-        try await Task.sleep(for: .milliseconds(300))
+        try await waitForReport {
+            if case .filed = request.state { return editor.window == nil }
+            return false
+        }
         let again = await retried.all
         #expect(again.count == 1)
         #expect(again.first?.images.count == 1)
@@ -177,7 +185,7 @@ extension RenderingTests {
             DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("report-filed"))
         }
         Self.sendKey("\r", code: 36, to: sheet)
-        try await Task.sleep(for: .milliseconds(400))
+        try await waitForReport { model.issueReport == nil && window.attachedSheet == nil }
         #expect(model.issueReport == nil)
         #expect(window.attachedSheet == nil)
         #expect(model.canReportIssue)
@@ -186,7 +194,7 @@ extension RenderingTests {
         // without filing.
         model.destination = .projects
         model.reportIssue()
-        try await Task.sleep(for: .milliseconds(400))
+        try await waitForReport { window.attachedSheet?.isKeyWindow == true && window.attachedSheet?.firstResponder is NSTextView }
         let gallery = try #require(window.attachedSheet)
         #expect(model.issueReport?.snapshot.lines.contains("Screen: Projects") == true)
         #expect(model.issueReport?.snapshot.lines.contains { $0.hasPrefix("Conversation:") } == false)
@@ -194,7 +202,7 @@ extension RenderingTests {
         #expect(captures.pictures.count == 2 && captures.pictures[0] != captures.pictures[1])
         #expect(model.issueReport?.images.images.map(\.png) == [captures.pictures[1]])
         Self.sendKey("\u{1B}", code: 53, to: gallery)
-        try await Task.sleep(for: .milliseconds(400))
+        try await waitForReport { model.issueReport == nil && window.attachedSheet == nil }
         #expect(model.issueReport == nil)
         #expect(await filings.all.count == 1)
         #expect(await retried.all.count == 1)
@@ -208,7 +216,7 @@ extension RenderingTests {
             return .filed(URL(string: "https://github.com/asieke/BotChu/issues/53"))
         }
         model.reportIssue(text: "Add a dark icon.")
-        try await Task.sleep(for: .milliseconds(400))
+        try await waitForReport { window.attachedSheet?.isKeyWindow == true && window.attachedSheet?.firstResponder is NSTextView }
         let plain = try #require(window.attachedSheet)
         let failed = try #require(model.issueReport)
         #expect(captures.windows.count == 3)
@@ -218,11 +226,14 @@ extension RenderingTests {
             DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("report-no-screenshot"))
         }
         Self.sendKey("\r", code: 36, modifiers: .command, to: plain)
-        try await Task.sleep(for: .milliseconds(300))
+        try await waitForReport {
+            if case .filed = failed.state { return !(plain.firstResponder is NSTextView) }
+            return false
+        }
         #expect(failed.state == .filed(URL(string: "https://github.com/asieke/BotChu/issues/53")))
         #expect(await textOnly.all.map(\.images.count) == [0])
         Self.sendKey("\r", code: 36, to: plain)
-        try await Task.sleep(for: .milliseconds(400))
+        try await waitForReport { model.issueReport == nil && window.attachedSheet == nil }
         #expect(model.issueReport == nil)
     }
 
@@ -262,6 +273,12 @@ extension RenderingTests {
         if case .failure(let error) = never { #expect(error.localizedDescription == "Taking it took too long.") }
         let none = await WindowCapture.take(nil, with: { _ in Data() })
         #expect((try? none.get()) == nil)
+    }
+
+    private func waitForReport(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(30)
+        while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        try #require(condition(), "The report sheet reached the expected state")
     }
 
     private static func sendKey(_ text: String, code: UInt16, modifiers: NSEvent.ModifierFlags = [], to window: NSWindow) {

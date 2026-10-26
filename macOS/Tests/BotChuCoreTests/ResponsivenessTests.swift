@@ -107,24 +107,37 @@ import Testing
 
     /// A CLI whose first lines aren't events (a login shell's greeting) has still started.
     @Test func theFirstOutputIsDeliveredEvenWithoutEvents() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-first-output-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let delivered = folder.appendingPathComponent("delivered")
         let script = #"""
         import json, time
+        from pathlib import Path
         print("Welcome to the login shell", flush=True)
-        time.sleep(0.3)
+        deadline = time.monotonic() + 30
+        while not Path("delivered").exists():
+            if time.monotonic() > deadline: raise RuntimeError("First output was never delivered")
+            time.sleep(0.01)
         print("not json either", flush=True)
         print(json.dumps({"type":"turn.completed"}), flush=True)
         """#
-        let batches = await withCheckedContinuation { (done: CheckedContinuation<[[AgentEvent]], Never>) in
+        let result = try await withCheckedThrowingContinuation { (done: CheckedContinuation<([[AgentEvent]], Int32), Error>) in
             DispatchQueue.main.async {
-                let run = AgentRun(command: "/usr/bin/python3", invocation: Invocation(arguments: ["-c", script]),
-                                   directory: FileManager.default.temporaryDirectory)
+                let run = AgentRun(command: "/usr/bin/python3", invocation: Invocation(arguments: ["-c", script]), directory: folder)
                 var batches: [[AgentEvent]] = []
-                run.deliverEvents(parsedBy: CodexParser()) { batches.append($0) }
-                run.onExit = { _, _ in done.resume(returning: batches) }
-                try? run.start()
+                run.deliverEvents(parsedBy: CodexParser()) { batch in
+                    batches.append(batch)
+                    // The CLI cannot print its event until the greeting reached this callback.
+                    try? Data().write(to: delivered)
+                }
+                run.onExit = { status, _ in done.resume(returning: (batches, status)) }
+                do { try run.start() } catch { done.resume(throwing: error) }
             }
         }
-        #expect(batches == [[], [.finished]])
+        #expect(result.1 == 0)
+        #expect(result.0.first == [])
+        #expect(result.0.flatMap { $0 } == [.finished])
     }
 
     @Test func linesStillReachOnLinesWithoutAParser() async throws {
@@ -290,17 +303,23 @@ import Testing
 
     @MainActor @Test func checkpointsWhileStreamingAreWrittenTogether() async throws {
         let writes = Writes()
-        let archive = SubagentArchive(interval: 0.2) { try writes.record($0) }
+        let storage = StorageQueue()
+        let archive = SubagentArchive(interval: 0.02, storage: storage) { try writes.record($0) }
         let run = record
+        let release = DispatchSemaphore(value: 0)
+        // Keep the lane occupied until all checkpoints have arrived. Coalescing then depends on
+        // their order, not on whether the machine can execute this loop within one timer tick.
+        storage.submit(snapshot(run, []).lane, work: { release.wait() })
         var texts: [String] = []
         for i in 0..<100 {
             texts.append("chunk \(i)")
             archive.checkpoint(snapshot(run, texts)) { _ in Issue.record("No write fails here") }
         }
-        try await Task.sleep(for: .milliseconds(600))
-        // One write, or two should the machine pause this loop for longer than the interval.
-        #expect((1...2).contains(writes.all.count))
-        #expect(writes.all.last == texts)
+        #expect(writes.all.isEmpty)
+        release.signal()
+        let deadline = ContinuousClock.now + .seconds(30)
+        while writes.all.last != texts, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(writes.all == [texts])
     }
 
     @MainActor @Test func aSaveIsWrittenAtOnceAndNoOlderCheckpointReplacesIt() async throws {

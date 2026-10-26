@@ -972,21 +972,33 @@ actor Gate {
         open(\(String(reflecting: pidFile.path)), "w").write(str(os.getpid()))
         while True: time.sleep(0.1)
         """.write(to: script, atomically: true, encoding: .utf8)
-        let started = Date()
-        let attempt = await RunEvaluator.run(job, with: { job in
+        let review = Task {
             try await EvaluationCLI.run(job, command: "/usr/bin/python3 \(Shell.quote(script.path))", model: nil, log: nil)
-        }, timeout: 1)
-        #expect(attempt.error?.timedOut == true)
-        #expect(Date().timeIntervalSince(started) < 5, "The review doesn't wait for its CLI to end")
+        }
+        defer { review.cancel() }
+        // Start the deadline only once the stand-in has installed its signal handlers. A busy
+        // build machine taking longer to launch Python must not turn this into a different test.
+        let launchDeadline = ContinuousClock.now + .seconds(30)
         var pid: Int32?
-        while pid == nil, Date().timeIntervalSince(started) < 10 {
+        while pid == nil, ContinuousClock.now < launchDeadline {
             pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { Int32($0) }
-            if pid == nil { try await Task.sleep(nanoseconds: 100_000_000) }
+            if pid == nil { try await Task.sleep(for: .milliseconds(20)) }
         }
         let running = try #require(pid)
-        while kill(running, 0) == 0, Date().timeIntervalSince(started) < 30 { try await Task.sleep(nanoseconds: 100_000_000) }
-        #expect(kill(running, 0) != 0, "Killed")
-        #expect(Date().timeIntervalSince(started) < EvaluationCLI.killDelay + 8)
+        defer { if kill(running, 0) == 0 { kill(running, SIGKILL) } }
+        let attempt = await RunEvaluator.run(job, with: { _ in
+            try await withTaskCancellationHandler {
+                try await review.value
+            } onCancel: {
+                review.cancel()
+            }
+        }, timeout: 0.05)
+        #expect(attempt.error?.timedOut == true)
+        #expect(kill(running, 0) == 0, "The timeout returns before the uncooperative CLI ends")
+        let exitDeadline = ContinuousClock.now + .seconds(30)
+        while kill(running, 0) == 0, ContinuousClock.now < exitDeadline { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(kill(running, 0) != 0, "The cancelled CLI is eventually killed")
+
     }
 
     // MARK: Without tools

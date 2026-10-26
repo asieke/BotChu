@@ -1343,7 +1343,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   tests, and runs every Core test. It does not need window focus or the gate.
 - Each step prints elapsed time and the load average before and after. xUnit reports and logs stay
   in `macOS/.build/test-results/`; a run prints its 20 slowest tests and a failed run prints a command
-  selecting only the failed tests with `--skip-build`.
+  selecting only the failed tests with `--skip-build`. If an unrelated test fails, rerun only that
+  test a few times; if it passes, name it and the load average in the PR instead of rerunning the
+  full suite. A changed test still needs a demonstrated fix.
 - `scripts/test.sh` runs everything: shell syntax for every script, `macOS/test.sh` (the unit and
   rendering tests) and `macOS/build.sh` into a temporary folder. There is no CI: the tests need a Mac
   with full Xcode. Debug/release test builds and the app build finish before any gate request. Core

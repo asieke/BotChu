@@ -29,7 +29,10 @@ def results(paths):
 
 def main(arguments):
     if arguments[0] == "--command":
-        Path(arguments[1] + ".command.json").write_text(json.dumps(arguments[2:]))
+        command = arguments[2:]
+        if "--skip-build" not in command:
+            command.append("--skip-build")
+        Path(arguments[1] + ".command.json").write_text(json.dumps(command))
     elif arguments[0] == "--failed":
         xml = Path(arguments[1])
         failed = sorted({name for name, _, failure in results(glob.glob(str(xml.with_suffix("")) + "*.xml")) if failure})

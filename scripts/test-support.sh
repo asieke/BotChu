@@ -34,7 +34,7 @@ test_run() {
   shift
   output="$BOTCHU_TEST_RESULTS/$label.log"
   xml="$BOTCHU_TEST_RESULTS/$label.xml"
-  python3 "$test_root/scripts/test-report.py" --command "$xml" swift test --package-path "$test_root/macOS" --skip-build "$@"
+  python3 "$test_root/scripts/test-report.py" --command "$xml" swift test --package-path "$test_root/macOS" "$@"
   swift test --package-path "$test_root/macOS" --xunit-output "$xml" "$@" 2>&1 |
     tee "$output" | { grep -vE '^\[[0-9]+ ?/ ?[0-9]+\]| started\.$' || true; }
   result=${PIPESTATUS[0]}
