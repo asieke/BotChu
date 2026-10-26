@@ -6,7 +6,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 test_root=$PWD
 source scripts/test-support.sh
-test_begin full
+tier=full
+case "${1:-}" in
+  '') ;;
+  --fast) tier=fast; shift ;;
+  *) echo "usage: scripts/test.sh [--fast]" >&2; exit 2 ;;
+esac
+[ $# = 0 ] || { echo "usage: scripts/test.sh [--fast]" >&2; exit 2; }
+test_begin "$tier"
 out=
 trap 'result=$?; [ -z "$out" ] || rm -rf "$out"; test_end "$result"' EXIT
 
@@ -22,6 +29,11 @@ for f in macOS/build.sh macOS/install.sh macOS/test.sh; do
   [ -x "$f" ] || { echo "$f must exist and be executable" >&2; exit 1; }
 done
 
+if [ "$tier" = fast ]; then
+  test_step 'fast macOS tests' macOS/test.sh --fast
+  echo "test: ok (fast)"
+  exit
+fi
 test_step 'macOS tests' macOS/test.sh
 
 out=$(mktemp -d)
