@@ -86,9 +86,10 @@ import Testing
 
     @Test func codeIndentationAndOperatorsArePreservedInDigestAndDetails() throws {
         let code = "if ready:\n    print(value | mask)\n    print(\"**literal**\")"
-        let source = "Use this example.\n```python\n" + code + "\n```"
+        let source = "Use `value | mask` with `__name__`.\n```python\n" + code + "\n```"
         let text = try reply([ChatMessage(role: .assistant, text: source)])
         #expect(text.contains(code))
+        #expect(text.contains("value | mask") && text.contains("__name__"))
         #expect(TelegramPresentation.plainText(source).contains(code))
     }
 
@@ -108,5 +109,13 @@ import Testing
         #expect(full == long.trimmingCharacters(in: .whitespacesAndNewlines))
         #expect(!full.contains("secret output") && !full.contains("other turn"))
         #expect(thread[2].text == long)
+    }
+
+    @Test func savedRepliesWithoutAFormatVersionDecodeAsLegacy() throws {
+        let id = UUID(), bot = UUID()
+        let json = #"{"id":"\#(id)","botID":"\#(bot)","chat":42,"replyTo":7,"sent":1}"#
+        let decoded = try JSONDecoder().decode(TelegramPendingReply.self, from: Data(json.utf8))
+        #expect(decoded.presentationVersion == 0 && decoded.sent == 1 && decoded.mapped == bot)
+        #expect(TelegramPendingReply(id: id, botID: bot, chat: 42, replyTo: 7).presentationVersion == 1)
     }
 }

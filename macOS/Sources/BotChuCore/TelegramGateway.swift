@@ -833,8 +833,11 @@ public actor TelegramGateway {
                 }
                 // A bot the chat chose with @ says who it is: the chat's own bot in Settings doesn't.
                 var reply = text
-                if pending.presentationVersion == 0, pending.sent > 0, let full = await app.fullReply(of: pending.id, for: pending.botID) { reply = full }
-                if pending.botID != pending.mapped, let name = await app.name(of: pending.botID) { reply = "\(TelegramPresentation.displayName(name)):\n" + reply }
+                let legacy = pending.presentationVersion == 0 && pending.sent > 0
+                if legacy, let full = await app.fullReply(of: pending.id, for: pending.botID) { reply = full }
+                if pending.botID != pending.mapped, let name = await app.name(of: pending.botID) {
+                    reply = "\(legacy ? name : TelegramPresentation.displayName(name)):\n" + reply
+                }
                 try await send(reply, for: pending, keepDetails: true)
             case .gone(let text):
                 try await send(text, for: pending)

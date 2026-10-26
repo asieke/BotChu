@@ -104,16 +104,33 @@ enum TelegramPresentation {
 
     private static func plainProse(_ text: String) -> String {
         var value = text.replacingOccurrences(of: "\r\n", with: "\n")
+        // Protect inline code from emphasis, escaping and table conversion too: x | y and
+        // __name__ mean something different if their punctuation is treated as Markdown.
+        var marker = "\u{E000}code"
+        while value.contains(marker) { marker += "\u{E000}" }
+        var code: [(marker: String, text: String)] = []
+        if let regex = try? NSRegularExpression(pattern: #"`([^`\n]+)`"#) {
+            for match in regex.matches(in: value, range: NSRange(value.startIndex..., in: value)).reversed() {
+                guard let range = Range(match.range, in: value), let content = Range(match.range(at: 1), in: value) else { continue }
+                let token = marker + String(code.count) + "\u{E001}"
+                code.append((token, String(value[content])))
+                value.replaceSubrange(range, with: token)
+            }
+        }
         value = replace(#"!?\[([^\]\n]+)\]\(([^\s)]+)\)"#, in: value, with: "$1 ($2)")
         value = replace(#"(?m)^\s{0,3}#{1,6}\s+"#, in: value, with: "")
         value = replace(#"(?m)^\s*[-*+]\s+"#, in: value, with: "• ")
         value = replace(#"(?m)^\s*>\s?"#, in: value, with: "")
         value = replace(#"\*\*([^*\n]+)\*\*|__([^_\n]+)__"#, in: value, with: "$1$2")
-        value = replace(#"`([^`\n]+)`"#, in: value, with: "$1")
         value = replace(#"(?m)^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$"#, in: value, with: "")
-        value = replace(#"(?m)^\|\s*(.*?)\s*\|$"#, in: value, with: "$1")
-        value = value.replacingOccurrences(of: " | ", with: " · ")
+        value = value.components(separatedBy: "\n").map { line in
+            let row = line.trimmingCharacters(in: .whitespaces)
+            return row.hasPrefix("|") && row.hasSuffix("|") && row.count > 1
+                ? String(row.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces).replacingOccurrences(of: " | ", with: " · ")
+                : line
+        }.joined(separator: "\n")
         value = replace(#"\\([_*\[\]()~`>#+\-=|{}.!])"#, in: value, with: "$1")
+        for snippet in code { value = value.replacingOccurrences(of: snippet.marker, with: snippet.text) }
         return value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
