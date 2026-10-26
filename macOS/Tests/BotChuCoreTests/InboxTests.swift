@@ -284,6 +284,28 @@ private final class InboxFixture {
         #expect(InboxList.section(of: question, state: state, now: now, calendar: calendar) == .yesterday)
         let pinned = InboxList.groups([question, today], state: state, now: now, calendar: calendar, pinned: [question.id: .needsYou])
         #expect(pinned.map(\.section) == [.needsYou, .today])
+
+        // Done while it is read moves it to Done at once, and both counts change.
+        state[today.id].done = true
+        let read = InboxList.groups([question, today, earlierToday], state: state, now: now, calendar: calendar,
+                                    pinned: [today.id: .today])
+        #expect(read.map(\.section) == [.today, .yesterday, .done])
+        #expect(read.map(\.ids) == [[earlierToday.id], [question.id], [today.id]])
+        // Moved to the Inbox while it is read in Done, it goes back to its group at once.
+        state[today.id].done = false
+        let moved = InboxList.groups([today, earlierToday], state: state, now: now, calendar: calendar, pinned: [today.id: .done])
+        #expect(moved.map(\.section) == [.today])
+        #expect(moved.map(\.ids) == [[today.id, earlierToday.id]])
+    }
+
+    @Test func whenTheSelectedDeliveryLeavesTheListTheNextOneShownIsSelected() {
+        let a = UUID(), b = UUID(), c = UUID()
+        #expect(InboxList.selection(after: b, was: [a, b, c], now: [a, c]) == c)
+        // The last one shown: the one before it.
+        #expect(InboxList.selection(after: c, was: [a, b, c], now: [a, b]) == b)
+        #expect(InboxList.selection(after: a, was: [a], now: []) == nil)
+        // Done closed with a Done delivery selected: the last active one.
+        #expect(InboxList.selection(after: c, was: [a, b, c, UUID()], now: [a, b]) == b)
     }
 
     @Test func aReplyNamesItsDelivery() {
