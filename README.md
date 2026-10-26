@@ -1361,8 +1361,13 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   selecting only the failed tests with `--skip-build`.
 - `scripts/test.sh` runs everything: shell syntax for every script, `macOS/test.sh` (the unit and
   rendering tests) and `macOS/build.sh` into a temporary folder. There is no CI: the tests need a Mac
-  with full Xcode. The rendering tests need window focus, so when other agents test on the same Mac,
-  run it through the shared test gate (`/tmp/botchu-coord/gate.sh start scripts/test.sh`).
+  with full Xcode. Debug/release test builds and the app build finish before any gate request. Core
+  and release tests run outside the gate; only the prebuilt window tests and isolated native-click
+  test acquire it. Run the script directly: do not wrap a full run in another gate request.
+  The script installs the versioned `scripts/coord/` gate to `/tmp/botchu-coord/` when absent or changed,
+  preserving its lock and run folders. Other repositories retain the same `start`, `wait`, `status`
+  interface. BotChu's windowless wrapper is recognized by ancestry; unwrapped window tests and
+  other repositories' tests still block the gate.
 - `macOS/test.sh` requires every test bundle to finish and rejects explicit failure summaries,
   even if SwiftPM returns success. The native-click test of the tasks' column runs in its own process because
   AppKit's window-animation callbacks can stop the Swift test runner's event loop during later
