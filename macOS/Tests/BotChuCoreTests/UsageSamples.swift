@@ -124,6 +124,57 @@ enum UsageSamples {
   }
 }
 """#.utf8)
+    /// `account/rateLimits/read` from Codex 0.164.0 on 2026-10-26, on a Pro plan; account IDs
+    /// removed, the balance replaced and the free resets left out.
+    static let codexPro = Data(#"""
+{
+  "id": 2,
+  "result": {
+    "ordinaryUsageAllowed": true,
+    "rateLimits": {
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {
+        "usedPercent": 72,
+        "windowDurationMins": 10080,
+        "resetsAt": 1793606734
+      },
+      "secondary": null,
+      "credits": {
+        "hasCredits": false,
+        "unlimited": false,
+        "balance": "0"
+      },
+      "individualLimit": null,
+      "spendControlReached": false,
+      "planType": "pro",
+      "rateLimitReachedType": null
+    },
+    "rateLimitsByLimitId": {
+      "codex": {
+        "limitName": null,
+        "normalModelSlug": null,
+        "primary": {
+          "usedPercent": 72,
+          "windowDurationMins": 10080,
+          "resetsAt": 1793606734
+        },
+        "secondary": null,
+        "credits": {
+          "hasCredits": false,
+          "unlimited": false,
+          "balance": "0"
+        },
+        "individualLimit": null,
+        "spendControlReached": false,
+        "planType": "pro",
+        "rateLimitReachedType": null
+      }
+    },
+    "rateLimitUpsell": null
+  }
+}
+"""#.utf8)
     static let antigravity = Data(#"""
 {
   "command": {

@@ -146,6 +146,7 @@ Task {
                 }
                 for badge in reading.badges(at: .now) { print("    \(badge.text)") }
                 if let note = reading.note { print("    \(note)") }
+                print("    Plan: \(reading.planLabel ?? "not reported")")
                 print("    OK")
             } catch {
                 print("    FAIL: \((error as? UsageFailure)?.message ?? "Usage query failed")")
