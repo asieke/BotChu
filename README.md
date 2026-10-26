@@ -1368,6 +1368,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   preserving its lock and run folders. Other repositories retain the same `start`, `wait`, `status`
   interface. BotChu's windowless wrapper is recognized by ancestry; unwrapped window tests and
   other repositories' tests still block the gate.
+- Release tests build with testability in `macOS/.build/release-tests/`, separate from the app's
+  release build. `RunEvaluationTests` runs only in release in the full tier; the fast tier keeps
+  running it in debug. This avoids the two release build modes evicting each other's artifacts.
 - `macOS/test.sh` requires every test bundle to finish and rejects explicit failure summaries,
   even if SwiftPM returns success. The native-click test of the tasks' column runs in its own process because
   AppKit's window-animation callbacks can stop the Swift test runner's event loop during later
