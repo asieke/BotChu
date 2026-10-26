@@ -1352,6 +1352,13 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   ```
 
 ## Test
+- While editing, run the suites the change touches: `swift test --package-path macOS --filter <Suite>`.
+  Rendering suites still need the shared window-test gate.
+- Before a push, `scripts/test.sh --fast` checks shell syntax and renderer checksums, builds debug
+  tests, and runs every Core test. It does not need window focus or the gate.
+- Each step prints elapsed time and the load average before and after. xUnit reports and logs stay
+  in `macOS/.build/test-results/`; a run prints its 20 slowest tests and a failed run prints a command
+  selecting only the failed tests with `--skip-build`.
 - `scripts/test.sh` runs everything: shell syntax for every script, `macOS/test.sh` (the unit and
   rendering tests) and `macOS/build.sh` into a temporary folder. There is no CI: the tests need a Mac
   with full Xcode. The rendering tests need window focus, so when other agents test on the same Mac,
