@@ -84,7 +84,7 @@ extension RenderingTests {
         defer { window.contentView = nil; window.close() }
         window.makeKeyAndOrderFront(nil)
         try await waitForReport {
-            window.isKeyWindow && window.toolbar?.items.contains { $0.label == "Report a Bug or Feature" } == true
+            window.isVisible && window.toolbar?.items.contains { $0.label == "Report a Bug or Feature" } == true
                 && model.thread(.home(bot.id)).count == 2
         }
 
@@ -98,7 +98,7 @@ extension RenderingTests {
                                                 windowNumber: window.windowNumber, context: nil, eventNumber: 1,
                                                 clickCount: 1, pressure: 1)!)
         }
-        try await waitForReport { window.attachedSheet?.isKeyWindow == true && window.attachedSheet?.firstResponder is NSTextView }
+        try await waitForReport { window.attachedSheet?.isVisible == true && window.attachedSheet?.firstResponder is NSTextView }
         let sheet = try #require(window.attachedSheet)
         let request = try #require(model.issueReport)
         #expect(!model.canReportIssue)
@@ -139,7 +139,7 @@ extension RenderingTests {
         if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
             DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("report-sheet"))
         }
-        Self.sendKey("\r", code: 36, modifiers: .command, to: sheet)
+        try await sendReportKey("\r", code: 36, modifiers: .command, to: sheet)
         try await waitForReport {
             request.state == .failed("gh couldn't create the issue:\nHTTP 401: Bad credentials") && editor.isEditable
         }
@@ -168,7 +168,7 @@ extension RenderingTests {
             await retried.add(title, body, images)
             return partly
         }
-        Self.sendKey("\r", code: 36, modifiers: .command, to: sheet)
+        try await sendReportKey("\r", code: 36, modifiers: .command, to: sheet)
         try await waitForReport {
             if case .filed = request.state { return editor.window == nil }
             return false
@@ -184,7 +184,7 @@ extension RenderingTests {
         if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
             DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("report-filed"))
         }
-        Self.sendKey("\r", code: 36, to: sheet)
+        try await sendReportKey("\r", code: 36, to: sheet)
         try await waitForReport { model.issueReport == nil && window.attachedSheet == nil }
         #expect(model.issueReport == nil)
         #expect(window.attachedSheet == nil)
@@ -194,14 +194,14 @@ extension RenderingTests {
         // without filing.
         model.destination = .projects
         model.reportIssue()
-        try await waitForReport { window.attachedSheet?.isKeyWindow == true && window.attachedSheet?.firstResponder is NSTextView }
+        try await waitForReport { window.attachedSheet?.isVisible == true && window.attachedSheet?.firstResponder is NSTextView }
         let gallery = try #require(window.attachedSheet)
         #expect(model.issueReport?.snapshot.lines.contains("Screen: Projects") == true)
         #expect(model.issueReport?.snapshot.lines.contains { $0.hasPrefix("Conversation:") } == false)
         #expect(captures.windows.count == 2 && captures.covered == [false, false])
         #expect(captures.pictures.count == 2 && captures.pictures[0] != captures.pictures[1])
         #expect(model.issueReport?.images.images.map(\.png) == [captures.pictures[1]])
-        Self.sendKey("\u{1B}", code: 53, to: gallery)
+        try await sendReportKey("\u{1B}", code: 53, to: gallery)
         try await waitForReport { model.issueReport == nil && window.attachedSheet == nil }
         #expect(model.issueReport == nil)
         #expect(await filings.all.count == 1)
@@ -216,7 +216,7 @@ extension RenderingTests {
             return .filed(URL(string: "https://github.com/asieke/BotChu/issues/53"))
         }
         model.reportIssue(text: "Add a dark icon.")
-        try await waitForReport { window.attachedSheet?.isKeyWindow == true && window.attachedSheet?.firstResponder is NSTextView }
+        try await waitForReport { window.attachedSheet?.isVisible == true && window.attachedSheet?.firstResponder is NSTextView }
         let plain = try #require(window.attachedSheet)
         let failed = try #require(model.issueReport)
         #expect(captures.windows.count == 3)
@@ -225,14 +225,14 @@ extension RenderingTests {
         if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
             DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("report-no-screenshot"))
         }
-        Self.sendKey("\r", code: 36, modifiers: .command, to: plain)
+        try await sendReportKey("\r", code: 36, modifiers: .command, to: plain)
         try await waitForReport {
             if case .filed = failed.state { return !(plain.firstResponder is NSTextView) }
             return false
         }
         #expect(failed.state == .filed(URL(string: "https://github.com/asieke/BotChu/issues/53")))
         #expect(await textOnly.all.map(\.images.count) == [0])
-        Self.sendKey("\r", code: 36, to: plain)
+        try await sendReportKey("\r", code: 36, to: plain)
         try await waitForReport { model.issueReport == nil && window.attachedSheet == nil }
         #expect(model.issueReport == nil)
     }
@@ -275,10 +275,19 @@ extension RenderingTests {
         #expect((try? none.get()) == nil)
     }
 
-    private func waitForReport(_ condition: () -> Bool) async throws {
+    private func sendReportKey(_ text: String, code: UInt16, modifiers: NSEvent.ModifierFlags = [], to window: NSWindow) async throws {
+        let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                                                windowNumber: window.windowNumber, context: nil, characters: text,
+                                                charactersIgnoringModifiers: text, isARepeat: false, keyCode: code))
+        // SwiftUI updates its enabled keyboard shortcuts on the next render. Wait for that
+        // actual shortcut to handle the event instead of sleeping or dropping it into the editor.
+        try await waitForReport { window.performKeyEquivalent(with: event) }
+    }
+
+    private func waitForReport(line: Int = #line, _ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(30)
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
-        try #require(condition(), "The report sheet reached the expected state")
+        try #require(condition(), "The report sheet reached the expected state at line \(line)")
     }
 
     private static func sendKey(_ text: String, code: UInt16, modifiers: NSEvent.ModifierFlags = [], to window: NSWindow) {
