@@ -188,12 +188,17 @@ extension RenderingTests {
         let app = AppModel(store: store, settings: AppSettings(defaults: defaults), usage: UsageCache { _, _ in ProviderUsage(windows: []) },
                            openRouterKey: { nil }, projectGitHub: ProjectGitHub { arguments, _ in
             await gh.add(arguments)
-            #expect(arguments.starts(with: ["gh", "issue", "close"]))
+            guard arguments.starts(with: ["gh", "issue", "close"]), arguments.count == 8 else {
+                Issue.record("Unexpected GitHub command: \(arguments)")
+                return await ProjectGitHub.command(["/usr/bin/false"], body: nil)
+            }
             #expect(Array(arguments.suffix(2)) == ["--reason", "not planned"])
             if arguments[3] == "5" {
                 return await ProjectGitHub.command(["/bin/sh", "-c", "echo 'Resource not accessible by integration (closeIssue)' >&2; exit 1"], body: nil)
             }
             return await ProjectGitHub.command(["/usr/bin/true"], body: nil)
+        }, workDetailLookup: { _, number, _ in
+            .failure(TaskWorktree.Failure(step: "Issue #\(number) isn't read in this test", output: ""))
         })
         defer { app.stopAll() }
         app.destination = .projects
