@@ -34,8 +34,9 @@ extension RenderingTests {
             let host = NSHostingView(rootView: view.defaultAppStorage(defaults))
             window.contentView = host
             window.makeKeyAndOrderFront(nil)
-            try await remoteEventually { remoteLabels(host).contains(expected) }
-            let labels = remoteLabels(host)
+            try await remoteEventually { remoteLabels(window).contains(expected) }
+            let labels = remoteLabels(window)
+            #expect(labels.contains(expected), "Visible accessibility labels: \(labels.sorted())")
             for absent in ["Account", "Model", "Workspace", "New Task", "New Session", "Attach images", "Model & Usage"] {
                 #expect(!labels.contains(absent), "Remote view included local control: \(absent)")
             }
@@ -77,6 +78,17 @@ extension RenderingTests {
         #expect(try await remoteCurl(base + "/v1/health", token: nil).status == 401)
         #expect(try await remoteCurl(base + "/v1/queue/next", token: fakeToken).status == 204)
         #expect(app.remoteQueue.online)
+        // Repeated observed/manual starts reuse the listener; rapid off/on waits for the old
+        // port binding to finish cancelling before its replacement starts.
+        app.remoteQueue.restart()
+        app.remoteQueue.restart()
+        #expect(app.remoteQueue.servingURL == base)
+        settings.remoteQueueEnabled = false
+        app.remoteQueue.restart()
+        settings.remoteQueueEnabled = true
+        app.remoteQueue.restart()
+        try await remoteEventually { app.remoteQueue.servingURL == base }
+        #expect(try await remoteCurl(base + "/v1/health", token: fakeToken).status == 200)
         let id = UUID()
         #expect(await app.sendAccepted("Reply with the word pineapple.", to: target, id: id))
         #expect(app.isRunning(target))
@@ -172,14 +184,12 @@ extension RenderingTests {
     var seen = Set<ObjectIdentifier>()
     var strings = Set<String>()
     func walk(_ value: Any) {
-        guard let object = value as? NSObject,
-              seen.insert(ObjectIdentifier(object)).inserted, seen.count < 3_000 else { return }
-        func attribute(_ name: String) -> Any? {
-            object.responds(to: NSSelectorFromString(name)) ? object.value(forKey: name) : nil
-        }
-        if let label = attribute("accessibilityLabel") as? String { strings.insert(label) }
-        if let value = attribute("accessibilityValue") as? String { strings.insert(value) }
-        for child in attribute("accessibilityChildren") as? [Any] ?? [] { walk(child) }
+        guard let element = value as? NSAccessibilityProtocol else { return }
+        let object = value as AnyObject
+        guard seen.insert(ObjectIdentifier(object)).inserted, seen.count < 3_000 else { return }
+        if let label = element.accessibilityLabel() { strings.insert(label) }
+        if let value = element.accessibilityValue() as? String { strings.insert(value) }
+        for child in element.accessibilityChildren() ?? [] { walk(child) }
     }
     walk(root)
     return strings

@@ -8,6 +8,10 @@ import BotChuCore
     private var botID: UUID?
     private var queue: RemoteQueue?
     private var server: RemoteQueueServer?
+    private var endpoint: RemoteQueueEndpoint?
+    private var binding: String?
+    private var starting = false
+    private var lifecycle: Task<Void, Never>?
     private var generation = 0
     private var appliedRevision = -1
     private var stopped = false
@@ -43,7 +47,6 @@ import BotChuCore
     func reloadBot() {
         let bot = model?.bots.first(where: \.isRemoteQueue)
         if bot?.id != botID {
-            server?.stop(); server = nil
             botID = bot?.id; queue = nil; pending = 0; lastPoll = nil; appliedRevision = -1
             if let bot {
                 do { queue = try RemoteQueue(botID: bot.id, file: BotHome(workspace: bot.persistencePath).url.appendingPathComponent("remote-queue.json")) }
@@ -66,42 +69,82 @@ import BotChuCore
     }
 
     func restart() {
-        guard !stopped else { return }
+        guard !stopped, let model else { return }
+        var nextBinding: String?
+        var nextEndpoint: RemoteQueueEndpoint?
+        let address = model.settings.remoteQueueAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let port = UInt16(exactly: model.settings.remoteQueuePort)
+        if !model.settings.remoteQueueEnabled {
+            summary = "Off."
+        } else if let queue, let botID {
+            guard let port, port > 0 else { summary = "Choose a port from 1 to 65535."; stopListening(); return }
+            var token = readToken() ?? ""
+            if token.isEmpty {
+                var bytes = [UInt8](repeating: 0, count: 32)
+                guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess,
+                      saveToken(Data(bytes).base64EncodedString()) else {
+                    problem = "Couldn't save a secure token in your Keychain."; summary = problem!; stopListening(); return
+                }
+                token = readToken() ?? ""
+            }
+            guard !token.isEmpty else { summary = "Token unavailable."; stopListening(); return }
+            nextBinding = "\(botID):\(address):\(port)"
+            nextEndpoint = RemoteQueueEndpoint(queue: queue, token: token)
+        } else {
+            summary = problem ?? "Create a remote queue bot first."
+        }
+        endpoint = nextEndpoint
+        // A token change swaps the authenticated endpoint synchronously; it doesn't interrupt the
+        // listener. An observed settings change repeated by a caller is also a no-op here.
+        if nextBinding == binding, server != nil || starting { return }
         generation += 1
         let expected = generation
-        server?.stop(); server = nil; servingURL = nil
-        guard let model, model.settings.remoteQueueEnabled else { summary = "Off."; return }
-        guard let queue, botID != nil else { summary = problem ?? "Create a remote queue bot first."; return }
-        if readToken()?.isEmpty != false {
-            guard regenerateToken() else { summary = problem ?? "Token unavailable."; return }
-            return // regenerateToken restarts with the newly saved token.
+        let previous = lifecycle, oldServer = server
+        server = nil; servingURL = nil; binding = nextBinding; starting = nextBinding != nil
+        if starting { summary = "Starting…" }
+        lifecycle = Task { [weak self] in
+            await previous?.value
+            await oldServer?.shutdown()
+            guard let self, !self.stopped, self.generation == expected else { return }
+            self.starting = false
+            guard nextBinding != nil, let port, self.model?.settings.remoteQueueEnabled == true else { return }
+            let server = RemoteQueueServer { [weak self] request in
+                guard let self, self.generation == expected, self.model?.settings.remoteQueueEnabled == true,
+                      let endpoint = self.endpoint else { return .init(401) }
+                let response = await endpoint.handle(request)
+                await self.reconcile()
+                return response
+            }
+            server.onReady = { [weak self] port in
+                guard let self, self.generation == expected else { return }
+                self.servingURL = "http://\(address.contains(":") ? "[\(address)]" : address):\(port)"
+                self.summary = "Listening."
+            }
+            server.onFailure = { [weak self] error in
+                guard let self, self.generation == expected else { return }
+                self.servingURL = nil; self.server = nil; self.binding = nil
+                // NWError contains only a transport error code, never headers or message bodies.
+                self.summary = "Couldn't listen (\(error)). Check the address and whether the port is in use."
+            }
+            do {
+                try server.start(address: address, port: port)
+                self.server = server
+            } catch { self.binding = nil; self.summary = "Enter a numeric local IP address and an available port." }
         }
-        guard let token = readToken(), !token.isEmpty else { return }
-        let endpoint = RemoteQueueEndpoint(queue: queue, token: token)
-        let server = RemoteQueueServer { [weak self] request in
-            guard let self, self.generation == expected, self.model?.settings.remoteQueueEnabled == true else { return .init(401) }
-            let response = await endpoint.handle(request)
-            await self.reconcile()
-            return response
-        }
-        let address = model.settings.remoteQueueAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let port = UInt16(exactly: model.settings.remoteQueuePort), port > 0 else { summary = "Choose a port from 1 to 65535."; return }
-        server.onReady = { [weak self] port in
-            guard let self, self.generation == expected else { return }
-            self.servingURL = "http://\(address.contains(":") ? "[\(address)]" : address):\(port)"
-            self.summary = "Listening."
-        }
-        server.onFailure = { [weak self] in
-            guard let self, self.generation == expected else { return }
-            self.servingURL = nil; self.summary = "Couldn't listen. Check the address and whether the port is in use."
-        }
-        do {
-            try server.start(address: address, port: port)
-            self.server = server; summary = "Starting…"
-        } catch { summary = "Enter a numeric local IP address and an available port." }
     }
 
-    func stop() { stopped = true; generation += 1; server?.stop(); server = nil; servingURL = nil; clock?.cancel(); clock = nil }
+    private func stopListening() {
+        generation += 1
+        let oldServer = server, previous = lifecycle
+        server = nil; servingURL = nil; endpoint = nil; binding = nil; starting = false
+        lifecycle = Task { await previous?.value; await oldServer?.shutdown() }
+    }
+
+    func stop() {
+        stopped = true; generation += 1
+        server?.stop(); server = nil; servingURL = nil; endpoint = nil
+        clock?.cancel(); clock = nil
+    }
 
     func enqueue(_ text: String, id: UUID, for botID: UUID, accepted: (@MainActor @Sendable (Bool) -> Void)?) -> Bool {
         guard !stopped, self.botID == botID, let queue else { problem = "The remote queue isn't available."; return false }

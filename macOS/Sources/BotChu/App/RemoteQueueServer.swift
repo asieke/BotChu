@@ -7,7 +7,7 @@ import BotChuCore
     private var listener: NWListener?
     private var connections: [UUID: Connection] = [:]
     var onReady: ((UInt16) -> Void)?
-    var onFailure: (() -> Void)?
+    var onFailure: ((NWError) -> Void)?
     let handle: @MainActor (RemoteQueueRequest) async -> RemoteQueueResponse
 
     init(handle: @escaping @MainActor (RemoteQueueRequest) async -> RemoteQueueResponse) { self.handle = handle }
@@ -26,7 +26,7 @@ import BotChuCore
                 guard let self, let listener, self.listener === listener else { return }
                 switch state {
                 case .ready: if let port = listener.port { self.onReady?(port.rawValue) }
-                case .failed: self.onFailure?(); self.stop()
+                case .failed(let error): self.onFailure?(error); self.stop()
                 default: break
                 }
             }
@@ -48,6 +48,23 @@ import BotChuCore
         let old = connections.values
         connections.removeAll()
         for connection in old { connection.stop() }
+    }
+
+    /// Cancellation releases the bound port asynchronously. A replacement listener waits for the
+    /// cancelled state, so rapid off/on or an address change cannot race the previous listener.
+    func shutdown() async {
+        guard let previous = listener else { stop(); return }
+        listener = nil
+        let old = connections.values
+        connections.removeAll()
+        for connection in old { connection.stop() }
+        await withCheckedContinuation { continuation in
+            if case .cancelled = previous.state { continuation.resume(); return }
+            previous.stateUpdateHandler = { state in
+                if case .cancelled = state { continuation.resume() }
+            }
+            previous.cancel()
+        }
     }
 
     @MainActor private final class Connection {
