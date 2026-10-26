@@ -222,6 +222,7 @@ import Testing
         // BotChu quit after Telegram took the reply's first message.
         var saved = TelegramState.load(from: folder.state)
         saved.pending[0].sent = 1
+        saved.pending[0].presentationVersion = 0 // multipart answer sent before the upgrade
         try saved.save(to: folder.state)
         await app.finishTurn(of: bot, with: [ChatMessage(role: .assistant, text: long)])
 
@@ -362,17 +363,17 @@ import Testing
         #expect(TelegramGateway.backoff(after: 20, base: 5, cap: 300) == 300)
     }
 
-    @Test func aTurnsReplyIsWhatItSaidAndAFailureStaysInBotChu() {
+    @Test func aTurnsFinalReplyIsConciseAndFailureRecoveryStaysVisible() {
         let message = ChatMessage(role: .user, text: "hello")
         let reply = { (turn: [ChatMessage]) in TelegramReply.compose(after: message.id, in: [message] + turn, botName: "Fixture") }
         #expect(reply([ChatMessage(role: .error, text: "Reconnecting... 1/5"), ChatMessage(role: .assistant, text: " Done. ")]) == "Done.")
         #expect(reply([ChatMessage(role: .assistant, text: "So far"), ChatMessage(role: .error, text: "codex exited with status 1:\nsecret stderr")])
-            == "So far\n\n⚠️ Fixture couldn't finish this turn. What went wrong is in BotChu.")
-        #expect(reply([ChatMessage(role: .assistant, text: "Partial"), ChatMessage(role: .note, text: "Stopped")]) == "Partial\n\n⏹ Stopped in BotChu.")
+            == "⚠️ Fixture couldn't finish this turn. Check the error in BotChu, then send a follow-up to retry.\n\nSo far")
+        #expect(reply([ChatMessage(role: .assistant, text: "Partial"), ChatMessage(role: .note, text: "Stopped")]) == "⏹ Stopped in BotChu. This result may be incomplete; send a follow-up to continue.\n\nPartial")
         #expect(reply([ChatMessage(role: .tool, toolName: "Bash"), ChatMessage(role: .note, text: "Saved 1 note")])
-            == "Fixture finished without a written reply. What it did is in BotChu.")
+            == "Fixture ended without a final answer. Ask it to explain the result or continue.")
         #expect(reply([ChatMessage(role: .assistant, text: "A"), ChatMessage(role: .assistant, text: "B"), ChatMessage(role: .user, text: "next"),
-                       ChatMessage(role: .assistant, text: "C")]) == "A\n\nB")
+                       ChatMessage(role: .assistant, text: "C")]) == "B")
         #expect(TelegramReply.compose(after: UUID(), in: [message], botName: "Fixture") == nil)
 
         let next = ChatMessage(role: .user, text: "next")
@@ -792,6 +793,8 @@ import Testing
         try await gateway.poll()
         let reply = String(repeating: "a", count: 3_000) + "\n\n" + String(repeating: "b", count: 3_000)
         await app.finishTurn(of: bot, with: [ChatMessage(role: .assistant, text: reply)])
+        // Exercise the transport checkpoint with a multipart answer independently of presentation.
+        await app.reportProgress(.answered(reply))
         let checkpoint = try Data(contentsOf: folder.state)
         let hold = Suspension()
         await telegram.hold("sendMessage", at: hold)
@@ -825,6 +828,83 @@ import Testing
         #expect(pieces.contains("�"))
         #expect(pieces.joined().contains("before") && pieces.joined().contains("after"))
         #expect(TelegramReply.messages(enormous) == ["�"])
+    }
+
+    @Test func conciseRepliesOfferFullDetailsOnePageAtATimeAcrossRelaunches() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID()
+        let app = FakeBotChu(bots: [bot: "Danny"])
+        let chats = [TelegramChat(id: 42, botID: bot), TelegramChat(id: 43, botID: bot)]
+        let telegram = TelegramStandIn(updates: [[update(10, chat: 42, text: "explain", message: 7)]])
+        let gateway = TelegramGateway(token: Self.token, chats: chats, app: app, stateURL: folder.state, transport: telegram, timing: Self.fast)
+        try await gateway.poll()
+        let long = "The migration passed.\n" + (1...200).map { "Step \($0) moved the records and retained their original identifiers." }.joined(separator: "\n") + "\nWarning: production remains unverified.\nPlease approve the production check?"
+        await app.finishTurn(of: bot, with: [ChatMessage(role: .tool, text: "secret raw log"), ChatMessage(role: .assistant, text: long)])
+        try await gateway.flushReplies()
+        let summary = try #require(await telegram.sent.first)
+        #expect(summary.text.contains("production remains unverified") && summary.text.contains("Please approve"))
+        #expect(summary.text.contains("/details") && summary.text.utf16.count < 1_600)
+        #expect(await telegram.sent.count == 1)
+        #expect(TelegramState.load(from: folder.state).details.count == 1)
+
+        let relaunched = TelegramGateway(token: Self.token, chats: chats, app: app, stateURL: folder.state, transport: telegram, timing: Self.fast)
+        await telegram.add([update(11, chat: 42, text: "/details", message: 8)])
+        try await relaunched.poll()
+        let first = try #require(await telegram.sent.last)
+        #expect(first.text.hasPrefix("Danny — reply details (1/"))
+        #expect(first.text.contains("Step 1 moved") && first.text.hasSuffix("Next: /details 2"))
+        #expect(first.text.utf16.count <= TelegramReply.limit && first.replyTo == 8)
+        await telegram.add([update(12, chat: 42, text: "/details 2", message: 9), update(13, chat: 43, text: "/details", message: 1)])
+        try await relaunched.poll()
+        let sent = await telegram.sent
+        #expect(sent.count == 4)
+        #expect(sent[2].text.contains("reply details (2/") && sent[2].text != first.text)
+        #expect(sent[3].text == "No delivered reply is available yet. Ask a bot something first.")
+        #expect(await app.delivered.count == 1) // /details never starts a CLI turn
+        #expect(!sent.contains { $0.text.contains("secret raw log") })
+        #expect(try !String(contentsOf: folder.state, encoding: .utf8).contains("Step 1")) // IDs only
+    }
+
+    @Test func detailsNeverCrossRevokedChatsOrMappingsAndDoNotAcceptInvalidPages() async throws {
+        let folder = try TemporaryFolder()
+        defer { folder.remove() }
+        let bot = UUID(), other = UUID()
+        let app = FakeBotChu(bots: [bot: "Danny", other: "Other"])
+        let telegram = TelegramStandIn(updates: [[update(10, chat: 42, text: "hello", message: 7)]])
+        let chats = [TelegramChat(id: 42, botID: bot)]
+        let gateway = TelegramGateway(token: Self.token, chats: chats, app: app, stateURL: folder.state, transport: telegram, timing: Self.fast)
+        try await gateway.poll()
+        await app.finishTurn(of: bot, with: [ChatMessage(role: .assistant, text: "Private answer.")])
+        try await gateway.flushReplies()
+        await telegram.add([update(11, chat: 42, text: "/details -1"), update(12, chat: 42, text: "/details 999"), update(13, chat: 42, text: "/details foo bar"), update(14, chat: 99, text: "/details")])
+        try await gateway.poll()
+        #expect(await telegram.sent.count == 4)
+        #expect(await telegram.sent.last?.text.contains("Use /details") == true)
+        #expect(await app.delivered.count == 1)
+
+        // Authorization can change while Home is being loaded for /details.
+        let hold = Suspension()
+        await app.holdDetails(at: hold)
+        await telegram.add([update(15, chat: 42, text: "/details")])
+        let reading = Task { try await gateway.poll() }
+        try await hold.waitUntilEntered()
+        await app.authorize([])
+        await hold.release()
+        try await reading.value
+        #expect(await telegram.sent.count == 4)
+        await app.authorize([TelegramChat(id: 42, botID: other)])
+
+        // Remapping discards the pointer, including after restarting the gateway.
+        let remapped = TelegramGateway(token: Self.token, chats: [TelegramChat(id: 42, botID: other)], app: app, stateURL: folder.state, transport: telegram, timing: Self.fast)
+        await telegram.add([update(16, chat: 42, text: "/details")])
+        try await remapped.poll()
+        #expect(await remapped.savedState.details.isEmpty)
+        #expect(await telegram.sent.last?.text == "No delivered reply is available yet. Ask a bot something first.")
+        await app.authorize([])
+        await telegram.add([update(17, chat: 42, text: "/details")])
+        try await remapped.poll()
+        #expect(await telegram.sent.count == 5)
     }
 
     // MARK: Choosing with @, # and /task (#114)
@@ -1249,6 +1329,7 @@ private actor FakeBotChu: TelegramApp {
     private var beforeDelivery: Suspension?
     private var afterDelivery: Suspension?
     private var beforeProgress: Suspension?
+    private var beforeDetails: Suspension?
     private var progressOverride: TelegramProgress?
     private(set) var progressReads = 0
     private(set) var delivered: [Delivered] = []
@@ -1279,6 +1360,7 @@ private actor FakeBotChu: TelegramApp {
         if after { afterDelivery = suspension } else { beforeDelivery = suspension }
     }
     func holdProgress(at suspension: Suspension) { beforeProgress = suspension }
+    func holdDetails(at suspension: Suspension) { beforeDetails = suspension }
     func reportProgress(_ progress: TelegramProgress) { progressOverride = progress }
 
     func authorization(for chat: Int64, botID: UUID?) -> TelegramAuthorization {
@@ -1329,6 +1411,15 @@ private actor FakeBotChu: TelegramApp {
         if let progressOverride { return progressOverride }
         guard let name = names[botID] else { return .gone(TelegramReply.unavailable) }
         return .of(id, thread: threads[botID] ?? [], queue: queues[botID], running: running.contains(botID), botName: name)
+    }
+
+    func fullReply(of id: UUID, for botID: UUID) async -> String? {
+        if let hold = beforeDetails {
+            beforeDetails = nil
+            await hold.pause()
+        }
+        guard let name = names[botID] else { return nil }
+        return TelegramReply.full(after: id, in: threads[botID] ?? [], botName: name)
     }
 
     func replyFailed(_ id: UUID, for botID: UUID, reason: String) { failures.append((id, reason)) }

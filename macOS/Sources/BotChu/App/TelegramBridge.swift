@@ -187,6 +187,11 @@ final class TelegramBridge {
         return .of(id, thread: thread, queue: model.messageQueues[target], running: model.isRunning(target), botName: bot.name)
     }
 
+    fileprivate func fullReply(of id: UUID, for botID: UUID) async -> String? {
+        guard let thread = await model?.loadedThread(.home(botID)), let bot = model?.bot(botID) else { return nil }
+        return TelegramReply.full(after: id, in: thread, botName: bot.name)
+    }
+
     fileprivate func replyFailed(_ id: UUID, for botID: UUID, reason: String, generation: Int) {
         guard !Task.isCancelled, generation == self.generation, let model, model.settings.telegramEnabled,
               model.bot(botID) != nil else { return }
@@ -235,6 +240,10 @@ final class TelegramBridge {
 
     func progress(of id: UUID, for botID: UUID) async -> TelegramProgress {
         await bridge?.progress(of: id, for: botID) ?? .queued(paused: false)
+    }
+
+    func fullReply(of id: UUID, for botID: UUID) async -> String? {
+        await bridge?.fullReply(of: id, for: botID)
     }
 
     func replyFailed(_ id: UUID, for botID: UUID, reason: String) {

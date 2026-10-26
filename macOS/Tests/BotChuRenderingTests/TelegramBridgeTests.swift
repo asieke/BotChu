@@ -210,6 +210,7 @@ extension RenderingTests {
         #expect(!app.thread(.home(danny.id)).contains { $0.role == .user })
         let asked = try #require(app.thread(workerHome).first { $0.role == .user })
         #expect(asked.text == "#fixture/project how is it going?" && asked.mentions.map(\.target) == ["fixture/project"])
+        #expect(await app.telegram.connection().fullReply(of: asked.id, for: worker.id) == "done:#fixture/project how is it going?")
         let sent = await telegram.sent
         #expect(sent.first?.text == TelegramReply.taskStarted(task.title, bot: "Worker", repo: "fixture/project"))
         #expect(sent.contains { $0.replyTo == 8 && $0.text == "Worker:\ndone:#fixture/project how is it going?" })
