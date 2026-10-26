@@ -248,7 +248,8 @@ final class AppModel {
     /// The issue the owner chose to delete in Projects, until they confirm it, and then why GitHub
     /// didn't delete it; the issues being deleted, by `owner/name#number` (`Projects.swift`).
     var issueDeletion: IssueDeletion?
-    var deletingIssues: Set<String> = []
+    var issueClosure: IssueClosure?
+    var updatingIssues: Set<String> = []
     var githubConnection: ProjectGitHub.Connection?
     var githubChecking = false
     let projectGitHub: ProjectGitHub

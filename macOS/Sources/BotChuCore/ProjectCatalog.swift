@@ -215,7 +215,7 @@ public struct ProjectSnapshot: Codable, Equatable, Sendable {
         }
     }
 
-    /// Forgets issue `number` of `repo`, deleted on GitHub: it leaves the open issues read, and
+    /// Forgets issue `number` of `repo`, closed or deleted on GitHub: it leaves the open issues read, and
     /// GitHub's count of them, which counted it, drops by one. One that wasn't read (closed, or
     /// beyond those read) changes nothing; GitHub's list entry moves, so the next sync reads the
     /// repository again. Returns whether it was there.

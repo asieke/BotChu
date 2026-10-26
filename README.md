@@ -55,6 +55,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     (**Review with**, **Review and Comment with**), continues it (unless it comes from a fork) or
     starts a task on an issue with a bot, opening New Task with it chosen, or opens the task already
     on it. They are read with one GraphQL query per ten repositories whose open work changed (below).
+    An issue’s menu has **Archive Issue…** and **Mark Obsolete…** (#162). Both close it as **not planned**
+    on GitHub, preserving its description, comments and link; it can be reopened on GitHub. After
+    confirming, it leaves the open lists, counts and saved catalog immediately, including during a
+    sync. If GitHub refuses or is unreachable, it stays and the app says why. The archive menu beside
+    Delete on an issue’s sidebar page offers the same actions.
     An issue's menu also has **Delete Issue…**, as its page in the sidebar has Delete (#154): after
     an alert naming the repository and number says it can't be undone, `gh issue delete <n> --repo
     <owner/name> --yes` deletes it on GitHub for good. It then leaves the lists, the counts and

@@ -104,6 +104,7 @@ struct ProjectsView: View {
             .inspectorColumnWidth(min: 280, ideal: 320, max: 480)
         }
         .modifier(IssueDeletionPrompt())
+        .modifier(IssueClosurePrompt())
     }
 
     private var scopePicker: some View {
@@ -463,8 +464,9 @@ struct WorkMenu: View {
         } else {
             botMenu("Start Task with") { model.newTask(for: $0, repo: item.repo, work: item.work) }
             Divider()
+            IssueClosureActions(repo: item.repo, number: item.number, title: item.title)
             Button("Delete Issue…", role: .destructive) { model.askToDeleteIssue(item.number, of: item.repo, title: item.title) }
-                .disabled(model.deletingIssues.contains(item.id))
+                .disabled(model.updatingIssues.contains(item.id))
         }
     }
 

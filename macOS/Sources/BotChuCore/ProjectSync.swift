@@ -85,7 +85,7 @@ public actor ProjectSync {
     private var activeWaiters: [CheckedContinuation<Void, Never>] = []
     private var queued: Scope?
     private var queuedWaiters: [CheckedContinuation<Void, Never>] = []
-    /// Issues deleted while a sync was under way, which it may have read before: kept out of what
+    /// Issues closed or deleted while a sync was under way, which it may have read before: kept out of what
     /// it takes, until it ends.
     private var deleted: [DeletedIssue] = []
 
@@ -420,7 +420,41 @@ public actor ProjectSync {
         return gone
     }
 
-    // MARK: Deleting an issue
+    // MARK: Closing and deleting issues
+
+    public struct ClosureFailure: Error, Equatable, Sendable {
+        public var message: String
+        public init(_ message: String) { self.message = message }
+    }
+
+    /// Archives an issue as not planned, retaining its URL, body and comments on GitHub. It can
+    /// be reopened there. As with deletion, stale sync results cannot bring it back into open work.
+    public func closeIssue(_ number: Int, of repo: String) async -> Result<Void, ClosureFailure> {
+        guard number > 0, GitHubLookup.isSafeName(repo) else {
+            return .failure(ClosureFailure("Issue #\(number) of \(repo) isn't one gh can name."))
+        }
+        let run = await client.gh(["gh", "issue", "close", String(number), "--repo", repo, "--reason", "not planned"])
+        guard run.ok else { return .failure(Self.closureFailure(run, number: number, repo: repo)) }
+        removeFromOpenIssues(number, of: repo)
+        return .success(())
+    }
+
+    static func closureFailure(_ run: Shell.Result, number: Int, repo: String) -> ClosureFailure {
+        let printed = [run.errors, run.output].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }.joined(separator: "\n")
+        let said = printed.lowercased()
+        if run.status == 127 || said.contains("command not found") || said.contains("gh auth login")
+            || ["error connecting", "could not resolve host", "no such host", "timeout", "network is unreachable"].contains(where: said.contains) {
+            return ClosureFailure(deletionFailure(run, number: number, repo: repo).message)
+        }
+        if said.contains("permission") || said.contains("not accessible") || said.contains("not authorized") {
+            return ClosureFailure("gh's account doesn't have permission to close issue #\(number) in \(repo). The issue is still on GitHub.")
+        }
+        if said.contains("could not resolve to") || said.contains("not found") {
+            return ClosureFailure("GitHub has no issue #\(number) in \(repo) for gh's account. Refresh to update Projects.")
+        }
+        return ClosureFailure(printed.isEmpty ? "gh couldn't close it (exit \(run.status)) and printed nothing." : "gh couldn't close it: \(printed)")
+    }
 
     /// Why gh didn't delete an issue, in a sentence for the owner.
     public struct DeletionFailure: Error, Equatable, Sendable {
@@ -440,13 +474,17 @@ public actor ProjectSync {
         }
         let run = await client.gh(["gh", "issue", "delete", String(number), "--repo", repo, "--yes"])
         guard run.ok else { return .failure(Self.deletionFailure(run, number: number, repo: repo)) }
+        removeFromOpenIssues(number, of: repo)
+        return .success(())
+    }
+
+    private func removeFromOpenIssues(_ number: Int, of repo: String) {
         load()
         if active != nil { deleted.append(DeletedIssue(repo: repo, number: number)) }
         if snapshot?.removeIssue(number, of: repo) == true {
             saveNow()
             publish()
         }
-        return .success(())
     }
 
     /// Why gh couldn't delete it, from what gh printed.
@@ -472,7 +510,7 @@ public actor ProjectSync {
         return DeletionFailure(printed.isEmpty ? "gh couldn't delete it (exit \(run.status)) and printed nothing." : "gh couldn't delete it: \(printed)")
     }
 
-    /// Keeps the issues deleted during a sync out of what it read before.
+    /// Keeps the issues closed or deleted during a sync out of what it read before.
     private func forgetDeleted() {
         for issue in deleted { snapshot?.removeIssue(issue.number, of: issue.repo) }
     }

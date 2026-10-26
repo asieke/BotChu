@@ -384,8 +384,8 @@ struct WorkDetailView: View {
                 }
                 .help("Back to the list")
                 Spacer()
-                let deleting = model.deletingIssues.contains(key)
-                if loading || deleting { ProgressView().controlSize(.small) }
+                let updating = model.updatingIssues.contains(key)
+                if loading || updating { ProgressView().controlSize(.small) }
                 Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(loading)
                     .help("Read it again")
@@ -394,10 +394,17 @@ struct WorkDetailView: View {
                     .help("Open on GitHub")
                     .accessibilityLabel("Open on GitHub")
                 if !pulls {
+                    Menu {
+                        IssueClosureActions(repo: repo.id, number: number, title: detail?.title ?? item?.title ?? "Issue #\(number)")
+                    } label: { Image(systemName: "archivebox") }
+                    .menuIndicator(.hidden)
+                    .disabled(updating)
+                    .help("Archive or mark obsolete; keep it on GitHub")
+                    .accessibilityLabel("Archive issue")
                     Button { model.askToDeleteIssue(number, of: repo.id, title: detail?.title ?? item?.title ?? "Issue #\(number)") } label: {
                         Image(systemName: "trash")
                     }
-                    .disabled(deleting)
+                    .disabled(updating)
                     .help("Delete Issue…")
                     .accessibilityLabel("Delete issue")
                 }
