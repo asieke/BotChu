@@ -47,7 +47,21 @@ def busy_lines(snapshot):
 
 
 if __name__ == "__main__":
-    snapshot = sys.stdin.read() if sys.argv[1:] == ["--stdin"] else subprocess.check_output(
-        ["ps", "-axo", "pid=,ppid=,comm=,args="], text=True)
+    if sys.argv[1:] == ["--stdin"]:
+        snapshot = sys.stdin.read()
+    else:
+        # Darwin truncates comm to 16 columns when another field follows it, even with -ww.
+        # Read it as the last field, then join argv by PID. This also keeps spaces in paths out
+        # of the field splitting used below. A process exiting between snapshots is ignored.
+        commands = subprocess.check_output(["ps", "-ww", "-axo", "pid=,ppid=,comm="], text=True)
+        arguments = subprocess.check_output(["ps", "-ww", "-axo", "pid=,args="], text=True)
+        argv = dict(line.split(None, 1) for line in arguments.splitlines() if len(line.split(None, 1)) == 2)
+        rows = []
+        for line in commands.splitlines():
+            fields = line.split(None, 2)
+            if len(fields) == 3 and fields[0] in argv:
+                pid, parent, executable = fields
+                rows.append(f"{pid} {parent} {os.path.basename(executable)} {argv[pid]}")
+        snapshot = "\n".join(rows)
     for line in busy_lines(snapshot):
         print(line)
