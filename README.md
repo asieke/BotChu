@@ -1355,9 +1355,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   preserving its lock and run folders. Other repositories retain the same `start`, `wait`, `status`
   interface. BotChu's windowless wrapper is recognized by ancestry; unwrapped window tests and
   other repositories' tests still block the gate.
-- Release tests build with testability in `macOS/.build/release-tests/`, separate from the app's
-  release build. `RunEvaluationTests` runs only in release in the full tier; the fast tier keeps
-  running it in debug. This avoids the two release build modes evicting each other's artifacts.
+- Debug tests use `macOS/.build/`, release tests with testability use `macOS/.build/release-tests/`,
+  and the app uses `macOS/.build/app/`. Each keeps its own build manifest: on Xcode's build system,
+  even a debug test build can invalidate optimized Core when it shares the app's scratch directory.
+  `RunEvaluationTests` runs only in release in the full tier; the fast tier keeps running it in debug.
 - A full pass on a tree that stayed clean and unchanged records `<tree> <commit> <UTC time>` in
   the shared Git directory's `test-passes`. Worktrees and merge commits with that same tree share
   the result; a dirty tree or an edit during testing cannot receive a receipt.
