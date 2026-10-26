@@ -1358,7 +1358,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   tests, and runs every Core test. It does not need window focus or the gate.
 - Each step prints elapsed time and the load average before and after. xUnit reports and logs stay
   in `macOS/.build/test-results/`; a run prints its 20 slowest tests and a failed run prints a command
-  selecting only the failed tests with `--skip-build`.
+  selecting only the failed tests with `--skip-build`. If an unrelated test fails, rerun only that
+  test a few times; if it passes, name it and the load average in the PR instead of rerunning the
+  full suite. A changed test still needs a demonstrated fix.
 - `scripts/test.sh` runs everything: shell syntax for every script, `macOS/test.sh` (the unit and
   rendering tests) and `macOS/build.sh` into a temporary folder. There is no CI: the tests need a Mac
   with full Xcode. Debug/release test builds and the app build finish before any gate request. Core
@@ -1368,9 +1370,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   preserving its lock and run folders. Other repositories retain the same `start`, `wait`, `status`
   interface. BotChu's windowless wrapper is recognized by ancestry; unwrapped window tests and
   other repositories' tests still block the gate.
-- Release tests build with testability in `macOS/.build/release-tests/`, separate from the app's
-  release build. `RunEvaluationTests` runs only in release in the full tier; the fast tier keeps
-  running it in debug. This avoids the two release build modes evicting each other's artifacts.
+- Debug tests use `macOS/.build/`, release tests with testability use `macOS/.build/release-tests/`,
+  and the app uses `macOS/.build/app/`. Each keeps its own build manifest: on Xcode's build system,
+  even a debug test build can invalidate optimized Core when it shares the app's scratch directory.
+  `RunEvaluationTests` runs only in release in the full tier; the fast tier keeps running it in debug.
 - A full pass on a tree that stayed clean and unchanged records `<tree> <commit> <UTC time>` in
   the shared Git directory's `test-passes`. Worktrees and merge commits with that same tree share
   the result; a dirty tree or an edit during testing cannot receive a receipt.

@@ -3,17 +3,17 @@
 set -euo pipefail
 dir=$(cd "$(dirname "$0")" && pwd)
 test_root=$(dirname "$dir")
+source "$test_root/scripts/test-support.sh"
 mode=${1:-full}
 case "$mode" in full|--fast|--build|--prebuilt|--windows) ;; *) echo "usage: macOS/test.sh [--fast]" >&2; exit 2 ;; esac
 [ $# -le 1 ] || exit 2
-if { [ "$mode" = full ] || [ "$mode" = --prebuilt ]; } && [ -n "${BOTCHU_GATE_RUN_ID:-}" ]; then
+if { [ "$mode" = full ] || [ "$mode" = --prebuilt ]; } && test_inside_gate; then
   echo "test: run macOS/test.sh directly; only its --windows phase belongs inside the gate" >&2
   exit 2
 fi
 if [ "$mode" != --windows ] && [ "${BOTCHU_WINDOWLESS_ROOT:-}" != "$test_root" ]; then
   exec "$test_root/scripts/coord/botchu-windowless.sh" "$dir/test.sh" "$@"
 fi
-source "$test_root/scripts/test-support.sh"
 test_begin "macOS $mode"
 trap 'test_end $?' EXIT
 renderer_checksums() { (cd "$dir/Sources/BotChu/Resources/ChatRenderer" && shasum -a 256 -c SHA256SUMS --status); }

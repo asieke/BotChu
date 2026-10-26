@@ -19,7 +19,7 @@ case "${1:-}" in
   *) echo "usage: scripts/test.sh [--fast]" >&2; exit 2 ;;
 esac
 [ $# = 0 ] || { echo "usage: scripts/test.sh [--fast]" >&2; exit 2; }
-if [ "$tier" = full ] && [ -n "${BOTCHU_GATE_RUN_ID:-}" ]; then
+if [ "$tier" = full ] && test_inside_gate; then
   echo "test: run scripts/test.sh directly, not inside gate.sh; it gates its own window tests" >&2
   exit 2
 fi

@@ -46,8 +46,46 @@ def busy_lines(snapshot):
             yield line[:200]
 
 
+def in_gate(snapshot, pid):
+    ancestors = {}
+    for line in snapshot.splitlines():
+        fields = line.split(None, 3)
+        if len(fields) != 4:
+            continue
+        try:
+            ancestors[int(fields[0])] = int(fields[1]), os.path.basename(fields[2]), shlex.split(fields[3])
+        except ValueError:
+            continue
+    seen = set()
+    while pid in ancestors and pid not in seen:
+        seen.add(pid)
+        parent, base, args = ancestors[pid]
+        if base in ("bash", "sh", "zsh"):
+            for index, argument in enumerate(args[:2]):
+                if os.path.basename(argument) == "gate.sh" and args[index + 1:index + 2] == ["_run"]:
+                    return True
+        pid = parent
+    return False
+
+
 if __name__ == "__main__":
-    snapshot = sys.stdin.read() if sys.argv[1:] == ["--stdin"] else subprocess.check_output(
-        ["ps", "-axo", "pid=,ppid=,comm=,args="], text=True)
+    if sys.argv[1:] == ["--stdin"]:
+        snapshot = sys.stdin.read()
+    else:
+        # Darwin truncates comm to 16 columns when another field follows it, even with -ww.
+        # Read it as the last field, then join argv by PID. This also keeps spaces in paths out
+        # of the field splitting used below. A process exiting between snapshots is ignored.
+        commands = subprocess.check_output(["ps", "-ww", "-axo", "pid=,ppid=,comm="], text=True)
+        arguments = subprocess.check_output(["ps", "-ww", "-axo", "pid=,args="], text=True)
+        argv = dict(line.split(None, 1) for line in arguments.splitlines() if len(line.split(None, 1)) == 2)
+        rows = []
+        for line in commands.splitlines():
+            fields = line.split(None, 2)
+            if len(fields) == 3 and fields[0] in argv:
+                pid, parent, executable = fields
+                rows.append(f"{pid} {parent} {os.path.basename(executable)} {argv[pid]}")
+        snapshot = "\n".join(rows)
+    if sys.argv[1:] == ["--in-gate"]:
+        sys.exit(0 if in_gate(snapshot, os.getppid()) else 1)
     for line in busy_lines(snapshot):
         print(line)

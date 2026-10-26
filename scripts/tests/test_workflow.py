@@ -1,6 +1,8 @@
 """Protect the shared gate, failed-test selection, and shared pass receipts."""
 import importlib.util
 import json
+import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -33,6 +35,25 @@ class WorkflowTests(unittest.TestCase):
 17 1 BotChuPackageTests BotChuPackageTests
 """
         self.assertEqual([int(line.split()[0]) for line in busy.busy_lines(snapshot)], [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17])
+
+    def test_legacy_gate_ancestor_is_detected_without_a_marker(self):
+        snapshot = """1 0 launchd launchd
+2 1 bash /bin/bash /tmp/botchu-coord/gate.sh _run 1234
+3 2 bash bash scripts/test.sh
+4 3 python3 python3 busy.py --in-gate
+5 1 zsh zsh -c 'mention gate.sh _run in a message'
+6 5 python3 python3 busy.py --in-gate
+"""
+        self.assertTrue(busy.in_gate(snapshot, 4))
+        self.assertFalse(busy.in_gate(snapshot, 6))
+        with tempfile.TemporaryDirectory() as temporary:
+            gate = Path(temporary) / "gate.sh"
+            gate.write_text('#!/bin/bash\nshift\n"$@"\n')
+            environment = dict(os.environ)
+            environment.pop("BOTCHU_GATE_RUN_ID", None)
+            check = f'test_root="{ROOT}"; source "{ROOT}/scripts/test-support.sh"; test_inside_gate'
+            self.assertEqual(subprocess.run(["bash", str(gate), "_run", "bash", "-c", check], env=environment).returncode, 0)
+            self.assertEqual(subprocess.run(["bash", "-c", check], env=environment).returncode, 1)
 
     def test_failed_test_command_keeps_build_and_only_failed_selection(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -75,6 +96,57 @@ class WorkflowTests(unittest.TestCase):
             self.assertNotEqual(shell("test_tree_passed").returncode, 0)
             shell("test_capture_tree; printf changed > source; test_record_pass")
             self.assertEqual(len(receipts.read_text().splitlines()), 1)
+
+    def test_gate_install_restores_missing_files_without_touching_live_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            lock = folder / "gate/lock"
+            lock.mkdir(parents=True)
+            (lock / "run").write_text("existing-run")
+            install = ["bash", str(ROOT / "scripts/coord/install.sh"), str(folder)]
+            subprocess.run(install, check=True)
+            self.assertEqual((folder / "busy.py").read_bytes(), (ROOT / "scripts/coord/busy.py").read_bytes())
+            first = (folder / "gate.sh").stat().st_mtime_ns
+            subprocess.run(install, check=True)
+            self.assertEqual((folder / "gate.sh").stat().st_mtime_ns, first)
+            self.assertEqual((lock / "run").read_text(), "existing-run")
+            (folder / "busy.sh").unlink()
+            subprocess.run(install, check=True)
+            self.assertTrue((folder / "busy.sh").exists())
+
+    def test_deploy_reuses_tree_pass_and_honors_both_explicit_modes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            (folder / "scripts").mkdir()
+            (folder / "macOS").mkdir()
+            for name in ("deploy.sh", "test-passes.sh"):
+                shutil.copy2(ROOT / "scripts" / name, folder / "scripts" / name)
+            for name, marker in (("scripts/test.sh", "full-tests"), ("macOS/install.sh", "installs")):
+                path = folder / name
+                path.write_text(f"#!/bin/bash\nprintf 'run\\n' >> .git/{marker}\n")
+                path.chmod(0o755)
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=folder, text=True, stderr=subprocess.DEVNULL).strip()
+            git("init", "-qb", "main")
+            git("config", "user.name", "Test")
+            git("config", "user.email", "test@example.invalid")
+            git("add", ".")
+            git("commit", "-qm", "fixture")
+            env = dict(os.environ, DEPLOY_UPDATED="1", DEPLOY_FROM=git("rev-parse", "HEAD"))
+            def deploy(*args):
+                return subprocess.check_output(["bash", "scripts/deploy.sh", *args], cwd=folder, env=env, text=True)
+            self.assertIn("running full tests", deploy())
+            receipts = folder / ".git/test-passes"
+            receipts.write_text(f"{git('rev-parse', 'HEAD^{tree}')} {git('rev-parse', 'HEAD')} 2026-01-01T00:00:00Z\n")
+            self.assertIn("already passed", deploy())
+            self.assertIn("running full tests", deploy("--tests"))
+            self.assertIn("--skip-tests", deploy("--skip-tests"))
+            self.assertEqual((folder / ".git/full-tests").read_text().splitlines(), ["run", "run"])
+            self.assertEqual(len((folder / ".git/installs").read_text().splitlines()), 4)
+            for receipt in (folder / ".git/deploys").read_text().splitlines():
+                _, commit, state = receipt.split()
+                self.assertEqual(commit, git("rev-parse", "HEAD"))
+                self.assertEqual(state, "ok")
 
 
 if __name__ == "__main__":

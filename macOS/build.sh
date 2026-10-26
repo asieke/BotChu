@@ -7,8 +7,11 @@ out="$(cd "${1:-$dir/build}" && pwd)/BotChu.app"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-swift build -c release --package-path "$dir" --product BotChu 2>&1 | { grep -vE '^\[[0-9]+ ?/ ?[0-9]+\]' || true; }
-bin="$(swift build -c release --package-path "$dir" --show-bin-path)/BotChu"
+# Debug --build-tests also invalidates optimized Core in a shared Xcode build manifest.
+# Keep the app independent of both test configurations, including when locating its binary.
+app_scratch="$dir/.build/app"
+swift build -c release --package-path "$dir" --scratch-path "$app_scratch" --product BotChu 2>&1 | { grep -vE '^\[[0-9]+ ?/ ?[0-9]+\]' || true; }
+bin="$(swift build -c release --package-path "$dir" --scratch-path "$app_scratch" --show-bin-path)/BotChu"
 [ -x "$bin" ] || { echo "build: swift build did not produce $bin" >&2; exit 1; }
 
 rm -rf "$out"

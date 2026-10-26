@@ -34,7 +34,7 @@ test_run() {
   shift
   output="$BOTCHU_TEST_RESULTS/$label.log"
   xml="$BOTCHU_TEST_RESULTS/$label.xml"
-  python3 "$test_root/scripts/test-report.py" --command "$xml" swift test --package-path "$test_root/macOS" --skip-build "$@"
+  python3 "$test_root/scripts/test-report.py" --command "$xml" swift test --package-path "$test_root/macOS" "$@"
   swift test --package-path "$test_root/macOS" --xunit-output "$xml" "$@" 2>&1 |
     tee "$output" | { grep -vE '^\[[0-9]+ ?/ ?[0-9]+\]| started\.$' || true; }
   result=${PIPESTATUS[0]}
@@ -46,4 +46,10 @@ test_run() {
   fi
   if [ "$result" != 0 ]; then python3 "$test_root/scripts/test-report.py" --failed "$xml"; fi
   return "$result"
+}
+
+# A pre-upgrade /tmp gate does not export the marker yet. Recognize its real ancestor too,
+# so the formerly documented outer-gate command cannot deadlock on the first upgraded run.
+test_inside_gate() {
+  [ -n "${BOTCHU_GATE_RUN_ID:-}" ] || python3 "$test_root/scripts/coord/busy.py" --in-gate
 }
