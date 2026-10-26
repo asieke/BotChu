@@ -47,10 +47,17 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     The list shows active projects (`status: active` in `PROJECT.md`) unless its status filter says
     otherwise: every status, or only paused, maintenance, deprecated or unclassified ones (no
     `PROJECT.md`); the choice is remembered. A repository whose `PROJECT.md` isn't read yet appears
-    once it is known to be active.
+    once it is known to be active. The type filter (all projects, code or non-code) is remembered too;
+    a repository without a readable `PROJECT.md` has no type, so it shows only under all projects.
     **Pull Requests** and **Issues** list the open ones across the repositories (up to 30 most
     recently updated per repository, saying so when there are more), with checks, review state,
-    labels, author and any bot's task on them, filtered by repository or search. Selecting one opens
+    labels, author and any bot's task on them, filtered by repository or search. They cover the same
+    repositories as the list, by the same status and type filters, which all three views show (#186):
+    the repository menu, the counts beside their names (GitHub's totals) and the note about what
+    wasn't read leave the others out, and a chosen repository narrows that further. A repository
+    chosen before the filters left it out counts as all repositories until they cover it again. When
+    the filters leave out everything open, the view says so and offers **Show All Projects**. The
+    search matches an item's title, number, labels, author or branch. Selecting one opens
     it in the repository's sidebar, and double-click on GitHub; its menu reviews a pull request
     (**Review with**, **Review and Comment with**), continues it (unless it comes from a fork) or
     starts a task on an issue with a bot, opening New Task with it chosen, or opens the task already

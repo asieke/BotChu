@@ -308,3 +308,94 @@ public enum ProjectStatusFilter: String, CaseIterable, Sendable {
         }
     }
 }
+
+/// Which projects the Projects list shows by the type in their PROJECT.md: code (a library or an
+/// app), non-code (docs), or all of them.
+public enum ProjectKindFilter: String, CaseIterable, Sendable {
+    case all, code, docs
+
+    public var label: String {
+        switch self {
+        case .all: "All projects"
+        case .code: "Code"
+        case .docs: "Non-code"
+        }
+    }
+
+    /// Whether the row shows. One without metadata (none, not read yet, or unreadable) has no type,
+    /// so it shows only under All projects.
+    public func includes(_ row: ProjectRow) -> Bool {
+        guard self != .all, let kind = row.metadata?.kind else { return self == .all }
+        return (kind == .docs) == (self == .docs)
+    }
+}
+
+/// The repositories all three of Projects' views cover: those of the chosen status and type. A search
+/// or a chosen repository narrows a view further.
+public struct ProjectScope: Equatable, Sendable {
+    public var status: ProjectStatusFilter
+    public var kind: ProjectKindFilter
+    public init(status: ProjectStatusFilter, kind: ProjectKindFilter) { self.status = status; self.kind = kind }
+
+    public static let everything = ProjectScope(status: .all, kind: .all)
+
+    public func includes(_ row: ProjectRow) -> Bool { status.includes(row) && kind.includes(row) }
+    public var isNarrowed: Bool { self != .everything }
+
+    /// The projects it covers in words, as in "No open issues in active code projects".
+    public var projects: String {
+        let words = [status == .all ? nil : status.label.lowercased(),
+                     kind == .all ? nil : kind == .code ? "code" : "non-code"].compactMap { $0 }
+        return (words + ["projects"]).joined(separator: " ")
+    }
+
+    /// GitHub's count of open pull requests or issues across the repositories it covers.
+    public func openCount(in rows: [ProjectRow], pulls: Bool) -> Int {
+        rows.filter(includes).reduce(0) { $0 + (pulls ? $1.openPullRequests : $1.openIssues) }
+    }
+}
+
+/// The open pull requests or issues one of Projects' tables shows: those read for the repositories in
+/// scope, of the chosen repository when it is in scope (a choice the scope no longer covers counts as
+/// none, so it can't show work the scope leaves out), matching the search.
+public struct ProjectWork: Equatable, Sendable {
+    public var pulls: Bool
+    /// The chosen repository, when the scope covers it.
+    public var repo: String?
+    public var items: [GitHubLookup.OpenItem]
+    /// The repositories in scope with any of this kind read, and the chosen one, by name.
+    public var repos: [String]
+    /// The repositories shown that have more open than were read.
+    public var truncated: [GitHubLookup.Repo]
+    /// How many read are left out by the scope alone, before the repository and search.
+    public var outOfScope: Int
+
+    public init(rows: [ProjectRow], items: [GitHubLookup.OpenItem], scope: ProjectScope, pulls: Bool, repo chosen: String?, query: String) {
+        let eligible = rows.filter(scope.includes)
+        let ids = Set(eligible.map { $0.id.lowercased() })
+        let kind = items.filter { $0.isPullRequest == pulls }
+        let inScope = kind.filter { ids.contains($0.repo.lowercased()) }
+        let repo = chosen.flatMap { chosen in eligible.first { $0.id.caseInsensitiveCompare(chosen) == .orderedSame }?.id }
+        self.pulls = pulls
+        self.repo = repo
+        self.outOfScope = kind.count - inScope.count
+        self.items = inScope.filter { item in (repo.map { item.repo.caseInsensitiveCompare($0) == .orderedSame } ?? true) && item.matches(query) }
+        var seen = Set<String>()
+        let names = (inScope.map(\.repo) + [repo].compactMap { $0 }).filter { seen.insert($0.lowercased()).inserted }
+        self.repos = names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        let read = Dictionary(grouping: inScope, by: { $0.repo.lowercased() }).mapValues(\.count)
+        self.truncated = eligible.map(\.repo).filter { row in
+            (repo == nil || row.id == repo) && (pulls ? row.openPullRequests : row.openIssues) > (read[row.id.lowercased()] ?? 0)
+        }
+    }
+}
+
+extension GitHubLookup.OpenItem {
+    /// Whether every word of the search is in its title, number, repository, author, branch or labels.
+    public func matches(_ query: String) -> Bool {
+        query.split(whereSeparator: \.isWhitespace).allSatisfy { word in
+            [title, repo, "#\(number)", author, branch ?? ""].contains { $0.localizedCaseInsensitiveContains(word) }
+                || labels.contains { $0.name.localizedCaseInsensitiveContains(word) }
+        }
+    }
+}
