@@ -138,15 +138,20 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     highest share used. The heading says when the newest reading was made ("Updated 3m ago"), with
     **Refresh**, which checks every profile again within its own limit (Muse at most every five
     minutes); a row adds its age only when its reading is 10 minutes older than that. While all is
-    well a row's second line is its family; otherwise, in the warning colour, **Stale · 2h ago**
+    well a row's second line is its family, and its plan when the CLI itself reports one (Codex's
+    plan type: "Codex · Pro"; never worked out from allowance, prices or names, so Claude,
+    Antigravity, Muse and OpenRouter rows show none); otherwise, in the warning colour, **Stale · 2h ago**
     (older than the background's interval, or a later check failed; its bars and shares are
     dimmed), **Usage unavailable** or **Command not found**, a button that shows why, with **Try
     Again** (labelled with the time the profile's limit allows it) and, for a missing command,
     **Change Command…**; a profile not read yet says Checking…, over empty tracks. Selecting a
-    profile shows it on the right: its allowance as **Model & Usage** shows it, the agents set to
+    profile shows it on the right: its family and plan, its allowance as **Model & Usage** shows it, the agents set to
     it, each opening its Home, and its command, with Copy and Change… (Settings ▸ Accounts). A row's
-    menu has Refresh, Copy Command and Change Command…, and, for a profile added here, **Remove
-    Profile…**, which asks first; agents set to a removed profile keep its CLI family and command.
+    menu has Refresh, Copy Command and Change Command…; **Assign to Agent**, the local agents with
+    those set to the profile checked, which moves the chosen agent's Home and the Tasks it starts
+    afterwards to the profile (Tasks under way keep theirs; an agent whose Home is running can't be
+    chosen until it is idle; a profile of another family clears its model and effort); and, for a
+    profile added here, **Remove Profile…**, which asks first; agents set to a removed profile keep its CLI family and command.
     Readings are saved between launches (`usage.json` beside the bot index; usage fields only; one
     saved before windows had model groups takes them from its windows' titles) and kept current in
     the background, every 15 minutes for a CLI profile and hourly for Muse, and every 5 minutes

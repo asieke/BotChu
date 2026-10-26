@@ -239,6 +239,59 @@ import Testing
         #expect(ProviderRow.newest([UsageState?]()) == nil)
     }
 
+    /// The plan comes only from what the CLI itself reports (Codex's `planType`); none, "unknown"
+    /// or anything else stays unknown, and nothing is worked out from allowance or wording.
+    @Test func plansAreOnlyWhatTheCLIReports() throws {
+        #expect(try UsageParser.codex(UsageSamples.codexPro, now: now).plan == "pro")
+        #expect(try UsageParser.codex(UsageSamples.codexPro, now: now).planLabel == "Pro")
+        #expect(try UsageParser.codex(UsageSamples.codex, now: now).planLabel == "Pro Lite")
+        #expect(try UsageParser.codex(UsageSamples.codexCredits, now: now).planLabel == "Pro Lite")
+        func plan(_ value: String) throws -> String? {
+            try UsageParser.codex(Data(#"{"rateLimits":{"primary":{"usedPercent":1,"windowDurationMins":300},"planType":\#(value)}}"#.utf8)).plan
+        }
+        #expect(try plan(#""unknown""#) == nil)
+        #expect(try plan(#""""#) == nil)
+        #expect(try plan("null") == nil)
+        #expect(try plan("3") == nil)
+        #expect(try plan(#""pro <script>""#) == nil)
+        #expect(try plan(#""Plus""#) == "plus")
+        // Only in the per-limit map.
+        let mapped = Data(#"{"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":1,"windowDurationMins":300},"planType":"team"}}}"#.utf8)
+        #expect(try UsageParser.codex(mapped).planLabel == "Team")
+        // Codex's own names, and a plan it adds later as it names it.
+        #expect(ProviderUsage.planLabel("promax") == "Pro Max")
+        #expect(ProviderUsage.planLabel("edu_plus") == "Edu Plus")
+        #expect(ProviderUsage.planLabel("UNKNOWN") == nil)
+        // Claude says only that a subscription is in use, and the other CLIs nothing: no plan.
+        #expect(try UsageParser.claude(UsageSamples.claude, now: now).plan == nil)
+        #expect(try UsageParser.antigravity(UsageSamples.antigravity, now: now).plan == nil)
+        #expect(try UsageParser.muse(UsageSamples.muse, now: now.addingTimeInterval(3_600)).plan == nil)
+
+        // Line 2 names it beside the family while all is well; a stale row still says it is stale.
+        let request = UsageRequest(account: Accounts.account(id: "codex-dev"), command: "codex-dev")
+        var reading = try UsageParser.codex(UsageSamples.codexPro, now: now)
+        let current = ProviderRow(request: request, state: UsageState(reading: reading, checkedAt: now), checking: false, found: true, newest: now, now: now)
+        #expect(current.status == .current && current.plan == "Pro" && current.family == "Codex · Pro")
+        reading.readAt = now.addingTimeInterval(-request.backgroundInterval)
+        let stale = ProviderRow(request: request, state: UsageState(reading: reading, checkedAt: reading.readAt), checking: false, found: true, newest: now, now: now)
+        #expect(stale.status == .stale(reading.readAt))
+        reading.plan = nil
+        let none = ProviderRow(request: request, state: UsageState(reading: reading, checkedAt: now), checking: false, found: true, newest: now, now: now)
+        #expect(none.plan == nil && none.family == "Codex")
+        #expect(ProviderRow(request: request, state: nil, checking: true, found: true, newest: nil, now: now).family == "Codex")
+
+        // A reading saved before plans were read still opens, without one; one saved with a plan keeps it.
+        let saved = try JSONEncoder().encode(UsageState(reading: ProviderUsage(windows: [UsageWindow(id: "w", title: "Weekly", usedPercent: 4)], readAt: now)))
+        var old = try #require(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        var oldReading = try #require(old["reading"] as? [String: Any])
+        oldReading["plan"] = nil
+        old["reading"] = oldReading
+        let decoded = try JSONDecoder().decode(UsageState.self, from: JSONSerialization.data(withJSONObject: old))
+        #expect(decoded.reading?.windows.first?.usedPercent == 4 && decoded.reading?.plan == nil)
+        let pro = try UsageParser.codex(UsageSamples.codexPro, now: now)
+        #expect(try JSONDecoder().decode(ProviderUsage.self, from: JSONEncoder().encode(pro)) == pro)
+    }
+
     @Test func creditsAndFreeResets() throws {
         let codex = try UsageParser.codex(UsageSamples.codexCredits, now: now)
         #expect(codex.windows.map(\.title) == ["Weekly"])
