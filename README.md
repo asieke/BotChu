@@ -389,11 +389,16 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     model and effort in a fresh CLI session; its Home conversation is separate. By default it works
     in the caller's workspace, on the same machine; `--workspace bot_home` uses the called bot's
     folder on this Mac. Shared-workspace delegates should own separate files or review without editing.
-    The **Sub-agents** inspector shows expandable nested runs, live tools/replies, duration, handoffs,
-    Copy and Stop. Runs under way come first; finished ones fold into one **Finished** row, newest
-    first, which counts any failures. A run that finishes while the tab shows it stays in view until
-    the tab is shown again, as does one opened from the chat. Home also groups delegations
-    belonging to its tasks. These runs never add tabs. Stop cascades through
+    The **Sub-agents** inspector lists each run as a compact row (its title, its bot, and its state in
+    a word and a time) with the runs it delegated to beneath it, grouped by the turn that started
+    them (older records by day). The turn under way comes first; a tree that ends completed or stopped
+    with no failure folds into **Finished** at once, newest turn first, while a tree with a failure
+    anywhere stays in view, open down to it, until Clear Run removes it. A row, or the chat's
+    **Open**, shows that run's details in place of the list: its handoff, error or stop reason first,
+    then the runs it delegated to, its transcript, brief and run facts, with Copy and Stop. Back
+    (Escape, ⌘[) returns to the list where it was, opening Finished if the run moved there meanwhile.
+    A row's context menu opens, copies, stops or clears it. Home also lists its tasks with runs, each
+    opening its own list. These runs never add tabs. Stop cascades through
     descendants; callers must wait before finishing their turn. A run whose CLI said its turn
     ended but doesn't exit is ended as a turn's is (above), and its handoff goes back.
     Three nesting levels, twelve concurrent children and sixty-four delegations per root turn bound
@@ -1485,6 +1490,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `BOTCHU_DEFAULT_MODEL` supplies an isolated OpenRouter default. `BOTCHU_OPEN=model` or `effort`
   opens the composer's picker, and `inspector-model` or `inspector-effort` opens the sidebar's.
   `BOTCHU_INSPECTOR=activity`, `subagents`, `model`, `session` or `memory` selects a status sidebar tab;
+  with `BOTCHU_DEMO=activity`, `BOTCHU_SUBAGENT=<title>` opens the details of the demo's sub-agent
+  whose title starts with it;
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
   `BOTCHU_WINDOW=compact` checks the minimum window width, where a bot's tasks show as the rail,
   `wide` (1,700 points) the column, and `BOTCHU_WINDOW=1908x960` a window of that size, as a
