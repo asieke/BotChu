@@ -38,7 +38,8 @@ import BotChuCore
 ///   after launch, a character at a time as the keyboard does, so `@` and `#` completion opens;
 ///   `{down}`, `{up}`, `{tab}`, `{return}` and `{escape}` press those keys.
 /// - `BOTCHU_DEMO=activity`: with `BOTCHU_DATA_DIR`, make the shown conversation a long agent run
-///   in memory (`DemoActivity`), to review the chat's activity cards without a real turn.
+///   in memory (`DemoActivity`), to review the chat's activity cards without a real turn;
+///   `BOTCHU_SUBAGENT=<title>` opens the details of its sub-agent whose title starts with it.
 /// - `BOTCHU_DEMO=tasks`: with `BOTCHU_DATA_DIR`, give the selected bot six more open tasks in memory,
 ///   one in each state (`DemoTabs`), to review its tabs beside the chat without real turns.
 /// - `BOTCHU_DENSITY`: with `BOTCHU_DATA_DIR`, the chat density (`compact`, `detailed` or `raw`).

@@ -4,7 +4,8 @@ import BotChuCore
 /// `BOTCHU_DEMO=activity` on throwaway data (`macOS/ui-review.sh`): the shown conversation becomes
 /// a long agent run, in memory only, for checking the chat's activity cards. It explores the
 /// BotChu sources (with failed reads and a file read twice), runs a build, explores logs, edits a
-/// file, hands work to three sub-agents (one running, one done, one failed), and is exploring
+/// file, hands work to three sub-agents (one running, one done, one failed; the Sub-agents tab also
+/// gets nested and earlier runs in every recorded state), and is exploring
 /// live when the screen is taken. Nothing is saved and no CLI runs.
 @MainActor
 enum DemoActivity {
@@ -83,6 +84,7 @@ enum DemoActivity {
             ("Docs Owl", "🦉", "Draft the README's Chat section", .failed),
         ]
         var runs: [SubagentRun] = []
+        let turn = UUID()
         for (name, emoji, title, phase) in helpers {
             let id = UUID()
             let spawn = tool("Bash", "botchu-subagent spawn --agent '\(name)' --title '\(title)' --brief 'Look into it and report back.'",
@@ -90,8 +92,8 @@ enum DemoActivity {
             messages.append(spawn)
             let helper = model.bots.first { $0.name == name } ?? Bot(name: name, emoji: emoji, workspace: bot.workspace)
             var run = SubagentRun(id: id, rootBotID: target.botID, rootTaskID: target.taskID, depth: 1, targetBot: helper, title: title,
-                                  brief: "Look into it and report back.", workingDirectory: root, phase: phase,
-                                  createdAt: spawn.date.addingTimeInterval(0.4))
+                                  brief: "Look into it and report back.", workingDirectory: root,
+                                  callerInvocationID: turn, phase: phase, createdAt: spawn.date.addingTimeInterval(0.4))
             let started = run.createdAt.addingTimeInterval(1)
             run.startedAt = started
             if phase != .running { run.finishedAt = started.addingTimeInterval(phase == .failed ? 41 : 272) }
@@ -106,7 +108,12 @@ enum DemoActivity {
             model.delegation.threads[id] = childThread
             if phase == .running { model.delegation.states[id] = RunState(hasOutput: true, activity: .researching) }
         }
+        runs += nestedAndEarlierRuns(in: model, target: target, under: runs[0], turn: turn, root: root, now: now)
         model.delegation.records[target] = runs
+        // `BOTCHU_SUBAGENT=<title>`: open that run's details, as the chat's Open does.
+        if let title = ProcessInfo.processInfo.environment["BOTCHU_SUBAGENT"], let run = runs.first(where: { $0.title.hasPrefix(title) }) {
+            SubagentFocus.shared.focus(run.id)
+        }
         messages.append(tool("Bash", "botchu-subagent wait " + runs.map { $0.id.uuidString.lowercased() }.joined(separator: " "),
                              state: .running, seconds: 1))
         messages.append(ChatMessage(role: .assistant, text: "While they work, I'll look up the DeviceActivity interface in the Xcode SDK.", date: tick(2)))
@@ -121,6 +128,50 @@ enum DemoActivity {
         for index in messages.indices.suffix(4) { messages[index].date = liveStart.addingTimeInterval(Double(index - messages.count + 4) * 2) }
         model.conversation(target).replace(messages)
         model.runStates[target] = RunState(startedAt: now.addingTimeInterval(-620), hasOutput: true, activity: .researching)
+    }
+}
+
+extension DemoActivity {
+    /// The rest of the Sub-agents tab's states (#194): beneath the running run, one done whose own
+    /// helper failed; a run still preparing; and an earlier turn's runs, done, without a handoff and
+    /// stopped by a restart, beside one recorded before runs kept their turn.
+    fileprivate static func nestedAndEarlierRuns(in model: AppModel, target: ChatTarget, under parent: SubagentRun, turn: UUID,
+                                                 root: String, now: Date) -> [SubagentRun] {
+        let bot = model.bot(target.botID)
+        func helper(_ name: String, _ emoji: String) -> Bot {
+            model.bots.first { $0.name == name } ?? Bot(name: name, emoji: emoji, workspace: bot?.workspace ?? root)
+        }
+        func run(_ title: String, by helper: Bot, _ phase: SubagentPhase, parent: SubagentRun? = nil, turn: UUID?, ago: Double,
+                 took: Double = 0) -> SubagentRun {
+            var run = SubagentRun(rootBotID: target.botID, rootTaskID: target.taskID, parentSubagentID: parent?.id,
+                                  depth: (parent?.depth ?? 0) + 1, targetBot: helper, title: title,
+                                  brief: "\(title). Report what you find, with the evidence.", workingDirectory: root,
+                                  callerInvocationID: turn, phase: phase, createdAt: now.addingTimeInterval(-ago))
+            if phase != .preparing { run.startedAt = run.createdAt.addingTimeInterval(1) }
+            if !phase.isActive { run.finishedAt = run.createdAt.addingTimeInterval(took) }
+            return run
+        }
+        let duck = helper("QA Duck", "🦆"), owl = helper("Docs Owl", "🦉"), racoon = helper("IT Racoon", "🦝")
+        var profile = run("Profile chat scroll with 17 sub-agent cards", by: duck, .completed, parent: parent, turn: parent.callerInvocationID,
+                          ago: 400, took: 390)
+        profile.handoffOutput = "Scrolling holds 60 fps; the sampler below failed, so stacks come from Instruments directly."
+        var sampler = run("Sample main-thread stacks", by: owl, .failed, parent: profile, turn: parent.callerInvocationID, ago: 380, took: 72)
+        sampler.errorMessage = "Codex Dev ended without a successful handoff (exit 1). stream disconnected before completion."
+        model.delegation.threads[sampler.id] = [
+            ChatMessage(role: .user, text: sampler.brief),
+            ChatMessage(role: .assistant, text: "Started a time profile of the chat; collecting the trace now."),
+        ]
+        let preparing = run("Research structured sub-agent phases", by: owl, .preparing, turn: turn, ago: 12)
+        model.delegation.states[preparing.id] = RunState(preparing: true)
+        let yesterday = UUID()
+        var docs = run("Compare Claude Code and Codex sub-agent APIs", by: owl, .completed, turn: yesterday, ago: 86_400, took: 435)
+        docs.handoffOutput = "Claude Code's Task returns at once in the background; Codex has no sub-agent tool."
+        let silent = run("Task tab overflow menu", by: duck, .completed, turn: yesterday, ago: 86_300, took: 122)
+        var restarted = run("Pet posture sheet", by: racoon, .stopped, turn: yesterday, ago: 86_200, took: 291)
+        restarted.errorMessage = "BotChu restarted before this sub-agent finished."
+        var legacy = run("Research OpenRouter video models", by: owl, .completed, turn: nil, ago: 3 * 86_400, took: 760)
+        legacy.handoffOutput = "Two models loop cleanly at 5 s; both need a still to start from."
+        return [profile, sampler, preparing, docs, silent, restarted, legacy]
     }
 }
 
