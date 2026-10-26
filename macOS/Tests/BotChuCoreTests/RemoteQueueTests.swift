@@ -61,7 +61,7 @@ struct RemoteQueueTests {
         #expect(await endpoint.handle(.init(method: "GET", path: "/v1/queue/next", authorization: auth)).status == 204)
         #expect(await queue.snapshot().online())
         #expect(await !queue.snapshot().online(at: Date().addingTimeInterval(121)))
-        await endpoint.replaceToken("replacement-fixture")
+        endpoint.replaceToken("replacement-fixture")
         #expect(await endpoint.handle(.init(method: "GET", path: "/v1/health", authorization: auth)).status == 401)
         #expect(await endpoint.handle(.init(method: "GET", path: "/v1/health", authorization: "Bearer replacement-fixture")).status == 200)
     }
@@ -94,6 +94,53 @@ struct RemoteQueueTests {
                     "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n", "POST / HTTP/1.1\r\nContent-Length: 999999999\r\n\r\n"] {
             guard case .invalid = RemoteQueueHTTP.decode(Data(raw.utf8)) else { Issue.record("Ambiguous request accepted"); continue }
         }
+    }
+
+    @Test func headersCanAuthenticateBeforeAnyDeclaredBodyArrives() throws {
+        let raw = "POST /v1/queue/reply HTTP/1.1\r\nAuthorization: Bearer fixture\r\nContent-Length: \(RemoteQueueHTTP.maximumBody)\r\n\r\n"
+        guard case .header(let header) = RemoteQueueHTTP.decodeHeader(Data(raw.utf8)) else {
+            Issue.record("Complete headers waited for the body"); return
+        }
+        #expect(header.authorization == "Bearer fixture")
+        #expect(header.contentLength == RemoteQueueHTTP.maximumBody)
+        #expect(header.byteCount == raw.utf8.count)
+        for raw in ["GET / HTTP/1.1\r\nBad Header: x\r\n\r\n", "GET / HTTP/1.1\r\nX: a\nb\r\n\r\n",
+                    "POST / HTTP/1.1\r\nContent-Length: +5\r\n\r\n", "POST / HTTP/1.1\r\nContent-Length: 99999999999999999999999\r\n\r\n",
+                    String(repeating: "a", count: RemoteQueueHTTP.maximumHeader),
+                    "GET / HTTP/1.1\r\nX: " + String(repeating: "a", count: RemoteQueueHTTP.maximumHeader) + "\r\n\r\n"] {
+            guard case .invalid = RemoteQueueHTTP.decodeHeader(Data(raw.utf8)) else { Issue.record("Unsafe headers accepted"); continue }
+        }
+    }
+
+    @Test func admissionBudgetBoundsBurstsRecoversAndSuppliesRetryGuidance() {
+        var rate = RemoteQueueRateLimiter(burst: 3, perSecond: 2, now: 10)
+        for _ in 0..<3 { #expect(rate.admit(at: 10) == nil) }
+        #expect(rate.admit(at: 10) == 1)
+        #expect(rate.admit(at: 9) == 1)
+        #expect(rate.admit(at: 10.49) == 1)
+        #expect(rate.admit(at: 10.5) == nil)
+        #expect(rate.admit(at: 10.5) == 1)
+        for _ in 0..<3 { #expect(rate.admit(at: 100) == nil) }
+        #expect(rate.admit(at: 100) == 1)
+        let response = String(decoding: RemoteQueueHTTP.encode(.init(429, retryAfter: 1)), as: UTF8.self)
+        #expect(response.contains("429 Too Many Requests\r\n"))
+        #expect(response.contains("Retry-After: 1\r\n"))
+        #expect(response.contains("Cache-Control: no-store\r\n"))
+    }
+
+    @Test func revocationInvalidatesAnAlreadyAuthenticatedUpload() async throws {
+        let (root, _, queue) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let endpoint = RemoteQueueEndpoint(queue: queue, token: "old-fixture")
+        let message = try await queue.enqueue("waiting")
+        #expect(endpoint.isAuthorized("Bearer old-fixture"))
+        endpoint.replaceToken("new-fixture")
+        let body = try JSONSerialization.data(withJSONObject: ["id": message.id.uuidString, "text": "stale upload"])
+        #expect(await endpoint.handle(.init(method: "POST", path: "/v1/queue/reply", authorization: "Bearer old-fixture", body: body)).status == 401)
+        #expect(await queue.status().pending == 1)
+        endpoint.replaceToken("")
+        #expect(!endpoint.isAuthorized("Bearer new-fixture"))
+        #expect(!endpoint.isAuthorized("Bearer "))
     }
 
     @Test func failedReplySaveIsNotAcknowledgedAndCorruptJournalIsPreserved() async throws {

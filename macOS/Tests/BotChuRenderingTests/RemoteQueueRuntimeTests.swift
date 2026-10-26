@@ -73,7 +73,7 @@ extension RenderingTests {
         defer { defaults.removePersistentDomain(forName: domain); try? FileManager.default.removeItem(at: root) }
         let store = Store(root: root)
         let settings = AppSettings(defaults: defaults)
-        settings.remoteQueuePort = Int.random(in: 35_000..<60_000)
+        settings.remoteQueuePort = Int(try remoteTestAvailablePort())
         let usage = UsageCache { _, _ in throw UsageFailure("No usage in tests") }
         let app = AppModel(store: store, settings: settings, usage: usage, openRouterKey: { nil })
         defer { app.stopAll() }

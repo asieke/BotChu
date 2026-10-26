@@ -89,12 +89,18 @@ import BotChuCore
             }
             guard !token.isEmpty else { summary = "Token unavailable."; stopListening(); return }
             nextBinding = "\(botID):\(address):\(port)"
-            nextEndpoint = RemoteQueueEndpoint(queue: queue, token: token)
+            if let endpoint, endpoint.queue === queue {
+                endpoint.replaceToken(token)
+                nextEndpoint = endpoint
+            } else {
+                nextEndpoint = RemoteQueueEndpoint(queue: queue, token: token)
+            }
         } else {
             summary = problem ?? "Create a remote queue bot first."
         }
+        if endpoint !== nextEndpoint { endpoint?.replaceToken("") }
         endpoint = nextEndpoint
-        // A token change swaps the authenticated endpoint synchronously; it doesn't interrupt the
+        // A token change replaces the credential synchronously; it doesn't interrupt the
         // listener. An observed settings change repeated by a caller is also a no-op here.
         if nextBinding == binding, server != nil || starting { return }
         generation += 1
@@ -107,27 +113,29 @@ import BotChuCore
             await oldServer?.shutdown()
             guard let self, !self.stopped, self.generation == expected else { return }
             self.starting = false
-            guard nextBinding != nil, let port, self.model?.settings.remoteQueueEnabled == true else { return }
-            let server = RemoteQueueServer { [weak self] request in
-                guard let self, self.generation == expected, self.model?.settings.remoteQueueEnabled == true,
-                      let endpoint = self.endpoint else { return .init(401) }
-                let response = await endpoint.handle(request)
-                await self.reconcile()
-                return response
-            }
-            server.onReady = { [weak self] port in
+            guard nextBinding != nil, let port, let endpoint = self.endpoint, self.model?.settings.remoteQueueEnabled == true else { return }
+            let server = RemoteQueueServer(endpoint: endpoint, onActivity: { [weak self] activity in
+                guard let self, !self.stopped, self.generation == expected, self.model?.settings.remoteQueueEnabled == true else { return }
+                switch activity {
+                case .reply: await self.reconcile()
+                case .poll:
+                    let status = await endpoint.queue.status()
+                    guard self.generation == expected else { return }
+                    self.pending = status.pending; self.lastPoll = status.lastPoll; self.now = Date()
+                }
+            }, onReady: { [weak self] port in
                 guard let self, self.generation == expected else { return }
                 self.servingURL = "http://\(address.contains(":") ? "[\(address)]" : address):\(port)"
                 self.summary = "Listening."
-            }
-            server.onFailure = { [weak self] error in
+            }, onFailure: { [weak self] error in
                 guard let self, self.generation == expected else { return }
                 self.servingURL = nil; self.server = nil; self.binding = nil
                 // NWError contains only a transport error code, never headers or message bodies.
                 self.summary = "Couldn't listen (\(error)). Check the address and whether the port is in use."
-            }
+            })
             do {
-                try server.start(address: address, port: port)
+                try await server.start(address: address, port: port)
+                guard self.generation == expected, !self.stopped else { await server.shutdown(); return }
                 self.server = server
             } catch { self.binding = nil; self.summary = "Enter a numeric local IP address and an available port." }
         }
@@ -136,12 +144,14 @@ import BotChuCore
     private func stopListening() {
         generation += 1
         let oldServer = server, previous = lifecycle
+        endpoint?.replaceToken("")
         server = nil; servingURL = nil; endpoint = nil; binding = nil; starting = false
         lifecycle = Task { await previous?.value; await oldServer?.shutdown() }
     }
 
     func stop() {
         stopped = true; generation += 1
+        endpoint?.replaceToken("")
         server?.stop(); server = nil; servingURL = nil; endpoint = nil
         clock?.cancel(); clock = nil
     }
