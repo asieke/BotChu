@@ -167,6 +167,49 @@ extension RenderingTests {
         settings.remoteQueueEnabled = false
     }
 
+    @Test func remoteQueueSaysWhenTailscaleIsOffUntilAPollArrives() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-remote-tailscale-\(UUID())")
+        let domain = "local.BotChu.RemoteTailscaleTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: domain)!
+        defer { defaults.removePersistentDomain(forName: domain); try? FileManager.default.removeItem(at: root) }
+        let settings = AppSettings(defaults: defaults)
+        settings.remoteQueuePort = Int(try remoteTestAvailablePort())
+        let app = AppModel(store: Store(root: root), settings: settings, usage: UsageCache { _, _ in throw UsageFailure("fixture") }, openRouterKey: { nil })
+        defer { app.stopAll() }
+        let token = "fixture-token-never-used-outside-this-test"
+        app.remoteQueue.readToken = { token }
+        app.remoteQueue.saveToken = { _ in true }
+        var disconnected = true
+        var checked: [String] = []
+        app.remoteQueue.tailscaleDisconnected = { checked.append($0); return disconnected }
+        var bot = Bot(name: "Danny fixture", workspace: "")
+        bot.kind = .remoteQueue
+        app.create(bot)
+        // Not serving: nothing to reach, so Tailscale isn't the reason.
+        app.remoteQueue.checkTailscale()
+        #expect(app.remoteQueue.presence == "Offline")
+        settings.remoteQueueEnabled = true
+        app.remoteQueue.restart()
+        try await remoteEventually { app.remoteQueue.servingURL != nil }
+        let base = try #require(app.remoteQueue.servingURL)
+        // Checked as soon as it listens, on the listen address.
+        #expect(app.remoteQueue.presence == "Tailscale off")
+        #expect(app.remoteQueue.unreachable)
+        #expect(checked.last == "127.0.0.1")
+        disconnected = false
+        app.remoteQueue.checkTailscale()
+        #expect(app.remoteQueue.presence == "Offline")
+        disconnected = true
+        app.remoteQueue.checkTailscale()
+        #expect(app.remoteQueue.presence == "Tailscale off")
+        // A poll that arrives anyway (another tunnel) wins.
+        #expect(try await remoteCurl(base + "/v1/queue/next", token: token).status == 204)
+        try await remoteEventually { app.remoteQueue.online }
+        #expect(app.remoteQueue.presence == "Online")
+        #expect(!app.remoteQueue.unreachable)
+        settings.remoteQueueEnabled = false
+    }
+
     @Test func remoteQueueCarriesDocumentsBothWaysOverHTTP() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-remote-files-\(UUID())")
         let domain = "local.BotChu.RemoteFileTests.\(UUID())"

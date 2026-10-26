@@ -940,7 +940,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     retains replies without truncation, and deduplicates retry acknowledgements. This bot has no
     local workspace, CLI, account/model controls, tasks, jobs or sub-agents. Settings ▸ **Remote queue**
     controls its address/port, generated Keychain token and connection status; the sidebar shows
-    whether a poll arrived in the last two minutes and how many messages wait. See
+    whether a poll arrived in the last two minutes and how many messages wait, or **Tailscale off**
+    when the queue is served through Tailscale and Tailscale is disconnected on this Mac (BotChu
+    never reconnects it). See
     [Remote queue setup and protocol](docs/remote-queue.md).
   - **Telegram:** an opt-in gateway, in Settings ▸ **Telegram**, lets you message bots from
     Telegram through a Telegram bot of your own (made with BotFather) while BotChu runs on this

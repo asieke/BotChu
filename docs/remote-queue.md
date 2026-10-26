@@ -67,7 +67,11 @@ limits below. Turn off the listener or Funnel to stop access. Local queued text 
 remain in BotChu's ordinary conversation files; only the token is in Keychain.
 
 The Mac must be awake and BotChu open. A successful queue poll in the last two minutes means
-**Online**. Home remains working while messages wait, including while the remote runtime is
+**Online**. Without one, it says **Tailscale off** instead of **Offline** when the listener is on
+loopback or a Tailscale address and this Mac's tunnel has no Tailscale address, as after Quit
+Tailscale: BotChu still listens, but Funnel can't reach it. BotChu reads this from its network
+interfaces and never runs `tailscale`, which would start the VPN session; reconnecting stays your
+choice (the Tailscale app, or `tailscale up`, which keeps the Funnel route). Home remains working while messages wait, including while the remote runtime is
 offline; turning the listener off keeps the queue. A full queue shows a notice and returns the
 unaccepted message to the composer.
 
