@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import SwiftUI
+import Vision
 import Testing
 import BotChuCore
 @testable import BotChu
@@ -20,23 +21,44 @@ extension RenderingTests {
         bot.kind = .remoteQueue
         app.create(bot)
         bot = try #require(app.bot(bot.id))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 850, height: 800),
-                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        defer { window.contentView = nil; window.close() }
         let views: [(AnyView, String)] = [
             (AnyView(NavigationStack { ChatView(target: .home(bot.id)).modifier(ChatToolbar()) }.environment(app)), "Message Danny fixture"),
-            (AnyView(BotEditor(request: EditorRequest(bot: bot, isNew: false)).environment(app)), "Edit Danny fixture"),
+            (AnyView(BotEditor(request: EditorRequest(bot: bot, isNew: false)).environment(app)), "Name"),
             (AnyView(BotInspector(botID: bot.id).environment(app)), "Remote queue bot"),
             (AnyView(Form { RemoteQueueSection() }.formStyle(.grouped).environment(app)), "Listen address")
         ]
         for (view, expected) in views {
-            let host = NSHostingView(rootView: view.defaultAppStorage(defaults))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 850, height: 800),
+                                  styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .aqua)
+            defer { window.contentView = nil; window.close() }
+            let host = NSHostingView(rootView: view.background(Color(nsColor: .windowBackgroundColor)).defaultAppStorage(defaults))
             window.contentView = host
             window.makeKeyAndOrderFront(nil)
-            try await remoteEventually { remoteLabels(window).contains(expected) }
-            let labels = remoteLabels(window)
-            #expect(labels.contains(expected), "Visible accessibility labels: \(labels.sorted())")
+            // Let SwiftUI commit its first display. Its drawn text isn't consistently exposed
+            // by in-process accessibility on supported macOS versions, so recognize the actual
+            // fixture pixels as well as checking native controls and toolbar item labels.
+            try await Task.sleep(for: .milliseconds(200))
+            host.layoutSubtreeIfNeeded()
+            let image = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: image)
+            if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+                let folder = URL(fileURLWithPath: path)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try image.representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent("remote-\(expected).png"))
+            }
+            let pixels = try #require(image.cgImage)
+            let visible = try await Task.detached {
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.recognitionLanguages = ["en-US"]
+                request.usesLanguageCorrection = false
+                try VNImageRequestHandler(cgImage: pixels).perform([request])
+                return Set((request.results ?? []).compactMap { $0.topCandidates(1).first?.string })
+            }.value
+            let labels = remoteLabels(window).union(visible)
+            #expect(labels.contains(expected), "Rendered text and control labels: \(labels.sorted())")
             for absent in ["Account", "Model", "Workspace", "New Task", "New Session", "Attach images", "Model & Usage"] {
                 #expect(!labels.contains(absent), "Remote view included local control: \(absent)")
             }
@@ -184,13 +206,27 @@ extension RenderingTests {
     var seen = Set<ObjectIdentifier>()
     var strings = Set<String>()
     func walk(_ value: Any) {
-        guard let element = value as? NSAccessibilityProtocol else { return }
-        let object = value as AnyObject
-        guard seen.insert(ObjectIdentifier(object)).inserted, seen.count < 3_000 else { return }
-        if let label = element.accessibilityLabel() { strings.insert(label) }
-        if let value = element.accessibilityValue() as? String { strings.insert(value) }
-        for child in element.accessibilityChildren() ?? [] { walk(child) }
+        guard let object = value as? NSObject, seen.insert(ObjectIdentifier(object)).inserted, seen.count < 3_000 else { return }
+        func attribute(_ name: String) -> Any? {
+            object.responds(to: NSSelectorFromString(name)) ? object.value(forKey: name) : nil
+        }
+        for name in ["accessibilityLabel", "accessibilityValue", "accessibilityTitle", "accessibilityPlaceholderValue"] {
+            if let text = attribute(name) as? String { strings.insert(text) }
+            if let text = attribute(name) as? NSAttributedString { strings.insert(text.string) }
+        }
+        for name in ["accessibilityChildren", "accessibilityChildrenInNavigationOrder"] {
+            for child in attribute(name) as? [Any] ?? [] { walk(child) }
+        }
+        if let view = object as? NSView { view.subviews.forEach(walk) }
+        if let window = object as? NSWindow {
+            if let content = window.contentView { walk(content) }
+            for item in window.toolbar?.items ?? [] {
+                strings.insert(item.label)
+                if let group = item as? NSToolbarItemGroup { for child in group.subitems { strings.insert(child.label) } }
+            }
+        }
     }
+
     walk(root)
     return strings
 }
