@@ -490,6 +490,123 @@ extension RenderingTests {
         }
     }
 
+    /// Beside Inbox, how many deliveries aren't Done, read or not (#189): it follows an arrival, Done,
+    /// Move to Inbox and a deleted bot at once, on the Inbox and elsewhere, is hidden at zero, comes
+    /// back at launch, and a large count fits the narrowest sidebar.
+    @Test func inboxShowsHowManyDeliveriesArentDone() async throws {
+        _ = NSApplication.shared
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 210, height: 640),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        func host(_ model: AppModel) -> NSHostingView<some View> {
+            let host = NSHostingView(rootView: SidebarView().environment(model).defaultAppStorage(fixture.defaults))
+            window.contentView = host
+            window.makeKeyAndOrderFront(nil)
+            return host
+        }
+        var shown = host(model)
+        func badge() async throws -> InboxBadge? {
+            try await Task.sleep(for: .milliseconds(200))
+            window.layoutIfNeeded()
+            let table = try #require(sidebarTable(in: shown))
+            let row = 1 + (LibraryDestination.sidebar.firstIndex(of: .inbox) ?? 0)
+            return try inboxBadge(in: try #require(table.view(atColumn: 0, row: row, makeIfNecessary: false)))
+        }
+        #expect(try await badge() == nil)
+
+        let report = Delivery(botID: fixture.bot.id, title: "Report")
+        let mockup = Delivery(botID: fixture.quiet.id, title: "Mockup")
+        try await model.inbox.post(report)
+        try await model.inbox.post(mockup)
+        #expect(model.inbox.unfinishedCount == 2)
+        let two = try #require(try await badge())
+        // Reading leaves it, with the Inbox shown and once it isn't.
+        model.selectSidebar(.library(.inbox))
+        model.inbox.markRead(report.id)
+        model.inbox.markRead(mockup.id)
+        #expect(model.inbox.unreadCount == 0 && model.inbox.unfinishedCount == 2)
+        #expect(try await badge()?.mask == two.mask)
+        model.selectSidebar(.library(.projects))
+        #expect(try await badge()?.mask == two.mask)
+        // Done takes one off; Move to Inbox puts it back; all Done, it is hidden.
+        model.inbox.setDone(report.id, true)
+        let one = try #require(try await badge())
+        #expect(one.mask != two.mask)
+        model.inbox.setDone(report.id, false)
+        #expect(try await badge()?.mask == two.mask)
+        model.inbox.setDone(report.id, true)
+        model.inbox.setDone(mockup.id, true)
+        #expect(try await badge() == nil)
+        model.inbox.setDone(report.id, false)
+        #expect(try await badge()?.mask == one.mask)
+        // Its bot deleted, its deliveries go from the count.
+        model.inbox.setDone(mockup.id, false)
+        #expect(try await badge()?.mask == two.mask)
+        model.delete(fixture.quiet.id)
+        #expect(model.inbox.unfinishedCount == 1)
+        #expect(try await badge()?.mask == one.mask)
+
+        // Read at launch with what was Done, a four-digit count stands apart from the label and
+        // inside the row.
+        await model.storage.settle()
+        let folder = InboxFolder(home: BotHome(workspace: fixture.bot.workspace))
+        for index in 1..<1234 { try folder.save(Delivery(botID: fixture.bot.id, title: "Report \(index)"), contents: [:]) }
+        let done = Delivery(botID: fixture.bot.id, title: "Done")
+        try folder.save(done, contents: [:])
+        var state = InboxState.load(from: fixture.store.root)
+        state[done.id].done = true
+        try state.save(to: fixture.store.root)
+        let relaunched = AppModel(store: fixture.store, settings: AppSettings(defaults: fixture.defaults),
+                                  usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
+        defer { relaunched.stopAll() }
+        for _ in 0..<250 where !relaunched.inbox.isLoaded { try await Task.sleep(for: .milliseconds(20)) }
+        // The report read before stays read: the Dock's count is one fewer.
+        #expect(relaunched.inbox.unfinishedCount == 1234 && relaunched.inbox.unreadCount == 1233)
+        shown = host(relaunched)
+        let large = try #require(try await badge())
+        #expect(large.columns.count > two.columns.count * 2)
+        #expect(large.columns.lowerBound > large.labelEnd)
+        #expect(large.columns.upperBound < large.width - 1)
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("sidebar-inbox-count"))
+        }
+    }
+
+    /// The Inbox row's badge: the last run of drawn columns, in the row's trailing half and apart
+    /// from the label, with which of its points are drawn; nil when the row has none.
+    private struct InboxBadge: Equatable {
+        var columns: ClosedRange<Int>
+        var mask: [Bool]
+        /// Where the label's drawing ends, and the row's width, in pixels.
+        var labelEnd: Int
+        var width: Int
+    }
+
+    private func inboxBadge(in cell: NSView) throws -> InboxBadge? {
+        let rep = try #require(cell.bitmapImageRepForCachingDisplay(in: cell.bounds))
+        cell.cacheDisplay(in: cell.bounds, to: rep)
+        // Each row's own last point is its background: the badge stops short of the edge.
+        func drawn(_ x: Int, _ y: Int) -> Bool {
+            guard let point = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                  let edge = rep.colorAt(x: rep.pixelsWide - 1, y: y)?.usingColorSpace(.sRGB) else { return false }
+            return [point.redComponent - edge.redComponent, point.greenComponent - edge.greenComponent,
+                    point.blueComponent - edge.blueComponent, point.alphaComponent - edge.alphaComponent].contains { abs($0) > 0.2 }
+        }
+        let inked = (0..<rep.pixelsWide).filter { x in (0..<rep.pixelsHigh).contains { drawn(x, $0) } }
+        guard let last = inked.last else { return nil }
+        // A gap of more than 8 points ends the label's drawing.
+        let gap = Int(8 * CGFloat(rep.pixelsWide) / cell.bounds.width)
+        var start = last
+        while let before = inked.last(where: { $0 < start }), start - before <= gap { start = before }
+        guard start > rep.pixelsWide / 2, let labelEnd = inked.last(where: { $0 < start }) else { return nil }
+        let mask = (start...last).flatMap { x in (0..<rep.pixelsHigh).map { drawn(x, $0) } }
+        return InboxBadge(columns: start...last, mask: mask, labelEnd: labelEnd, width: rep.pixelsWide)
+    }
+
     /// One point of the view's own drawing, in sRGB, measured from its top-left corner.
     private func sidebarPixel(in view: NSView, x: CGFloat, fromTop y: CGFloat) throws -> NSColor {
         let rep = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))

@@ -478,9 +478,9 @@ enum DevHooks {
                 HStack {
                     Label(destination.title, systemImage: destination.symbol)
                     Spacer()
-                    // The Inbox's unread count, as the sidebar's badge shows it.
-                    if destination == .inbox, model.inbox.unreadCount > 0 {
-                        Text("\(model.inbox.unreadCount)").font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                    // What in the Inbox isn't Done, as the sidebar's badge shows it.
+                    if destination == .inbox, model.inbox.unfinishedCount > 0 {
+                        Text("\(model.inbox.unfinishedCount)").font(.callout).monospacedDigit().foregroundStyle(.secondary)
                     }
                 }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(10)

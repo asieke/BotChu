@@ -439,7 +439,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     clicking it brings BotChu forward on the delivery in the Inbox. An answer from a banner that
     launched BotChu is sent once the deliveries are read. BotChu asks for notifications the first
     time a delivery arrives, not at launch. The Dock tile's badge shows the unread deliveries.
-  - **Inbox:** first under Workspace (⇧⌘I), with how many deliveries are unread. A 392-point list
+  - **Inbox:** first under Workspace (⇧⌘I), with how many deliveries aren't Done, read or not (none
+    shown at zero). A 392-point list
     (320 in a narrower window) in the tasks column's idiom: **Needs you** (questions not answered
     since they were sent), **Today**, **Yesterday**, then each earlier day, newest first, with
     **Done** collapsed at the end with its count. A row has the sender's pet (a credited bot's on its
