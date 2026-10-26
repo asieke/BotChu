@@ -15,11 +15,19 @@ struct RunReviewSettings: View {
             DatePicker("Review time", selection: time, displayedComponents: .hourAndMinute)
                 .disabled(!settings.evaluateRuns)
                 .onChange(of: settings.reviewTime) { model.evaluator.pump() }
-        } header: {
-            Text("Run reviews")
-        } footer: {
-            Text("At the review time, in this Mac's time zone, BotChu reviews each bot's work since its last review in one pass: its Home, its tasks and the sub-agents that ran as it, in a fresh session on the bot's own account, model and effort, with every tool turned off by the CLI itself. Only work with signal is reviewed: a failure, a stop, you steering a task, \(limits.failedToolCalls) or more failed tool calls, \(limits.toolCalls) or more tool calls, or \(Int(limits.turnTime / 60)) minutes or more at work; a day without it asks no model. A review waits until its account has been idle for a minute, one at a time, at most \(limits.perAccountPerDay) model calls a day per account, each stopped after \(Int(limits.timeout / 60)) minutes; if BotChu is closed or the Mac asleep at the review time, it runs at the first chance afterwards. Up to \(EvaluationPlan.maxApplied) concise, evidence-backed notes a day go to the bot's MEMORY.md, where you can revert them in the status sidebar's Activity (which also has Review now); changes to INSTRUCTIONS.md and anything else are kept as proposals for you. Reviews use the bot's allowance; bots on Antigravity and Pi aren't reviewed, since BotChu can't run them without tools.")
-                .font(.caption).foregroundStyle(.secondary)
+        }
+        .help("At the review time, in this Mac's time zone, BotChu reviews each bot's work since its last review in one pass: its Home, its tasks and the sub-agents that ran as it. If BotChu is closed or the Mac asleep at the review time, it runs at the first chance afterwards.")
+        Section("Each review") {
+            LabeledContent("Runs on", value: "The bot's own account, model and effort")
+                .help("In a fresh session, with every tool turned off by the CLI itself. Reviews use the bot's allowance.")
+            LabeledContent("Reviews", value: "Only work with signal")
+                .help("A failure, a stop, you steering a task, \(limits.failedToolCalls) or more failed tool calls, \(limits.toolCalls) or more tool calls, or \(Int(limits.turnTime / 60)) minutes or more at work; a day without it asks no model.")
+            LabeledContent("Limit", value: "\(limits.perAccountPerDay) model calls a day per account")
+                .help("A review waits until its account has been idle for a minute, one at a time, each stopped after \(Int(limits.timeout / 60)) minutes.")
+            LabeledContent("Writes", value: "Up to \(EvaluationPlan.maxApplied) notes a day to the bot's MEMORY.md")
+                .help("Concise, evidence-backed notes, which you can revert in the status sidebar's Activity (which also has Review now); changes to INSTRUCTIONS.md and anything else are kept as proposals for you.")
+            LabeledContent("Skips", value: "Bots on Antigravity and Pi")
+                .help("BotChu can't run them without tools.")
         }
     }
 

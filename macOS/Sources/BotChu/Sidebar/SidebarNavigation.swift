@@ -28,6 +28,13 @@ extension AppModel {
         }
     }
 
+    /// Settings, in the window, on `page`, or the page shown last (#191). Like a gallery, it keeps
+    /// the conversation shown, its draft and its turns.
+    func openSettings(_ page: SettingsPage? = nil) {
+        if let page { settings.settingsPage = page }
+        destination = .settings
+    }
+
     /// The bot's conversations in their tabs' order: Home, then its open tasks, as they were opened.
     func tabs(of botID: UUID) -> [ChatTarget] {
         [.home(botID)] + openTasks(of: botID).map { .task($0.id, of: botID) }

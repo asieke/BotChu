@@ -4,6 +4,7 @@ import BotChuCore
 /// Settings ▸ Hosts: the computers besides this Mac that tasks can run on, over SSH.
 struct HostsSection: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.settingsSheetHeight) private var height
     @State private var editing: SSHHost?
 
     var body: some View {
@@ -28,15 +29,21 @@ struct HostsSection: View {
                     .help("Remove \(host.nickname). Tasks already on it stop until it is back.")
                 }
             }
-            Button("Add Host…") { editing = SSHHost(nickname: "", destination: "") }
+            if model.settings.hosts.isEmpty {
+                Text("No SSH hosts").foregroundStyle(.secondary)
+            }
+            HStack {
+                Spacer()
+                Button("Add Host…") { editing = SSHHost(nickname: "", destination: "") }
+            }
         } header: {
-            Text("Hosts")
-        } footer: {
-            Text("Other computers tasks can work on, over SSH with your keys (never a password).")
-                .font(.caption).foregroundStyle(.secondary)
+            Text("SSH hosts")
+                .help("Other computers tasks can work on, over SSH with your keys (never a password).")
         }
         .sheet(item: $editing) { host in
+            // As tall as it can be in the window, up to its full height.
             HostEditor(host: host)
+                .frame(height: min(680, max(420, height - 40)))
                 .environment(model)
         }
     }
@@ -156,7 +163,7 @@ struct HostEditor: View {
             }
             .padding(16)
         }
-        .frame(width: 520, height: 680)
+        .frame(width: 520)
     }
 
     private var problem: String? {

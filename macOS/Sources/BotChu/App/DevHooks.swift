@@ -9,7 +9,9 @@ import BotChuCore
 ///   their own `defaults` domain (`local.BotChu.dev`), so a throwaway run never changes the real ones.
 /// - `BOTCHU_SNAPSHOT`: write a PNG of each window into this folder every second, and of the sidebar's
 ///   rows (`sidebar.png`), which the window's picture leaves out.
-/// - `BOTCHU_OPEN`: open `editor` (a new bot), `task` (New Task), `memory`, `soul`, or `settings` at launch.
+/// - `BOTCHU_OPEN`: open `editor` (a new bot), `task` (New Task), `memory`, `soul`, or `settings` at launch;
+///   `BOTCHU_SETTINGS=<page>` (`general`, `accounts`, `github`, `hosts`, `run-reviews`, `pets`,
+///   `openrouter`, `telegram`, `remote-queue`) opens Settings on that page, else on the one shown last.
 /// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
 /// - `BOTCHU_OPEN=model|effort|inspector-model|inspector-effort`: open a generation picker;
 ///   `job-model|job-effort` opens a new job's editor with its picker open.
@@ -223,7 +225,7 @@ enum DevHooks {
         }
     }
 
-    static func start(model: AppModel, openSettings: () -> Void) {
+    static func start(model: AppModel) {
         if dataDir != nil, let profiles = env["BOTCHU_PROFILE"] {
             model.settings.customAccounts = profiles.split(separator: ";").enumerated().compactMap { index, profile in
                 let parts = profile.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
@@ -296,7 +298,7 @@ enum DevHooks {
         case "task": if let id = model.selection { model.newTask(for: id) }
         case "memory": if let id = model.selection { model.editDocument(.memory, for: id) }
         case "soul": if let id = model.selection { model.editDocument(.soul, for: id) }
-        case "settings": openSettings()
+        case "settings": model.openSettings(env["BOTCHU_SETTINGS"].flatMap(SettingsPage.init(rawValue:)))
         default: break
         }
         if dataDir != nil, let name = env["BOTCHU_SECTION"], let id = model.selection {
@@ -472,7 +474,7 @@ enum DevHooks {
     static func snapshotSidebar(model: AppModel, into dir: URL) {
         let rows = VStack(alignment: .leading, spacing: 4) {
             Text("Workspace").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.vertical, 6)
-            ForEach(LibraryDestination.allCases, id: \.self) { destination in
+            ForEach(LibraryDestination.sidebar, id: \.self) { destination in
                 HStack {
                     Label(destination.title, systemImage: destination.symbol)
                     Spacer()

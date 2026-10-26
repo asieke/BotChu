@@ -924,7 +924,15 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     an expired window hides its old percentage until a new reading arrives. CLI output and
     credentials are not written to disk by BotChu; of a reading, only its usage fields are
     (`usage.json`).
-  - **Settings:** **GitHub ▸ Test Connection** checks that `gh` is available and can authenticate to
+  - **Settings:** a page of the main window, beside the sidebar, opened by the sidebar's gear,
+    ⌘, or BotChu ▸ Settings…, like a gallery: the conversation shown keeps its tab, its draft and its
+    turns. Its nine pages (General, Accounts, GitHub, Hosts, Run reviews, Pets, OpenRouter, Telegram,
+    Remote queue) are in a rail that marks a page needing you (a missing command, an unsaved key, a
+    service on), which becomes a menu in the page's title when the page is under 720 points wide.
+    It opens on the page last shown, and links elsewhere (Change Command…, GitHub Settings,
+    Connection Settings…) open their page. Preferences save as you change them; the OpenRouter key
+    and Telegram token save only with Save, and a key typed and not saved stays while you change
+    pages, until you leave Settings. **GitHub ▸ Test Connection** checks that `gh` is available and can authenticate to
     github.com, then shows its version and signed-in username. Connection failures give install/login
     guidance without displaying credentials. Settings also contains the bots folder, the repositories folder, the hosts and where you chose to work
     on repositories, each account's command, the Codex account that draws pets' stills, the
@@ -1109,8 +1117,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished turns and runs to the daily run reviews, `Evaluations.swift`),
     `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, selecting a reply's text across its blocks, `ReplySelection.swift`, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
-    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (with
-    the hosts, Telegram and run reviews), and
+    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (the
+    in-window Settings page with its rail and pages, with the hosts, Telegram and run reviews), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
     only to identify the CLI an account runs).
@@ -1410,7 +1418,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   Claude Dev); the app writes a PNG of each of its windows into the printed folder every second
   (`BOTCHU_SNAPSHOT`), so screens can be checked without screen-recording permission.
   `BOTCHU_OPEN=editor`, `BOTCHU_OPEN=task` or `BOTCHU_OPEN=settings` opens the bot editor, New
-  Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository).
+  Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository;
+  `BOTCHU_SETTINGS=<page>` picks Settings' page: `general`, `accounts`, `github`, `hosts`,
+  `run-reviews`, `pets`, `openrouter`, `telegram` or `remote-queue`).
   `BOTCHU_OPEN=projects`, `agents`, `providers`, `skills` or `jobs` opens that workspace screen;
   with `projects`, `BOTCHU_PROJECT=<owner/name>` shows that repository's sidebar, and
   `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
