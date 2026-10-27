@@ -61,7 +61,7 @@ extension RenderingTests {
         }, openWorkLookup: { _ in .success(GitHubLookup.OpenWork(items: [])) })
         defer { app.stopAll() }
         for _ in 0..<100 where app.inbox.all.count < 2 { try await Task.sleep(for: .milliseconds(20)) }
-        #expect(app.inbox.unreadCount == 2)
+        #expect(app.inbox.unreadCount == 2 && app.inbox.unfinishedCount == 2)
         app.unread.insert(.home(bot.id))
 
         app.destination = .inbox
@@ -83,6 +83,8 @@ extension RenderingTests {
         app.inbox.selected = report.id
         try await Task.sleep(for: .milliseconds(100))
         #expect(app.inbox.unreadCount == 0)
+        // Read, they are still not Done: the sidebar counts them (#189).
+        #expect(app.inbox.unfinishedCount == 2)
         window.contentView = nil
         try await Task.sleep(for: .milliseconds(100))
         #expect(!app.inbox.isReading(report.id))
@@ -126,7 +128,7 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(100))
         app.inbox.setDone(second.id, true)
         try await Task.sleep(for: .milliseconds(100))
-        #expect(app.inbox.isDone(second.id))
+        #expect(app.inbox.isDone(second.id) && app.inbox.unfinishedCount == 2)
         #expect(app.inbox.selected == third.id && app.inbox.isReading(third.id))
         // The last one shown: the one before it; then none is left to read.
         app.inbox.setDone(third.id, true)
@@ -134,14 +136,14 @@ extension RenderingTests {
         #expect(app.inbox.selected == first.id)
         app.inbox.setDone(first.id, true)
         try await Task.sleep(for: .milliseconds(100))
-        #expect(app.inbox.selected == nil)
+        #expect(app.inbox.selected == nil && app.inbox.unfinishedCount == 0)
 
         // A Done one chosen opens Done; moved to the Inbox, it stays the one read.
         app.inbox.selected = second.id
         try await Task.sleep(for: .milliseconds(100))
         app.inbox.setDone(second.id, false)
         try await Task.sleep(for: .milliseconds(100))
-        #expect(!app.inbox.isDone(second.id))
+        #expect(!app.inbox.isDone(second.id) && app.inbox.unfinishedCount == 1)
         #expect(app.inbox.selected == second.id && app.inbox.isReading(second.id))
         // With Done open, Done keeps it chosen, in Done.
         app.inbox.setDone(second.id, true)
