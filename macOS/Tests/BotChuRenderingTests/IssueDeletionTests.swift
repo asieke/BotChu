@@ -28,8 +28,10 @@ extension RenderingTests {
                                   updatedAt: .now.addingTimeInterval(-Double(number) * 3600))
         }
         var snapshot = ProjectSnapshot(login: "octocat")
-        snapshot.takeList([ProjectSnapshot.Page(etag: "", repos: [ProjectSnapshot.Listed(nameWithOwner: orbit, description: "Orbit’s repository",
-                                                                                         pushedAt: .now, updatedAt: .now, openCount: 3)])], complete: true)
+        let listed = ProjectSnapshot.Listed(nameWithOwner: orbit, description: "Orbit’s repository", pushedAt: .now, updatedAt: .now, openCount: 3)
+        snapshot.takeList([ProjectSnapshot.Page(etag: "", repos: [listed])], complete: true)
+        // An active project, so Projects' default scope covers its issues (#186).
+        snapshot.takeRecord(orbit, .success(try activeRecord("Orbit")), under: listed.fingerprint)
         snapshot.takeWork([orbit], .success(GitHubLookup.OpenWork(items: items, counts: [orbit: .init(issues: 3, pullRequests: 0)])), under: [:], etags: [:])
         snapshot.syncedAt = .now
         snapshot.fullSyncedAt = .now
@@ -170,8 +172,9 @@ extension RenderingTests {
                                   isPullRequest: false, author: "hubot", createdAt: .now, updatedAt: .now.addingTimeInterval(-Double(number)))
         }
         var snapshot = ProjectSnapshot(login: "octocat")
-        snapshot.takeList([ProjectSnapshot.Page(etag: "", repos: [ProjectSnapshot.Listed(nameWithOwner: orbit, description: "Orbit",
-                                                                                         pushedAt: .now, updatedAt: .now, openCount: 3)])], complete: true)
+        let listed = ProjectSnapshot.Listed(nameWithOwner: orbit, description: "Orbit", pushedAt: .now, updatedAt: .now, openCount: 3)
+        snapshot.takeList([ProjectSnapshot.Page(etag: "", repos: [listed])], complete: true)
+        snapshot.takeRecord(orbit, .success(try activeRecord("Orbit")), under: listed.fingerprint)
         snapshot.takeWork([orbit], .success(GitHubLookup.OpenWork(items: items, counts: [orbit: .init(issues: 3, pullRequests: 0)])), under: [:], etags: [:])
         snapshot.syncedAt = .now
         snapshot.fullSyncedAt = .now
@@ -270,9 +273,14 @@ extension RenderingTests {
                                   updatedAt: .now.addingTimeInterval(-Double(number) * 3600))
         }
         var snapshot = ProjectSnapshot(login: "octocat")
-        snapshot.takeList([ProjectSnapshot.Page(etag: "", repos: [orbit, nova].map {
+        let listed = [orbit, nova].map {
             ProjectSnapshot.Listed(nameWithOwner: $0, description: $0, pushedAt: .now, updatedAt: .now, openCount: $0 == orbit ? 4 : 1)
-        })], complete: true)
+        }
+        snapshot.takeList([ProjectSnapshot.Page(etag: "", repos: listed)], complete: true)
+        // Active projects, so Projects' default scope covers their issues (#186).
+        for repo in listed {
+            snapshot.takeRecord(repo.nameWithOwner, .success(try activeRecord(String(repo.nameWithOwner.split(separator: "/").last!))), under: repo.fingerprint)
+        }
         snapshot.takeWork([orbit, nova], .success(GitHubLookup.OpenWork(items: items, counts: [orbit: .init(issues: 4, pullRequests: 0),
                                                                                               nova: .init(issues: 1, pullRequests: 0)])),
                           under: [:], etags: [:])
@@ -435,6 +443,12 @@ extension RenderingTests {
         #expect(await github.asked.map { "\($0[2]) \($0[3])" } == ["delete 4", "delete 3", "delete 3", "delete 5", "delete 6", "delete 7", "close 6"])
         let saved = try JSONDecoder().decode(ProjectSnapshot.self, from: Data(contentsOf: catalog))
         #expect(saved.openItems.isEmpty)
+    }
+
+    /// The PROJECT.md of an active app project.
+    private func activeRecord(_ name: String) throws -> ProjectRecord {
+        let metadata = ProjectMetadata(name: name, kind: .hosted, status: .active, deploy: "none", merge: "agent")
+        return ProjectRecord(text: try ProjectRecord(text: "", sha: nil).updating(metadata), sha: name)
     }
 
     /// Waits (up to five seconds) until `condition` holds.

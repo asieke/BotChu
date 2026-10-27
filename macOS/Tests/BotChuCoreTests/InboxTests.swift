@@ -234,6 +234,23 @@ private final class InboxFixture {
         #expect(entries.count == 2, "No temporary folders are left: \(entries)")
     }
 
+    /// A scheduled run's report (#170) is its task's delivery, read again at launch with its
+    /// origin, and delivering it again (a retry) replaces it rather than adding another.
+    @Test func aJobRunsReportIsItsTasksDeliveryOnce() throws {
+        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-inbox-job-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let folder = InboxFolder(home: BotHome(workspace: workspace.path))
+        let job = Job(botID: UUID(), title: "10x Product Analysis", prompt: "x", schedule: JobSchedule(kind: .daily))
+        var run = JobRun(trigger: .scheduled, scheduledFor: Date(), timeZone: "America/New_York", reservedAt: Date())
+        run.taskID = UUID()
+        let report = try #require(JobReport.delivery(job: job, run: run, reply: "20 recommendations"))
+        try folder.save(report, contents: [:])
+        try folder.save(report, contents: [:])
+        let kept = folder.load()
+        #expect(kept == [report])
+        #expect(kept.first?.botID == job.botID && kept.first?.taskID == run.taskID && kept.first?.id == run.id)
+    }
+
     @Test func readDoneAndAnsweredAreKeptBesideTheIndex() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-inbox-state-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -284,25 +301,57 @@ private final class InboxFixture {
         #expect(InboxList.section(of: question, state: state, now: now, calendar: calendar) == .yesterday)
         let pinned = InboxList.groups([question, today], state: state, now: now, calendar: calendar, pinned: [question.id: .needsYou])
         #expect(pinned.map(\.section) == [.needsYou, .today])
+
+        // Done while it is read moves it to Done at once, and both counts change.
+        state[today.id].done = true
+        let read = InboxList.groups([question, today, earlierToday], state: state, now: now, calendar: calendar,
+                                    pinned: [today.id: .today])
+        #expect(read.map(\.section) == [.today, .yesterday, .done])
+        #expect(read.map(\.ids) == [[earlierToday.id], [question.id], [today.id]])
+        // Moved to the Inbox while it is read in Done, it goes back to its group at once.
+        state[today.id].done = false
+        let moved = InboxList.groups([today, earlierToday], state: state, now: now, calendar: calendar, pinned: [today.id: .done])
+        #expect(moved.map(\.section) == [.today])
+        #expect(moved.map(\.ids) == [[today.id, earlierToday.id]])
     }
 
-    @Test func aReplyNamesItsDeliveryAndOnlyItsExchangeShowsUnderIt() {
+    @Test func whenTheSelectedDeliveryLeavesTheListTheNextOneShownIsSelected() {
+        let a = UUID(), b = UUID(), c = UUID()
+        #expect(InboxList.selection(after: b, was: [a, b, c], now: [a, c]) == c)
+        // The last one shown: the one before it.
+        #expect(InboxList.selection(after: c, was: [a, b, c], now: [a, b]) == b)
+        #expect(InboxList.selection(after: a, was: [a], now: []) == nil)
+        // Done closed with a Done delivery selected: the last active one.
+        #expect(InboxList.selection(after: c, was: [a, b, c, UUID()], now: [a, b]) == b)
+    }
+
+    @Test func aReplyNamesItsDelivery() {
         let delivery = Delivery(botID: UUID(), title: "Should sub-agent work block Telegram?")
         #expect(InboxReply.prompt("Answer first.", delivery: delivery)
                 == "[Your owner's reply from the Inbox to your delivery “Should sub-agent work block Telegram?” (\(delivery.id.uuidString.lowercased()))]\n\nAnswer first.")
-        var reply = ChatMessage(role: .user, text: "Answer first.")
-        reply.delivery = delivery.id
-        var other = ChatMessage(role: .user, text: "Another reply")
-        other.delivery = UUID()
-        let thread = [
-            ChatMessage(role: .user, text: "Look into #118"), ChatMessage(role: .assistant, text: "Delivered."),
-            delivery.card, reply, ChatMessage(role: .tool, toolName: "Bash"),
-            ChatMessage(role: .assistant, text: "Filing it as #156."), ChatMessage(role: .note, text: "Stopped"),
-            ChatMessage(role: .user, text: "Something else"), ChatMessage(role: .assistant, text: "Unrelated"),
-            other, ChatMessage(role: .assistant, text: "Not this one"),
-        ]
-        #expect(InboxReply.exchange(for: delivery.id, in: thread).map(\.text) == ["Answer first.", "Filing it as #156."])
-        #expect(InboxReply.answered(in: thread) == [delivery.id, other.delivery!])
+    }
+
+    @Test func anAcceptedAnswerIsReadAndDoneAndAsksNothingMore() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-inbox-answer-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let asking = Delivery(botID: UUID(), title: "Which?", question: Delivery.Question(text: "Which?", choices: ["A", "B"]),
+                              sentAt: Delivery.stamp(Date(timeIntervalSinceNow: -60)))
+        var state = InboxState()
+        let now = Delivery.stamp()
+        state.answer(asking.id, at: now)
+        #expect(state[asking.id] == InboxState.Entry(read: true, done: true, repliedAt: now))
+        #expect(!state.needsAnswer(asking) && !state.isUnread(asking) && state.isAnswered(asking))
+        #expect(InboxList.section(of: asking, state: state, now: now) == .done)
+        // After a relaunch it is still answered and Done.
+        try state.save(to: root)
+        let read = InboxState.load(from: root)
+        #expect(read[asking.id].done && read[asking.id].repliedAt == now && !read.needsAnswer(asking))
+        // Out of Done again, it is answered and asks nothing until it is sent again.
+        state[asking.id].done = false
+        #expect(!state.needsAnswer(asking))
+        var again = asking
+        again.updatedAt = now.addingTimeInterval(5)
+        #expect(state.needsAnswer(again) && !state.isAnswered(again))
     }
 
     @Test func everySessionLearnsHowToDeliver() {

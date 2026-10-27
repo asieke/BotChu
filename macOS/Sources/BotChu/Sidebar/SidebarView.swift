@@ -15,7 +15,7 @@ struct SidebarView: View {
                 model.selectSidebar(value)
             })) {
             Section("Workspace") {
-                ForEach(LibraryDestination.allCases, id: \.self) { destination in
+                ForEach(LibraryDestination.sidebar, id: \.self) { destination in
                     Label(destination.title, systemImage: destination.symbol)
                         .badge(destination == .inbox ? model.inbox.unreadCount : 0)
                         .tag(SidebarDestination.library(destination))
@@ -65,11 +65,7 @@ struct SidebarView: View {
                 }
                 .help("New Bot (⌘N)")
                 Spacer()
-                SettingsLink {
-                    Label("Settings", systemImage: "gearshape")
-                        .labelStyle(.iconOnly)
-                }
-                .help("Settings (⌘,)")
+                SettingsGearButton()
             }
             .buttonStyle(.borderless)
             .padding(.horizontal, 14)

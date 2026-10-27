@@ -8,7 +8,8 @@ import BotChuCore
 ///
 /// One unread state: reading a delivery clears its conversation's news dot, and showing the
 /// conversation reads its deliveries. A reply goes into the conversation that sent the delivery,
-/// through its queue, marked with the delivery (`InboxReply`).
+/// through its queue, marked with the delivery (`InboxReply`); once the queue holds it, the delivery
+/// is Done and what the bot does with it shows in that conversation.
 @MainActor @Observable
 final class InboxModel {
     /// Every delivery, by ID.
@@ -20,8 +21,10 @@ final class InboxModel {
     var selected: UUID?
     /// What is typed in each delivery's reply box and not sent yet.
     var drafts: [UUID: String] = [:]
-    /// Deliveries opened while they were news, so the reading pane shows the exchange's end.
-    @ObservationIgnored var openedAsNews: Set<UUID> = []
+    /// Deliveries whose reply is being saved in their conversation's queue: no other goes meanwhile.
+    private(set) var sending: Set<UUID> = []
+    /// Each delivery's reply the queue couldn't take, to send again.
+    private(set) var failed: [UUID: String] = [:]
     /// Whether the Inbox's page is showing, so the selected delivery is being read.
     @ObservationIgnored var isShowing = false
     @ObservationIgnored weak var model: AppModel?
@@ -99,6 +102,25 @@ final class InboxModel {
         try await storage.perform(folder.url.path, label: "delivery") { try folder.save(saved, contents: data) }
         try? await transport.removeStaged(request: request.id)
         titles[target, default: [:]][request.title] = delivery.id
+        show(delivery, isNew: existing == nil)
+        return (delivery, existing != nil)
+    }
+
+    /// Puts a delivery BotChu makes for a conversation in the Inbox (a job run's report, #170): saved
+    /// in its bot's folder, then shown as one from `botchu-inbox send` is. The same delivery again
+    /// replaces it.
+    func post(_ delivery: Delivery) async throws {
+        guard let bot = model?.bot(delivery.botID) else { throw InboxRequest.Problem("its bot is gone") }
+        let folder = InboxFolder(home: BotHome(workspace: bot.persistencePath))
+        try await storage.perform(folder.url.path, label: "delivery") { try folder.save(delivery, contents: [:]) }
+        show(delivery, isNew: deliveries[delivery.id] == nil)
+    }
+
+    /// A delivery saved: it is news, unless it arrives in the conversation the owner is looking at,
+    /// and a new one is announced, its card in the conversation (after the turn under way's reply).
+    private func show(_ delivery: Delivery, isNew: Bool) {
+        guard let model else { return }
+        let target = target(of: delivery)
         deliveries[delivery.id] = delivery
         var entry = state[delivery.id]
         entry.done = false
@@ -106,7 +128,7 @@ final class InboxModel {
         entry.read = model.isShown(target)
         state[delivery.id] = entry
         saveState()
-        if existing == nil {
+        if isNew {
             model.notifier?.arrived(delivery)
             if model.isRunning(target) {
                 cards[target, default: []].append(delivery.id)
@@ -115,7 +137,6 @@ final class InboxModel {
                 model.saveThread(target)
             }
         }
-        return (delivery, existing != nil)
     }
 
     /// The cards of what the conversation delivered in the turn that is ending.
@@ -123,19 +144,10 @@ final class InboxModel {
         (cards.removeValue(forKey: target) ?? []).compactMap { deliveries[$0]?.card }
     }
 
-    /// A conversation's turn ended: a delivery it answers from the Inbox is news again, unless the
-    /// owner is reading it, and comes back out of Done.
-    func turnEnded(_ target: ChatTarget, turn: [ChatMessage]) {
+    /// A conversation's turn ended. Its answer to a reply from the Inbox stays in the conversation:
+    /// only a new delivery asks for the owner again.
+    func turnEnded(_ target: ChatTarget) {
         titles[target] = nil
-        let answered = InboxReply.answered(in: turn).filter { deliveries[$0] != nil }
-        guard !answered.isEmpty else { return }
-        for id in answered {
-            var entry = state[id]
-            entry.done = false
-            if !isReading(id) { entry.read = false }
-            state[id] = entry
-        }
-        saveState()
     }
 
     // MARK: The owner
@@ -166,24 +178,49 @@ final class InboxModel {
         saveState()
     }
 
-    /// Sends a reply into the conversation that sent the delivery, through its queue.
+    /// Sends a reply, word for word, into the conversation that sent the delivery, through its
+    /// queue; one at a time. Once the queue holds it the delivery is Done, and read in the Inbox, its
+    /// conversation opens. Should the queue not take it, the delivery keeps its draft and choices,
+    /// and `failed` holds the reply to send again.
     @discardableResult
-    func reply(_ text: String, to id: UUID, accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
-        guard let model, let delivery = deliveries[id] else { return false }
+    func reply(_ text: String, to id: UUID) -> Bool {
+        guard let model, let delivery = deliveries[id], !sending.contains(id),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         let target = target(of: delivery)
         // A closed task opens again for the reply, as a job's run becomes the owner's.
         if let task = model.task(target), task.isArchived { model.reopenTask(target) }
-        guard model.send(text, to: target, delivery: id, accepted: accepted) else { return false }
-        state[id].repliedAt = Delivery.stamp()
-        state[id].read = true
+        sending.insert(id)
+        failed[id] = nil
+        let started = model.send(text, to: target, delivery: id) { [weak self] accepted in
+            self?.settle(id, text: text, accepted: accepted)
+        }
+        if !started, sending.remove(id) != nil { failed[id] = text }
+        return started
+    }
+
+    private func settle(_ id: UUID, text: String, accepted: Bool) {
+        guard sending.remove(id) != nil, let delivery = deliveries[id] else { return }
+        guard accepted else {
+            failed[id] = text
+            return
+        }
+        let reading = isReading(id)
+        state.answer(id, at: Delivery.stamp())
         saveState()
-        return true
+        if drafts[id] == text { drafts[id] = nil }
+        model?.unread.remove(target(of: delivery))
+        if reading { model?.openOrigin(of: delivery) }
     }
 
     /// The bot and everything it kept went (`AppModel.delete`).
     func forget(bot id: UUID) {
         let gone = deliveries.values.filter { $0.botID == id }.map(\.id)
-        for delivery in gone { deliveries[delivery] = nil; state[delivery] = InboxState.Entry() }
+        for delivery in gone {
+            deliveries[delivery] = nil
+            state[delivery] = InboxState.Entry()
+            sending.remove(delivery)
+            failed[delivery] = nil
+        }
         cards = cards.filter { $0.key.botID != id }
         titles = titles.filter { $0.key.botID != id }
         if let selected, gone.contains(selected) { self.selected = nil }
