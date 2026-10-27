@@ -207,7 +207,7 @@ final class JobRuntime {
         if let runner = runners[runID] { return runner.stop() }
         guard let preparation = preparing.removeValue(forKey: runID) else { return }
         preparation.cancel()
-        if let target = targets[runID] { model?.conversation(target).append(ChatMessage(role: .note, text: "Stopped")) }
+        if let target = targets[runID] { model?.conversation(target).append(.stopNote(byOwner: !quitting)) }
         finish(runID, outcome: .stopped, summary: "Stopped.")
     }
 
@@ -419,7 +419,7 @@ final class JobRuntime {
                                             failure: outcome.ended ? outcome.failure : nil, status: status,
                                             finished: outcome.ended && outcome.failure == nil, stopped: runner.stopped,
                                             timedOut: timedOut, timeLimit: job.timeLimit, accountName: account.name, stderr: stderr)
-            if result.outcome == .stopped { conversation.append(ChatMessage(role: .note, text: "Stopped")) }
+            if result.outcome == .stopped { conversation.append(.stopNote(byOwner: true)) }
             self.model?.log(TurnLog.ended(at: Date(), startedAt: startedAt, status: status, stopped: runner.stopped,
                                           toolCalls: messages.filter { $0.role == .tool }.count,
                                           error: result.outcome == .failed ? result.summary : nil, stderr: stderr, what: what), in: home)

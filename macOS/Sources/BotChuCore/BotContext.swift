@@ -685,6 +685,7 @@ public enum BotContext {
         case .preparing: line += ": BotChu is making its worktree"
         case .starting, .working: line += ": working now"
         case .failed: line += ": its last turn failed (\(TaskNaming.shortened(status.lastError ?? "", limit: 200)))"
+        case .stopped: line += ": the owner stopped its last turn"
         case .idle: line += status.messageCount == 0 ? ": not started" : ": its last turn finished"
         }
         if let pullRequest { line += "; pull request #\(pullRequest)" }

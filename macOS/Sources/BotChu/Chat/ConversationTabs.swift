@@ -8,8 +8,12 @@ extension Palette {
     static let conversationColumn = dynamic(0xF6F5F3, 0x18181B)
     /// An idle conversation's ring.
     static let idleRing = dynamic(0xB8B8BE, 0x5E5E66)
-    /// A turn that finished since the conversation was last shown, as the news badge was.
+    /// An unread delivery in the Inbox's list.
     static let news = Color(nsColor: .systemBlue)
+    /// A conversation waiting on the owner's answer to a Needs input delivery (#218).
+    static let needsInput = dynamic(0xD97706, 0xFF9F0A)
+    /// A turn that finished well since the conversation was last shown (#218).
+    static let finished = dynamic(0x2F9E44, 0x32D74B)
     /// The window's background, which the selected tab and tile take, lifted off the column.
     static let chat = Color(nsColor: .windowBackgroundColor)
 }
@@ -26,10 +30,11 @@ extension EnvironmentValues {
     @Entry var composerTakesFocus = true
 }
 
-/// A conversation's state as a dot (#128): a faint ring while idle, a violet ring while preparing
-/// or starting, violet while working, blue when a turn finished since it was last shown, and red
-/// when its last turn failed. It holds still; when a turn ends it crossfades to its new state and
-/// pops once. With Reduce Motion it only crossfades.
+/// A conversation's state as a dot (#128, #218): a faint ring while idle, a violet ring while
+/// preparing or starting, violet while working, an orange diamond while it waits on the owner's
+/// input, a red dot when its last turn failed and a red square when the owner stopped it, and green
+/// when a turn finished well since it was last shown. It holds still; when a turn ends it
+/// crossfades to its new state and pops once. With Reduce Motion it only crossfades.
 struct StatusDot: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let kind: TabState.Kind
@@ -45,8 +50,14 @@ struct StatusDot: View {
             case .idle: Circle().strokeBorder(Palette.idleRing, lineWidth: line)
             case .preparing, .starting: Circle().strokeBorder(Palette.violet, lineWidth: line)
             case .working: Circle().fill(Palette.violet)
-            case .news: Circle().fill(Palette.news)
+            case .news: Circle().fill(Palette.finished)
             case .failed: Circle().fill(StatusLook.error.dot)
+            case .stopped: RoundedRectangle(cornerRadius: size * 0.2).fill(StatusLook.stopped.dot).padding(size * 0.08)
+            case .needsInput:
+                // A square on its corner, as wide as the other dots.
+                RoundedRectangle(cornerRadius: size * 0.12).fill(Palette.needsInput)
+                    .frame(width: size * 0.78, height: size * 0.78)
+                    .rotationEffect(.degrees(45))
             }
         }
         .frame(width: size, height: size)
@@ -368,7 +379,8 @@ struct ConversationDetail: View {
 
     private var what: Text {
         switch tab.state {
-        case .failed: Text(tab.status).foregroundStyle(StatusLook.error.dot)
+        case .failed, .stopped: Text(tab.status).foregroundStyle(StatusLook.error.dot)
+        case .needsInput: Text(tab.status).foregroundStyle(Palette.warning)
         case .news(let pullRequest?, _):
             Text("Finished · ") + Text("PR #\(pullRequest)").foregroundStyle(Palette.pathText).fontWeight(.medium)
         default: Text(tab.status)

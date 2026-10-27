@@ -1781,7 +1781,7 @@ final class AppModel {
                         ThreadAssembler.closeRunningTools(&messages)
                         messages += cards
                         if stopped {
-                            messages.append(ChatMessage(role: .note, text: "Stopped"))
+                            messages.append(.stopNote(byOwner: !self.terminating))
                         } else if run.lingered {
                             messages.append(ChatMessage(role: .note, text: "\(account.name) didn't exit after its reply, so BotChu ended it."))
                         } else if !outcome.ended, machine.isRemote, status == 255 {
@@ -1966,7 +1966,7 @@ final class AppModel {
             // Workspace setup or image transfer may finish, but this turn must not start.
             waiting[target] = nil
             runStates[target] = nil
-            append(ChatMessage(role: .note, text: "Stopped"), to: target)
+            append(.stopNote(byOwner: !terminating), to: target)
             saveThread(target)
         }
     }

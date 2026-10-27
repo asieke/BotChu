@@ -40,10 +40,12 @@ extension AppModel {
         [.home(botID)] + openTasks(of: botID).map { .task($0.id, of: botID) }
     }
 
-    /// How a conversation is doing, as its tab's dot and second line say it (#128).
+    /// How a conversation is doing, as its tab's dot and second line say it (#128): waiting on the
+    /// owner while a Needs input delivery it sent isn't answered or Done (#218).
     func tabState(of target: ChatTarget) -> TabState {
         guard let status = status(of: target) else { return .idle(since: nil) }
-        return TabState(status: status, unread: unread.contains(target), pullRequest: task(target)?.pullRequest)
+        let asked = inbox.map { inbox in inbox.awaitingInput(target).compactMap { inbox.delivery($0)?.updatedAt } } ?? []
+        return TabState(status: status, unread: unread.contains(target), pullRequest: task(target)?.pullRequest, awaitingInput: asked)
     }
 
     /// What a conversation's tab says.
