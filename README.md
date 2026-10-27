@@ -954,6 +954,24 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     an expired window hides its old percentage until a new reading arrives. CLI output and
     credentials are not written to disk by BotChu; of a reading, only its usage fields are
     (`usage.json`).
+  - **Connectors (#183):** under Usage, **Connectors** shows the connectors the conversation's
+    CLI profile already has, as its provider reports them, for the conversation's profile, command
+    (a host's own included), folder and host; BotChu never installs, signs in or configures one.
+    On this Mac a Claude Code or Codex profile is checked in the conversation's folder when the
+    section shows and the last check is over an hour old, or with Refresh (at most once a minute),
+    each within 20 seconds: `claude mcp list` (which health-checks the servers it may connect to,
+    claude.ai connectors and plugins' among them) or a `codex app-server` that asks for every
+    page of `mcpServerStatus/list` and a refreshed `app/installed`. Neither starts a model turn or
+    calls a connector's tool. The card is **Enabled for this profile**: a check of the profile,
+    not of the conversation's session. On a host, Claude Code's report from its turn's start
+    (`system/init`) is **Connected at last report**, an earlier session's in the same profile,
+    command, folder and host **Last session report**, and otherwise **Not reported yet**; Codex
+    there is **Not checked on <host>**, and Antigravity, Muse and Pi **Discovery unavailable for
+    <CLI>**. Connected names are chips (twelve, then **+N more**); **Needs sign-in**, **Failed**,
+    **Off** and **Not confirmed** (pending, not started, or with no callable tool) are rows with a
+    symbol each. Unknown is a sentence, never an empty list; **None** only when a report came back
+    empty. A failed check keeps the last list, all of it marked stale, with the error. Only names,
+    states and tool counts are kept, in memory: no endpoints, commands, errors or credentials.
   - **Settings:** a page of the main window, beside the sidebar, opened by the sidebar's gear,
     ⌘, or BotChu ▸ Settings…, like a gallery: the conversation shown keeps its tab, its draft and its
     turns. Its nine pages (General, Accounts, GitHub, Hosts, Run reviews, Pets, OpenRouter, Telegram,
@@ -1216,7 +1234,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
     grows and how far its text scrolls; each account's allowance, with Muse's check through a
     stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
-    answered empty, and none at all; Model & Usage showing the reading the background keeps,
+    answered empty, and none at all; connector discovery: Claude Code's `mcp list` and init and
+    Codex's app-server, from captured samples, every page, an older Codex, late checks from
+    another conversation, stale and empty lists; Model & Usage showing the reading the background keeps,
     checking only one missing or as old as its interval, and Refresh's limits; Providers' model
     groups, time left and reset times, credits and free resets with their expiry, a row's status by
     exception, and the widths of its columns and meters; skills: their frontmatter, finding and making them, which a
@@ -1500,6 +1520,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   current frame is drawn into its circle, and
   `pets.txt` lists each pet player's clip, state and time.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
+  `BOTCHU_CONNECTORS=sample` (or `stale`, `unavailable`) gives profile checks in Connectors
+  sample results, a check that fails after the first, or one that always fails, without starting
+  a CLI.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
   querying any account (`sample` is Providers as its mock's main state: Claude's Fable week,
   Codex profiles' credits and free resets, and the Pi profile a key with a spending limit);

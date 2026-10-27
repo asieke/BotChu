@@ -192,6 +192,8 @@ final class AppModel {
     /// What Providers and a conversation's Model & Usage show of it, kept current in the background
     /// in the app itself, so both open on numbers instead of checking.
     let usageBoard = ProviderUsageBoard()
+    /// The connectors each conversation's CLI reported or a check found (#183).
+    let connectorBoard = ConnectorBoard()
     @ObservationIgnored private var usageWatch: Task<Void, Never>?
     /// Usage views inject this lookup in tests so they never read the owner's Keychain.
     let openRouterKey: @MainActor () -> String?
@@ -1623,7 +1625,8 @@ final class AppModel {
                 }
 
                 // On a host, its own command for the account when it has one.
-                let command = task.flatMap { settings.host($0.hostID)?.command(for: account) } ?? settings.command(for: account)
+                let command = effectiveCommand(for: account, task: task)
+                let connectorScope = ConnectorScope(accountID: account.id, command: command, folder: directory, hostID: task?.hostID)
                 let run = machine.isRemote
                     ? AgentRun(command: command, invocation: invocation, on: machine, folder: directory)
                     : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: directory, isDirectory: true))
@@ -1650,6 +1653,7 @@ final class AppModel {
                     }
                     var sessions: [String] = []
                     var reported: String?
+                    var connectors: [Connector]?
                     var settles: [TimeInterval] = []
                     var delivered = false
                     conversation.stream { messages in
@@ -1663,6 +1667,8 @@ final class AppModel {
                                 sessions.append(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: reported))
                             case .model(let id):
                                 reported = id
+                            case .connectors(let list):
+                                connectors = list
                             case .inputTaken:
                                 guard self.inputs[target] != nil else { break }
                                 if self.inputs[target]?.ledger.taken() == true {
@@ -1704,6 +1710,9 @@ final class AppModel {
                         self.delegationSessions[target, default: []].insert(session)
                     }
                     if let reported { self.recordReportedModel(reported, requested: current.model, accountID: accountID, for: target) }
+                    if let connectors {
+                        self.connectorBoard.record(connectors, scope: connectorScope, sessionID: sessions.last ?? self.runSettings(of: target)?.resumableSessionID, for: target)
+                    }
                     if delivered {
                         // The taken message leaves the saved queue only once the saved transcript holds it.
                         self.saveThread(target)

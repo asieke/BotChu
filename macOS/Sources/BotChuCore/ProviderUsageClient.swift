@@ -159,13 +159,17 @@ final class UsageProcess: @unchecked Sendable {
     private var buffer = Data()
     private var requestID = 0
     private let deadline: Date
+    /// The most bytes one output (or frame) may take; a connector check's tool catalogs run to megabytes.
+    private let frameLimit: Int
     /// What Muse announces, also while a call waits for its answer: usage, and how its turn went.
     var museReading: ProviderUsage?
     var museAnswered = false
     var museEnded: String?
 
-    init(command: String, arguments: [String], directory: URL, environment: [String: String] = [:], timeout: TimeInterval) throws {
+    init(command: String, arguments: [String], directory: URL, environment: [String: String] = [:], timeout: TimeInterval,
+         frameLimit: Int = 2 << 20) throws {
         deadline = Date().addingTimeInterval(timeout)
+        self.frameLimit = frameLimit
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-l", "-c", CommandBuilder.shellScript(command: command), "botchu-usage"] + arguments
         process.currentDirectoryURL = directory
@@ -211,7 +215,7 @@ final class UsageProcess: @unchecked Sendable {
             guard let chunk = try chunk() else { continue }
             if chunk.isEmpty { break }
             data.append(chunk)
-            guard data.count <= 2 << 20 else { throw UsageFailure.unrecognized }
+            guard data.count <= frameLimit else { throw UsageFailure.unrecognized }
         }
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { throw failure() }
@@ -274,7 +278,7 @@ final class UsageProcess: @unchecked Sendable {
             guard let chunk = try chunk(until: soft) else { return nil }
             guard !chunk.isEmpty else { throw failure() }
             buffer.append(chunk)
-            guard buffer.count <= 2 << 20 else { throw UsageFailure.unrecognized }
+            guard buffer.count <= frameLimit else { throw UsageFailure.unrecognized }
         }
     }
 }
