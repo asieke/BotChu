@@ -17,7 +17,9 @@ extension RenderingTests {
         #expect(app.inbox.all.count == 1, "The same title again in the turn updates it")
         #expect(delivery.botID == fixture.fox.id && delivery.taskID == nil && delivery.title == "Report")
         #expect(delivery.note == "Second version" && delivery.credits.isEmpty)
-        #expect(delivery.question == Delivery.Question(text: "Which should I file?", choices: ["Answer first", "Hold"]))
+        #expect(delivery.question == Delivery.Question(text: "Which should I file?", choices: ["Answer first", "Hold"], recommended: "Answer first"))
+        // Sent for review first, then updated to ask: it needs input.
+        #expect(delivery.purpose == .needsInput && app.inbox.awaitingInput(home) == [delivery.id])
         #expect(delivery.links == [Delivery.Link(repo: "asieke/BotChu", number: 118, isPullRequest: false)])
         #expect(delivery.files.map(\.name) == ["report.md"] && delivery.files.first?.kind == .document)
         let copy = InboxFolder(home: BotHome(workspace: fixture.fox.workspace)).fileURL("report.md", of: delivery.id)
@@ -32,7 +34,7 @@ extension RenderingTests {
 
         // One unread state: reading the delivery clears its conversation's dot, and the reverse.
         #expect(app.inbox.unreadCount == 1 && app.unread.contains(home))
-        #expect(InboxList.section(of: delivery, state: app.inbox.state, now: Date()) == .needsYou)
+        #expect(InboxList.section(of: delivery, state: app.inbox.state, now: Date()) == .needsInput)
         app.inbox.markRead(delivery.id)
         #expect(app.inbox.unreadCount == 0 && !app.unread.contains(home))
         app.inbox.markRead(delivery.id, false)
@@ -63,7 +65,7 @@ extension RenderingTests {
         #expect(!app.inbox.reply("Hold", to: delivery.id))
         try await fixture.wait { !app.inbox.sending.contains(delivery.id) }
         #expect(app.inbox.isDone(delivery.id) && app.inbox.state.isAnswered(delivery) && !app.inbox.isUnread(delivery.id))
-        #expect(app.inbox.failed[delivery.id] == nil)
+        #expect(app.inbox.failed[delivery.id] == nil && app.inbox.awaitingInput(home).isEmpty)
         // Its conversation opened.
         #expect(app.destination == nil && app.isShown(home))
 
@@ -157,6 +159,9 @@ extension RenderingTests {
         #expect(app.inbox.drafts[delivery.id] == "Answer first, please")
         #expect(!app.inbox.isDone(delivery.id) && app.inbox.state.needsAnswer(delivery))
         #expect(app.destination == .inbox && app.inbox.selected == delivery.id)
+        // Still unresolved: first in the list, counted, and its conversation still waits on the owner.
+        #expect(InboxList.section(of: delivery, state: app.inbox.state, now: Date()) == .needsInput)
+        #expect(app.inbox.unfinishedCount == 1 && app.inbox.awaitingInput(home) == [delivery.id])
 
         // Sent again once it can be saved.
         try FileManager.default.removeItem(at: queue)
@@ -167,6 +172,41 @@ extension RenderingTests {
         app.resumeQueuedMessages(to: home)
         try await fixture.wait { app.thread(home).contains { $0.text.hasPrefix("GOT-REPLY") } }
         #expect(app.thread(home).filter { $0.delivery == delivery.id && $0.role == .user }.map(\.text) == ["Answer first, please"])
+    }
+
+    /// `--update <id>` in a later turn replaces the delivery rather than adding one; sent again
+    /// saying nothing new it stays Done, and changed it is unread and needs input again (#217).
+    @Test func anUpdateInALaterTurnReplacesTheDeliveryAndOnlyAChangeAsksAgain() async throws {
+        let fixture = try InboxFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app, home = ChatTarget.home(fixture.fox.id)
+        app.destination = .projects
+        app.send("DELIVER", to: home)
+        try await fixture.wait { !app.isRunning(home) }
+        let delivery = try #require(app.inbox.all.first)
+        app.inbox.setDone(delivery.id, true)
+        let id = delivery.id.uuidString.lowercased()
+
+        app.send("UPDATE \(id) Second version", to: home)
+        try await fixture.wait { !app.isRunning(home) }
+        #expect(app.thread(home).last { $0.role == .assistant }?.text.contains("Updated to your owner's Inbox: Report") == true)
+        #expect(app.inbox.all.count == 1 && app.inbox.delivery(delivery.id)?.updatedAt == delivery.updatedAt)
+        #expect(app.inbox.isDone(delivery.id) && !app.inbox.isUnread(delivery.id) && app.inbox.awaitingInput(home).isEmpty)
+
+        app.send("UPDATE \(id) Third version: the options changed", to: home)
+        try await fixture.wait { !app.isRunning(home) }
+        let renewed = try #require(app.inbox.delivery(delivery.id))
+        #expect(app.inbox.all.count == 1 && renewed.note == "Third version: the options changed" && renewed.sentAt == delivery.sentAt)
+        #expect(!app.inbox.isDone(delivery.id) && app.inbox.isUnread(delivery.id) && app.inbox.awaitingInput(home) == [delivery.id])
+        #expect(app.thread(home).filter { $0.delivery == delivery.id }.count == 1, "One card")
+
+        // Only a delivery this conversation sent can be updated.
+        app.send("UPDATE \(UUID().uuidString.lowercased()) Elsewhere", to: home)
+        try await fixture.wait { !app.isRunning(home) }
+        #expect(app.thread(home).last { $0.role == .assistant }?.text.contains("Not delivered: this conversation sent no delivery") == true)
+        app.send("UPDATE \(id) From the task", to: fixture.task)
+        try await fixture.wait { !app.isRunning(fixture.task) }
+        #expect(app.inbox.all.count == 1 && app.inbox.delivery(delivery.id)?.taskID == nil)
     }
 
     @Test func aSubagentsDeliveryIsItsCallersAndCreditsIt() async throws {
@@ -254,12 +294,19 @@ extension RenderingTests {
         answer = "GOT-REPLY " + reply.group(1) + " " + brief
     elif brief == "DELIVER":
         with open("report.md", "w") as handle: handle.write("# v1")
-        first = run("botchu-inbox", "send", "--title", "Report", "--note", "First version", "--file", "report.md")
+        first = run("botchu-inbox", "send", "--purpose", "review", "--title", "Report", "--note", "First version", "--file", "report.md")
         with open("report.md", "w") as handle: handle.write("# v2")
-        second = run("botchu-inbox", "send", "--title", "Report", "--note", "Second version", "--file", "report.md",
-                     "--issue", "asieke/BotChu#118", "--ask", "Which should I file?", "--choice", "Answer first", "--choice", "Hold")
+        second = run("botchu-inbox", "send", "--purpose", "needs-input", "--title", "Report", "--note", "Second version", "--file", "report.md",
+                     "--issue", "asieke/BotChu#118", "--ask", "Which should I file?", "--choice", "Answer first", "--choice", "Hold",
+                     "--recommend", "Answer first")
         with open("report.md", "w") as handle: handle.write("# edited after sending")
         answer = first + "\n---\n" + second
+    elif brief.startswith("UPDATE "):
+        _, ident, note = brief.split(" ", 2)
+        with open("report.md", "w") as handle: handle.write("# v2")
+        answer = run("botchu-inbox", "send", "--purpose", "needs-input", "--title", "Report", "--note", note, "--file", "report.md",
+                     "--issue", "asieke/BotChu#118", "--ask", "Which should I file?", "--choice", "Answer first", "--choice", "Hold",
+                     "--recommend", "Answer first", "--update", ident)
     elif brief == "HOLD":
         import time
         while not os.path.exists("release"): time.sleep(0.05)
@@ -269,7 +316,7 @@ extension RenderingTests {
                                 stdout=subprocess.PIPE).stdout
     elif brief == "SUB_DELIVER":
         with open("research.md", "w") as handle: handle.write("# Findings")
-        answer = run("botchu-inbox", "send", "--title", "Research", "--note", "Findings", "--file", "research.md")
+        answer = run("botchu-inbox", "send", "--purpose", "fyi", "--title", "Research", "--note", "Findings", "--file", "research.md")
     else:
         answer = "Done"
     emit({"type":"item.completed", "item":{"type":"agent_message", "text":answer}})

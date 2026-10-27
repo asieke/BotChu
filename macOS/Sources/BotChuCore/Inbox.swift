@@ -99,11 +99,30 @@ public struct Delivery: Identifiable, Codable, Hashable, Sendable {
     public struct Question: Codable, Hashable, Sendable {
         public var text: String
         public var choices: [String]
+        /// The choice the bot would pick (`--recommend`), one of `choices`.
+        public var recommended: String?
 
-        public init(text: String, choices: [String] = []) {
+        public init(text: String, choices: [String] = [], recommended: String? = nil) {
             self.text = text
             self.choices = choices
+            self.recommended = recommended
         }
+    }
+
+    /// What a delivery asks of the owner (`--purpose`), shown in the list and the reader.
+    public enum Purpose: String, Codable, CaseIterable, Hashable, Sendable {
+        /// A decision, access or information the bot can't go on without: one question to answer.
+        case needsInput = "needs-input"
+        /// Work that needs the owner's judgment; a reply accepts it or asks for changes.
+        case review
+        /// A meaningful finished outcome; looking at it is optional.
+        case completed
+        /// An important finding that needs no answer.
+        case fyi
+
+        /// What a delivery that doesn't say is for, as before purposes (#217): its question needs
+        /// input, anything else is for review.
+        public static func fallback(asking: Bool) -> Purpose { asking ? .needsInput : .review }
     }
 
     public var id: UUID
@@ -117,13 +136,16 @@ public struct Delivery: Identifiable, Codable, Hashable, Sendable {
     public var files: [File]
     public var links: [Link]
     public var question: Question?
+    public var purpose: Purpose
     public var credits: [Credit]
     public var sentAt: Date
-    /// When it was last sent again with the same title, in the same turn; `sentAt` until then.
+    /// When it was last sent again changed (with the same title in the turn, or `--update`); `sentAt`
+    /// until then.
     public var updatedAt: Date
 
     public init(id: UUID = UUID(), botID: UUID, taskID: UUID? = nil, title: String, note: String = "", files: [File] = [],
-                links: [Link] = [], question: Question? = nil, credits: [Credit] = [], sentAt: Date = Date(), updatedAt: Date? = nil) {
+                links: [Link] = [], question: Question? = nil, purpose: Purpose? = nil, credits: [Credit] = [], sentAt: Date = Date(),
+                updatedAt: Date? = nil) {
         self.id = id
         self.botID = botID
         self.taskID = taskID
@@ -132,10 +154,59 @@ public struct Delivery: Identifiable, Codable, Hashable, Sendable {
         self.files = files
         self.links = links
         self.question = question
+        self.purpose = purpose ?? .fallback(asking: question != nil)
         self.credits = credits
         // As its record keeps them, so an answer stamped in the same second still counts.
         self.sentAt = Self.stamp(sentAt)
         self.updatedAt = Self.stamp(updatedAt ?? sentAt)
+    }
+
+    /// A delivery kept before purposes, or with one this version doesn't know, has its fallback.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        botID = try container.decode(UUID.self, forKey: .botID)
+        taskID = try container.decodeIfPresent(UUID.self, forKey: .taskID)
+        title = try container.decode(String.self, forKey: .title)
+        note = try container.decode(String.self, forKey: .note)
+        files = try container.decode([File].self, forKey: .files)
+        links = try container.decode([Link].self, forKey: .links)
+        question = try container.decodeIfPresent(Question.self, forKey: .question)
+        purpose = (try? container.decodeIfPresent(Purpose.self, forKey: .purpose)) ?? .fallback(asking: question != nil)
+        credits = try container.decode([Credit].self, forKey: .credits)
+        sentAt = try container.decode(Date.self, forKey: .sentAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+
+    /// The conversation that sent it: its bot, and its task or nil for Home.
+    public struct Origin: Hashable, Sendable {
+        public var botID: UUID
+        public var taskID: UUID?
+
+        public init(botID: UUID, taskID: UUID?) {
+            self.botID = botID
+            self.taskID = taskID
+        }
+    }
+
+    public var origin: Origin { Origin(botID: botID, taskID: taskID) }
+
+    /// Whether it says what `other` says: the same purpose, title, note, question, links and files.
+    public func says(the other: Delivery) -> Bool {
+        purpose == other.purpose && title == other.title && note == other.note && question == other.question
+            && links == other.links && files.map { [$0.name, $0.kind.rawValue, String($0.bytes)] } == other.files.map { [$0.name, $0.kind.rawValue, String($0.bytes)] }
+    }
+
+    /// `fresh` sent in place of `earlier`: it keeps `earlier`'s first time, and when it says nothing
+    /// new, its time and what the owner did with it too (`renewed` false). A changed one is renewed:
+    /// unread, out of Done and, asking again, unanswered.
+    public static func resent(_ fresh: Delivery, replacing earlier: Delivery?) -> (delivery: Delivery, renewed: Bool) {
+        guard let earlier else { return (fresh, true) }
+        var delivery = fresh
+        delivery.sentAt = earlier.sentAt
+        guard fresh.says(the: earlier) else { return (delivery, true) }
+        delivery.updatedAt = earlier.updatedAt
+        return (delivery, false)
     }
 
     /// A date as its record keeps it: in whole seconds.
@@ -189,6 +260,10 @@ public struct InboxRequest: Equatable, Sendable {
     public var files: [StagedFile]
     public var links: [Delivery.Link]
     public var question: Delivery.Question?
+    /// `--purpose`, or the fallback from what it sends when it doesn't say.
+    public var purpose: Delivery.Purpose
+    /// The delivery of this conversation it updates (`--update`), from this turn or an earlier one.
+    public var updates: UUID?
     /// Bots credited by name, slug or ID (`--credit`).
     public var credits: [String]
     public var createdAt: Date
@@ -241,17 +316,42 @@ public struct InboxRequest: Equatable, Sendable {
             let text = ((asked["text"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let choices = ((asked["choices"] as? [String]) ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
             guard !text.isEmpty, text.count <= 500 else { throw Problem("the question (--ask) must be 1–500 characters") }
-            guard choices.count <= maxChoices, choices.allSatisfy({ $0.count <= 80 }) else {
+            var offered = choices
+            let recommended = (asked["recommended"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let recommended {
+                guard !recommended.isEmpty, recommended.count <= 80 else { throw Problem("the recommended answer (--recommend) must be 1–80 characters") }
+                // The answer the bot would pick is one click too.
+                if !offered.contains(recommended) { offered.insert(recommended, at: 0) }
+            }
+            guard offered.count <= maxChoices, offered.allSatisfy({ $0.count <= 80 }) else {
                 throw Problem("offer at most \(maxChoices) choices, each up to 80 characters")
             }
-            question = Delivery.Question(text: text, choices: choices)
+            question = Delivery.Question(text: text, choices: offered, recommended: recommended)
+        }
+        let purpose: Delivery.Purpose
+        if let declared = fields["purpose"] as? String {
+            guard let known = Delivery.Purpose(rawValue: declared) else {
+                throw Problem("--purpose is one of \(Delivery.Purpose.allCases.map(\.rawValue).joined(separator: ", "))")
+            }
+            purpose = known
+        } else {
+            purpose = .fallback(asking: question != nil)
+        }
+        if purpose == .needsInput, question == nil { throw Problem("ask the one question it needs answered (--ask)") }
+        if question != nil, ![.needsInput, .review].contains(purpose) {
+            throw Problem("a question (--ask) is for --purpose needs-input or review")
+        }
+        var updates: UUID?
+        if let id = fields["updates"] as? String {
+            guard let parsed = UUID(uuidString: id) else { throw Problem("--update takes the ID of a delivery this conversation sent") }
+            updates = parsed
         }
         let credits = ((fields["credits"] as? [String]) ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard credits.count <= 8 else { throw Problem("credit at most 8 bots") }
         let created = (object["createdAt"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
         return InboxRequest(id: id, invocationID: invocationID, callerBotID: callerBotID, callerTaskID: uuid("callerTaskID"),
                             parentSubagentID: uuid("parentSubagentID"), title: title, note: note, files: files, links: links,
-                            question: question, credits: credits, createdAt: created)
+                            question: question, purpose: purpose, updates: updates, credits: credits, createdAt: created)
     }
 
     /// Checks that the delivery comes from the turn whose mailbox it is in, as BotChu registered it.
@@ -398,6 +498,28 @@ public struct InboxState: Codable, Equatable, Sendable {
         delivery.question != nil && !self[delivery.id].done && !isAnswered(delivery)
     }
 
+    /// An unresolved Needs input delivery: not Done, nor answered since it was sent. It comes
+    /// first in the list, and its conversation waits on the owner (`awaitingInput`).
+    public func needsInput(_ delivery: Delivery) -> Bool {
+        delivery.purpose == .needsInput && !self[delivery.id].done && !isAnswered(delivery)
+    }
+
+    /// Each conversation waiting on the owner, with its unresolved Needs input deliveries, newest
+    /// first. A conversation with none isn't listed.
+    public func awaitingInput(_ deliveries: [Delivery]) -> [Delivery.Origin: [UUID]] {
+        Dictionary(grouping: deliveries.filter(needsInput), by: \.origin)
+            .mapValues { $0.sorted { ($0.updatedAt, $0.id.uuidString) > ($1.updatedAt, $1.id.uuidString) }.map(\.id) }
+    }
+
+    /// A delivery saved again: renewed (`Delivery.resent`), it is out of Done and unread, unless it
+    /// arrives where the owner is looking (`shown`); a new one is too. One that says nothing new
+    /// keeps what the owner did with it.
+    public mutating func received(_ id: UUID, renewed: Bool, shown: Bool) {
+        guard renewed else { return }
+        self[id].done = false
+        self[id].read = shown
+    }
+
     /// The owner replied to it from the Inbox since it was sent.
     public func isAnswered(_ delivery: Delivery) -> Bool {
         self[delivery.id].repliedAt.map { $0 >= delivery.updatedAt } ?? false
@@ -435,11 +557,11 @@ public struct InboxState: Codable, Equatable, Sendable {
 
 // MARK: The list
 
-/// The Inbox's list in groups: what needs the owner's answer, Today, Yesterday, then each earlier
-/// day, newest first, with Done at the end.
+/// The Inbox's list in groups: unresolved Needs input, Today, Yesterday, then each earlier day,
+/// newest first, with Done at the end.
 public enum InboxList {
     public enum Section: Hashable, Sendable {
-        case needsYou, today, yesterday
+        case needsInput, today, yesterday
         /// An earlier day, by its start.
         case day(Date)
         case done
@@ -452,7 +574,7 @@ public enum InboxList {
 
     public static func section(of delivery: Delivery, state: InboxState, now: Date, calendar: Calendar = .current) -> Section {
         if state[delivery.id].done { return .done }
-        if state.needsAnswer(delivery) { return .needsYou }
+        if state.needsInput(delivery) { return .needsInput }
         if calendar.isDate(delivery.updatedAt, inSameDayAs: now) { return .today }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(delivery.updatedAt, inSameDayAs: yesterday) {
             return .yesterday
@@ -472,7 +594,7 @@ public enum InboxList {
         }
         func rank(_ section: Section) -> (Int, TimeInterval) {
             switch section {
-            case .needsYou: (0, 0)
+            case .needsInput: (0, 0)
             case .today: (1, 0)
             case .yesterday: (2, 0)
             case .day(let date): (3, -date.timeIntervalSinceReferenceDate)
@@ -482,6 +604,21 @@ public enum InboxList {
         return grouped.keys.sorted { rank($0) < rank($1) }.map { section in
             Group(section: section, ids: grouped[section]!.sorted { ($0.updatedAt, $0.id.uuidString) > ($1.updatedAt, $1.id.uuidString) }.map(\.id))
         }
+    }
+
+    /// The deliveries shown, in order: every group's, Done's only while it is open.
+    public static func shown(_ groups: [Group], showsDone: Bool) -> [UUID] {
+        groups.flatMap { $0.section == .done && !showsDone ? [] : $0.ids }
+    }
+
+    /// The delivery to read when the Inbox opens: the first not Done.
+    public static func first(_ groups: [Group]) -> UUID? { groups.first { $0.section != .done }?.ids.first }
+
+    /// The one `offset` rows from `selected` in `shown` (↑ is -1, ↓ is 1), staying put at either end;
+    /// nil when `selected` isn't shown.
+    public static func step(from selected: UUID?, by offset: Int, in shown: [UUID]) -> UUID? {
+        guard let selected, let index = shown.firstIndex(of: selected) else { return nil }
+        return shown[min(max(index + offset, 0), shown.count - 1)]
     }
 
     /// What to select when the selected delivery leaves the list shown (`was`, now `now`), as when

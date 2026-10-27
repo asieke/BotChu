@@ -157,7 +157,7 @@ deliveries = [
   (scout, None, did(1), "Should sub-agent work block Telegram?",
    "Coder looked into [#118](https://github.com/asieke/BotChu/issues/118). Today a Telegram message is answered only when everything its turn started is back, sub-agents included, so you can watch “typing…” for as long as the slowest sub-agent takes.\n\n1. **Answer first.** The bot replies when its own work is done; each sub-agent's handoff follows as its own message.\n2. **Hold, but say so.** One reply as today, plus “Waiting on 2 sub-agents” once the wait passes a minute.\n\nI'd file the first: it's how Home already hears from tasks.",
    [("telegram-subagents.md", "document", report, {"botID": coder, "name": "Coder"})], [("asieke/BotChu", 118, False)],
-   {"text": "Which should I file?", "choices": ["Answer first", "Hold, but say so"]}, [{"botID": coder, "name": "Coder"}], 28),
+   {"text": "Which should I file?", "choices": ["Answer first", "Hold, but say so"], "recommended": "Answer first"}, [{"botID": coder, "name": "Coder"}], 28),
   (scout, task, did(2), "Providers, today and improved",
    "Done: credits, free resets and dollars now share the meter's line, and a free reset that expires within three days says when.",
    [("index.html", "page", page, None)], [], None, [], 95),
@@ -169,6 +169,8 @@ deliveries = [
    [], None, [], 60 * 26),
   (coder, None, did(5), "Weekly dependency check", "Nothing to update this week.", [], [], None, [], 60 * 50),
 ]
+# Their purposes; the last one's was kept before purposes, so it is for review.
+purposes = {did(1): "needs-input", did(2): "review", did(3): "completed", did(4): "fyi"}
 state = {"entries": {}}
 for bot, task_id, ident, title, note, files, links, question, credits, minutes in deliveries:
     workspace = os.path.join(data, "bots", "scout" if bot == scout else "coder")
@@ -184,6 +186,7 @@ for bot, task_id, ident, title, note, files, links, question, credits, minutes i
               "links": [{"repo": r, "number": n, "isPullRequest": p} for r, n, p in links], "sentAt": at(minutes), "updatedAt": at(minutes)}
     if task_id: record["taskID"] = task_id
     if question: record["question"] = question
+    if ident in purposes: record["purpose"] = purposes[ident]
     with open(os.path.join(folder, "delivery.json"), "w") as handle: json.dump(record, handle, indent=2)
 state["entries"][did(2)] = {"read": True, "done": False}
 state["entries"][did(4)] = {"read": True, "done": False}

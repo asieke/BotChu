@@ -324,10 +324,10 @@ extension RenderingTests {
         answer = "GOT-REPLY " + reply.group(1) + " " + brief
     elif brief == "SEND":
         with open("analysis.md", "w") as handle: handle.write("# 20 recommendations")
-        answer = run("botchu-inbox", "send", "--title", "Product analysis", "--note", "20 recommendations", "--file", "analysis.md",
+        answer = run("botchu-inbox", "send", "--purpose", "needs-input", "--title", "Product analysis", "--note", "20 recommendations", "--file", "analysis.md",
                      "--ask", "File them?", "--choice", "Yes", "--choice", "Hold")
     elif brief == "PENDING":
-        answer = run("botchu-inbox", "send", "--wait", "0", "--title", "Late analysis", "--note", "Sent as the run ended")
+        answer = run("botchu-inbox", "send", "--wait", "0", "--purpose", "fyi", "--title", "Late analysis", "--note", "Sent as the run ended")
     elif brief == "QUIET":
         answer = "Checked every repo.\nNOTHING_TO_REPORT"
     else:

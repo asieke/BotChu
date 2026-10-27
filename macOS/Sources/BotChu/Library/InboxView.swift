@@ -13,6 +13,8 @@ extension Palette {
     static let tertiaryText = dynamic(0x8E8E93, 0x7C7C83)
     static let chip = Color.primary.opacity(0.055)
     static let tile = dynamic(0xEFEEEC, 0x34333A)
+    /// Work for the owner's judgment.
+    static let review = dynamic(0x0A64D8, 0x4BA3FF)
     static let merged = dynamic(0x8250DF, 0xA371F7)
     static let added = dynamic(0x1A7F37, 0x3FB950)
     static let deleted = dynamic(0xCF222E, 0xF85149)
@@ -32,7 +34,7 @@ struct InboxView: View {
         let inbox = model.inbox!
         let deliveries = inbox.all
         let groups = InboxList.groups(deliveries, state: inbox.state, now: .now, pinned: pinned)
-        let visible = groups.flatMap { $0.section == .done && !showsDone ? [] : $0.ids }
+        let visible = InboxList.shown(groups, showsDone: showsDone)
         HStack(spacing: 0) {
             InboxColumn(groups: groups, showsDone: $showsDone)
                 .frame(width: width >= 1180 ? 392 : 320)
@@ -40,10 +42,8 @@ struct InboxView: View {
                 .focused($listFocused)
                 .focusEffectDisabled()
                 .onKeyPress(keys: [.upArrow, .downArrow]) { press in
-                    guard let selected = inbox.selected, let index = visible.firstIndex(of: selected) else { return .ignored }
-                    let next = index + (press.key == .upArrow ? -1 : 1)
-                    guard visible.indices.contains(next) else { return .handled }
-                    inbox.selected = visible[next]
+                    guard let next = InboxList.step(from: inbox.selected, by: press.key == .upArrow ? -1 : 1, in: visible) else { return .ignored }
+                    inbox.selected = next
                     return .handled
                 }
             Group {
@@ -67,7 +67,7 @@ struct InboxView: View {
         }
         .onAppear {
             inbox.isShowing = true
-            if inbox.selected.map({ !visible.contains($0) }) ?? true { inbox.selected = groups.first { $0.section != .done }?.ids.first }
+            if inbox.selected.map({ !visible.contains($0) }) ?? true { inbox.selected = InboxList.first(groups) }
             read(inbox.selected, in: groups)
             listFocused = true
         }
@@ -88,7 +88,7 @@ struct InboxView: View {
         }
         // Deliveries read after the page showed: the first is chosen.
         .onChange(of: deliveries.count) { _, _ in
-            if inbox.selected == nil { inbox.selected = groups.first { $0.section != .done }?.ids.first }
+            if inbox.selected == nil { inbox.selected = InboxList.first(groups) }
         }
     }
 
@@ -143,7 +143,7 @@ private struct InboxColumn: View {
     }
 }
 
-/// "NEEDS YOU 3"; Done's opens and closes its group.
+/// "NEEDS INPUT 3"; Done's opens and closes its group.
 private struct InboxGroupHeading: View {
     let section: InboxList.Section
     let count: Int
@@ -181,7 +181,7 @@ private struct InboxGroupHeading: View {
 
     static func title(_ section: InboxList.Section) -> String {
         switch section {
-        case .needsYou: "Needs you"
+        case .needsInput: "Needs input"
         case .today: "Today"
         case .yesterday: "Yesterday"
         case .day(let date): date.formatted(.dateTime.weekday(.wide).day().month(.wide))
@@ -244,7 +244,7 @@ struct InboxRow: View {
         .padding(.horizontal, ConversationColumn.rowInset)
         .onHover { hovering = $0 }
         .contextMenu { DeliveryMenu(delivery: delivery) }
-        .accessibilityLabel("\(model.bot(delivery.botID)?.name ?? "Bot"): \(delivery.title)\(unread ? ", unread" : "")")
+        .accessibilityLabel("\(model.bot(delivery.botID)?.name ?? "Bot"): \(PurposeLook(delivery.purpose).title): \(delivery.title)\(unread ? ", unread" : "")")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("inbox-row-\(delivery.id)")
     }
@@ -260,24 +260,28 @@ struct InboxRow: View {
     }
 }
 
-/// What came with a delivery, a chip each, after what it waits for.
+/// What came with a delivery, a chip each, after its purpose (or the work its reply started) and a
+/// reply that wasn't sent.
 struct DeliveryChips: View {
     @Environment(AppModel.self) private var model
     let delivery: Delivery
 
     var body: some View {
         HStack(spacing: 6) {
-            if model.inbox.state.needsAnswer(delivery) {
-                Label("Needs your answer", systemImage: "questionmark.circle")
-                    .labelStyle(TightLabel())
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Palette.needs)
-                    .fixedSize()
-            } else if model.isRunning(model.inbox.target(of: delivery)), model.inbox.state[delivery.id].repliedAt != nil {
+            if model.isRunning(model.inbox.target(of: delivery)), model.inbox.state.isAnswered(delivery) {
                 Label("Working", systemImage: "circle.dotted")
                     .labelStyle(TightLabel())
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Palette.violet)
+                    .fixedSize()
+            } else {
+                PurposeLabel(delivery: delivery)
+            }
+            if model.inbox.failed[delivery.id] != nil {
+                Label("Not sent", systemImage: "exclamationmark.triangle.fill")
+                    .labelStyle(TightLabel())
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.red)
                     .fixedSize()
             }
             ForEach(delivery.files.prefix(3), id: \.name) { file in
@@ -292,6 +296,40 @@ struct DeliveryChips: View {
             }
         }
         .lineLimit(1)
+    }
+}
+
+/// What a delivery asks of the owner, in its colour while it waits on them; grey once handled.
+struct PurposeLabel: View {
+    @Environment(AppModel.self) private var model
+    let delivery: Delivery
+
+    var body: some View {
+        let look = PurposeLook(delivery.purpose)
+        let state = model.inbox.state
+        let waiting = delivery.purpose == .needsInput ? state.needsInput(delivery) : !state[delivery.id].done
+        Label(look.title, systemImage: look.symbol)
+            .labelStyle(TightLabel())
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(waiting ? look.color : Palette.secondaryText)
+            .fixedSize()
+            .accessibilityIdentifier("inbox-purpose-\(delivery.purpose.rawValue)")
+    }
+}
+
+/// How each purpose is named and drawn.
+struct PurposeLook {
+    var title: String
+    var symbol: String
+    var color: Color
+
+    init(_ purpose: Delivery.Purpose) {
+        switch purpose {
+        case .needsInput: (title, symbol, color) = ("Needs input", "questionmark.circle", Palette.needs)
+        case .review: (title, symbol, color) = ("For review", "eye", Palette.review)
+        case .completed: (title, symbol, color) = ("Completed", "checkmark.seal", Palette.added)
+        case .fyi: (title, symbol, color) = ("FYI", "info.circle", Palette.secondaryText)
+        }
     }
 }
 

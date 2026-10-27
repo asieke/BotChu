@@ -668,13 +668,15 @@ public enum JobReport {
     }
 
     /// The delivery of a run's final reply, without what it asked to remember; nil for an empty one.
+    /// It is FYI: a finding the run thought worth the owner's attention, which asks nothing of them.
     public static func delivery(job: Job, run: JobRun, reply: String, at date: Date = Date()) -> Delivery? {
         let text = MemoryNotes.handoffText(reply)
         guard !text.isEmpty else { return nil }
         var bytes = 0
         let limit = InboxRequest.maxNoteBytes - 3
         let note = text.utf8.count <= InboxRequest.maxNoteBytes ? text : text.prefix { bytes += $0.utf8.count; return bytes <= limit } + "…"
-        return Delivery(id: run.id, botID: job.botID, taskID: run.taskID, title: job.title, note: note, sentAt: Delivery.stamp(date))
+        return Delivery(id: run.id, botID: job.botID, taskID: run.taskID, title: job.title, note: note, purpose: .fyi,
+                        sentAt: Delivery.stamp(date))
     }
 }
 

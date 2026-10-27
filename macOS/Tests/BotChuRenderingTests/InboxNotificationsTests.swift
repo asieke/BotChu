@@ -168,7 +168,7 @@ extension RenderingTests {
         answer = "GOT-REPLY " + reply.group(1) + " " + brief
     elif brief == "DELIVER":
         for note in ["First version", "Second version"]:
-            subprocess.run(["botchu-inbox", "send", "--title", "Report", "--note", note,
+            subprocess.run(["botchu-inbox", "send", "--purpose", "needs-input", "--title", "Report", "--note", note,
                             "--ask", "Which should I file?", "--choice", "Answer first", "--choice", "Hold"])
         answer = "Sent"
     else:

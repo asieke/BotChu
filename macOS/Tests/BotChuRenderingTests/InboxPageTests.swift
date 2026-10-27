@@ -90,6 +90,80 @@ extension RenderingTests {
         #expect(!app.inbox.isReading(report.id))
     }
 
+    /// Unresolved Needs input comes first, the rest stay newest first whatever their purpose, and
+    /// reading every one files none of them (#217). Each row says its purpose, in colour while it
+    /// waits on the owner.
+    @Test func needsInputComesFirstAndReadingFilesNothing() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-inbox-purpose-\(UUID().uuidString)")
+        let domain = "BotChu.InboxPageTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: domain) }
+        let store = Store(root: root.appendingPathComponent("index"))
+        let bot = Bot(name: "Fox", emoji: "🦊", workspace: root.appendingPathComponent("fox").path)
+        try BotHome(workspace: bot.workspace).save(bot)
+        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        let folder = InboxFolder(home: BotHome(workspace: bot.workspace))
+        func sent(_ minutes: Double) -> Date { Delivery.stamp(Date(timeIntervalSinceNow: -minutes * 60)) }
+        let asking = Delivery(botID: bot.id, title: "Which?", question: Delivery.Question(text: "Which?", choices: ["A", "B"], recommended: "A"),
+                              purpose: .needsInput, sentAt: sent(50))
+        let review = Delivery(botID: bot.id, title: "Mockup", purpose: .review, sentAt: sent(10))
+        let completed = Delivery(botID: bot.id, title: "Dashboard is live", note: "https://example.com/dash", purpose: .completed, sentAt: sent(20))
+        let fyi = Delivery(botID: bot.id, title: "Found a leak", purpose: .fyi, sentAt: sent(30))
+        for delivery in [asking, review, completed, fyi] { try folder.save(delivery, contents: [:]) }
+        let app = AppModel(store: store, settings: AppSettings(defaults: defaults), openRouterKey: { nil }, projectGitHub: ProjectGitHub { _, _ in
+            await ProjectGitHub.command(["/usr/bin/false"], body: nil)
+        }, openWorkLookup: { _ in .success(GitHubLookup.OpenWork(items: [])) })
+        defer { app.stopAll() }
+        for _ in 0..<100 where app.inbox.all.count < 4 { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(app.inbox.unfinishedCount == 4)
+
+        // The question's label is in colour while it waits, grey once answered.
+        func coloured(_ delivery: Delivery) -> Int {
+            let view = NSHostingView(rootView: PurposeLabel(delivery: delivery).environment(app).padding(4))
+            view.setFrameSize(view.fittingSize)
+            view.layoutSubtreeIfNeeded()
+            guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return 0 }
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            var count = 0
+            for x in 0..<bitmap.pixelsWide {
+                for y in 0..<bitmap.pixelsHigh {
+                    guard let colour = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), colour.alphaComponent > 0.5 else { continue }
+                    if colour.redComponent - colour.blueComponent > 0.3 { count += 1 }
+                }
+            }
+            return count
+        }
+        #expect(coloured(asking) > 10)
+
+        app.destination = .inbox
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 760), styleMask: [.titled, .closable, .resizable],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: InboxView().environment(app).defaultAppStorage(defaults))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(400))
+        // The oldest, but it needs input; then the rest newest first.
+        #expect(app.inbox.selected == asking.id)
+        let groups = InboxList.groups(app.inbox.all, state: app.inbox.state, now: .now)
+        #expect(InboxList.shown(groups, showsDone: false) == [asking.id, review.id, completed.id, fyi.id])
+        for delivery in [review, completed, fyi] {
+            app.inbox.selected = delivery.id
+            try await Task.sleep(for: .milliseconds(80))
+        }
+        #expect(app.inbox.unreadCount == 0 && app.inbox.unfinishedCount == 4)
+        #expect([asking, review, completed, fyi].allSatisfy { !app.inbox.isDone($0.id) })
+        #expect(app.inbox.awaitingInput(.home(bot.id)) == [asking.id])
+
+        app.inbox.selected = asking.id
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(app.inbox.reply("A", to: asking.id))
+        for _ in 0..<250 where !app.inbox.isDone(asking.id) { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(app.inbox.isDone(asking.id) && app.inbox.unfinishedCount == 3 && app.inbox.awaitingInput(.home(bot.id)).isEmpty)
+        #expect(coloured(asking) == 0)
+    }
+
     /// Done moves the delivery being read out of its group at once: with Done closed, the next one
     /// is read, and after the last, none; a Done one chosen opens Done, and Move to Inbox keeps it.
     @Test func doneMovesTheDeliveryBeingReadAtOnce() async throws {

@@ -54,6 +54,10 @@ final class InboxModel {
     func target(of delivery: Delivery) -> ChatTarget { ChatTarget(botID: delivery.botID, taskID: delivery.taskID) }
     func isUnread(_ id: UUID) -> Bool { deliveries[id].map(state.isUnread) ?? false }
     func isDone(_ id: UUID) -> Bool { state[id].done }
+    /// The conversation's unresolved Needs input deliveries, newest first: it waits on the owner.
+    func awaitingInput(_ target: ChatTarget) -> [UUID] {
+        state.awaitingInput(Array(deliveries.values))[Delivery.Origin(botID: target.botID, taskID: target.taskID)] ?? []
+    }
 
     /// Reads every bot's deliveries off the main thread.
     func load(bots: [Bot]) {
@@ -83,9 +87,17 @@ final class InboxModel {
 
     /// Takes a delivery from `botchu-inbox send` in `target`'s turn (a sub-agent's, crediting its
     /// bot): copies its staged files out of the mailbox, saves it in the sender's folder, then shows it.
+    /// It updates the delivery it names (`--update`), else the one with its title sent in the turn.
     func receive(_ request: InboxRequest, in target: ChatTarget, credits: [Delivery.Credit], subagent: Delivery.Credit?,
                  transport: SubagentTransport) async throws -> (delivery: Delivery, updated: Bool) {
         guard let model, let bot = model.bot(target.botID) else { throw InboxRequest.Problem("its bot is gone") }
+        var existing = titles[target]?[request.title].flatMap { deliveries[$0] }
+        if let id = request.updates {
+            guard let named = deliveries[id], self.target(of: named) == target else {
+                throw InboxRequest.Problem("this conversation sent no delivery \(id.uuidString.lowercased()) to update")
+            }
+            existing = named
+        }
         var contents: [String: Data] = [:]
         var files: [Delivery.File] = []
         for file in request.files {
@@ -93,17 +105,16 @@ final class InboxModel {
             files.append(Delivery.File(name: file.name, kind: Delivery.File.kind(of: file.name), bytes: contents[file.name]!.count,
                                        source: file.source, credit: subagent))
         }
-        let existing = titles[target]?[request.title].flatMap { deliveries[$0] }
-        let now = Delivery.stamp()
-        let delivery = Delivery(id: existing?.id ?? UUID(), botID: target.botID, taskID: target.taskID, title: request.title,
-                                note: request.note, files: files, links: request.links, question: request.question,
-                                credits: credits, sentAt: existing?.sentAt ?? now, updatedAt: now)
+        let (delivery, renewed) = Delivery.resent(
+            Delivery(id: existing?.id ?? UUID(), botID: target.botID, taskID: target.taskID, title: request.title, note: request.note,
+                     files: files, links: request.links, question: request.question, purpose: request.purpose, credits: credits),
+            replacing: existing)
         let folder = InboxFolder(home: BotHome(workspace: bot.persistencePath))
         let saved = delivery, data = contents
         try await storage.perform(folder.url.path, label: "delivery") { try folder.save(saved, contents: data) }
         try? await transport.removeStaged(request: request.id)
         titles[target, default: [:]][request.title] = delivery.id
-        show(delivery, isNew: existing == nil)
+        show(delivery, isNew: existing == nil, renewed: renewed)
         return (delivery, existing != nil)
     }
 
@@ -113,22 +124,21 @@ final class InboxModel {
     func post(_ delivery: Delivery) async throws {
         guard let bot = model?.bot(delivery.botID) else { throw InboxRequest.Problem("its bot is gone") }
         let folder = InboxFolder(home: BotHome(workspace: bot.persistencePath))
-        try await storage.perform(folder.url.path, label: "delivery") { try folder.save(delivery, contents: [:]) }
-        show(delivery, isNew: deliveries[delivery.id] == nil)
+        let (saved, renewed) = Delivery.resent(delivery, replacing: deliveries[delivery.id])
+        try await storage.perform(folder.url.path, label: "delivery") { try folder.save(saved, contents: [:]) }
+        show(saved, isNew: deliveries[delivery.id] == nil, renewed: renewed)
     }
 
     /// A delivery saved: it is news, unless it arrives in the conversation the owner is looking at,
     /// and a new one is announced, its card in the conversation (after the turn under way's reply).
-    private func show(_ delivery: Delivery, isNew: Bool) {
+    /// Sent again saying nothing new, it keeps what the owner did with it.
+    private func show(_ delivery: Delivery, isNew: Bool, renewed: Bool) {
         guard let model else { return }
         let target = target(of: delivery)
         deliveries[delivery.id] = delivery
-        var entry = state[delivery.id]
-        entry.done = false
         // Arriving in the conversation the owner is looking at, it is read there.
-        entry.read = model.isShown(target)
-        state[delivery.id] = entry
-        saveState()
+        state.received(delivery.id, renewed: renewed, shown: model.isShown(target))
+        if renewed { saveState() }
         if isNew {
             model.notifier?.arrived(delivery)
             if model.isRunning(target) {
