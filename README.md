@@ -634,8 +634,20 @@ on that pull request's branch to continue in instead). The same command run agai
     option. OpenRouter shows the actual model inherited from Settings (for example **Flint (free)**),
     and searches its public catalog of text models with tool support, with context sizes. Catalog
     requests contain no key or conversation data, are cached in memory for an hour, and preserve
-    current/custom choices when unavailable. Other providers offer starter choices and label an
-    unspecified model as the account's default.
+    current/custom choices when unavailable. A Codex profile on this Mac offers the models its own
+    CLI lists (app-server `model/list`, every page, visible rows only, with each model's efforts),
+    read through the profile's command in a bounded, read-only query that starts no turn and reads
+    no login. The list is shared by every picker set to that profile (Home and task chats, the
+    **Runs on** card, the job editor and Quick tasks) and saved in `model-catalogs.json` by an opaque
+    key of the profile and its command, so a changed command starts a new list. A list a day old is
+    checked again at launch, on wake, hourly while BotChu runs and when a picker opens; the picker's
+    footer says when it was checked, and its refresh button checks at once. Checks of a profile
+    don't overlap and time out after 20 seconds; a failed or incomplete one keeps the last list,
+    says so, and is retried after a minute, doubling up to an hour. Until a list is read, and for a
+    task on an SSH host, Codex offers BotChu's starter choices instead. A listed model isn't proof the
+    account can run it, and a new list never changes a saved model, effort or session. Other
+    providers offer starter choices; every provider labels an unspecified model as the account's
+    default.
     Models are shown by their full name and version (Claude Opus 5.5, GPT-6.1 Sol, Muse Spark 1.3) in
     the picker, the composer, the **Runs on** card, Edit Bot and sub-agent cards. A version shows only
     when the ID pins one or the CLI has reported the model it ran: Claude Code offers each moving
@@ -1027,7 +1039,7 @@ on that pull request's branch to continue in instead). The same command run agai
     background asks: for now, each new task's summary, the label of three or four words on its
     tab's second line. It is **Off** until you pick a profile (Claude Code, Codex or Muse, which
     BotChu can run without tools); picking one starts on its family's smallest model (Haiku, GPT-6
-    Luna, Muse Spark), which you can change. Each task started afterwards is summarized once, in the
+    Luna, Muse Spark), which you can change, among a Codex profile's own models once listed. Each task started afterwards is summarized once, in the
     background (its turn doesn't wait), from its issue's or pull request's title once looked up, else
     its brief, in a fresh session with every tool turned off by the CLI itself, in an empty folder,
     as a run review is, on that profile's allowance and never another's, and logged in its bot's
@@ -1564,6 +1576,8 @@ on that pull request's branch to continue in instead). The same command run agai
   `BOTCHU_CONNECTORS=sample` (or `stale`, `unavailable`) gives profile checks in Connectors
   sample results (every state, an action of each kind, Computer Use and System entries), a check
   that fails after the first, or one that always fails, without starting a CLI.
+  `BOTCHU_CODEX_MODELS=sample` (or `unavailable`) gives Codex profiles the models their CLI listed
+  on 2026-10-27, or a list check that always fails, without starting a CLI.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
   querying any account (`sample` is Providers as its mock's main state: Claude's Fable week,
   Codex profiles' credits and free resets, and the Pi profile a key with a spending limit);

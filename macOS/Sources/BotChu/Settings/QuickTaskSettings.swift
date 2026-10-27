@@ -21,11 +21,15 @@ struct QuickTaskSettings: View {
             .accessibilityIdentifier("settings-quick-tasks-profile")
             if let account {
                 Picker("Model", selection: $settings.quickTaskModel) {
-                    ForEach(models(for: account.kind), id: \.id) { option in
+                    ForEach(models(for: account), id: \.id) { option in
                         Text(option.name).tag(option.id)
                     }
                 }
                 .accessibilityIdentifier("settings-quick-tasks-model")
+                // The profile's own list, as a conversation's picker shows it (#220), checked when it is due.
+                .task(id: model.modelCatalogScope(for: account)) {
+                    if let scope = model.modelCatalogScope(for: account) { await model.modelCatalog.refresh(scope) }
+                }
             }
         }
         .help("Names each new task in three or four words, once, in a fresh session with no tools, on this profile's allowance.")
@@ -37,18 +41,17 @@ struct QuickTaskSettings: View {
             let settings = model.settings
             settings.quickTaskAccountID = id
             guard let id else { return }
-            let kind = settings.account(id).kind
-            if !models(for: kind).contains(where: { $0.id == settings.quickTaskModel }) {
-                settings.quickTaskModel = QuickTasks.suggestedModel(for: kind)
+            let account = settings.account(id)
+            if !models(for: account).contains(where: { $0.id == settings.quickTaskModel }) {
+                settings.quickTaskModel = QuickTasks.suggestedModel(for: account.kind)
             }
         })
     }
 
-    /// The family's models, with the one chosen when it isn't among them.
-    private func models(for kind: AgentKind) -> [(id: String, name: String)] {
-        let options = GenerationOptions.models(for: kind).map { (id: $0.id, name: $0.name) }
-        let chosen = model.settings.quickTaskModel
-        guard !chosen.isEmpty, !options.contains(where: { $0.id == chosen }) else { return options }
-        return options + [(id: chosen, name: chosen)]
+    /// The profile's models (its own list once read, else its family's starters), with the one
+    /// chosen when it isn't among them.
+    private func models(for account: Account) -> [ModelOption] {
+        QuickTasks.models(for: account.kind, catalog: model.modelCatalog.models(for: model.modelCatalogScope(for: account)),
+                          chosen: model.settings.quickTaskModel)
     }
 }

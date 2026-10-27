@@ -206,8 +206,9 @@ private struct RunsOnRows: View {
             }
         }
         .help("The account each run starts on")
-        ModelMenu(settings: shown, disabled: false, onModel: { job.selectModel($0, agent: agent) },
-                  onEffort: { job.selectReasoningEffort($0, agent: agent, openRouterDefault: model.settings.openRouterModel) }, inForm: true)
+        ModelMenu(settings: shown, disabled: false, onModel: { job.selectModel($0, agent: agent, catalog: model.nativeModels(for: shown)) },
+                  onEffort: { job.selectReasoningEffort($0, agent: agent, openRouterDefault: model.settings.openRouterModel,
+                                                       catalog: model.nativeModels(for: shown)) }, inForm: true)
             // There's no choosing a model for an account BotChu can't run.
             .disabled(unavailable?.isAccount ?? false)
         Group {

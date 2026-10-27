@@ -84,7 +84,10 @@ public struct ModelPickerData: Sendable {
     public let choices: [Choice]
 
     /// `resolved` is the model the CLI reported for this selection (`RunSettings.resolvedModel`).
-    public init(kind: AgentKind, model: String, openRouterDefault: String, catalog: [CatalogModel] = [], resolved: String? = nil) {
+    /// `native` is a Codex profile's own list once read (#220): it replaces the starters, which stand
+    /// in only while it is nil; the selection and the default stay choices either way.
+    public init(kind: AgentKind, model: String, openRouterDefault: String, catalog: [CatalogModel] = [], native: [ModelOption]? = nil,
+                resolved: String? = nil) {
         self.kind = kind
         let selectedID = model.trimmingCharacters(in: .whitespacesAndNewlines)
         self.selectedID = selectedID
@@ -92,7 +95,7 @@ public struct ModelPickerData: Sendable {
         let available = kind == .pi ? catalog : []
         func label(_ id: String) -> ModelLabel {
             if let found = available.first(where: { $0.id == id }) { return ModelLabel(title: found.title, detail: found.detail) }
-            return GenerationOptions.label(for: id, kind: kind, resolved: id == selectedID ? resolved : nil)
+            return GenerationOptions.label(for: id, kind: kind, resolved: id == selectedID ? resolved : nil, catalog: native)
         }
         let current = label(effectiveID)
         self.title = current.title
@@ -109,7 +112,7 @@ public struct ModelPickerData: Sendable {
         for entry in available where seen.insert(entry.id).inserted {
             choices.append(Choice(id: entry.id, title: entry.title, detail: entry.detail))
         }
-        for option in GenerationOptions.models(for: kind) where seen.insert(option.id).inserted {
+        for option in GenerationOptions.models(for: kind, catalog: native) where seen.insert(option.id).inserted {
             let found = label(option.id)
             choices.append(Choice(id: option.id, title: found.title, detail: found.detail))
         }

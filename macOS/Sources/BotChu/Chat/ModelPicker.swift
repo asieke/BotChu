@@ -8,6 +8,8 @@ struct ModelPicker: View {
     let catalog: ModelCatalog
     let disabled: Bool
     let select: (String) -> Void
+    /// The profile whose own list `data` shows (#220), checked as the picker opens when it is due.
+    var scope: ModelCatalogScope?
     @State private var query = ""
     @State private var highlighted: String?
     @State private var showsCustom = false
@@ -47,7 +49,10 @@ struct ModelPicker: View {
             if !ids.contains(where: { $0 == highlighted }) { highlighted = ids.first }
         }
         .onChange(of: disabled) { _, running in if running { dismiss() } }
-        .task { if data.kind == .pi { await catalog.load() } }
+        .task {
+            if data.kind == .pi { await catalog.load() }
+            if let scope { await catalog.refresh(scope) }
+        }
     }
 
     private var search: some View {
@@ -135,6 +140,7 @@ struct ModelPicker: View {
                         .font(.system(size: 10.5)).foregroundStyle(.secondary)
                 }
             }
+            if let scope { nativeStatus(catalog.status(for: scope), scope: scope) }
             HStack {
                 Button {
                     customID = query.isEmpty ? data.effectiveID : query
@@ -155,6 +161,27 @@ struct ModelPicker: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.primary.opacity(0.025))
         .overlay(alignment: .top) { Divider() }
+    }
+
+    /// When the profile's list was read, or why it couldn't be, with Refresh models beside it.
+    private func nativeStatus(_ status: NativeCatalogStatus, scope: ModelCatalogScope) -> some View {
+        HStack(spacing: 6) {
+            if status.checking { ProgressView().controlSize(.mini) }
+            else if status.failure != nil {
+                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10)).foregroundStyle(.orange)
+            }
+            Text(status.summary(at: Date()))
+                .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                .help(status.failure ?? "")
+            Spacer(minLength: 4)
+            Button { Task { await catalog.refresh(scope, force: true) } } label: {
+                Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.plain).foregroundStyle(.secondary)
+            .disabled(status.checking)
+            .help("Refresh models")
+            .accessibilityLabel("Refresh models")
+        }
     }
 
     private var customForm: some View {
