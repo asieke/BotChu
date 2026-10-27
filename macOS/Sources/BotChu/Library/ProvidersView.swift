@@ -425,7 +425,7 @@ private struct ProviderWindowsCell: View {
         ProviderLines {
             switch ProviderRowContent(row) {
             case .checking:
-                Capsule().fill(.primary.opacity(0.1)).frame(width: layout.bar, height: 6).frame(height: ProviderLine.height)
+                Capsule().fill(.primary.opacity(0.1)).frame(width: layout.bar, height: UsageMeterLayout.barHeight).frame(height: ProviderLine.height)
             case .unavailable:
                 Text("—").font(.system(size: 12)).foregroundStyle(.tertiary).frame(height: ProviderLine.height)
             case .note(let note):
@@ -445,10 +445,10 @@ private struct ProviderWindowsCell: View {
     }
 }
 
-/// A window's meter: its bar, the share used, the time left and when the reset is, each in its own
-/// slot so they line up down the column. A passed reset reads "Reset at 5:40 AM" across both, until
-/// the next reading.
-private struct UsageMeter: View {
+/// A window's meter: its bar, with a tick for the time gone by, the share used, the time left and when
+/// the reset is, each in its own slot so they line up down the column. A passed reset reads "Reset at
+/// 5:40 AM" across both, until the next reading.
+struct UsageMeter: View {
     let line: UsageLine
     let layout: UsageMeterLayout
     var dimmed = false
@@ -456,8 +456,8 @@ private struct UsageMeter: View {
     var body: some View {
         let both = UsageMeterLayout.timeLeft + (layout.showsResetTime ? UsageMeterLayout.spacing + UsageMeterLayout.resetTime : 0)
         HStack(spacing: UsageMeterLayout.spacing) {
-            UsageBar(title: line.title, percent: line.percent ?? 0, track: .primary.opacity(0.1), dimmed: dimmed)
-                .frame(width: layout.bar, height: 6)
+            UsageBar(title: line.title, percent: line.percent ?? 0, track: .primary.opacity(0.1), dimmed: dimmed, elapsed: line.elapsed)
+                .frame(width: layout.bar, height: UsageMeterLayout.barHeight)
             Text(line.percentText).font(.system(size: 12, weight: .medium)).monospacedDigit()
                 .foregroundStyle(line.percent == nil ? .secondary : .primary)
                 .opacity(dimmed ? 0.45 : 1)
@@ -479,7 +479,8 @@ private struct UsageMeter: View {
         .help(line.help)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(line.title)
-        .accessibilityValue("\(line.percent == nil ? "Not known" : "\(line.percentText) used"), \(line.reset)")
+        .accessibilityValue("\(line.percent == nil ? "Not known" : "\(line.percentText) used")"
+                            + "\(line.elapsedText.map { ", \($0) of the window elapsed" } ?? ""), \(line.reset)")
     }
 }
 

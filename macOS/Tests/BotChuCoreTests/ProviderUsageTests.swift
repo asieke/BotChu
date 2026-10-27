@@ -138,7 +138,7 @@ import Testing
         #expect(week.timeLeft == "6d 19h")
         #expect(week.resetTime == "\(nextSunday.formatted(.dateTime.month(.abbreviated).day())), \(nextSunday.formatted(date: .omitted, time: .shortened))")
         #expect(week.resetSentence == "Resets in 6d 19h, \(nextSunday.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())) at \(nextSunday.formatted(date: .omitted, time: .shortened))")
-        #expect(week.help == "Weekly: 9% used. \(week.resetSentence)")
+        #expect(week.help == "Weekly: 9% used, 3% of the window elapsed. \(week.resetSentence)")
         #expect(line(in: 28 * 60).timeLeft == "28m")
         #expect(line(in: 30).timeLeft == "<1m")
         // Tonight at 8:00 PM, the time alone; tomorrow at 5:00 PM, its weekday.
@@ -162,21 +162,61 @@ import Testing
         #expect(unknown.reset == "—" && unknown.resetSentence == "Reset time not reported" && unknown.help == "Weekly: not reported. Reset time not reported")
     }
 
+    /// A window's tick marks how much of it has gone by: only for a known length, with its reset ahead
+    /// and within that length, and never for a share that isn't known.
+    @Test func theTimeGoneByIsMarkedOnlyWhenItIsKnown() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func window(_ title: String = "Weekly", used: Double? = 40, in left: TimeInterval?, period: TimeInterval? = nil) -> UsageWindow {
+            UsageWindow(id: "w", title: title, usedPercent: used, resetsAt: left.map { now.addingTimeInterval($0) }, period: period)
+        }
+        // Half a week left of a week, one hour left of five, and the edges.
+        #expect(window(in: UsageWindow.week / 2).elapsedFraction(at: now) == 0.5)
+        #expect(window("5-hour", in: 3_600).elapsedFraction(at: now) == 0.8)
+        #expect(window("5-hour", in: UsageWindow.fiveHours).elapsedFraction(at: now) == 0)
+        #expect(window("5-hour", in: 1).elapsedFraction(at: now) == 1 - 1 / UsageWindow.fiveHours)
+        #expect(window("Key allowance", in: 3_600, period: 7_200).elapsedFraction(at: now) == 0.5) // the CLI's own length
+        // No length, an invalid one, no reset, a passed or a present one, or one further off than the window is long.
+        #expect(window("Key allowance", in: 3_600).elapsedFraction(at: now) == nil)
+        for period in [0, -3_600, .infinity, .nan] {
+            #expect(window("Key allowance", in: 3_600, period: period).elapsedFraction(at: now) == nil, "\(period)")
+        }
+        #expect(window(in: nil).elapsedFraction(at: now) == nil)
+        #expect(window(in: -60).elapsedFraction(at: now) == nil)
+        #expect(window(in: 0).elapsedFraction(at: now) == nil)
+        #expect(window("5-hour", in: UsageWindow.fiveHours + 60).elapsedFraction(at: now) == nil)
+
+        // The line says it beside the share, and leaves it out where the share isn't known.
+        let line = UsageLine(window(used: 62, in: UsageWindow.week / 2), at: now)
+        #expect(line.elapsed == 0.5 && line.elapsedText == "50%")
+        #expect(line.help.hasPrefix("Weekly: 62% used, 50% of the window elapsed. Resets in 3d 12h, "))
+        let unknown = UsageLine(window(used: nil, in: UsageWindow.week / 2), at: now)
+        #expect(unknown.elapsed == nil && unknown.elapsedText == nil && unknown.help.hasPrefix("Weekly: not reported. "))
+        let passed = UsageLine(window(used: 62, in: -60), at: now)
+        #expect(passed.hasReset && passed.elapsed == nil && passed.percent == nil)
+        let spending = UsageLine(UsageWindow(id: "k", title: "Key allowance", usedPercent: 10, resetDescription: "No scheduled reset", detail: "$22.50 of $25.00 left"), at: now)
+        #expect(spending.elapsed == nil && spending.help == "Key allowance: 10% used. No scheduled reset · $22.50 of $25.00 left")
+        // A row's windows each have their own; its credits and resets have none.
+        let reading = ProviderUsage(windows: [window("5-hour", in: 3_600), window(in: UsageWindow.week / 2)],
+                                    credits: UsageCredits(available: true, balance: 10), resets: UsageResets(available: 1))
+        let group = try #require(reading.groups(at: now).first)
+        #expect(group.short?.elapsed == 0.8 && group.long?.elapsed == 0.5)
+    }
+
     /// The table's columns are fixed widths for its size, and Agents takes the rest; under its
     /// narrowest, Credits & resets takes it.
     @Test func providersColumnsGiveAgentsTheRest() {
         // The 1,908-point window #148 was filed from, with the inspector open, a 1,180-point window, and narrower.
         let wide = ProvidersColumns(width: 1_615), regular = ProvidersColumns(width: 1_295), compact = ProvidersColumns(width: 887)
         #expect([wide.size, regular.size, compact.size] == [.wide, .regular, .compact])
-        #expect([wide.provider, wide.models, wide.window, wide.credits] == [230, 110, 430, 200])
-        #expect([regular.provider, regular.models, regular.window, regular.credits] == [190, 96, 322, 190])
-        #expect([compact.provider, compact.models, compact.window, compact.credits] == [160, 96, 180, 160])
+        #expect([wide.provider, wide.models, wide.window, wide.credits] == [230, 110, 474, 200])
+        #expect([regular.provider, regular.models, regular.window, regular.credits] == [190, 96, 339, 190])
+        #expect([compact.provider, compact.models, compact.window, compact.credits] == [160, 96, 190, 160])
         #expect(wide.showsAgents && regular.showsAgents && compact.showsAgents)
-        #expect(wide.rest(in: 1_615) == 1_615 - ProvidersColumns.edges - 1_400)
+        #expect(wide.rest(in: 1_615) == 1_615 - ProvidersColumns.edges - 1_488)
         #expect(wide.rest(in: 2_000) - wide.rest(in: 1_615) == 385) // every extra point is Agents'
-        let noAgents = ProvidersColumns(width: 820)
+        let noAgents = ProvidersColumns(width: 830)
         #expect(noAgents.size == .compact && !noAgents.showsAgents)
-        #expect(noAgents.rest(in: 820) == 820 - ProvidersColumns.edges - 616) // Credits & resets takes it
+        #expect(noAgents.rest(in: 830) == 830 - ProvidersColumns.edges - 636) // Credits & resets takes it
         let tight = ProvidersColumns(width: ProvidersColumns.minimumWidth)
         #expect(tight.size == .tight && !tight.showsAgents)
         // Never wider than the table, at any width.
@@ -188,12 +228,13 @@ import Testing
         }
     }
 
-    /// One bar width for every meter, up to 200 points, with the share, the time left and the reset
-    /// time while it keeps 60, then without the reset time, the bar never under 40.
+    /// One bar width for every meter, up to 250 points, with the share, the time left and the reset
+    /// time while it keeps 60, then without the reset time, the bar never under 40. Every size but
+    /// the narrowest has bars a quarter wider than before #222 (176, 68 and 40).
     @Test func metersKeepTheirSlotsAndGiveTheBarTheRest() {
-        let wide = UsageMeterLayout(column: 430), regular = UsageMeterLayout(column: 322)
-        let compact = UsageMeterLayout(column: 180), tight = UsageMeterLayout(column: 102)
-        #expect([wide.bar, regular.bar, compact.bar, tight.bar] == [176, 68, 40, 40])
+        let wide = UsageMeterLayout(column: 474), regular = UsageMeterLayout(column: 339)
+        let compact = UsageMeterLayout(column: 190), tight = UsageMeterLayout(column: 102)
+        #expect([wide.bar, regular.bar, compact.bar, tight.bar] == [220, 85, 50, 40])
         #expect([wide.showsResetTime, regular.showsResetTime, compact.showsResetTime, tight.showsResetTime] == [true, true, false, false])
         #expect([wide.showsTimeLeft, regular.showsTimeLeft, compact.showsTimeLeft, tight.showsTimeLeft] == [true, true, true, false])
         #expect(UsageMeterLayout(column: 1_000).bar == UsageMeterLayout.maximumBar)

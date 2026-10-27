@@ -98,8 +98,8 @@ extension RenderingTests {
             return try #require(table)
         }
 
-        // The width #148 was filed from, a regular, a compact table with and without Agents, the narrowest, and back to the widest.
-        for (width, appearance) in [(1908.0, NSAppearance.Name.darkAqua), (1300, .aqua), (1000, .darkAqua), (830, .aqua), (600, .darkAqua), (1908, .aqua)] {
+        // The width #148 was filed from, #222's, a regular, a compact table with and without Agents, the narrowest, and back to the widest.
+        for (width, appearance) in [(1908.0, NSAppearance.Name.darkAqua), (1882, .aqua), (1300, .aqua), (1000, .darkAqua), (830, .aqua), (600, .darkAqua), (1908, .aqua)] {
             window.appearance = NSAppearance(named: appearance)
             window.setContentSize(NSSize(width: width, height: 1100))
             let rows = try await loadedTable()
@@ -223,6 +223,55 @@ extension RenderingTests {
         #expect(board.states[request]?.reading?.windows.first?.usedPercent == 50) // shown, it is due
     }
 
+    /// Meters are 8-point bars, as wide as each table size's layout has them, with a 1.5-point tick
+    /// for the share of the window gone by, 2 points past the bar's top and bottom and set off from
+    /// the fill and the track by a gap (#222). It stands out over the fill and over the track, in both
+    /// appearances, in a selected row and in a stale one; a window without a known length has none.
+    @Test func usageMetersMarkTheTimeGoneBy() throws {
+        _ = NSApplication.shared
+        let now = Date()
+        func line(used: Double, period: TimeInterval?) -> UsageLine {
+            UsageLine(UsageWindow(id: "w", title: "Weekly", usedPercent: used, resetsAt: now.addingTimeInterval(UsageWindow.week / 2 + 30),
+                                  period: period ?? 0), at: now)
+        }
+        let layouts = [1_882.0, 1_300, 1_000, ProvidersColumns.minimumWidth].map { ProvidersColumns(width: $0).meter }
+        #expect(layouts.map(\.bar) == [220, 85, 50, 40])
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for selected in [false, true] {
+                for dimmed in [false, true] {
+                    for layout in layouts {
+                        for used in [62.0, 20, 90] {
+                            let state = "\(appearance.rawValue) selected \(selected) dimmed \(dimmed) bar \(layout.bar) used \(used)"
+                            let meter = try MeterPixels(line(used: used, period: UsageWindow.week), layout: layout, dimmed: dimmed, selected: selected, appearance: appearance)
+                            let tick = meter.barX + layout.bar * meter.elapsed
+                            // 8 points high and the layout's width; the tick 12 high, centred on it.
+                            let ink = try #require(meter.ink(in: CGRect(x: meter.barX - 3, y: 0, width: layout.bar + 6, height: meter.height)), "\(state)")
+                            #expect(abs(ink.width - layout.bar) <= 0.5, "\(state): \(ink)")
+                            #expect(abs(ink.height - (UsageMeterLayout.barHeight + 4)) <= 0.5, "\(state): \(ink)")
+                            let bar = try #require(meter.ink(in: CGRect(x: meter.barX + 3, y: 0, width: 2, height: meter.height)), "\(state)")
+                            #expect(abs(bar.height - UsageMeterLayout.barHeight) <= 0.5 && abs(bar.midY - ink.midY) <= 0.5, "\(state): \(bar)")
+                            // The tick past the bar, over it, and a gap on each side through to the row.
+                            let above = try #require(meter.color(x: tick, y: bar.minY - 1), "\(state)")
+                            #expect(Luminance.contrast(above, meter.background) >= 3, "\(state): tick \(above)")
+                            #expect(Luminance.distance(try #require(meter.color(x: tick, y: bar.midY)), above) < 0.1, "\(state): over the bar")
+                            #expect(Luminance.distance(try #require(meter.color(x: tick, y: bar.maxY + 1)), above) < 0.1, "\(state)")
+                            #expect(meter.color(x: tick, y: bar.minY - 2.5).map { Luminance.distance($0, meter.background) < 0.05 } == true, "\(state): 2 points past")
+                            for side in [-1.4, 1.4] {
+                                let gap = try #require(meter.color(x: tick + side, y: bar.midY), "\(state)")
+                                #expect(Luminance.distance(gap, meter.background) < 0.05, "\(state): gap \(gap)")
+                            }
+                        }
+                    }
+                    // No length, no tick: only the bar.
+                    let unknown = try MeterPixels(line(used: 62, period: nil), layout: layouts[0], dimmed: dimmed, selected: selected, appearance: appearance)
+                    #expect(unknown.line.elapsed == nil)
+                    let ink = try #require(unknown.ink(in: CGRect(x: unknown.barX - 3, y: 0, width: layouts[0].bar + 6, height: unknown.height)))
+                    #expect(abs(ink.height - UsageMeterLayout.barHeight) <= 0.5, "\(appearance.rawValue) selected \(selected): \(ink)")
+                }
+            }
+        }
+    }
+
     /// The context menu a right click shows in the middle of a row view.
     private func providersMenu(at row: NSView?, in host: NSView) throws -> NSMenu {
         let row = try #require(row)
@@ -258,5 +307,72 @@ extension RenderingTests {
         let url = URL(fileURLWithPath: folder)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         try image.representation(using: .png, properties: [:])?.write(to: url.appendingPathComponent(name + ".png"))
+    }
+}
+
+/// A Providers meter drawn alone on its row's background, unselected or selected, measured in points
+/// from its top-left corner.
+@MainActor private struct MeterPixels {
+    static let inset = 10.0
+    let line: UsageLine
+    let rep: NSBitmapImageRep
+    let scale: CGFloat
+    let height: CGFloat
+    let background: NSColor
+    var barX: CGFloat { Self.inset }
+    var elapsed: CGFloat { CGFloat(line.elapsed ?? 0) }
+
+    init(_ line: UsageLine, layout: UsageMeterLayout, dimmed: Bool, selected: Bool, appearance: NSAppearance.Name) throws {
+        self.line = line
+        let named = try #require(NSAppearance(named: appearance))
+        var row = NSColor.windowBackgroundColor
+        if selected { named.performAsCurrentDrawingAppearance { row = NSColor.selectedContentBackgroundColor.usingColorSpace(.sRGB) ?? row } }
+        else { named.performAsCurrentDrawingAppearance { row = NSColor.windowBackgroundColor.usingColorSpace(.sRGB) ?? row } }
+        let host = NSHostingView(rootView: UsageMeter(line: line, layout: layout, dimmed: dimmed)
+            .environment(\.backgroundProminence, selected ? .increased : .standard)
+            .padding(Self.inset).background(Color(nsColor: row)))
+        host.appearance = named
+        host.setFrameSize(host.fittingSize)
+        host.layoutSubtreeIfNeeded()
+        rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        scale = CGFloat(rep.pixelsWide) / host.bounds.width
+        height = host.bounds.height
+        background = try #require(rep.colorAt(x: 1, y: 1)?.usingColorSpace(.sRGB))
+    }
+
+    func color(x: CGFloat, y: CGFloat) -> NSColor? {
+        rep.colorAt(x: Int(x * scale), y: Int(y * scale))?.usingColorSpace(.sRGB)
+    }
+
+    /// The smallest rectangle holding every pixel of `rect` that isn't the row's background.
+    func ink(in rect: CGRect) -> CGRect? {
+        var found: CGRect?
+        for y in max(0, Int(rect.minY * scale))..<min(rep.pixelsHigh, Int((rect.maxY * scale).rounded(.up))) {
+            for x in max(0, Int(rect.minX * scale))..<min(rep.pixelsWide, Int((rect.maxX * scale).rounded(.up))) {
+                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), Luminance.distance(color, background) > 0.03 else { continue }
+                let pixel = CGRect(x: CGFloat(x) / scale, y: CGFloat(y) / scale, width: 1 / scale, height: 1 / scale)
+                found = found.map { $0.union(pixel) } ?? pixel
+            }
+        }
+        return found
+    }
+}
+
+private enum Luminance {
+    static func relative(_ color: NSColor) -> Double {
+        func linear(_ c: CGFloat) -> Double { let c = Double(c); return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear(color.redComponent) + 0.7152 * linear(color.greenComponent) + 0.0722 * linear(color.blueComponent)
+    }
+
+    /// WCAG's contrast ratio between two opaque colours.
+    static func contrast(_ a: NSColor, _ b: NSColor) -> Double {
+        let (x, y) = (relative(a), relative(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+
+    /// The largest difference of their sRGB components.
+    static func distance(_ a: NSColor, _ b: NSColor) -> Double {
+        Double(max(abs(a.redComponent - b.redComponent), abs(a.greenComponent - b.greenComponent), abs(a.blueComponent - b.blueComponent)))
     }
 }

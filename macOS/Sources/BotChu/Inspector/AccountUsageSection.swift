@@ -165,18 +165,22 @@ struct UsageWindowView: View {
 }
 
 /// How much of an allowance window is used, here and in the Providers table; in a selected table
-/// row, white on a lighter track.
+/// row, white on a lighter track. Providers marks how much of the window has gone by with a tick
+/// across the bar, set off from it by a gap, so fill past it is use ahead of the time.
 struct UsageBar: View {
     let title: String
     let percent: Double
     var track = Palette.rowDivider
     /// A stale reading's bar, faded.
     var dimmed = false
+    /// The share of the window gone by, from 0 to 1, to mark.
+    var elapsed: Double?
     @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
         let selected = prominence == .increased
         GeometryReader { geometry in
+            let tick = elapsed.map { min(max(0, geometry.size.width * $0 - UsageMeterLayout.tickWidth / 2), geometry.size.width - UsageMeterLayout.tickWidth) }
             ZStack(alignment: .leading) {
                 Capsule().fill(selected ? AnyShapeStyle(.white.opacity(0.3)) : AnyShapeStyle(track))
                 Capsule().fill(selected ? .white : percent >= 100 ? Palette.dynamic(0xD93A2F, 0xFF6B60)
@@ -184,9 +188,34 @@ struct UsageBar: View {
                     .frame(width: geometry.size.width * min(100, max(0, percent)) / 100)
                     .opacity(dimmed ? 0.45 : 1)
             }
+            // A point's gap on each side of the tick, through the fill and track to the row behind.
+            .mask { UsageBarGap(at: tick.map { $0 - 1 }, width: UsageMeterLayout.tickWidth + 2) }
+            // Over the bar, and past its top and bottom, without moving it.
+            .overlay(alignment: .leading) {
+                if let tick {
+                    Rectangle().fill(selected ? .white : Palette.text)
+                        .frame(width: UsageMeterLayout.tickWidth, height: geometry.size.height + 2 * UsageMeterLayout.tickOverhang)
+                        .offset(x: tick)
+                }
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title) allowance used")
-        .accessibilityValue("\(percent.formatted(.number.precision(.fractionLength(0)))) percent")
+        .accessibilityValue("\(percent.formatted(.number.precision(.fractionLength(0)))) percent"
+                            + (elapsed.map { ", \(($0 * 100).formatted(.number.precision(.fractionLength(0)))) percent of the window elapsed" } ?? ""))
+    }
+}
+
+/// The whole bar but a gap this wide at `at`, when there is one.
+private struct UsageBarGap: Shape {
+    let at: Double?
+    let width: Double
+
+    func path(in rect: CGRect) -> Path {
+        guard let at else { return Path(rect) }
+        var path = Path()
+        path.addRect(CGRect(x: rect.minX, y: rect.minY, width: max(0, at), height: rect.height))
+        path.addRect(CGRect(x: rect.minX + at + width, y: rect.minY, width: max(0, rect.width - at - width), height: rect.height))
+        return path
     }
 }
