@@ -262,7 +262,7 @@ private struct SettingsPageForm: View {
     }
 }
 
-/// Settings ▸ General: the bots folder and what every bot shares there.
+/// Settings ▸ General: the bots folder, what every bot shares there, and Quick tasks.
 private struct GeneralSettings: View {
     @Environment(AppModel.self) private var model
     @Environment(\.settingsSheetHeight) private var height
@@ -302,6 +302,7 @@ private struct GeneralSettings: View {
             BotDocumentEditor(request: request)
                 .frame(width: 560, height: min(620, max(360, height - 40)))
         }
+        QuickTaskSettings()
     }
 }
 

@@ -21,7 +21,8 @@ extension RenderingTests {
     /// window down to its narrowest and back. The columns are the widths `ProvidersColumns` gives
     /// the table's width, with Agents taking the rest and going first when it doesn't fit. Weekly
     /// sorts by the highest share; selecting a row shows it in the sidebar; a row's menu refreshes,
-    /// copies and changes its command, and removes an added profile after asking.
+    /// copies and changes its command, assigns an agent whose Home is idle to the profile, and
+    /// removes an added profile after asking. Codex Dev reports a plan, which line 2 names.
     @Test func providersTableShowsWindowsInColumns() async throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-providers-\(UUID().uuidString)")
@@ -56,7 +57,8 @@ extension RenderingTests {
                                      credits: UsageCredits(available: false), resets: UsageResets(available: 1, expiries: [now.addingTimeInterval(172_800)]))
             case "codex-dev":
                 return ProviderUsage(windows: [UsageWindow(id: "week", title: "Weekly", usedPercent: 41, resetsAt: now.addingTimeInterval(259_200))],
-                                     credits: UsageCredits(available: true, balance: 65_292.36), resets: UsageResets(available: 2, expiries: [now.addingTimeInterval(86_400)]))
+                                     credits: UsageCredits(available: true, balance: 65_292.36), resets: UsageResets(available: 2, expiries: [now.addingTimeInterval(86_400)]),
+                                     plan: "prolite")
             default: break
             }
             return ProviderUsage(windows: [UsageWindow(id: "session", title: "5-hour", usedPercent: 24, resetsAt: now.addingTimeInterval(7_200)),
@@ -148,9 +150,19 @@ extension RenderingTests {
         #expect(rows.bounds.width < fullWidth - 250)
         try captureProviders(window, name: "providers-selected")
 
-        // A row's menu, and an added profile's, which can be removed after asking.
+        // A row's menu, with its agents: those set to it checked, and one whose Home is running
+        // disabled; a running Task leaves its Home free.
+        let scout = try #require(app.bots.last)
+        let danny = try #require(app.bots.first)
+        app.runStates[.home(scout.id)] = RunState()
+        app.runStates[.task(UUID(), of: danny.id)] = RunState()
         var menu = try providersMenu(at: rows.rowView(atRow: 0, makeIfNecessary: false), in: host)
-        #expect(menu.items.map(\.title) == ["Refresh", "Copy Command", "Change Command…"])
+        #expect(menu.items.map(\.title) == ["Refresh", "Copy Command", "Change Command…", "", "Assign to Agent"])
+        var agents = try #require(menu.item(withTitle: "Assign to Agent")?.submenu)
+        #expect(agents.items.map(\.title) == app.bots.map(\.name))
+        #expect(agents.items.map(\.state) == app.bots.map { $0.accountID == "codex-personal" ? .on : .off })
+        #expect(agents.items.map(\.isEnabled) == app.bots.map { $0.id != scout.id })
+        app.runStates.removeAll()
         rows.sortDescriptors = []
         app.providerSelection = nil
         try await Task.sleep(for: .milliseconds(600))
@@ -168,8 +180,18 @@ extension RenderingTests {
         try captureProviders(popover, name: "providers-command-not-found")
         popover.close()
         try await Task.sleep(for: .milliseconds(300))
+        // Assigning Duck moves its Home to the profile: another family, so its model and effort clear.
         menu = try providersMenu(at: rows.rowView(atRow: custom, makeIfNecessary: false), in: host)
-        #expect(menu.items.map(\.title) == ["Refresh", "Copy Command", "Change Command…", "", "Remove Profile…"])
+        #expect(menu.items.map(\.title) == ["Refresh", "Copy Command", "Change Command…", "", "Assign to Agent", "", "Remove Profile…"])
+        agents = try #require(menu.item(withTitle: "Assign to Agent")?.submenu)
+        #expect(agents.items.allSatisfy { $0.state == .off && $0.isEnabled })
+        let duck = app.bots[2]
+        agents.performActionForItem(at: agents.indexOfItem(withTitle: "Duck"))
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(app.bot(duck.id)?.accountID == "custom-long" && app.bot(duck.id)?.account.kind == .claude)
+        #expect(app.bot(duck.id)?.model == "" && app.bot(duck.id)?.reasoningEffort == nil)
+        menu = try providersMenu(at: rows.rowView(atRow: custom, makeIfNecessary: false), in: host)
+        #expect(menu.item(withTitle: "Assign to Agent")?.submenu?.item(withTitle: "Duck")?.state == .on)
         menu.performActionForItem(at: menu.indexOfItem(withTitle: "Remove Profile…"))
         try await Task.sleep(for: .milliseconds(500))
         let dialog = try #require(window.attachedSheet)

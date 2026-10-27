@@ -4,7 +4,7 @@ import BotChuCore
 
 /// Every CLI profile in one table: its 5-hour and Weekly allowance by model group, its credits and
 /// free resets, and the agents set to it. The columns are fixed widths for the table's size
-/// (`ProvidersColumns`) and Agents takes the rest; a row's second line names its family until
+/// (`ProvidersColumns`) and Agents takes the rest; a row’s second line names its family, and the plan its CLI reports, until
 /// something is wrong, and says what. One freshness for the page is in the heading, with Refresh.
 /// The numbers come from the app's usage board, kept current in the background and saved between
 /// launches, so the table opens on them without checking. Selecting a profile shows it on the right.
@@ -182,6 +182,18 @@ private struct ProvidersTable: View {
         Button("Refresh") { Task { await model.usageBoard.refresh(request, usage: model.usage, openRouterKey: model.openRouterKey, for: .manual) } }
         Button("Copy Command") { copy(request.command) }
         Button("Change Command…", action: changeCommand)
+        // Home and the Tasks started after use the profile; Tasks under way keep theirs.
+        let agents = model.bots.filter { !$0.isRemoteQueue }
+        if !agents.isEmpty {
+            Divider()
+            Menu("Assign to Agent") {
+                ForEach(agents) { bot in
+                    Toggle(bot.name, isOn: Binding(get: { bot.accountID == account.id },
+                                                   set: { if $0 { model.setAccount(account.id, for: .home(bot.id)) } }))
+                        .disabled(model.isRunning(.home(bot.id)))
+                }
+            }
+        }
         if model.settings.customAccounts.contains(where: { $0.id == account.id }) {
             Divider()
             Button("Remove Profile…", role: .destructive) { remove(account) }
@@ -237,11 +249,11 @@ private struct ProviderNameCell: View {
         }
         .frame(minHeight: 2 * ProviderLine.height, alignment: .leading)
         .padding(.vertical, ProviderLine.padding)
-        .help("\(row.name) · \(row.account.kind.displayName)")
+        .help("\(row.name) · \(row.family)")
     }
 
     @ViewBuilder private var status: some View {
-        let family = row.account.kind.displayName
+        let family = row.family
         Group {
             switch row.status {
             case .current: Text(family)
@@ -626,12 +638,14 @@ private struct ProviderInspector: View {
         let request = model.usageRequest(for: account)
         let bots = model.bots.filter { $0.accountID == account.id }
         let found = model.usageBoard.found[request.command]
+        let plan = model.usageBoard.states[request]?.reading?.planLabel
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 ProviderLogo(kind: account.kind, size: 34)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(account.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
-                    Text(account.kind.displayName).font(.system(size: 11)).foregroundStyle(Palette.secondaryText).lineLimit(1)
+                    Text([account.kind.displayName, plan].compactMap(\.self).joined(separator: " · "))
+                        .font(.system(size: 11)).foregroundStyle(Palette.secondaryText).lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 Button { model.providerSelection = nil } label: { Image(systemName: "xmark") }

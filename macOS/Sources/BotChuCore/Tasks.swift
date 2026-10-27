@@ -111,6 +111,9 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     /// For a run of one of its bot's scheduled jobs, which works in the bot's workspace rather than
     /// a repository's worktree: the job, the run and the time it was for (`JobTasks`).
     public var jobRun: JobTaskOrigin?
+    /// Its label of three or four words, asked for once as it started (`TaskSummary`); nil for a
+    /// task from before, or when none came, which its tab names as before.
+    public var summary: String?
 
     public init(
         id: UUID = UUID(), title: String? = nil, repo: String, checkout: String, branch: String = "", folder: String? = nil,

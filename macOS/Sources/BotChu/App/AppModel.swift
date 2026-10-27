@@ -166,6 +166,13 @@ final class AppModel {
     var petJobs: [UUID: PetJob] = [:]
     @ObservationIgnored var petRuns: [UUID: AgentRun] = [:]
     @ObservationIgnored var petTasks: [UUID: Task<Void, Never>] = [:]
+    /// New tasks waiting for their issue's title before their summary is asked for, and the
+    /// summaries asked for, one at a time (#192, `TaskSummaries.swift`).
+    @ObservationIgnored var summariesWanted: Set<UUID> = []
+    @ObservationIgnored var summaryRuns: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored var lastSummaryRun: Task<Void, Never>?
+    /// Runs a summary; nil runs it on this Mac (`EvaluationCLI`). Tests set it.
+    @ObservationIgnored var summaryRunner: RunEvaluator.Runner?
     var editor: EditorRequest?
     var taskSheet: TaskSheetRequest?
     /// The repository selected in Projects, shown in its sidebar; nil hides the sidebar.
@@ -663,6 +670,7 @@ final class AppModel {
         postReceipt(TaskReceipt.started(task), task: task.id, for: botID)
         if show { self.show(target) }
         send(task.opening, to: target, images: images)
+        summarizeNewTask(target)
     }
 
     /// Records a scheduled job's run as a new task of its agent (#146), whose conversation the job's
@@ -1124,6 +1132,7 @@ final class AppModel {
             tasks[botID]?[i].head = task.head
         }
         saveTask(tasks[botID]![i], of: botID)
+        summarizeIfReady(target)
         let on = task.isRemote ? " on \(machineName(task.hostID, fallback: task.hostName))" : ""
         if let failure {
             append(ChatMessage(role: .error, text: "Couldn't make this task's worktree\(on). " + failure.message), to: target)
@@ -1934,6 +1943,7 @@ final class AppModel {
         for target in Array(runStates.keys) { stop(target) }
         for run in petRuns.values { run.stop() }
         for task in petTasks.values { task.cancel() }
+        for run in summaryRuns.values { run.cancel() }
         // Sidebar changes that couldn't be saved get one more try.
         if indexFailure != nil { saveIndex() }
         unsavedAtQuit = storage.wait(timeout: quitTimeout)
@@ -2277,7 +2287,7 @@ final class AppModel {
     static let warmedReplies = 60
     static let warmedBytes = 256 << 10
 
-    private func taskIndex(_ target: ChatTarget) -> Int? {
+    func taskIndex(_ target: ChatTarget) -> Int? {
         target.taskID.flatMap { id in tasks[target.botID]?.firstIndex { $0.id == id } }
     }
 
@@ -2332,7 +2342,7 @@ final class AppModel {
     }
 
     /// Writes the task's `task.json` off the main thread, after its earlier saves.
-    private func saveTask(_ task: BotTask, of botID: UUID, saved: (@MainActor @Sendable (Error?) -> Void)? = nil) {
+    func saveTask(_ task: BotTask, of botID: UUID, saved: (@MainActor @Sendable (Error?) -> Void)? = nil) {
         guard let bot = bot(botID) else {
             saved?(CocoaError(.fileNoSuchFile))
             return
