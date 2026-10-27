@@ -239,6 +239,8 @@ public enum AgentEvent: Equatable, Sendable {
     /// The CLI took the next message written to its stdin (Claude Code's replay of it). The
     /// first is the turn's prompt; later ones are follow-ups, which then join the transcript.
     case inputTaken
+    /// The connectors the CLI reported at the start of its turn (Claude Code's `system/init`).
+    case connectors([Connector])
 }
 
 /// Applies a run's events to a thread. Kept free of UI so it can be tested.
@@ -250,7 +252,7 @@ public struct ThreadAssembler {
 
     public mutating func apply(_ event: AgentEvent, to messages: inout [ChatMessage]) {
         switch event {
-        case .model:
+        case .model, .connectors:
             break
         case .session, .finished:
             openTextID = nil

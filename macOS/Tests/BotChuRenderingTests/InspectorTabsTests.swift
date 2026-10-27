@@ -93,6 +93,10 @@ extension RenderingTests {
             #expect(usesExpectedKey)
             return await readings.read(request.account.id)
         }, openRouterKey: { keyReads += 1; return "test-openrouter-key" })
+        let connectorChecks = InspectorConnectorProbe()
+        model.connectorBoard.checkProfile = { kind, command, folder in
+            await connectorChecks.check(kind, command, folder)
+        }
         // The background has read Home's account already (#147).
         let background = try #require(model.usageRequests.first { $0.account.id == "codex-dev" })
         await model.usageBoard.refresh(background, usage: model.usage, openRouterKey: model.openRouterKey, for: .background)
@@ -134,6 +138,23 @@ extension RenderingTests {
         #expect(model.usageBoard.states[background]?.reading != nil)
         #expect(keyReads == 0) // Other providers never ask for an OpenRouter key.
 
+        // Connectors (#183): Home's Codex profile is checked once in its folder and shown; the task
+        // runs Claude Code on a host, where only its session's report counts, and it has none yet.
+        let homeScope = try #require(model.connectorScope(of: .home(bot.id)))
+        #expect(await connectorChecks.calls == ["codex \(homeScope.command) \(bot.workspace)"])
+        let check = try #require(model.connectorBoard.evidence.checks[homeScope])
+        #expect(model.connectorCard(of: .home(bot.id)) == .profile(check))
+        #expect(check.report?.connected.map(\.name) == ["Linear"])
+        #expect(model.connectorCard(of: taskTarget) == .notReported)
+        let taskScope = try #require(model.connectorScope(of: taskTarget))
+        #expect(taskScope.hostID == remote.id && taskScope.folder == task.folder)
+        model.connectorBoard.record([Connector(name: "Gmail", state: .connected, origin: .claudeAI)], scope: taskScope,
+                                    sessionID: "task-session", for: taskTarget)
+        #expect(model.connectorCard(of: taskTarget).title == "Connected at last report")
+        model.runStates[taskTarget] = nil // its turn ends, so New Session can start one afresh
+        model.newSession(taskTarget)
+        #expect(model.connectorCard(of: taskTarget).title == "Last session report")
+
         // Switching Home to OpenRouter exercises the inspector's injected credential lookup too.
         let homeTarget = ChatTarget.home(bot.id)
         model.setAccount("openrouter", for: homeTarget)
@@ -145,6 +166,8 @@ extension RenderingTests {
         }
         #expect(await readings.accounts == ["codex-dev", "claude-work", "openrouter"])
         #expect(keyReads > 0)
+        #expect(model.connectorCard(of: homeTarget) == .unavailable(.pi))
+        #expect(await connectorChecks.calls.count == 1)
     }
 
     private func pressInspectorKey(_ text: String, code: UInt16, window: NSWindow) {
@@ -153,6 +176,16 @@ extension RenderingTests {
                                     windowNumber: window.windowNumber, context: nil, characters: text,
                                     charactersIgnoringModifiers: text, isARepeat: false, keyCode: code)!
         window.sendEvent(event)
+    }
+}
+
+private actor InspectorConnectorProbe {
+    var calls: [String] = []
+
+    func check(_ kind: AgentKind, _ command: String, _ folder: String) -> ConnectorReport {
+        calls.append("\(kind.rawValue) \(command) \(folder)")
+        return ConnectorReport(connectors: [Connector(name: "Linear", state: .connected, origin: .codexApp),
+                                            Connector(name: "Slack", state: .needsAuth, origin: .codexApp)])
     }
 }
 

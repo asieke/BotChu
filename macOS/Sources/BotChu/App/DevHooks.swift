@@ -22,6 +22,8 @@ import BotChuCore
 ///   `wide`, 1,700 points wide, where a bot's tasks show as a column beside its chat.
 /// - `BOTCHU_USAGE`: `sample`, `stale`, `expired`, or `unavailable` allowance for an isolated review;
 ///   `mixed` gives each kind of profile a different state (`mixedUsage`).
+/// - `BOTCHU_CONNECTORS`: `sample` connectors for every profile check, `stale` (a check that fails
+///   after the first), or `unavailable` (one that always fails), for an isolated review.
 /// - `BOTCHU_PROVIDER`: with `BOTCHU_OPEN=providers`, select this profile (an account id), showing
 ///   it in the sidebar.
 /// - `BOTCHU_PROFILE`: with `BOTCHU_DATA_DIR`, CLI profiles to add, from `name|family|command`
@@ -124,6 +126,24 @@ enum DevHooks {
     static var windowCapture: WindowCapture.Capture {
         guard dataDir != nil, env["BOTCHU_SCREENSHOT_FAIL"] != nil else { return WindowCapture.screen }
         return { _ in throw ImageDelivery.Failure("The window isn't on screen.") }
+    }
+
+    /// `BOTCHU_CONNECTORS`, as the mock's states: connected names and a row of each other state.
+    static var connectorCheck: (@Sendable (AgentKind, String, String) async throws -> ConnectorReport)? {
+        guard dataDir != nil, let fixture = env["BOTCHU_CONNECTORS"], ["sample", "stale", "unavailable"].contains(fixture) else { return nil }
+        let checks = UsageChecks()
+        return { kind, _, _ in
+            let count = await checks.next(kind.rawValue)
+            if fixture == "unavailable" || (fixture == "stale" && count > 1) {
+                throw ConnectorFailure("\(kind.displayName) didn’t answer within 20 seconds.")
+            }
+            let names: [(String, Connector.State)] = [
+                ("GitHub", .connected), ("Gmail", .connected), ("Google Drive", .connected), ("Linear", .connected), ("Notion", .connected),
+                ("Google Calendar", .needsAuth), ("Slack", .needsAuth), ("Postgres", .failed), ("Figma", .off), ("computer-use", .unconfirmed),
+            ]
+            return ConnectorReport(connectors: names.map { Connector(name: $0.0, state: $0.1, origin: kind == .codex ? .codexApp : .claudeAI) },
+                                   at: Date().addingTimeInterval(fixture == "stale" ? -7_200 : -180))
+        }
     }
 
     static var usageFetch: UsageCache.Fetch? {

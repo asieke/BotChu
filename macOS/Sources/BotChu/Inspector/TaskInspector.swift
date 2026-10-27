@@ -72,6 +72,7 @@ struct TaskInspector: View {
                     let usageRequest = model.usageRequest(for: task.account)
                     AccountUsageSection(request: usageRequest, isRunning: model.isRunning(target))
                         .id(usageRequest)
+                    ConnectorsSection(target: target)
                 case .session:
                     InspectorSection("Session") {
                         SessionCard(session: status.session)
