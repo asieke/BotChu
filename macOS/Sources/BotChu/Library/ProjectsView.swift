@@ -65,13 +65,8 @@ struct ProjectsView: View {
                 Button { Task { await model.refreshProjects() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
             }
             // One row when it fits; in a narrow window, the search goes on a row of its own.
-            ViewThatFits(in: .horizontal) {
-                HStack { scopePicker; search.frame(minWidth: 160); filters }
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack { scopePicker; Spacer(minLength: 8); filters }
-                    search
-                }
-            }.padding(.horizontal, 24).padding(.bottom, 16)
+            HeaderControls { scopePicker; search.frame(minWidth: 160); HStack { filters } }
+                .padding(.horizontal, 24).padding(.bottom, 16)
             if let error = model.repositoriesError ?? (scope == .repositories ? nil : model.openItemsError) {
                 HStack {
                     Label(error, systemImage: "exclamationmark.triangle")
@@ -256,6 +251,60 @@ struct ProjectsView: View {
         .contentShape(RoundedRectangle(cornerRadius: 14))
         .accessibilityLabel("\(metadata?.name ?? repo.name), \(metadata?.kind.label ?? "unclassified"). Show project")
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// Projects' scope picker, search and filters: on one row when they fit, else with the search on a
+/// row of its own below. Each control is measured once when it changes, and only placed as the width
+/// changes, which it does on every frame of the sidebar's slide (#188); `ViewThatFits` measured two
+/// copies of every control again on each of those frames.
+private struct HeaderControls: Layout {
+    struct Cache {
+        /// The scope picker's, the search's and the filters' ideal sizes.
+        var sizes: [CGSize]
+        /// Between the scope picker and the search, and the search and the filters, as an HStack spaces them.
+        var gaps: [CGFloat]
+        var rowWidth: CGFloat { sizes.reduce(0) { $0 + $1.width } + gaps.reduce(0, +) }
+        /// The narrowest the scope picker and the filters fit beside each other.
+        var pairWidth: CGFloat { sizes[0].width + 8 + sizes[2].width }
+        var pairHeight: CGFloat { max(sizes[0].height, sizes[2].height) }
+    }
+
+    private let rowSpacing: CGFloat = 10
+
+    func makeCache(subviews: Subviews) -> Cache {
+        Cache(sizes: subviews.map { $0.sizeThatFits(.unspecified) },
+              gaps: subviews.indices.dropLast().map { subviews[$0].spacing.distance(to: subviews[$0 + 1].spacing, along: .horizontal) })
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        cache = makeCache(subviews: subviews)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        guard subviews.count == 3 else { return .zero }
+        guard let width = proposal.width, width.isFinite else { return CGSize(width: cache.rowWidth, height: cache.sizes.map(\.height).max()!) }
+        if width >= cache.rowWidth { return CGSize(width: width, height: cache.sizes.map(\.height).max()!) }
+        return CGSize(width: max(width, cache.pairWidth), height: cache.pairHeight + rowSpacing + cache.sizes[1].height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        guard subviews.count == 3 else { return }
+        let sizes = cache.sizes
+        if bounds.width >= cache.rowWidth {
+            let search = bounds.width - sizes[0].width - sizes[2].width - cache.gaps.reduce(0, +)
+            subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(sizes[0]))
+            subviews[1].place(at: CGPoint(x: bounds.minX + sizes[0].width + cache.gaps[0], y: bounds.midY), anchor: .leading,
+                              proposal: ProposedViewSize(width: search, height: nil))
+            subviews[2].place(at: CGPoint(x: bounds.maxX, y: bounds.midY), anchor: .trailing, proposal: ProposedViewSize(sizes[2]))
+        } else {
+            let middle = bounds.minY + cache.pairHeight / 2
+            subviews[0].place(at: CGPoint(x: bounds.minX, y: middle), anchor: .leading, proposal: ProposedViewSize(sizes[0]))
+            subviews[2].place(at: CGPoint(x: max(bounds.maxX, bounds.minX + cache.pairWidth), y: middle), anchor: .trailing,
+                              proposal: ProposedViewSize(sizes[2]))
+            subviews[1].place(at: CGPoint(x: bounds.minX, y: bounds.minY + cache.pairHeight + rowSpacing), anchor: .topLeading,
+                              proposal: ProposedViewSize(width: bounds.width, height: nil))
+        }
     }
 }
 
