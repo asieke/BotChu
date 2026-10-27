@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import SwiftUI
 import Testing
 import BotChuCore
 @testable import BotChu
@@ -117,7 +118,89 @@ extension RenderingTests {
         #expect(players().first === greeting)
     }
 
-    private func waitForPet(_ prefix: String, in view: PetVideoLayerView, timeout: TimeInterval = 3) async throws {
+    /// #221: the chat's intro shows a still pet; asked to animate, as a remote queue bot's inspector
+    /// asks, it plays, except with Reduce Motion, which shows the still again.
+    @Test func botIntroAnimatesItsPetOnlyWhenAskedAndNeverWithReduceMotion() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-pet-intro-\(UUID().uuidString)")
+        let domain = "local.BotChu.PetIntroTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain); try? FileManager.default.removeItem(at: root) }
+        let app = AppModel(store: Store(root: root.appendingPathComponent("index")), settings: AppSettings(defaults: defaults),
+                           usage: UsageCache { _, _ in throw UsageFailure("fixture") }, openRouterKey: { nil })
+        defer { app.stopAll() }
+        let bot = Bot(name: "Pet fixture", workspace: root.appendingPathComponent("bot").path)
+        try await writePetPackage(to: root.appendingPathComponent("pet"))
+        app.pets[bot.id] = try #require(PetVideoPackage.load(from: root.appendingPathComponent("pet")))
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 160), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        for (animates, reduceMotion) in [(false, false), (true, false), (true, true)] {
+            let host = NSHostingView(rootView: BotIntro(bot: bot, animates: animates)
+                .environment(\._accessibilityReduceMotion, reduceMotion).environment(app))
+            window.contentView = host
+            window.makeKeyAndOrderFront(nil)
+            try await Task.sleep(for: .milliseconds(200))
+            host.layoutSubtreeIfNeeded()
+            if animates && !reduceMotion {
+                let pet = try #require(petViews(in: host).first)
+                try await waitForPet("idle playing", in: pet)
+            } else {
+                #expect(petViews(in: host).isEmpty, "animates: \(animates), Reduce Motion: \(reduceMotion)")
+                #expect(try drawsGreenStill(host, "pet-intro-\(animates)-\(reduceMotion)"), "animates: \(animates), Reduce Motion: \(reduceMotion)")
+            }
+        }
+        #expect(app.runStates.isEmpty)
+    }
+
+    /// A pet with looping idle and thinking clips and a one-shot greeting, over plain green stills.
+    func writePetPackage(to folder: URL) async throws {
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("clips"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("stills"), withIntermediateDirectories: true)
+        let wave = folder.appendingPathComponent("clips/greeting.mp4")
+        try await writeWaveVideo(to: wave)
+        for name in ["idle", "thinking"] {
+            try FileManager.default.copyItem(at: wave, to: folder.appendingPathComponent("clips/\(name).mp4"))
+        }
+        let still = NSImage(size: NSSize(width: 32, height: 32))
+        still.lockFocus(); NSColor.systemGreen.setFill(); NSRect(x: 0, y: 0, width: 32, height: 32).fill(); still.unlockFocus()
+        let png = try #require(still.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?.representation(using: .png, properties: [:]))
+        for name in ["idle", "thinking"] { try png.write(to: folder.appendingPathComponent("stills/\(name).png")) }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(PetVideoManifest(model: "fixture", clips: [
+            .init(id: "idle", still: "idle", loops: true),
+            .init(id: "greeting", still: "idle", loops: false),
+            .init(id: "thinking", still: "thinking", loops: true),
+        ])).write(to: folder.appendingPathComponent("video.json"))
+    }
+
+    /// The pet players in a view.
+    func petViews(in view: NSView) -> [PetVideoLayerView] {
+        view.subviews.flatMap { ($0 as? PetVideoLayerView).map { [$0] } ?? petViews(in: $0) }
+    }
+
+    /// Whether the view draws `writePetPackage`'s green still (an emoji or a player draws none).
+    func drawsGreenStill(_ view: NSView, _ name: String = "pet-still") throws -> Bool {
+        let rep = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            let folder = URL(fileURLWithPath: path)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try rep.representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent(name + ".png"))
+        }
+        var count = 0
+        for y in stride(from: 0, to: rep.pixelsHigh, by: 2) {
+            for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
+                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if color.alphaComponent > 0.9, color.greenComponent - max(color.redComponent, color.blueComponent) > 0.25 { count += 1 }
+            }
+        }
+        return count > 20
+    }
+
+    func waitForPet(_ prefix: String, in view: PetVideoLayerView, timeout: TimeInterval = 3) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if view.debugState.hasPrefix(prefix) { return }
@@ -127,7 +210,7 @@ extension RenderingTests {
     }
 
     /// A tiny, real five-second clip, with no network or committed binary fixture.
-    private func writeWaveVideo(to url: URL) async throws {
+    func writeWaveVideo(to url: URL) async throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 32, AVVideoHeightKey: 32,

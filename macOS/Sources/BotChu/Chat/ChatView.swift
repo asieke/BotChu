@@ -415,10 +415,13 @@ struct ActivityRow: View, Equatable {
 /// The top of every chat: who the bot is.
 struct BotIntro: View {
     let bot: Bot
+    var activity: BotActivity = .idle
+    /// Whether its pet moves; still atop a chat, animated in a remote queue bot's inspector (#221).
+    var animates = false
 
     var body: some View {
         VStack(spacing: 6) {
-            BotAvatar(bot: bot, size: 56)
+            BotAvatar(bot: bot, size: 56, activity: activity, animates: animates)
             Text(bot.name).font(.title2.weight(.semibold))
             if !bot.title.isEmpty {
                 Text(bot.title).foregroundStyle(.secondary).multilineTextAlignment(.center)

@@ -1038,7 +1038,7 @@ on that pull request's branch to continue in instead). The same command run agai
     on its own computer. BotChu serves an authenticated HTTP queue, while the remote runtime
     polls for messages and posts complete replies or errors into Home. Documents go both ways: attach
     them with +, a drop or a paste, and the remote runtime's files show under its reply, opening in
-    their apps. It can have a pet like any bot's. Other bots message it with `botchu-message send`, and
+    their apps. It can have a pet like any bot's, moving in its status sidebar too. Other bots message it with `botchu-message send`, and
     its answer comes back into the asking conversation as a message from it, starting a turn; it only
     answers, never starts a conversation itself. The queue survives relaunch,
     retains replies without truncation, and deduplicates retry acknowledgements. This bot has no
