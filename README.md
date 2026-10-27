@@ -11,12 +11,12 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
 - Does:
   - **Workspace:** the left sidebar has **Inbox**, **Projects**, **Agents**, **Providers**, **Skills** and **Jobs**, followed by
     the bots, one row each, in sections (below); a bot's Home and tasks are the tabs beside its chat
-    (**Tasks**). A bot's row says on its second line what it is doing ("Working on #113", "2 tasks
+    (**Tasks**). A bot's row says on its second line what it is doing ("Needs input on #113", "Working on #113", "2 tasks
     running", its Home's activity, "4 tasks", or its account), with a small dot at the row's end,
     centred on it, for each of its conversations that isn't idle, in the tabs' colours, at most four,
-    then +N. Selecting a bot
+    the most urgent first (needs input, then failed or stopped, then working, then finished), then +N; a bot whose conversations are all idle has none. Selecting a bot
     shows the conversation it showed last. Opening a gallery keeps the selected conversation and unsent draft;
-    turns that finish while a gallery is shown still show as news (a blue dot). In dark mode the sidebar
+    turns that finish while a gallery is shown still show as news (a green dot). In dark mode the sidebar
     takes the status sidebar's darker shade, with a hairline along its edge, so it stands apart from
     the chat; light mode keeps the standard sidebar.
   - **Sections:** bots can be grouped into sections you name, each a heading of its own in the
@@ -343,8 +343,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     below), or for a task without one its issue's title or a brief's words; its third says what it
     is doing, with a time on the right that is never cut off: making the worktree or starting (a
     violet ring), working (violet, what it is doing and its elapsed time, ticking each second),
-    finished since it was last shown (blue, with its pull request), or its last turn failed (red,
-    until its next turn starts); while idle (a faint ring), **Idle** and its last activity (2m, 1h,
+    finished since it was last shown (green, with its pull request), its last turn failed (a red dot)
+    or the owner stopped it (a red square; both until its next turn starts, saved with the thread),
+    or **Needs input** (an orange diamond) while a Needs input delivery it sent isn't answered or
+    Done, whatever else it does (reading it doesn't count); while idle (a faint ring), **Idle** and its last activity (2m, 1h,
     1d). Home's tab has two lines: Home, then its account, or its own turn's state. The rows are inset 8 points from both of the column's edges, and the selected
     one is a card with its edge all round, as the rail's selected tile is. Dots hold still; when a
     turn ends, its dot pops once (with Reduce Motion, it only crossfades). A click, **⌘1** (Home) to **⌘9** (the first eight tasks, in the Bot menu), ⌃Tab,
@@ -400,7 +402,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     task to another bot (below). Home gets a receipt when a task starts, ends a turn or fails (with an Open
     link to its conversation), or can't start, and its next turn opens with a report on those tasks: their
     state, pull request and the start of their last reply. A new Home session also lists the open
-    tasks. The bot's row shows a blue dot for each of its conversations with news.
+    tasks. The bot's row shows a green dot for each of its conversations with news.
   - **Sub-agents:** Home, tasks and delegated runs can call another configured bot with
     `botchu-subagent call`, or launch several with `spawn` and collect their handoffs with `wait`.
     `list` shows the available bots. Each child uses the called bot's identity, soul, memory, account,
@@ -912,7 +914,7 @@ on that pull request's branch to continue in instead). The same command run agai
     a large character (its pet, playing, or its emoji) on the left, beside the bot name and current
     activity. Tasks show the repository as a larger title, with the issue or task title beneath it
     in smaller text. The ring says its state (grey when idle, a spinning violet arc while it
-    works, red after a failed turn); plain text gives its activity and running time, last activity,
+    works, red after a failed or stopped turn); plain text gives its activity and running time, last activity,
     or error. The character and ring convey status
     without a dot or status pill. The card and pet animation reflect only the shown Home or task;
     the bot list still shows activity across its tasks. Five icon tabs sit below the character,

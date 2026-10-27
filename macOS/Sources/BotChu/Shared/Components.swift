@@ -59,15 +59,7 @@ extension BotStatus.Phase {
         case .starting: "Starting…"
         case .working: "Working"
         case .failed: "Last turn failed"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .idle: .secondary
-        case .preparing, .starting: .orange
-        case .working: .green
-        case .failed: .red
+        case .stopped: "Stopped"
         }
     }
 }

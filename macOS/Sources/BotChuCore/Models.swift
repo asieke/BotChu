@@ -173,6 +173,10 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     /// On the owner's message, the delivery it replies to from the Inbox (`InboxReply`); on a note,
     /// the delivery it shows in the chat as a card. Nil otherwise, and in threads saved before.
     public var delivery: UUID?
+    /// On BotChu's "Stopped" note, the owner stopped the turn there (`stopNote`), so the
+    /// conversation shows it stopped until its next message (#218). Nil otherwise, and in threads
+    /// saved before.
+    public var stopped: Bool?
 
     public init(
         id: UUID = UUID(), role: Role, text: String = "", date: Date = Date(), toolID: String? = nil,
@@ -195,6 +199,14 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.toolExitCode = toolExitCode
         self.references = references.isEmpty ? nil : references
     }
+    /// BotChu's note at the end of a stopped turn: marked `stopped` when the owner stopped it, not
+    /// when BotChu stopped it to quit.
+    public static func stopNote(byOwner: Bool, date: Date = Date()) -> ChatMessage {
+        var note = ChatMessage(role: .note, text: "Stopped", date: date)
+        if byOwner { note.stopped = true }
+        return note
+    }
+
     /// Older versions missed AGY's subagent terminal events and saved them as failures.
     /// No result was recorded, so show an unknown completion instead of inventing success or failure.
     public func displayedToolState(for kind: AgentKind) -> ToolState {

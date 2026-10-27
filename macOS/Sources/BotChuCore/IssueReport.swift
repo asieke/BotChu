@@ -328,6 +328,7 @@ public struct IssueSnapshot: Equatable, Sendable {
             case .starting: state = "turn started, no output yet"
             case .working: state = "working (\(status.activity.rawValue))"
             case .failed: state = "last turn failed: " + IssueSnapshot.errorKind(status.lastError ?? "")
+            case .stopped: state = "last turn stopped by the owner"
             }
             if status.phase.isActive, let start = status.runStartedAt {
                 state += " for " + BotStatus.formatElapsed(from: start, to: now)

@@ -1,8 +1,10 @@
 import Foundation
 
 /// How a conversation, a bot's Home or one of its tasks, is doing, as its tab's dot and second line
-/// say it (#128): from its status, whether a turn finished since it was last shown (`unread`), and
-/// its task's pull request.
+/// say it (#128): from its status, whether a turn finished since it was last shown (`unread`), its
+/// task's pull request, and the Needs input deliveries it waits on the owner for (#218). The most
+/// urgent wins: needs input, then failed or stopped, then a turn under way, then a finished turn
+/// not yet seen, then idle.
 public enum TabState: Equatable, Sendable {
     /// Nothing under way; `since` is its last activity.
     case idle(since: Date?)
@@ -15,24 +17,60 @@ public enum TabState: Equatable, Sendable {
     case news(pullRequest: Int?, at: Date?)
     /// The last turn failed. It stays so until the next turn starts, whether it was looked at or not.
     case failed(at: Date?)
+    /// The owner stopped the last turn. Like a failure, it stays so until the next turn starts.
+    case stopped(at: Date?)
+    /// It sent the owner Needs input deliveries (`requests`, the newest `at`) that aren't answered
+    /// or Done; reading them doesn't count (`InboxState.awaitingInput`).
+    case needsInput(requests: Int, at: Date?)
 
     /// What the dot shows.
     public enum Kind: Equatable, Sendable {
-        case idle, preparing, starting, working, news, failed
+        case idle, preparing, starting, working, news, failed, stopped, needsInput
 
         /// A turn is under way, or about to start.
         public var isActive: Bool { self == .preparing || self == .starting || self == .working }
+
+        /// How much it asks for the owner's attention: the bot list's dots show the most urgent first.
+        public var urgency: Int {
+            switch self {
+            case .needsInput: 4
+            case .failed, .stopped: 3
+            case .preparing, .starting, .working: 2
+            case .news: 1
+            case .idle: 0
+            }
+        }
+
+        /// The state in a word or two, for the dots' tooltip and VoiceOver (`count` of them).
+        public func name(count: Int) -> String {
+            switch self {
+            case .idle: "idle"
+            case .preparing: "preparing"
+            case .starting: "starting"
+            case .working: "working"
+            case .news: "finished"
+            case .failed: "failed"
+            case .stopped: "stopped"
+            case .needsInput: count == 1 ? "needs input" : "need input"
+            }
+        }
 
         /// Whether a change from `old` to this is a turn ending, when the dot pops once.
         public func endsTurn(from old: Kind) -> Bool { old.isActive && !isActive }
     }
 
-    public init(status: BotStatus, unread: Bool, pullRequest: Int? = nil) {
+    /// `awaitingInput` holds when each of its unresolved Needs input deliveries was sent.
+    public init(status: BotStatus, unread: Bool, pullRequest: Int? = nil, awaitingInput: [Date] = []) {
+        if !awaitingInput.isEmpty {
+            self = .needsInput(requests: awaitingInput.count, at: awaitingInput.max())
+            return
+        }
         switch status.phase {
         case .preparing: self = .preparing
         case .starting: self = .starting(since: status.runStartedAt)
         case .working: self = .working(status.activity, since: status.runStartedAt)
         case .failed: self = .failed(at: status.lastActivity)
+        case .stopped: self = .stopped(at: status.lastActivity)
         case .idle: self = unread ? .news(pullRequest: pullRequest, at: status.lastActivity) : .idle(since: status.lastActivity)
         }
     }
@@ -45,6 +83,8 @@ public enum TabState: Equatable, Sendable {
         case .working: .working
         case .news: .news
         case .failed: .failed
+        case .stopped: .stopped
+        case .needsInput: .needsInput
         }
     }
 
@@ -57,6 +97,8 @@ public enum TabState: Equatable, Sendable {
         case .working(let activity, _): activity.doing
         case .news(let pullRequest, _): pullRequest.map { "Finished · PR #\($0)" } ?? "Finished"
         case .failed: "Turn failed"
+        case .stopped: "Stopped"
+        case .needsInput(let requests, _): requests == 1 ? "Needs input" : "\(requests) requests need input"
         }
     }
 
@@ -66,7 +108,8 @@ public enum TabState: Equatable, Sendable {
         switch self {
         case .preparing: nil
         case .starting(let since), .working(_, let since): since.map { BotStatus.formatElapsed(from: $0, to: now) }
-        case .idle(let at), .news(_, let at), .failed(let at): at.map { Self.ago(now.timeIntervalSince($0)) }
+        case .idle(let at), .news(_, let at), .failed(let at), .stopped(let at), .needsInput(_, let at):
+            at.map { Self.ago(now.timeIntervalSince($0)) }
         }
     }
 
@@ -81,7 +124,7 @@ public enum TabState: Equatable, Sendable {
             let parts = [(total / 3600, "hour"), (total % 3600 / 60, "minute"), (total % 60, "second")]
                 .filter { $0.0 > 0 }.map { unit($0.0, $0.1) }
             return parts.isEmpty ? unit(0, "second") : parts.joined(separator: " ")
-        case .idle(let at), .news(_, let at), .failed(let at):
+        case .idle(let at), .news(_, let at), .failed(let at), .stopped(let at), .needsInput(_, let at):
             guard let at else { return nil }
             let seconds = max(0, Int(now.timeIntervalSince(at)))
             if seconds < 60 { return "just now" }
@@ -229,27 +272,41 @@ public struct ConversationTab: Equatable, Sendable {
 }
 
 /// A bot's row in the bot list (#128): a small dot for each of its conversations that isn't idle,
-/// and a subtitle that says what it is doing.
+/// the most urgent first (#218), and a subtitle that says what it is doing.
 public struct BotRowSummary: Equatable, Sendable {
     /// The most dots a row shows; the rest are counted (+N).
     public static let dotLimit = 4
 
-    /// The dots, in tab order: Home, then the open tasks.
+    /// The dots, most urgent first (`TabState.Kind.urgency`), and in tab order (Home, then the open
+    /// tasks) among equals, so the ones a full row leaves out are the least urgent.
     public var dots: [TabState.Kind]
     /// How many more conversations aren't idle.
     public var more: Int
-    /// "Working on #113", "2 tasks running", "Thinking…" while only Home works, "4 tasks", or the account.
+    /// "Needs input on #113", "Working on #113", "2 tasks running", "Thinking…" while only Home
+    /// works, "4 tasks", or the account.
     public var subtitle: String
-    /// What the dots say, for VoiceOver and the tooltip: "2 working, 1 finished".
+    /// What the dots say, for VoiceOver and the tooltip: "1 needs input, 2 working, 1 finished".
     public var spokenDots: String
 
     public init(account: String, home: TabState, tasks: [(task: BotTask, state: TabState)]) {
-        let busy = ([home] + tasks.map(\.state)).map(\.kind).filter { $0 != .idle }
+        let busy = ([home] + tasks.map(\.state)).map(\.kind).enumerated()
+            .filter { $0.element != .idle }
+            .sorted { ($0.element.urgency, -$0.offset) > ($1.element.urgency, -$1.offset) }
+            .map(\.element)
         dots = Array(busy.prefix(Self.dotLimit))
         more = max(0, busy.count - Self.dotLimit)
+        func name(_ task: BotTask) -> String { task.work.map { "#\($0.number)" } ?? task.jobRun?.jobTitle ?? task.repoName }
+        let asking = tasks.filter { $0.state.kind == .needsInput }
+        let waiting = asking.count + (home.kind == .needsInput ? 1 : 0)
         let running = tasks.filter { $0.state.kind.isActive }
-        if running.count == 1, let task = running.first?.task {
-            subtitle = "Working on " + (task.work.map { "#\($0.number)" } ?? task.jobRun?.jobTitle ?? task.repoName)
+        if waiting > 1 {
+            subtitle = "\(waiting) need input"
+        } else if home.kind == .needsInput {
+            subtitle = "Needs input"
+        } else if let task = asking.first?.task {
+            subtitle = "Needs input on " + name(task)
+        } else if running.count == 1, let task = running.first?.task {
+            subtitle = "Working on " + name(task)
         } else if running.count > 1 {
             subtitle = "\(running.count) tasks running"
         } else if home.kind.isActive, let text = home.text {
@@ -259,11 +316,10 @@ public struct BotRowSummary: Equatable, Sendable {
         } else {
             subtitle = account
         }
-        let names: [(TabState.Kind, String)] = [(.preparing, "preparing"), (.starting, "starting"), (.working, "working"),
-                                                         (.news, "finished"), (.failed, "failed")]
-        spokenDots = names.compactMap { kind, name in
+        let order: [TabState.Kind] = [.needsInput, .failed, .stopped, .preparing, .starting, .working, .news]
+        spokenDots = order.compactMap { kind in
             let n = busy.filter { $0 == kind }.count
-            return n == 0 ? nil : "\(n) \(name)"
+            return n == 0 ? nil : "\(n) \(kind.name(count: n))"
         }.joined(separator: ", ")
     }
 }
