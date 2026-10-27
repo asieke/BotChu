@@ -66,6 +66,97 @@ extension RenderingTests {
         #expect(reads == 0)
     }
 
+    /// #221: a remote queue bot's installed pet moves in its inspector while it's selected, as in its
+    /// sidebar row, without starting a turn; Reduce Motion, an unreadable pet and selecting another
+    /// bot leave no player running.
+    @Test func remoteQueuePetAnimatesInItsInspectorWithoutRunningATurn() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-remote-pet-\(UUID())")
+        let domain = "local.BotChu.RemotePetTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain); try? FileManager.default.removeItem(at: root) }
+        // A local bot already in the index, so selecting it starts no introduction turn.
+        let local = Bot(name: "Local fixture", emoji: "🔭", workspace: root.appendingPathComponent("local").path)
+        try BotHome(workspace: local.workspace).save(local)
+        let store = Store(root: root.appendingPathComponent("index"))
+        try store.saveIndex([Store.Entry(id: local.id, workspace: local.workspace)])
+        let app = AppModel(store: store, settings: AppSettings(defaults: defaults), usage: UsageCache { _, _ in throw UsageFailure("fixture") }, openRouterKey: { nil })
+        defer { app.stopAll() }
+        var reads = 0
+        app.remoteQueue.readToken = { reads += 1; return nil }
+        var bot = Bot(name: "Danny fixture", workspace: "")
+        bot.kind = .remoteQueue
+        app.create(bot)
+        bot = try #require(app.bot(bot.id))
+        let pet = PetVideo.folder(for: BotHome(workspace: bot.persistencePath))
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        defer { window.contentView = nil; window.close() }
+        let host = NSHostingView(rootView: AnyView(EmptyView()))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        func show(_ id: UUID, reduceMotion: Bool = false) async throws {
+            host.rootView = AnyView(BotInspector(botID: id).environment(\._accessibilityReduceMotion, reduceMotion).environment(app))
+            try await Task.sleep(for: .milliseconds(200))
+            host.layoutSubtreeIfNeeded()
+        }
+
+        // An unreadable pet keeps the emoji.
+        try FileManager.default.createDirectory(at: pet, withIntermediateDirectories: true)
+        try Data("not a manifest".utf8).write(to: pet.appendingPathComponent("video.json"))
+        app.reloadPet(bot.id)
+        #expect(app.pets[bot.id] == nil)
+        try await show(bot.id)
+        #expect(petViews(in: host).isEmpty)
+
+        try FileManager.default.removeItem(at: pet)
+        try await writePetPackage(to: pet)
+        app.reloadPet(bot.id)
+        try #require(app.pets[bot.id] != nil)
+        try await show(bot.id)
+        let player = try #require(petViews(in: host).first)
+        // Selecting it greets, as a local bot does; then it idles.
+        let package = try #require(app.pets[bot.id])
+        let known = try #require(app.status(of: .home(bot.id))).activity
+        try await waitForPet("\(known.animation(among: package.available) ?? "idle") playing", in: player)
+        try await waitForPet("idle playing", in: player, timeout: 10)
+        try #require(app.status(of: .home(bot.id))?.activity == .idle)
+
+        // Its sidebar row moves while selected, and is still otherwise while it's idle.
+        for selected in [true, false] {
+            let row = NSHostingView(rootView: BotRow(bot: bot, status: app.status(of: bot), summary: app.botRowSummary(of: bot), selected: selected)
+                .frame(width: 220).environment(app))
+            let rowWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+            rowWindow.isReleasedWhenClosed = false
+            rowWindow.contentView = row
+            rowWindow.orderFront(nil)
+            try await Task.sleep(for: .milliseconds(200))
+            if selected {
+                try await waitForPet("idle playing", in: try #require(petViews(in: row).first))
+            } else {
+                #expect(petViews(in: row).isEmpty)
+            }
+            rowWindow.contentView = nil
+            rowWindow.close()
+        }
+
+        // Selecting another bot stops the pet's player rather than leaving it hidden and playing.
+        try await show(local.id)
+        #expect(petViews(in: host).isEmpty)
+        #expect(player.debugState == "no clip")
+
+        try await show(bot.id, reduceMotion: true)
+        #expect(petViews(in: host).isEmpty)
+        #expect(try drawsGreenStill(host))
+
+        #expect(app.runStates.isEmpty)
+        #expect(!app.isRunning(.home(bot.id)) && !app.isRunning(.home(local.id)))
+        #expect(app.thread(.home(bot.id)).isEmpty)
+        #expect(reads == 0)
+    }
+
     @Test func remoteQueueCurlRoundTripIsDurableAndDoesNotRunALocalCLI() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-remote-http-\(UUID())")
         let domain = "local.BotChu.RemoteQueueTests.\(UUID())"

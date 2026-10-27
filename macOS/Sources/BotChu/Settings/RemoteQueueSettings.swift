@@ -82,7 +82,9 @@ struct RemoteQueueInspector: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                BotIntro(bot: bot)
+                // Only the selected bot's inspector shows, so its pet moves, as a local bot's does,
+                // for what its Home conversation is known to be doing.
+                BotIntro(bot: bot, activity: model.status(of: .home(bot.id))?.activity ?? .idle, animates: true)
                 PetJobStatus(botID: bot.id)
                 Text("Remote queue bot").font(.headline)
                 RemoteQueuePresence()
