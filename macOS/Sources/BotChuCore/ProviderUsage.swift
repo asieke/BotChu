@@ -119,6 +119,15 @@ public struct UsageWindow: Identifiable, Equatable, Sendable, Codable {
 
     /// A window of a day or less, which Providers shows under 5-hour.
     public var isShort: Bool { period.map { $0 <= Self.day } ?? false }
+
+    /// How much of the window has gone by, from 0 to 1: only for a window of a known length whose
+    /// reset is ahead and within that length, never worked out from what is left to spend.
+    public func elapsedFraction(at now: Date) -> Double? {
+        guard let period, period.isFinite, period > 0, let resetsAt else { return nil }
+        let left = resetsAt.timeIntervalSince(now)
+        guard left.isFinite, left > 0, left <= period else { return nil }
+        return min(1, max(0, 1 - left / period))
+    }
 }
 
 /// An allowance window as one line of Providers' meters and the inspector: the share used, and its
@@ -144,6 +153,11 @@ public struct UsageLine: Identifiable, Equatable, Sendable {
     public var help: String
     /// The window has reset since it was read, so its share is unknown until the next reading.
     public var hasReset: Bool
+    /// How much of the window has gone by, from 0 to 1, when its share and length are known and
+    /// its reset is ahead within that length: the share used is ahead of the time when it is more.
+    public var elapsed: Double?
+    /// The time gone by as a share, "50%", when it is known.
+    public var elapsedText: String?
 
     public init(_ window: UsageWindow, at now: Date) {
         id = window.id
@@ -151,6 +165,8 @@ public struct UsageLine: Identifiable, Equatable, Sendable {
         hasReset = window.hasReset(at: now)
         percent = window.currentPercent(at: now)
         percentText = percent.map { "\($0.formatted(.number.precision(.fractionLength(0))))%" } ?? "—"
+        elapsed = percent == nil ? nil : window.elapsedFraction(at: now)
+        elapsedText = elapsed.map { "\(($0 * 100).formatted(.number.precision(.fractionLength(0))))%" }
         if hasReset, let date = window.resetsAt {
             reset = "Reset at \(UsageTime.when(date, now: now))"
             resetSentence = "\(reset), waiting for a new reading"
@@ -167,7 +183,8 @@ public struct UsageLine: Identifiable, Equatable, Sendable {
             reset = "—"
             resetSentence = "Reset time not reported"
         }
-        let share = hasReset ? "not read since its reset" : percent == nil ? "not reported" : "\(percentText) used"
+        let share = hasReset ? "not read since its reset" : percent == nil ? "not reported"
+            : "\(percentText) used" + (elapsedText.map { ", \($0) of the window elapsed" } ?? "")
         let money = hasReset ? nil : window.detail
         help = "\(window.title): \(share). \(resetSentence)" + (money.map { " · \($0)" } ?? "")
     }
@@ -336,7 +353,7 @@ public struct ProvidersColumns: Equatable, Sendable {
     public init(width: Double) {
         let room = width - Self.edges
         // Each size's columns, and the narrowest Agents it is used with.
-        let wide = (230.0, 110.0, 430.0, 200.0, 100.0), regular = (190.0, 96.0, 322.0, 190.0, 60.0), compact = (160.0, 96.0, 180.0, 160.0, 56.0)
+        let wide = (230.0, 110.0, 474.0, 200.0, 100.0), regular = (190.0, 96.0, 339.0, 190.0, 60.0), compact = (160.0, 96.0, 190.0, 160.0, 56.0)
         func fixed(_ size: (Double, Double, Double, Double, Double)) -> Double { size.0 + size.1 + 2 * size.2 + size.3 }
         let chosen: (Double, Double, Double, Double, Double)
         if room >= fixed(wide) + wide.4 {
@@ -361,16 +378,20 @@ public struct ProvidersColumns: Equatable, Sendable {
     }
 }
 
-/// How a meter line fills its column: a bar of at most 200 points, then the share, the time left and
-/// when the reset is, each in a slot of its own so they line up down the column. In a column too
-/// narrow for a bar of 60 beside them, the reset time goes (it is in the tooltip), and then the time
-/// left; the bar is never under 40. Every meter in the table has the same.
+/// How a meter line fills its column: an 8-point bar of at most 250 points, then the share, the time
+/// left and when the reset is, each in a slot of its own so they line up down the column. In a column
+/// too narrow for a bar of 60 beside them, the reset time goes (it is in the tooltip), and then the
+/// time left; the bar is never under 40. Every meter in the table has the same.
 public struct UsageMeterLayout: Equatable, Sendable {
     public static let spacing = 10.0
     public static let share = 36.0
     public static let timeLeft = 68.0
     public static let resetTime = 104.0
-    public static let maximumBar = 200.0
+    public static let maximumBar = 250.0
+    public static let barHeight = 8.0
+    /// The mark of the time gone by: this wide, and this much above and below the bar.
+    public static let tickWidth = 1.5
+    public static let tickOverhang = 2.0
     public var bar: Double
     public var showsTimeLeft: Bool
     public var showsResetTime: Bool

@@ -135,7 +135,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     the logo and name, with the CLI family below it, or what is wrong; the model groups the
     profile's limits cover (All models, Fable, Gemini, Claude & GPT), each named once, a daily
     window's saying so ("Images · Daily"); **5-hour** and **Weekly**, a meter per group in each:
-    a bar of at most 200 points, the share used, the time left and when the reset is ("in 1d 10h",
+    an 8-point bar of at most 250 points, with a tick for the share of the window gone by when its
+    length is known and its reset is ahead within it (fill past the tick is use ahead of the time;
+    the tooltip says both shares), the share used, the time left and when the reset is ("in 1d 10h",
     "Mon 5:00 PM": the time alone today, a weekday within six days, else the date), each in a slot
     of its own so they line up down the column, and "Reset at 5:40 AM" once a window has reset, until
     the next reading; **Credits & resets**, a line each for the money left under an OpenRouter key's
