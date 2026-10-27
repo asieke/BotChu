@@ -179,6 +179,18 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
         case nil: return work.isPullRequest ? "Continue \(work.reference)." : "Work on \(work.reference)."
         }
     }
+
+    /// Whether this task, open, already works on the issue or pull request (or reviews it, for a
+    /// review), or on the branch, in the repository on the same machine: a second task there would
+    /// share its worktree, or do the same review twice. A pull request's task asks with its head
+    /// branch, so a task that opened the pull request on that branch, with no work of its own, is
+    /// found too (#215).
+    public func alreadyWorks(on repo: String, hostID: UUID?, work: Work?, review: Review?, branch: String) -> Bool {
+        guard !isArchived, self.hostID == hostID, self.repo.caseInsensitiveCompare(repo) == .orderedSame else { return false }
+        if review == nil, self.review == nil, !branch.isEmpty, self.branch == branch { return true }
+        guard let work, let theirs = self.work, (review == nil) == (self.review == nil) else { return false }
+        return theirs.number == work.number && theirs.isPullRequest == work.isPullRequest
+    }
 }
 
 /// How tasks and their branches are named.
@@ -401,9 +413,31 @@ public struct TaskRequest: Equatable, Sendable {
 
     public struct Problem: Error, Equatable, Sendable {
         public var message: String
+        /// The open task already working on what was asked, to continue in instead (#215).
+        public var working: Working?
 
-        public init(message: String) {
+        public init(message: String, working: Working? = nil) {
             self.message = message
+            self.working = working
+        }
+
+        /// The task, of the bot with `botID`, that already works on what was asked.
+        public static func alreadyWorking(_ task: BotTask, of botID: UUID) -> Problem {
+            Problem(message: "“\(task.title)” already works on it; send it a message instead",
+                    working: Working(taskID: task.id, botID: botID, title: task.title))
+        }
+    }
+
+    /// An open task by its bot and ID, as a request turned away from it names it.
+    public struct Working: Equatable, Sendable {
+        public var taskID: UUID
+        public var botID: UUID
+        public var title: String
+
+        public init(taskID: UUID, botID: UUID, title: String) {
+            self.taskID = taskID
+            self.botID = botID
+            self.title = title
         }
     }
 

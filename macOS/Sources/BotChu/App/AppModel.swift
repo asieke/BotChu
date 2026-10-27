@@ -268,6 +268,9 @@ final class AppModel {
     /// shows it, and the ones read so far, by `owner/name#number`.
     let workDetailLookup: @Sendable (String, Int, Bool) async -> Result<GitHubLookup.WorkDetail, TaskWorktree.Failure>
     @ObservationIgnored var workDetails: [String: GitHubLookup.WorkDetail] = [:]
+    /// An issue or pull request (repository, number, whether a pull request) as a task starts on it,
+    /// with a pull request's head branch.
+    let workLookup: @Sendable (String, Int, Bool) async -> Result<GitHubLookup.Found, TaskWorktree.Failure>
     /// The issue the owner chose to delete in Projects, until they confirm it, and then why GitHub
     /// didn't delete it; the issues being deleted, by `owner/name#number` (`Projects.swift`).
     var issueDeletion: IssueDeletion?
@@ -284,6 +287,8 @@ final class AppModel {
          openWorkLookup: @escaping @Sendable ([String]) async -> Result<GitHubLookup.OpenWork, TaskWorktree.Failure> = { await GitHubLookup.openWork(repos: $0) },
          workDetailLookup: @escaping @Sendable (String, Int, Bool) async -> Result<GitHubLookup.WorkDetail, TaskWorktree.Failure> = {
              await GitHubLookup.detail(number: $1, pullRequest: $2, repo: $0)
+         }, workLookup: @escaping @Sendable (String, Int, Bool) async -> Result<GitHubLookup.Found, TaskWorktree.Failure> = {
+             await GitHubLookup.work(number: $1, pullRequest: $2, repo: $0)
          }, evaluationRunner: RunEvaluator.Runner? = nil, storage: StorageQueue = .shared) {
         self.storage = storage
         // Files still being written by this process (a model made before, in tests) are read once written.
@@ -291,6 +296,7 @@ final class AppModel {
         self.projectGitHub = projectGitHub
         self.openWorkLookup = openWorkLookup
         self.workDetailLookup = workDetailLookup
+        self.workLookup = workLookup
         DevHooks.configure()
         self.store = store ?? DevHooks.dataDir.map { Store(root: $0) } ?? .applicationSupport
         projectSync = ProjectSync(file: self.store.root.appendingPathComponent("projects.json"), client: ProjectSync.Client(
@@ -878,7 +884,9 @@ final class AppModel {
     }
 
     /// The task a request asks `bot` for, where its repository lives (or on the machine it names),
-    /// or why it can't be: a repository BotChu can't find, or another open task already on it.
+    /// or why it can't be: a repository BotChu can't find, or another open task already on it (its
+    /// pull request's head branch too, looked up first, so no tab is made for it: #215). Checked
+    /// after its last wait, so a caller that starts it without waiting again can't race another.
     func plannedTask(_ wanted: TaskRequest, for bot: Bot, checkouts: [RepoCheckout], origin: BotTask.Origin) async throws -> BotTask {
         guard !bot.isRemoteQueue else { throw TaskRequest.Problem(message: "Remote queue bots do not run local tasks.") }
         let found = try repository(named: wanted.repo, checkouts: checkouts).get()
@@ -892,12 +900,16 @@ final class AppModel {
             location = self.location(of: found.repo)
         }
         if location.hostID == nil { location.path = (location.path as NSString).expandingTildeInPath }
-        let work = wanted.issue.map { BotTask.Work(number: $0, isPullRequest: false, repo: found.repo) }
+        var work = wanted.issue.map { BotTask.Work(number: $0, isPullRequest: false, repo: found.repo) }
             ?? wanted.pullRequest.map { BotTask.Work(number: $0, isPullRequest: true, repo: found.repo) }
         // A pull request's task works on the pull request's own branch (or its head, for a review).
-        let branch = work?.isPullRequest == true ? "" : wanted.branch ?? ""
-        if let other = taskAlreadyWorking(on: found.repo, hostID: location.hostID, work: work, review: wanted.review, branch: branch) {
-            throw TaskRequest.Problem(message: "“\(other.title)” already works on it; send it a message instead")
+        var branch = work?.isPullRequest == true ? "" : wanted.branch ?? ""
+        if let pull = work, wanted.review == nil, let head = await pullRequestHead(pull, repo: found.repo) {
+            work = head.work
+            branch = head.branch
+        }
+        if let other = taskWorking(on: found.repo, hostID: location.hostID, work: work, review: wanted.review, branch: branch) {
+            throw TaskRequest.Problem.alreadyWorking(other.task, of: other.botID)
         }
         return BotTask(for: bot, repo: found.repo, checkout: location.path, work: work, brief: wanted.task, branch: branch,
                        title: wanted.title, origin: origin, host: settings.host(location.hostID), review: wanted.review)
@@ -1036,17 +1048,30 @@ final class AppModel {
     }
 
     /// The open task, of any bot, that already works on this issue or pull request (or reviews it,
-    /// for a review), or on this branch, in the repository on the same machine: a second task
-    /// there would share its worktree, or do the same review twice.
+    /// for a review), or on this branch, in the repository on the same machine
+    /// (`BotTask.alreadyWorks`).
     func taskAlreadyWorking(on repo: String, hostID: UUID?, work: BotTask.Work?, review: BotTask.Review?, branch: String,
                             except id: UUID? = nil) -> BotTask? {
-        tasks.values.joined().first { other in
-            guard other.id != id, !other.isArchived, other.hostID == hostID,
-                  other.repo.caseInsensitiveCompare(repo) == .orderedSame else { return false }
-            if review == nil, other.review == nil, !branch.isEmpty, other.branch == branch { return true }
-            guard let work, let theirs = other.work, (review == nil) == (other.review == nil) else { return false }
-            return theirs.number == work.number && theirs.isPullRequest == work.isPullRequest
+        taskWorking(on: repo, hostID: hostID, work: work, review: review, branch: branch, except: id)?.task
+    }
+
+    /// `taskAlreadyWorking`, with the bot whose task it is.
+    func taskWorking(on repo: String, hostID: UUID?, work: BotTask.Work?, review: BotTask.Review?, branch: String,
+                     except id: UUID? = nil) -> (task: BotTask, botID: UUID)? {
+        for (botID, list) in tasks {
+            if let other = list.first(where: { $0.id != id && $0.alreadyWorks(on: repo, hostID: hostID, work: work, review: review, branch: branch) }) {
+                return (other, botID)
+            }
         }
+        return nil
+    }
+
+    /// A pull request to continue, read from GitHub with its title, and the head branch its task
+    /// works on: empty for a fork's, which only a review can work on (the worktree says so). Nil
+    /// when it is an issue's, or GitHub can't say; making the worktree asks again.
+    func pullRequestHead(_ work: BotTask.Work, repo: String) async -> (work: BotTask.Work, branch: String)? {
+        guard work.isPullRequest, case .success(let found) = await workLookup(repo, work.number, true) else { return nil }
+        return (found.work, found.fromFork ? "" : found.branch ?? "")
     }
 
     /// Makes (or reopens) the task's worktree, or waits for the making already under way. Returns
@@ -1082,7 +1107,7 @@ final class AppModel {
         var task = task
         var failure: TaskWorktree.Failure?
         if let work = task.work, work.title.isEmpty || (work.isPullRequest && task.branch.isEmpty && task.review == nil) {
-            switch await GitHubLookup.work(number: work.number, pullRequest: work.isPullRequest, repo: task.repo) {
+            switch await workLookup(task.repo, work.number, work.isPullRequest) {
             case .success(let found) where found.fromFork && task.review == nil:
                 failure = TaskWorktree.Failure(step: "This pull request comes from a fork; start a review task instead", output: "")
             case .success(let found):

@@ -498,6 +498,14 @@ final class SubagentRuntime {
                                        existing: made.existing, errorMessage: made.unsaved)
         } catch {
             result.errorMessage = Self.reason(error)
+            // Turned away from a Task already working on it: that Task, to continue in (#215).
+            if let working = (error as? TaskRequest.Problem)?.working {
+                result.alreadyWorking = true
+                result.taskID = working.taskID
+                result.taskTitle = working.title
+                result.targetBotID = working.botID
+                result.targetBotName = model.bot(working.botID)?.name
+            }
         }
         handoffs[handoff.id] = result
         await deliver(result, to: caller)

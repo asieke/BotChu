@@ -122,6 +122,42 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
     }
 }
 
+@Suite struct TaskOwnershipTests {
+    let url = URL(string: "https://github.com/asieke/BotChu/pull/213")!
+
+    /// #215: the task that opened pull request #213 on its branch has no work of its own, so only
+    /// the pull request's head branch finds it.
+    @Test func aPullRequestsHeadBranchFindsTheTaskThatOwnsIt() {
+        let pull = BotTask.Work(number: 213, url: url, isPullRequest: true)
+        var owner = BotTask(repo: "asieke/BotChu", checkout: "/repo", branch: "feat/own-work-end-end", brief: "Redesign connectors")
+        owner.pullRequest = 213
+        #expect(!owner.alreadyWorks(on: "asieke/BotChu", hostID: nil, work: pull, review: nil, branch: ""))
+        #expect(owner.alreadyWorks(on: "asieke/botchu", hostID: nil, work: pull, review: nil, branch: "feat/own-work-end-end"))
+        // A review works in a detached worktree of its own; another machine or repository, or a
+        // closed task, is no conflict.
+        #expect(!owner.alreadyWorks(on: "asieke/BotChu", hostID: nil, work: pull, review: .review, branch: "feat/own-work-end-end"))
+        #expect(!owner.alreadyWorks(on: "asieke/BotChu", hostID: UUID(), work: pull, review: nil, branch: "feat/own-work-end-end"))
+        #expect(!owner.alreadyWorks(on: "asieke/GitChu", hostID: nil, work: pull, review: nil, branch: "feat/own-work-end-end"))
+        owner.archivedAt = Date()
+        #expect(!owner.alreadyWorks(on: "asieke/BotChu", hostID: nil, work: pull, review: nil, branch: "feat/own-work-end-end"))
+
+        // A task on the pull request itself is found by its number, as before.
+        let continuing = BotTask(repo: "asieke/BotChu", checkout: "/repo", work: pull)
+        #expect(continuing.alreadyWorks(on: "asieke/BotChu", hostID: nil, work: pull, review: nil, branch: ""))
+        #expect(!continuing.alreadyWorks(on: "asieke/BotChu", hostID: nil, work: pull, review: .comment, branch: ""))
+        #expect(!continuing.alreadyWorks(on: "asieke/BotChu", hostID: nil, work: nil, review: nil, branch: "feat/other"))
+    }
+
+    @Test func aRequestTurnedAwayNamesTheTaskToContinueIn() {
+        let owner = BotTask(title: "Redesign connectors", repo: "asieke/BotChu", checkout: "/repo")
+        let bot = UUID()
+        let problem = TaskRequest.Problem.alreadyWorking(owner, of: bot)
+        #expect(problem.message == "“Redesign connectors” already works on it; send it a message instead")
+        #expect(problem.working == TaskRequest.Working(taskID: owner.id, botID: bot, title: "Redesign connectors"))
+        #expect(TaskRequest.Problem(message: "No repository").working == nil)
+    }
+}
+
 @Suite struct RepositoriesTests {
     @Test func gitHubNames() {
         #expect(Repositories.nameWithOwner(remote: "https://github.com/asieke/GitChu.git") == "asieke/GitChu")

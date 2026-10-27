@@ -32,6 +32,8 @@ struct NewTaskSheet: View {
     /// The issue or pull request the task works on, if any.
     @State private var work: BotTask.Work?
     @State private var purpose: Purpose
+    /// A pull request to continue, as GitHub has it, with the head branch its task works on.
+    @State private var head: PullHead?
     @State private var brief = ""
     @State private var editing = true
     @State private var images = DraftImages()
@@ -94,6 +96,15 @@ struct NewTaskSheet: View {
             .padding(16)
         }
         .frame(width: 560, height: 720)
+        // A pull request's branch another task owns turns the task away before it is made (#215).
+        .task(id: headKey) {
+            guard let headKey, let repo, let work else { return }
+            if let found = await model.pullRequestHead(work, repo: repo) {
+                head = PullHead(key: headKey, work: found.work, branch: found.branch)
+            } else {
+                head = PullHead(key: headKey, work: work, branch: "")
+            }
+        }
         .task {
             await model.loadRepositories()
             let wanted = initialRepo ?? (DevHooks.dataDir == nil ? lastRepo : DevHooks.env["BOTCHU_TASK_REPO"] ?? "")
@@ -241,11 +252,27 @@ struct NewTaskSheet: View {
 
     // MARK: Starting
 
+    struct PullHead {
+        var key: String
+        var work: BotTask.Work
+        var branch: String
+    }
+
+    /// The pull request the task would continue, while it is one.
+    private var headKey: String? {
+        guard let repo, let work, work.isPullRequest, purpose == .work else { return nil }
+        return "\(repo)#\(work.number)"
+    }
+
+    /// The pull request's head as read, once it is for the one chosen.
+    private var currentHead: PullHead? { head.flatMap { $0.key == headKey ? $0 : nil } }
+
     /// Why the task can't start yet, or nil when it can.
     private var problem: String? {
         guard let location else { return "Choose a project" }
         if work == nil, brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Say what \(botName) should do" }
         if location.hostID != nil, let folder = SSHHost.folderProblem(location.path) { return folder }
+        if headKey != nil, currentHead == nil, let work { return "Reading \(work.reference)…" }
         return conflict
     }
 
@@ -253,7 +280,7 @@ struct NewTaskSheet: View {
     /// branches automatically during preparation, even when their briefs happen to match.
     private var conflict: String? {
         guard let repo, let other = model.taskAlreadyWorking(on: repo, hostID: location?.hostID, work: work,
-                                                             review: purpose.review, branch: "") else { return nil }
+                                                             review: purpose.review, branch: currentHead?.branch ?? "") else { return nil }
         return "“\(other.title)” already works on this. Send it a message there."
     }
 
@@ -268,8 +295,8 @@ struct NewTaskSheet: View {
             images.problem = "Couldn't keep the images in \(bot.name)'s folder: \(error.localizedDescription)"
             return
         }
-        let task = BotTask(for: bot, repo: repo, checkout: location.path, work: work,
-                           brief: brief.trimmingCharacters(in: .whitespacesAndNewlines),
+        let task = BotTask(for: bot, repo: repo, checkout: location.path, work: currentHead?.work ?? work,
+                           brief: brief.trimmingCharacters(in: .whitespacesAndNewlines), branch: currentHead?.branch ?? "",
                            host: model.settings.host(location.hostID), review: purpose.review)
         lastRepo = repo
         model.startTask(task, for: botID, show: true, images: attachments)

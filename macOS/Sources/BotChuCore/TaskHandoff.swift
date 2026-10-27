@@ -103,11 +103,15 @@ public struct TaskHandoffResult: Codable, Equatable, Sendable {
     public var taskTitle: String?
     /// The Task the same request made before (`TaskHandoff.key`), rather than a new one.
     public var existing: Bool
+    /// For a failed request: `taskID` is the open Task, of `targetBotID`, already working on what
+    /// was asked (its pull request's branch), to continue in instead; no Task was made (#215).
+    public var alreadyWorking: Bool
     public var errorMessage: String?
     public var updatedAt: Date
 
     public init(id: UUID, phase: Phase, targetBotID: UUID? = nil, targetBotName: String? = nil, taskID: UUID? = nil,
-                taskTitle: String? = nil, existing: Bool = false, errorMessage: String? = nil, updatedAt: Date = Date()) {
+                taskTitle: String? = nil, existing: Bool = false, alreadyWorking: Bool = false, errorMessage: String? = nil,
+                updatedAt: Date = Date()) {
         self.id = id
         kind = TaskHandoff.kind
         self.phase = phase
@@ -116,6 +120,7 @@ public struct TaskHandoffResult: Codable, Equatable, Sendable {
         self.taskID = taskID
         self.taskTitle = taskTitle
         self.existing = existing
+        self.alreadyWorking = alreadyWorking
         self.errorMessage = errorMessage
         self.updatedAt = updatedAt
     }
