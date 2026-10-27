@@ -207,7 +207,7 @@ struct BotEditor: View {
 
     private var modelLabel: ModelPickerData {
         ModelPickerData(kind: bot.account.kind, model: bot.model, openRouterDefault: model.settings.openRouterModel,
-                        catalog: model.modelCatalog.models, resolved: bot.resolvedModel)
+                        catalog: model.modelCatalog.models, native: model.nativeModels(for: bot), resolved: bot.resolvedModel)
     }
 
     private var modelPrompt: String {

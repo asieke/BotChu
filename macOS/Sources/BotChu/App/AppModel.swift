@@ -314,6 +314,8 @@ final class AppModel {
         arrange(botSections, save: false)
         connectorBoard.profiles = { [weak self] in self?.connectorProfiles }
         connectorBoard.prune()
+        // Lists Codex profiles' models (#220): only the real app, or a review copy with sample lists, checks by itself.
+        configureModelCatalogs(file: self.store.root.appendingPathComponent("model-catalogs.json"), live: store == nil && DevHooks.dataDir == nil)
         // Only the bots' and tasks' settings are read here; conversations are read when they are
         // needed (#109). A Home's or open task's queue with something in its files is recovered off
         // the main thread, with its transcript only when messages wait in it; the others have nothing
@@ -583,13 +585,14 @@ final class AppModel {
 
     func setModel(_ selected: String, for target: ChatTarget) {
         guard !isRunning(target) else { return }
-        change(target) { $0.selectModel(selected) }
+        let catalog = runSettings(of: target).flatMap(nativeModels(for:))
+        change(target) { $0.selectModel(selected, catalog: catalog) }
     }
 
     func setReasoningEffort(_ effort: ReasoningEffort?, for target: ChatTarget) {
         guard !isRunning(target), let current = runSettings(of: target) else { return }
         let effective = GenerationOptions.effectiveModel(current.model, kind: current.account.kind, openRouterDefault: settings.openRouterModel)
-        if let effort, !GenerationOptions.efforts(for: current.account.kind, model: effective).contains(effort) { return }
+        if let effort, !GenerationOptions.efforts(for: current.account.kind, model: effective, catalog: nativeModels(for: current)).contains(effort) { return }
         change(target) { $0.reasoningEffort = effort }
     }
 

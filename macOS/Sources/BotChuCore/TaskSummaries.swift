@@ -31,6 +31,14 @@ public struct QuickTasks: Equatable, Sendable {
         case .antigravity, .pi: GenerationOptions.models(for: kind).first?.id ?? ""
         }
     }
+
+    /// The models a profile offers: its own list once read (`catalog`, #220), else its family's
+    /// starters, with `chosen` when it isn't among them.
+    public static func models(for kind: AgentKind, catalog: [ModelOption]?, chosen: String) -> [ModelOption] {
+        let options = GenerationOptions.models(for: kind, catalog: catalog)
+        guard !chosen.isEmpty, !options.contains(where: { $0.id == chosen }) else { return options }
+        return options + [ModelOption(id: chosen, name: chosen, efforts: [])]
+    }
 }
 
 /// A new task's label of three or four words (#192), asked for once, in the background, as the

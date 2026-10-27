@@ -14,12 +14,14 @@ struct ModelMenu: View {
     @State private var showsModels = false
     @State private var showsEffort = false
 
+    /// The profile on this Mac whose own list the picker shows (#220), if it lists one.
+    private var scope: ModelCatalogScope? { app.modelCatalogScope(for: settings) }
     private var data: ModelPickerData {
         ModelPickerData(kind: settings.account.kind, model: settings.model, openRouterDefault: app.settings.openRouterModel,
-                        catalog: app.modelCatalog.models, resolved: settings.resolvedModel)
+                        catalog: app.modelCatalog.models, native: app.modelCatalog.models(for: scope), resolved: settings.resolvedModel)
     }
     private var efforts: [ReasoningEffort] {
-        GenerationOptions.efforts(for: settings.account.kind, model: data.effectiveID)
+        GenerationOptions.efforts(for: settings.account.kind, model: data.effectiveID, catalog: app.modelCatalog.models(for: scope))
     }
 
     var body: some View {
@@ -79,7 +81,7 @@ struct ModelMenu: View {
         .help(disabled ? "Model can change when this turn ends" : modelHelp)
         .popover(isPresented: $showsModels, arrowEdge: .top) {
             ModelPicker(data: data, accountName: settings.account.name, catalog: app.modelCatalog,
-                        disabled: disabled, select: onModel)
+                        disabled: disabled, select: onModel, scope: scope)
         }
 
     }

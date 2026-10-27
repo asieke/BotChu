@@ -128,6 +128,20 @@ enum DevHooks {
         return { _ in throw ImageDelivery.Failure("The window isn't on screen.") }
     }
 
+    /// `BOTCHU_CODEX_MODELS`: `sample`, a Codex profile's list as its `model/list` gave it on 2026-10-27
+    /// (#220), after a second; `unavailable`, a check that times out.
+    static var codexModels: (@Sendable (String) async throws -> [ModelOption])? {
+        guard dataDir != nil, let fixture = env["BOTCHU_CODEX_MODELS"], ["sample", "unavailable"].contains(fixture) else { return nil }
+        return { _ in
+            try await Task.sleep(for: .seconds(1))
+            if fixture == "unavailable" { throw CodexModelFailure("Codex didn’t list its models within 20 seconds.") }
+            let all: [ReasoningEffort] = [.low, .medium, .high, .xhigh, .max, .ultra]
+            return [("gpt-6.1-sol", "GPT-6.1-Sol"), ("gpt-6-astra", "GPT-6-Astra"), ("gpt-6.1-terra", "GPT-6.1 Terra"), ("gpt-6-sol", "GPT-6-Sol"),
+                    ("gpt-6-luna", "GPT-6-Luna"), ("gpt-5.6-sol", "GPT-5.6-Sol"), ("gpt-5.6-terra", "GPT-5.6-Terra"), ("gpt-5.6-luna", "GPT-5.6-Luna")]
+                .map { ModelOption(id: $0.0, name: $0.1, efforts: $0.0.hasSuffix("luna") ? Array(all.dropLast()) : all) }
+        }
+    }
+
     /// `BOTCHU_CONNECTORS`, as the mock's states: connected services, ones needing sign-in, failed or
     /// off, Computer Use configured, and the provider's own entries.
     static var connectorCheck: (@Sendable (AgentKind, String, String) async throws -> ConnectorReport)? {

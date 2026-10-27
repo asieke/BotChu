@@ -9,12 +9,14 @@
 // account's connectors as the inspector does, printing each one's category and action (#212); a
 // turn's Claude Code report is printed with the turn too. `--summary`
 // names a new task the way Quick tasks do (#192), on each account's smallest model unless
-// BOTCHU_SMOKE_MODEL names one: it must reply with a label of three or four words.
+// BOTCHU_SMOKE_MODEL names one: it must reply with a label of three or four words. `--models`
+// lists each Codex account's models the way its pickers read them (#220), starting no turn.
 //
 //   swift run --package-path macOS botchu-smoke claude-personal codex-dev
 //   OPENROUTER_API_KEY=… swift run --package-path macOS botchu-smoke openrouter
 //   swift run --package-path macOS botchu-smoke --review claude-dev codex-dev muse
 //   swift run --package-path macOS botchu-smoke --summary claude-dev codex-dev
+//   swift run --package-path macOS botchu-smoke --models codex-work
 import Foundation
 import BotChuCore
 
@@ -28,7 +30,8 @@ let usageOnly = CommandLine.arguments.dropFirst().first == "--usage"
 let reviewOnly = CommandLine.arguments.dropFirst().first == "--review"
 let connectorsOnly = CommandLine.arguments.dropFirst().first == "--connectors"
 let summaryOnly = CommandLine.arguments.dropFirst().first == "--summary"
-let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly || connectorsOnly || summaryOnly ? 2 : 1))
+let modelsOnly = CommandLine.arguments.dropFirst().first == "--models"
+let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly || connectorsOnly || summaryOnly || modelsOnly ? 2 : 1))
 let accounts = requested.isEmpty ? Accounts.all : requested.map { Accounts.account(id: $0) }
 let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-smoke-\(UUID().uuidString)")
 
@@ -172,6 +175,24 @@ Task {
                 print("    OK")
             } catch {
                 print("    FAIL: \((error as? UsageFailure)?.message ?? "Usage query failed")")
+                failures.append(account.id)
+            }
+            continue
+        }
+        if modelsOnly {
+            print("== \(account.name) models")
+            guard account.kind == .codex else {
+                print("    skipped: no model list for \(account.kind.displayName)")
+                continue
+            }
+            let started = Date()
+            do {
+                for model in try await CodexModelList.list(command: account.defaultCommand) {
+                    print("    \(model.id) · \(model.name) · \(model.efforts.map(\.rawValue).joined(separator: " "))")
+                }
+                print("    OK in \(Int(Date().timeIntervalSince(started)))s")
+            } catch {
+                print("    FAIL: \((error as? CodexModelFailure)?.message ?? "Model list failed")")
                 failures.append(account.id)
             }
             continue

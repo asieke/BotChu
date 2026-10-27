@@ -18,6 +18,13 @@ public struct ModelOption: Identifiable, Equatable, Sendable {
     public let efforts: [ReasoningEffort]
     /// A CLI alias that moves to newer versions, such as Claude Code's `opus`, not a pinned version.
     public var moving = false
+
+    public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false) {
+        self.id = id
+        self.name = name
+        self.efforts = efforts
+        self.moving = moving
+    }
 }
 
 /// How a model choice reads wherever it is chosen or shown. The title has a version number only
@@ -34,8 +41,14 @@ public struct ModelLabel: Equatable, Sendable {
 }
 
 /// Starter choices verified against the installed CLIs. Custom ids remain available because
-/// catalogs and account access change independently of BotChu. No login files are read.
+/// catalogs and account access change independently of BotChu. No login files are read. A Codex
+/// profile's own list (`catalog`, #220) replaces its starters once read; they stand in until then.
 public enum GenerationOptions {
+    public static func models(for kind: AgentKind, catalog: [ModelOption]?) -> [ModelOption] {
+        if kind == .codex, let catalog, !catalog.isEmpty { return catalog }
+        return models(for: kind)
+    }
+
     public static func models(for kind: AgentKind) -> [ModelOption] {
         let common: [ReasoningEffort] = [.low, .medium, .high]
         let extended = common + [.xhigh, .max]
@@ -68,8 +81,8 @@ public enum GenerationOptions {
         }
     }
 
-    public static func efforts(for kind: AgentKind, model: String) -> [ReasoningEffort] {
-        if let option = option(for: model, kind: kind) { return option.efforts }
+    public static func efforts(for kind: AgentKind, model: String, catalog: [ModelOption]? = nil) -> [ReasoningEffort] {
+        if let option = option(for: model, kind: kind, catalog: catalog) { return option.efforts }
         switch kind {
         case .claude, .antigravity: return [.low, .medium, .high, .xhigh, .max]
         case .codex: return [.low, .medium, .high, .xhigh, .max, .ultra]
@@ -78,8 +91,8 @@ public enum GenerationOptions {
         }
     }
 
-    private static func option(for model: String, kind: AgentKind) -> ModelOption? {
-        let options = models(for: kind)
+    private static func option(for model: String, kind: AgentKind, catalog: [ModelOption]? = nil) -> ModelOption? {
+        let options = models(for: kind, catalog: catalog)
         if let exact = options.first(where: { $0.id == model }) { return exact }
         guard kind == .antigravity else { return nil }
         return options.first { antigravityFamily($0.id) == antigravityFamily(model) }
@@ -103,7 +116,8 @@ public enum GenerationOptions {
     /// `model` is the ID sent to the CLI, empty for the account's default; `resolved` is the ID the
     /// CLI reported running for it (`RunSettings.resolvedModel`), if it has. Nothing here guesses a
     /// version: without a report, an alias or default shows none.
-    public static func label(for model: String, kind: AgentKind, resolved: String? = nil) -> ModelLabel {
+    public static func label(for model: String, kind: AgentKind, resolved: String? = nil, catalog: [ModelOption]? = nil) -> ModelLabel {
+        func fullName(_ model: String, kind: AgentKind) -> String { Self.fullName(model, kind: kind, catalog: catalog) }
         let model = model.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolved = resolved.flatMap { $0.isEmpty ? nil : $0 }
         // Claude Code and Muse report the model a turn ran; the others never say, so stay unresolved.
@@ -131,8 +145,8 @@ public enum GenerationOptions {
 
     /// The full name and version of a model ID: a starter choice's name, a Claude or Muse ID spelled
     /// out (`claude-opus-5-5` is Claude Opus 5.5), else the ID itself.
-    public static func fullName(_ model: String, kind: AgentKind) -> String {
-        if let option = option(for: model, kind: kind), !option.moving { return option.name }
+    public static func fullName(_ model: String, kind: AgentKind, catalog: [ModelOption]? = nil) -> String {
+        if let option = option(for: model, kind: kind, catalog: catalog), !option.moving { return option.name }
         return claudeName(model) ?? (kind == .muse ? museName(model) : nil) ?? model
     }
 
@@ -181,9 +195,10 @@ public enum GenerationOptions {
 }
 
 extension RunSettings {
-    public mutating func selectModel(_ model: String) {
+    /// `catalog`: the profile's own list, when read (#220), whose efforts the model offers.
+    public mutating func selectModel(_ model: String, catalog: [ModelOption]? = nil) {
         self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let reasoningEffort, !GenerationOptions.efforts(for: account.kind, model: self.model).contains(reasoningEffort) {
+        if let reasoningEffort, !GenerationOptions.efforts(for: account.kind, model: self.model, catalog: catalog).contains(reasoningEffort) {
             self.reasoningEffort = nil
         }
     }

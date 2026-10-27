@@ -494,17 +494,17 @@ extension Job {
     }
 
     /// Chooses the model its runs use, on the account they use; an effort the model doesn't take goes.
-    public mutating func selectModel(_ model: String, agent: Bot) {
+    public mutating func selectModel(_ model: String, agent: Bot, catalog: [ModelOption]? = nil) {
         var settings = runsOn?.applied(to: agent) ?? agent
-        settings.selectModel(model)
+        settings.selectModel(model, catalog: catalog)
         runsOn = JobRunsOn(settings)
     }
 
     /// Chooses the effort its runs use, only one their account and model take.
-    public mutating func selectReasoningEffort(_ effort: ReasoningEffort?, agent: Bot, openRouterDefault: String) {
+    public mutating func selectReasoningEffort(_ effort: ReasoningEffort?, agent: Bot, openRouterDefault: String, catalog: [ModelOption]? = nil) {
         var settings = runsOn?.applied(to: agent) ?? agent
         let model = GenerationOptions.effectiveModel(settings.model, kind: settings.account.kind, openRouterDefault: openRouterDefault)
-        if let effort, !GenerationOptions.efforts(for: settings.account.kind, model: model).contains(effort) { return }
+        if let effort, !GenerationOptions.efforts(for: settings.account.kind, model: model, catalog: catalog).contains(effort) { return }
         settings.reasoningEffort = effort
         runsOn = JobRunsOn(settings)
     }
