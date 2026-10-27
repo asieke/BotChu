@@ -184,7 +184,9 @@ struct OwnerCell: View {
 /// such as This Mac), Vercel project or registry, with an icon for its kind.
 struct DeployCell: View {
     var row: ProjectRow
-    var machineLabel: (String) -> String
+    /// What each target shows: a machine as BotChu knows it, else its name. Values rather than a
+    /// lookup, so the cell is drawn again only when they change (#188).
+    var names: [String]
     var body: some View {
         HStack(spacing: 8) {
             if case .loading = row.record {
@@ -194,14 +196,15 @@ struct DeployCell: View {
             } else if row.deploy.isEmpty {
                 Dash()
             }
-            ForEach(Array(row.deploy.enumerated()), id: \.offset) { _, target in
+            ForEach(Array(zip(row.deploy, names).enumerated()), id: \.offset) { _, shown in
+                let (target, name) = shown
                 switch target.kind {
-                case .none: Text(target.name).foregroundStyle(.tertiary)
+                case .none: Text(name).foregroundStyle(.tertiary)
                 default:
                     HStack(spacing: 4) {
                         Image(systemName: Self.symbol(target.kind)).font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(target.kind == .unrecognized ? GitHubColors.attention : GitHubColors.neutral)
-                        Text(target.kind == .local ? machineLabel(target.name) : target.name)
+                        Text(name)
                     }
                 }
             }

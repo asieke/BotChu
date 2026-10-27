@@ -62,19 +62,10 @@ struct ProjectsView: View {
                 // Never disabled: asked for during a sync, it runs once that one ends.
                 Button { Task { await model.refreshProjects() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
             }
-            // One row when it fits; in a narrow window, the search goes on a row of its own.
-            ViewThatFits(in: .horizontal) {
-                HStack { scopePicker; search.frame(minWidth: 160); filters }
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack { scopePicker; Spacer(minLength: 8); filters }
-                    search
-                }
-                VStack(alignment: .leading, spacing: 10) {
-                    scopePicker
-                    HStack { filters }
-                    search
-                }
-            }.padding(.horizontal, 24).padding(.bottom, 16)
+            // One row when it fits; in a narrow window, the search goes on a row of its own, and in a
+            // narrower one the filters too.
+            HeaderControls { scopePicker; search.frame(minWidth: 160); HStack { filters } }
+                .padding(.horizontal, 24).padding(.bottom, 16)
             if let error = model.repositoriesError ?? (scope == .repositories ? nil : model.openItemsError) {
                 HStack {
                     Label(error, systemImage: "exclamationmark.triangle")
@@ -266,13 +257,87 @@ struct ProjectsView: View {
     }
 }
 
+/// Projects' scope picker, search and filters: on one row when they fit, else with the search on a
+/// row of its own below, or, narrower still, each on its own row. Each control is measured once when
+/// it changes, and only placed as the width changes, which it does on every frame of the sidebar's
+/// slide (#188); `ViewThatFits` measured every copy of every control again on each of those frames.
+struct HeaderControls: Layout {
+    struct Cache {
+        /// The scope picker's, the search's and the filters' ideal sizes.
+        var sizes: [CGSize]
+        /// Between the scope picker and the search, and the search and the filters, as an HStack spaces them.
+        var gaps: [CGFloat]
+        var rowWidth: CGFloat { sizes.reduce(0) { $0 + $1.width } + gaps.reduce(0, +) }
+        /// The narrowest the scope picker and the filters fit beside each other.
+        var pairWidth: CGFloat { sizes[0].width + 8 + sizes[2].width }
+        var pairHeight: CGFloat { max(sizes[0].height, sizes[2].height) }
+    }
+
+    private let rowSpacing: CGFloat = 10
+
+    func makeCache(subviews: Subviews) -> Cache {
+        Cache(sizes: subviews.map { $0.sizeThatFits(.unspecified) },
+              gaps: subviews.indices.dropLast().map { subviews[$0].spacing.distance(to: subviews[$0 + 1].spacing, along: .horizontal) })
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        cache = makeCache(subviews: subviews)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        guard subviews.count == 3 else { return .zero }
+        let sizes = cache.sizes
+        guard let width = proposal.width, width.isFinite else { return CGSize(width: cache.rowWidth, height: sizes.map(\.height).max()!) }
+        if width >= cache.rowWidth { return CGSize(width: width, height: sizes.map(\.height).max()!) }
+        if width >= cache.pairWidth { return CGSize(width: width, height: cache.pairHeight + rowSpacing + sizes[1].height) }
+        return CGSize(width: max(width, sizes[0].width, sizes[2].width), height: sizes.map(\.height).reduce(0, +) + 2 * rowSpacing)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        guard subviews.count == 3 else { return }
+        let sizes = cache.sizes
+        if bounds.width >= cache.rowWidth {
+            let search = bounds.width - sizes[0].width - sizes[2].width - cache.gaps.reduce(0, +)
+            subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(sizes[0]))
+            subviews[1].place(at: CGPoint(x: bounds.minX + sizes[0].width + cache.gaps[0], y: bounds.midY), anchor: .leading,
+                              proposal: ProposedViewSize(width: search, height: nil))
+            subviews[2].place(at: CGPoint(x: bounds.maxX, y: bounds.midY), anchor: .trailing, proposal: ProposedViewSize(sizes[2]))
+        } else if bounds.width >= cache.pairWidth {
+            let middle = bounds.minY + cache.pairHeight / 2
+            subviews[0].place(at: CGPoint(x: bounds.minX, y: middle), anchor: .leading, proposal: ProposedViewSize(sizes[0]))
+            subviews[2].place(at: CGPoint(x: bounds.maxX, y: middle), anchor: .trailing, proposal: ProposedViewSize(sizes[2]))
+            subviews[1].place(at: CGPoint(x: bounds.minX, y: bounds.minY + cache.pairHeight + rowSpacing), anchor: .topLeading,
+                              proposal: ProposedViewSize(width: bounds.width, height: nil))
+        } else {
+            subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(sizes[0]))
+            subviews[2].place(at: CGPoint(x: bounds.minX, y: bounds.minY + sizes[0].height + rowSpacing), proposal: ProposedViewSize(sizes[2]))
+            subviews[1].place(at: CGPoint(x: bounds.minX, y: bounds.minY + sizes[0].height + sizes[2].height + 2 * rowSpacing),
+                              proposal: ProposedViewSize(width: bounds.width, height: nil))
+        }
+    }
+}
+
 /// A table's column choices (shown, order, widths), saved between launches.
 private struct SavedColumns<Row: Identifiable>: DynamicProperty {
     @AppStorage private var data: Data
+    /// The table reads them many times a frame while its columns resize, as in the sidebar's slide (#188).
+    @State private var decoded = Decoded<Row>()
     init(_ key: String) { _data = AppStorage(wrappedValue: Data(), key) }
     var customization: TableColumnCustomization<Row> {
-        get { (try? JSONDecoder().decode(TableColumnCustomization<Row>.self, from: data)) ?? TableColumnCustomization() }
+        get { decoded.value(of: data) }
         nonmutating set { data = (try? JSONEncoder().encode(newValue)) ?? Data() }
+    }
+}
+
+/// What a table's saved column choices last decoded to.
+private final class Decoded<Row: Identifiable> {
+    private var last: (data: Data, value: TableColumnCustomization<Row>)?
+
+    func value(of data: Data) -> TableColumnCustomization<Row> {
+        if let last, last.data == data { return last.value }
+        let value = (try? JSONDecoder().decode(TableColumnCustomization<Row>.self, from: data)) ?? TableColumnCustomization()
+        last = (data, value)
+        return value
     }
 }
 
@@ -293,7 +358,9 @@ struct ProjectsTable: View {
                 .width(min: 140, ideal: 190)
                 .customizationID("name")
                 .disabledCustomizationBehavior(.visibility)
-            TableColumn("Deploy", value: \ProjectRow.deployKey) { (row: ProjectRow) in DeployCell(row: row, machineLabel: machineLabel) }
+            TableColumn("Deploy", value: \ProjectRow.deployKey) { (row: ProjectRow) in
+                DeployCell(row: row, names: row.deploy.map { $0.kind == .local ? machineLabel($0.name) : $0.name })
+            }
                 .width(min: 60, ideal: 150, max: 300)
                 .customizationID("deploy")
             TableColumn("Owner", value: \ProjectRow.ownerKey) { (row: ProjectRow) in OwnerCell(repo: row.repo) }

@@ -198,6 +198,21 @@ extension RenderingTests {
         try await settle("sidebar-closed")
     }
 
+    /// Projects' scope picker, search and filters stay on one row when they fit; narrower, the search
+    /// goes on a row of its own, and narrower still the filters too. Each is measured once, not at every
+    /// width the sidebar's slide passes through (#188).
+    @Test func projectsHeaderWrapsAsTheWindowNarrows() {
+        let header = NSHostingController(rootView: HeaderControls {
+            Color.clear.frame(width: 200, height: 20)
+            Color.clear.frame(minWidth: 160).frame(height: 30)
+            Color.clear.frame(width: 300, height: 24)
+        })
+        func size(_ width: CGFloat) -> CGSize { header.sizeThatFits(in: CGSize(width: width, height: 1000)) }
+        #expect(size(900) == CGSize(width: 900, height: 30))
+        #expect(size(600) == CGSize(width: 600, height: 24 + 10 + 30))
+        #expect(size(400) == CGSize(width: 400, height: 20 + 10 + 24 + 10 + 30))
+    }
+
     private func captureSidebar(_ window: NSWindow, name: String) throws {
         guard let folder = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"], let view = window.contentView,
               let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
