@@ -126,10 +126,11 @@ struct ChatView: View {
                     }
                     if let queue = model.messageQueues[target], !queue.pending.isEmpty {
                         QueuedMessages(queue: queue, running: running, preparing: model.runStates[target]?.preparing == true,
-                            midTurn: model.takesFollowUpsMidTurn(target),
+                            midTurn: model.takesFollowUpsMidTurn(target), canInterrupt: model.canInterrupt(target),
                             resume: { model.resumeQueuedMessages(to: target) },
                             edit: { model.editQueuedMessage($0, in: target); composerFocused = true },
-                            remove: { model.removeQueuedMessage($0, from: target) })
+                            remove: { model.removeQueuedMessage($0, from: target) },
+                            interrupt: { model.interruptAndSend(target) })
                     }
                     Composer(draft: Binding(get: { model.drafts[target] ?? "" }, set: { model.drafts[target] = $0 }),
                          focused: $composerFocused,

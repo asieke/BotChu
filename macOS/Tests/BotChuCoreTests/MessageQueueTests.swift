@@ -394,4 +394,104 @@ import Testing
         queue.restore(messages[1], at: 0)
         #expect(queue.messages == messages, "Never twice")
     }
+
+    /// #223: Interrupt & send stops the turn; once it has ended, the message written to the CLI and
+    /// never taken goes out again, once, as the next turn, before the rest, in order.
+    @Test func interruptSendsTheUntakenMessageOnceTheStoppedTurnEnds() {
+        let messages = ["Stop that, do this", "Then this", "And this"].map { ChatMessage(role: .user, text: $0) }
+        var queue = MessageQueue()
+        for message in messages { queue.enqueue(message) }
+        queue.markInFlight(messages[0].id)
+        #expect(queue.interruptible == messages[0])
+        let interrupted1 = queue.interrupt()
+        #expect(interrupted1)
+        // A second click while the turn stops does nothing, so the next turn isn't stopped too.
+        let interrupted2 = queue.interrupt()
+        #expect(!interrupted2)
+        #expect(queue.interruptible == nil)
+        #expect(queue.isInterrupting)
+        // Its Stop doesn't pause the queue: the CLI never took the message, which goes out next.
+        queue.finishTurn(stopped: true, failed: false)
+        #expect(!queue.isInterrupting)
+        #expect(!queue.isPaused)
+        #expect(queue.inFlight.isEmpty)
+        #expect(queue.next == messages[0])
+        #expect(queue.messages == messages)
+        #expect(queue.taken.isEmpty)
+    }
+
+    /// #223: the CLI took the message as it stopped. That late acknowledgment is reconciled before
+    /// the next turn, which sends only what it never took.
+    @Test func aMessageTakenWhileTheTurnStopsIsNotSentAgain() {
+        let first = ChatMessage(role: .user, text: "Taken just in time")
+        let second = ChatMessage(role: .user, text: "Still waiting")
+        var queue = MessageQueue()
+        queue.enqueue(first)
+        queue.enqueue(second)
+        queue.markInFlight(first.id)
+        queue.markInFlight(second.id)
+        let interrupted3 = queue.interrupt()
+        #expect(interrupted3)
+        #expect(queue.acknowledge() == first)
+        queue.finishTurn(stopped: true, failed: false)
+        #expect(queue.next == second)
+        #expect(queue.messages == [second])
+        #expect(queue.taken == [first])
+    }
+
+    /// #223: Interrupt & send is the owner's explicit choice, so it sends a queue that Stop paused,
+    /// and works for a message not yet written to the CLI.
+    @Test func interruptSendsAPausedQueue() {
+        let message = ChatMessage(role: .user, text: "Waiting since Stop")
+        var queue = MessageQueue()
+        queue.enqueue(message)
+        queue.pause()
+        #expect(queue.next == nil)
+        let interrupted4 = queue.interrupt()
+        #expect(interrupted4)
+        queue.finishTurn(stopped: true, failed: false)
+        #expect(queue.next == message)
+    }
+
+    /// #223: the owner's own Stop, or a turn that fails (its transcript can't be saved), calls the
+    /// interruption off: everything stays queued, paused, for the owner to send again.
+    @Test(arguments: [false, true]) func stopOrFailureDuringAnInterruptionKeepsTheMessagesPaused(failed: Bool) {
+        let messages = ["one", "two"].map { ChatMessage(role: .user, text: $0) }
+        var queue = MessageQueue()
+        for message in messages { queue.enqueue(message) }
+        queue.markInFlight(messages[0].id)
+        let interrupted5 = queue.interrupt()
+        #expect(interrupted5)
+        if failed {
+            queue.finishTurn(stopped: true, failed: true)
+        } else {
+            queue.pause()
+            #expect(!queue.isInterrupting)
+            queue.finishTurn(stopped: true, failed: false)
+        }
+        #expect(queue.isPaused)
+        #expect(queue.next == nil)
+        #expect(queue.messages == messages)
+        queue.resume()
+        #expect(queue.next == messages[0])
+    }
+
+    /// #223: nothing to interrupt for with an empty queue, a message still waiting for its first save,
+    /// or one already starting a turn; then the one after it is next.
+    @Test func interruptNeedsASavedMessageNotAlreadyStartingATurn() {
+        var queue = MessageQueue()
+        let interrupted6 = queue.interrupt()
+        #expect(!interrupted6)
+        let first = ChatMessage(role: .user, text: "first")
+        let second = ChatMessage(role: .user, text: "second")
+        queue.enqueue(first, unsaved: true)
+        #expect(queue.interruptible == nil)
+        let interrupted7 = queue.interrupt()
+        #expect(!interrupted7)
+        queue.accepted(first.id)
+        queue.enqueue(second)
+        #expect(queue.interruptible == first)
+        queue.deliver(first.id)
+        #expect(queue.interruptible == second)
+    }
 }

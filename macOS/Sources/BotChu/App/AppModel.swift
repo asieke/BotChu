@@ -1367,8 +1367,8 @@ final class AppModel {
         returnToDraft(message.text, references: message.mentions, images: message.images, in: target)
     }
 
-    /// Whether follow-ups reach this conversation's CLI during a turn, at its next tool call, rather
-    /// than once the turn ends: Claude Code, on This Mac.
+    /// Whether follow-ups reach this conversation's CLI during a turn, once its current step ends,
+    /// rather than once the turn ends: Claude Code, on This Mac.
     func takesFollowUpsMidTurn(_ target: ChatTarget) -> Bool {
         guard let current = runSettings(of: target) else { return false }
         return CommandBuilder.takesInputMidTurn(current.account.kind) && task(target)?.isRemote != true
@@ -1405,9 +1405,10 @@ final class AppModel {
         }
     }
 
-    /// Writes queued messages to the running CLI, which takes them at its next tool call. They stay
-    /// queued, unable to be edited, until the CLI echoes them (`AgentEvent.inputTaken`); any it
-    /// never takes go out as the next turn.
+    /// Writes queued messages to the running CLI, which takes them once its current step ends (after
+    /// the running tool call returns). They stay queued, unable to be edited, until the CLI echoes
+    /// them (`AgentEvent.inputTaken`), however long that takes; any it never takes go out as the
+    /// next turn.
     private func sendFollowUps(to target: ChatTarget) {
         guard let run = runs[target], run.acceptsInput, var input = inputs[target], input.ledger.acceptsFollowUps else { return }
         while let message = messageQueues[target]?.next,
@@ -1774,6 +1775,8 @@ final class AppModel {
                         return
                     }
                     let stopped = run.stopped
+                    // Interrupt & send stopped it, not the owner: the conversation goes on at once.
+                    let interrupted = self.messageQueues[target]?.isInterrupting == true
                     // What the turn delivered to the Inbox shows after its reply.
                     let cards = self.inbox.takeCards(for: target)
                     self.conversation(target).stream { messages in
@@ -1781,7 +1784,7 @@ final class AppModel {
                         ThreadAssembler.closeRunningTools(&messages)
                         messages += cards
                         if stopped {
-                            messages.append(.stopNote(byOwner: !self.terminating))
+                            messages.append(.stopNote(byOwner: !self.terminating && !interrupted))
                         } else if run.lingered {
                             messages.append(ChatMessage(role: .note, text: "\(account.name) didn't exit after its reply, so BotChu ended it."))
                         } else if !outcome.ended, machine.isRemote, status == 255 {
@@ -1815,8 +1818,8 @@ final class AppModel {
                             if target.taskID != nil { self.finishTaskTurn(target, stopped: stopped, failure: failure) }
                             // Home's turns and tasks' join the work their bot's next run review covers.
                             self.reviewTurn(target, thread: messages, turnStart: turnStart, accountID: account.id)
-                            // Only Stop and real failures pause the queue (not quitting BotChu); messages the
-                            // CLI never took go out as the next turn.
+                            // Only Stop and real failures pause the queue (not quitting BotChu, nor Interrupt &
+                            // send); messages the CLI never took go out as the next turn.
                             self.messageQueues[target]?.finishTurn(stopped: stopped && !self.terminating,
                                                                    failed: !self.terminating && (!saved || failure != nil))
                             self.saveQueue(for: target)
@@ -1952,9 +1955,28 @@ final class AppModel {
         [.bot(workspace: bot.workspace), .shared(settings.sharedMemoryPath, botWorkspace: bot.workspace)]
     }
 
+    /// Whether Interrupt & send can stop this conversation's running CLI for its next queued message.
+    func canInterrupt(_ target: ChatTarget) -> Bool {
+        runs[target] != nil && messageQueues[target]?.interruptible != nil
+    }
+
+    /// Interrupt & send: stops the running turn and its sub-agents as Stop does, but leaves the queue
+    /// to go on. Once the CLI has exited and its output is read, so every message it took is in the
+    /// conversation, its next message starts a turn of the same session, and what it never took
+    /// follows in order (`MessageQueue.finishTurn`). What the turn's tools did stays done.
+    func interruptAndSend(_ target: ChatTarget) {
+        guard bot(target.botID)?.isRemoteQueue != true, let run = runs[target],
+              messageQueues[target]?.interrupt() == true else { return }
+        delegation.stopRoot(target)
+        inputs[target]?.ledger.close()
+        run.stop()
+    }
+
     func stop(_ target: ChatTarget) {
         guard bot(target.botID)?.isRemoteQueue != true else { return }
         delegation.stopRoot(target)
+        // The owner's Stop calls off an Interrupt & send under way, even once the CLI took everything.
+        if messageQueues[target]?.isInterrupting == true { messageQueues[target]?.pause() }
         pauseQueue(target)
         inputs[target]?.ledger.close()
         if let run = runs[target] {

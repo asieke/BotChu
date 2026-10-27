@@ -81,8 +81,8 @@ public struct Invocation: Equatable, Sendable {
 }
 
 public enum CommandBuilder {
-    /// Whether the CLI takes a follow-up while a turn runs, at its next tool call: Claude Code,
-    /// with `--input-format stream-json`. The others hear follow-ups as the next turn, once the
+    /// Whether the CLI takes a follow-up while a turn runs, once its current step ends (after the
+    /// running tool call returns): Claude Code, with `--input-format stream-json`. The others hear follow-ups as the next turn, once the
     /// running one ends (see README.md, Queued messages).
     public static func takesInputMidTurn(_ kind: AgentKind) -> Bool { kind == .claude }
 

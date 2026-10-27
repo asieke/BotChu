@@ -247,9 +247,11 @@ extension RenderingTests {
         #expect(try fixture.calls(target).count == 2)
     }
 
-    /// Claude Code takes a follow-up mid-turn, at its next tool call, in the same process; the
-    /// message joins the transcript where the CLI took it, and leaves the queue only then.
-    @Test(arguments: [false, true]) func claudeTakesAFollowUpAtItsNextToolCall(withImages: Bool) async throws {
+    /// Claude Code takes a follow-up mid-turn, once the running tool call returns, in the same
+    /// process; the message joins the transcript where the CLI took it, and leaves the queue only
+    /// then. However long the CLI takes to acknowledge it (#223: minutes, for a long command), it
+    /// is written once.
+    @Test(arguments: [false, true]) func claudeTakesAFollowUpOnceItsToolCallReturns(withImages: Bool) async throws {
         let fixture = try ConversationFixture(accountID: "claude-dev", script: ConversationFixture.claudeScript)
         defer { fixture.cleanUp() }
         let app = fixture.app, target = fixture.taskTarget
@@ -267,10 +269,17 @@ extension RenderingTests {
         #expect(app.messageQueues[target]?.messages.count == 1)
         await app.storage.settle()
         #expect(fixture.home.loadQueuedMessages(task: target.taskID).map(\.id) == [id])
-        // The tool call ends once the CLI has the follow-up, so it takes it at that call.
+        // The CLI has read it, but the tool call runs on: no acknowledgment yet, so it is still
+        // queued, not in the conversation, and not written again.
         try await fixture.wait { FileManager.default.fileExists(atPath: fixture.folder(target).appendingPathComponent("received").path) }
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(app.messageQueues[target]?.isInFlight(id) == true)
+        #expect(!app.thread(target).contains { $0.id == id })
+        #expect(try fixture.lines("stdin.jsonl", target).count == 1)
+        // The tool call returns: the CLI takes it then.
         try fixture.release(target)
         try await fixture.wait { !app.isRunning(target) }
+        #expect(try fixture.lines("stdin.jsonl", target).count == 1)
         let thread = app.thread(target).filter { !$0.role.isNote }
         #expect(thread.map(\.role) == [.user, .tool, .user, .assistant])
         #expect(thread.filter { $0.role == .user }.map(\.text) == ["WAIT", "steer me"])
@@ -294,6 +303,91 @@ extension RenderingTests {
         #expect(calls.count == 1)
         #expect(calls.first?.contains("--replay-user-messages") == true)
         #expect(!app.thread(target).contains { $0.role == .error })
+    }
+
+    /// #223: the CLI ends its turn without ever taking a follow-up written to it. It goes out once,
+    /// as the next turn of the same session, and the queue isn't paused.
+    @Test func claudeFollowUpTheCLINeverTookGoesOutOnceAsTheNextTurn() async throws {
+        let fixture = try ConversationFixture(accountID: "claude-dev", script: ConversationFixture.claudeScript)
+        defer { fixture.cleanUp() }
+        let app = fixture.app, target = fixture.taskTarget
+        app.send("DROP", to: target)
+        try await fixture.wait { app.runStates[target]?.takesInput == true }
+        app.send("steer me", to: target)
+        try await fixture.wait { FileManager.default.fileExists(atPath: fixture.folder(target).appendingPathComponent("received").path) }
+        try fixture.release(target)
+        try await fixture.wait { !app.isRunning(target) && app.thread(target).last?.text == "reply:steer me" }
+        #expect(app.thread(target).filter { $0.role == .user }.map(\.text) == ["DROP", "steer me"])
+        #expect(app.messageQueues[target]?.messages.isEmpty == true)
+        #expect(app.messageQueues[target]?.isPaused == false)
+        let calls = try fixture.calls(target)
+        #expect(calls.count == 2)
+        #expect(calls.last?.contains("--resume") == true)
+    }
+
+    /// #223: Stop during a long tool call keeps a follow-up the CLI never took, paused, out of the
+    /// conversation; Send next sends it once.
+    @Test func stoppingClaudeMidToolKeepsTheUntakenFollowUpPaused() async throws {
+        let fixture = try ConversationFixture(accountID: "claude-dev", script: ConversationFixture.claudeScript)
+        defer { fixture.cleanUp() }
+        let app = fixture.app, target = fixture.taskTarget
+        app.send("WAIT", to: target)
+        try await fixture.wait { app.runStates[target]?.takesInput == true }
+        app.send("steer me", to: target)
+        try await fixture.wait { FileManager.default.fileExists(atPath: fixture.folder(target).appendingPathComponent("received").path) }
+        app.stop(target)
+        try await fixture.wait { !app.isRunning(target) }
+        #expect(app.messageQueues[target]?.messages.map(\.text) == ["steer me"])
+        #expect(app.messageQueues[target]?.isPaused == true)
+        #expect(app.messageQueues[target]?.inFlight.isEmpty == true)
+        #expect(!app.thread(target).contains { $0.text == "steer me" })
+        #expect(app.thread(target).last?.text == "Stopped")
+        #expect(app.thread(target).last?.stopped == true)
+        app.resumeQueuedMessages(to: target)
+        try await fixture.wait { !app.isRunning(target) && app.thread(target).last?.text == "reply:steer me" }
+        #expect(app.thread(target).filter { $0.text == "steer me" }.count == 1)
+        #expect(try fixture.calls(target).count == 2)
+    }
+
+    /// #223: Interrupt & send stops the running turn mid-tool, waits for the CLI to end, then resumes
+    /// its session with what it never took, in order, each once; a second click starts nothing more.
+    @Test func interruptAndSendResumesTheSessionWithWhatTheCLINeverTook() async throws {
+        let fixture = try ConversationFixture(accountID: "claude-dev", script: ConversationFixture.claudeScript)
+        defer { fixture.cleanUp() }
+        let app = fixture.app, target = fixture.taskTarget
+        app.send("WAIT", to: target)
+        try await fixture.wait { app.runStates[target]?.takesInput == true }
+        #expect(!app.canInterrupt(target))
+        app.send("steer me", to: target)
+        app.send("and then this", to: target)
+        let ids = try #require(app.messageQueues[target]?.messages.map(\.id))
+        try await fixture.wait { ids.allSatisfy { app.messageQueues[target]?.isInFlight($0) == true } }
+        #expect(app.canInterrupt(target))
+        app.interruptAndSend(target)
+        #expect(app.messageQueues[target]?.isInterrupting == true)
+        #expect(!app.canInterrupt(target))
+        app.interruptAndSend(target)
+        try await fixture.wait { app.thread(target).contains { $0.text == "reply:and then this" } && !app.isRunning(target) }
+        let thread = app.thread(target)
+        #expect(thread.filter { $0.role == .user }.map(\.text) == ["WAIT", "steer me", "and then this"])
+        // Stopped as part of the interruption, not by the owner: the queue isn't paused.
+        let stop = try #require(thread.firstIndex { $0.role == .note && $0.text == "Stopped" })
+        #expect(stop < thread.firstIndex { $0.text == "steer me" }!)
+        #expect(thread[stop].stopped != true)
+        #expect(app.messageQueues[target]?.messages.isEmpty == true)
+        #expect(app.messageQueues[target]?.isPaused == false)
+        #expect(app.messageQueues[target]?.isInterrupting == false)
+        let calls = try fixture.calls(target)
+        #expect(calls.count >= 2)
+        #expect(calls.dropFirst().allSatisfy { $0.contains("--resume") })
+        // What the CLIs took: each message once, the interrupted process none of the follow-ups.
+        let taken = try fixture.lines("inputs.jsonl", target).map { line -> String in
+            let object = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+            let content = (object?["message"] as? [String: Any])?["content"] as? [[String: Any]]
+            return (content?.first?["text"] as? String)?.split(separator: "\n").last.map(String.init) ?? ""
+        }
+        #expect(taken == ["WAIT", "steer me", "and then this"])
+        #expect(!thread.contains { $0.role == .error })
     }
 
     /// #77: Claude Code takes a follow-up while the task's transcript can't be saved (its file is
@@ -549,6 +643,12 @@ final class Flag: @unchecked Sendable {
     func release(_ target: ChatTarget) throws {
         try Data().write(to: folder(target).appendingPathComponent("release"))
     }
+    /// The lines of a file the fixture CLI wrote in the conversation's folder; none before it has.
+    func lines(_ name: String, _ target: ChatTarget) throws -> [String] {
+        let url = folder(target).appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        return try String(contentsOf: url, encoding: .utf8).split(separator: "\n").map(String.init)
+    }
     func calls(_ target: ChatTarget) throws -> [[String]] {
         let text = try String(contentsOf: folder(target).appendingPathComponent("calls.jsonl"), encoding: .utf8)
         return try text.split(separator: "\n").map { try JSONDecoder().decode([String].self, from: Data($0.utf8)) }
@@ -637,10 +737,12 @@ final class Flag: @unchecked Sendable {
     """#
 
     /// Claude Code with `--input-format stream-json --replay-user-messages`: messages on stdin,
-    /// each echoed when taken; one written during a tool call is taken after its result; the CLI
-    /// ends when stdin closes.
+    /// each echoed when taken; one written during a tool call is taken after its result (each is
+    /// logged to `stdin.jsonl` as read); the CLI ends when stdin closes. As Claude Code 2.1.311 does
+    /// (#223), SIGINT rejects the running call, ends with an error result and exits, never taking
+    /// what waited on stdin. With DROP, the call returns and the CLI ends without taking it.
     static let claudeScript = #"""
-    import json, os, select, sys, time
+    import json, os, select, signal, sys, time
     from pathlib import Path
     def emit(value):
         print(json.dumps(value), flush=True)
@@ -670,13 +772,19 @@ final class Flag: @unchecked Sendable {
               "content":[{"type":"text", "text":words}]}, "parent_tool_use_id":None})
     def result():
         emit({"type":"result", "subtype":"success", "is_error":False, "result":"ok"})
+    def interrupted(signum, frame):
+        emit({"type":"user", "message":{"role":"user", "content":[{"tool_use_id":"toolu_1", "type":"tool_result",
+              "content":"The user doesn't want to proceed with this tool use.", "is_error":True}]}, "parent_tool_use_id":None})
+        emit({"type":"result", "subtype":"error_during_execution", "is_error":True, "errors":["aborted_tools"]})
+        os._exit(0)
+    signal.signal(signal.SIGINT, interrupted)
     with open("calls.jsonl", "a") as file:
         file.write(json.dumps(sys.argv[1:]) + "\n")
     emit({"type":"system", "subtype":"init", "session_id":"claude-fixture"})
     first = read_line()
     replay(first)
     prompt = text(first).splitlines()[-1]
-    if "WAIT" in prompt:
+    if "WAIT" in prompt or "DROP" in prompt:
         emit({"type":"assistant", "message":{"id":"m1", "role":"assistant", "content":[{"type":"tool_use",
               "id":"toolu_1", "name":"Bash", "input":{"command":"sleep 1"}}]}, "parent_tool_use_id":None})
         pending = []
@@ -684,9 +792,15 @@ final class Flag: @unchecked Sendable {
             line = read_line(0.02)
             if line:
                 pending.append(line)
+                with open("stdin.jsonl", "a") as file:
+                    file.write(line + "\n")
                 Path("received").touch()
         emit({"type":"user", "message":{"role":"user", "content":[{"tool_use_id":"toolu_1", "type":"tool_result",
               "content":"done", "is_error":False}]}, "parent_tool_use_id":None})
+        if "DROP" in prompt:
+            say("dropped")
+            result()
+            sys.exit(0)
         for line in pending:
             replay(line)
             say("steered:" + text(line))
