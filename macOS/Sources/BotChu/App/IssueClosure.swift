@@ -31,8 +31,13 @@ extension AppModel {
         defer { updatingIssues.remove(request.id) }
         let login = projectsLogin
         leaveIssueDetail(request.number, of: request.repo)
-        guard case .failure(let failure) = await projectSync.closeIssue(request.number, of: request.repo),
-              projectsLogin == login else { return }
+        let result = await projectSync.closeIssue(request.number, of: request.repo)
+        guard projectsLogin == login else { return }
+        guard case .failure(let failure) = result else {
+            // Its page, opened again meanwhile, has nothing left to show.
+            leaveIssueDetail(request.number, of: request.repo)
+            return
+        }
         var failed = request
         failed.failure = failure.message
         // A late failure waits for the question asked meanwhile about another issue.
