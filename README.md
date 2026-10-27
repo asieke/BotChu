@@ -592,13 +592,19 @@ on that pull request's branch to continue in instead). The same command run agai
     its bottom row. Return sends; Shift-Return (or Option-Return) inserts a new line. The box grows with your draft, its first line staying in place as lines are added or removed, then scrolls at its maximum height with the line being typed in view; the report and New Task boxes do the same. Send stays available during a
     run: follow-ups appear in a queue above the composer and reach the bot on their own, in order,
     in the same CLI session. Where the CLI takes input mid-turn (Claude Code on This Mac, through
-    `--input-format stream-json`), a follow-up reaches it at its next tool call, like steering in
-    Claude Code itself; it shows as **Sent** until the CLI takes it, then joins the conversation
-    where it was read. Every other account (Codex, Antigravity, Muse, Pi, and any task over SSH)
-    gets it as the next turn, as soon as the running one ends. Pending messages can be edited or
-    removed until they are sent. Only Stop and a failed turn pause the queue (**Paused · send when
-    you're ready**), and a paused queue stays paused across relaunches; messages left queued when
-    BotChu quit go out on their own after it starts again. **Send next** resumes a paused queue.
+    `--input-format stream-json`), a follow-up is written to it at once and reaches the model when
+    its current step ends (once the running tool call returns, which for a long command or a
+    sub-agent can take minutes), like steering in Claude Code itself; it shows as **Not read yet**
+    until the CLI takes it, then joins the conversation where it was read. Every other account
+    (Codex, Antigravity, Muse, Pi, and any task over SSH) gets it as the next turn, as soon as the
+    running one ends. Pending messages can be edited or removed until they are written to the CLI.
+    **Interrupt & send**, on the next pending message while a turn runs, stops the turn and its
+    sub-agents (what their tools already did stays done), waits for the CLI to exit, then resumes
+    the same session with that message and whatever else the CLI hadn't taken, in order, each once;
+    a message the CLI took as it stopped isn't sent again. Only Stop and a failed turn pause the
+    queue (**Paused · send when you're ready**), and a paused queue stays paused across relaunches;
+    messages left queued when BotChu quit go out on their own after it starts again. **Send next**
+    resumes a paused queue.
     Each Home and task has its own queue, saved beside its thread in `queued.jsonl` (with
     `queued.paused` while paused). A follow-up the CLI has taken stays saved beside them, in
     `taken.jsonl`, until the conversation is saved with it: when the conversation can't be saved (a
