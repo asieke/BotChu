@@ -101,10 +101,13 @@ struct JobsView: View {
     private var table: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let now = max(context.date, Date())
+            // The cell that reads the model is given it, as in Providers: a deleted job's row is
+            // laid out once more as it goes, without the window's environment, and reading the
+            // model there stopped BotChu (#196).
             Table(matches, selection: $selection) {
                 TableColumn("Job") { (job: Job) in JobTitleCell(job: job, problem: model.jobs.problems[job.id], fallback: model.jobs.fallback(of: job)) }
                     .width(min: 130, ideal: 180)
-                TableColumn("Agent") { (job: Job) in JobAgentCell(botID: job.botID) }
+                TableColumn("Agent") { (job: Job) in JobAgentCell(botID: job.botID).environment(model) }
                     .width(min: 90, ideal: 120, max: 220)
                 TableColumn("Schedule") { (job: Job) in
                     VStack(alignment: .leading, spacing: 1) {
