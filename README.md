@@ -489,8 +489,11 @@ on that pull request's branch to continue in instead). The same command run agai
     the title (semibold while unread, with a blue dot), its purpose (**Needs input**, **For
     review**, **Completed** or **FYI**, in colour while it waits on the owner; **Working** while
     the bot works on a reply), **Not sent** for a reply the queue didn't take, and chips for what
-    came with it. The row being read keeps its place until the owner leaves it; ↑ and ↓ move
-    through the list. The reading pane shows the purpose, the repository and issue, the title, the sender with
+    came with it. The row being read keeps its place until the owner leaves it; as in Gmail, J or ↓
+    and K or ↑ move through the list (past a closed Done, never into it), and E files the one being
+    read as **Done**, once (never one already Done), and reads the next one not Done; the keys do
+    nothing with a modifier, while a reply or other text is typed, in a delivered page that has the
+    keyboard, or with a sheet open. The reading pane shows the purpose, the repository and issue, the title, the sender with
     whom it credits, where and when; the note in the chat's Markdown; then a card for each file
     (a document's first 260 points, then **Show all**; an HTML page in a web view with its scripts on
     and the network off, links opening in the browser; an image; any other file) and for each
@@ -500,7 +503,7 @@ on that pull request's branch to continue in instead). The same command run agai
     Done and that conversation opens (Home, the task, opened again if it was closed, or the job's
     run). One reply goes at a time; one the queue can't take keeps the draft and the choices and
     says so, with **Try Again**. Answered, the question says when. The toolbar opens the conversation (**Open Home**, **Open
-    Task** or **Open Run**, ⌘O) and files the delivery as **Done** (⌃⌘A); its menu marks it read or
+    Task** or **Open Run**, ⌘O) and files the delivery as **Done** (E, or ⌃⌘A while typing); its menu marks it read or
     unread and finds the copies and the originals. With nothing left to read it says when the last
     delivery came, with **Show Done**. In the sending conversation's chat, a delivery is a card with
     **Show in Inbox** and its question's choices until it is answered, each sent as from the Inbox,

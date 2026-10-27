@@ -628,6 +628,52 @@ public enum InboxList {
         let shown = Set(now)
         return was[(index + 1)...].first(where: shown.contains) ?? was[..<index].last(where: shown.contains)
     }
+
+    /// The Inbox's own keys, as Gmail's (#219): J or ↓ reads the next delivery shown, K or ↑ the one
+    /// before, and E files the one being read as Done.
+    public enum Key: Equatable, Sendable {
+        case next, previous, done
+
+        /// The key pressed alone (with ⌘, ⌃, ⌥ or ⇧ it is left to the app's shortcuts); ↑ and ↓
+        /// are AppKit's function-key characters.
+        public init?(_ character: Character, modified: Bool) {
+            guard !modified else { return nil }
+            switch character.lowercased() {
+            case "j", "\u{F701}": self = .next
+            case "k", "\u{F700}": self = .previous
+            case "e": self = .done
+            default: return nil
+            }
+        }
+
+        /// Held down, J and K keep moving; E files only the one it was pressed on.
+        public var repeats: Bool { self != .done }
+    }
+
+    /// What a key does to the list: the delivery it files as Done, if any, and the one read then.
+    public struct Move: Equatable, Sendable {
+        public var done: UUID?
+        public var selected: UUID?
+
+        public init(done: UUID? = nil, selected: UUID?) {
+            self.done = done
+            self.selected = selected
+        }
+    }
+
+    /// A key on the list as shown; nil when it does nothing: none is selected, or E on one that is
+    /// already Done (it never moves one back). E reads the next one not Done, else the one before,
+    /// else none, as when Done takes it out of the list, though Done is open.
+    public static func move(_ key: Key, from selected: UUID?, in groups: [Group], showsDone: Bool) -> Move? {
+        switch key {
+        case .next, .previous:
+            return step(from: selected, by: key == .next ? 1 : -1, in: shown(groups, showsDone: showsDone)).map { Move(selected: $0) }
+        case .done:
+            let open = groups.filter { $0.section != .done }.flatMap(\.ids)
+            guard let selected, open.contains(selected) else { return nil }
+            return Move(done: selected, selected: selection(after: selected, was: open, now: open.filter { $0 != selected }))
+        }
+    }
 }
 
 // MARK: Replies
