@@ -88,6 +88,9 @@ public actor ProjectSync {
     /// Issues closed or deleted while a sync was under way, which it may have read before: kept out of what
     /// it takes, until it ends.
     private var deleted: [DeletedIssue] = []
+    /// Issues being closed, by lower-cased `owner/name#number`: kept out of what is shown until
+    /// GitHub answers, but not out of what is saved, so a relaunch meanwhile asks GitHub again.
+    private var closing: [String: Closing] = [:]
 
     public init(file: URL, client: Client, saveDelay: Duration = .seconds(1)) {
         self.file = file
@@ -110,7 +113,10 @@ public actor ProjectSync {
     }
 
     public var state: State {
-        guard let snapshot else { return State(syncing: active, error: error) }
+        guard var snapshot else { return State(syncing: active, error: error) }
+        for pending in closing.values where pending.login.caseInsensitiveCompare(snapshot.login) == .orderedSame {
+            snapshot.removeIssue(pending.number, of: pending.repo)
+        }
         // Nothing read yet for this account: nil, not an empty list.
         let listed = snapshot.syncedAt != nil || !snapshot.pages.isEmpty
         let worked = snapshot.syncedAt != nil || !snapshot.work.isEmpty || !snapshot.workProblems.isEmpty
@@ -427,15 +433,47 @@ public actor ProjectSync {
         public init(_ message: String) { self.message = message }
     }
 
+    private struct Closing {
+        let login: String, repo: String, number: Int
+        let request: Task<Result<Void, ClosureFailure>, Never>
+        var waiting = 1
+    }
+
+    /// How many wait for GitHub to close issue `number` of `repo`.
+    func waiting(toClose number: Int, of repo: String) -> Int { closing["\(repo.lowercased())#\(number)"]?.waiting ?? 0 }
+
     /// Archives an issue as not planned, retaining its URL, body and comments on GitHub. It can
-    /// be reopened there. As with deletion, stale sync results cannot bring it back into open work.
+    /// be reopened there. It leaves what is shown at once, before GitHub answers; once GitHub has
+    /// closed it, it is forgotten in the catalog, on disk too, and stale sync results cannot bring
+    /// it back into open work. When GitHub refuses, it comes back, with whatever syncs took
+    /// meanwhile. Asking again while GitHub answers waits for the same request.
     public func closeIssue(_ number: Int, of repo: String) async -> Result<Void, ClosureFailure> {
         guard number > 0, GitHubLookup.isSafeName(repo) else {
             return .failure(ClosureFailure("Issue #\(number) of \(repo) isn't one gh can name."))
         }
+        load()
+        let key = "\(repo.lowercased())#\(number)"
+        if let pending = closing[key] {
+            closing[key]?.waiting += 1
+            return await pending.request.value
+        }
+        // The account it was asked for: an answer that arrives after another signed in changes nothing.
+        let login = snapshot?.login ?? ""
+        let request = Task { await self.close(number, of: repo, key: key, login: login) }
+        closing[key] = Closing(login: login, repo: repo, number: number, request: request)
+        publish()
+        return await request.value
+    }
+
+    private func close(_ number: Int, of repo: String, key: String, login: String) async -> Result<Void, ClosureFailure> {
         let run = await client.gh(["gh", "issue", "close", String(number), "--repo", repo, "--reason", "not planned"])
-        guard run.ok else { return .failure(Self.closureFailure(run, number: number, repo: repo)) }
-        removeFromOpenIssues(number, of: repo)
+        closing[key] = nil
+        guard run.ok else {
+            publish()
+            return .failure(Self.closureFailure(run, number: number, repo: repo))
+        }
+        if snapshot?.login.caseInsensitiveCompare(login) == .orderedSame { removeFromOpenIssues(number, of: repo) }
+        publish()
         return .success(())
     }
 

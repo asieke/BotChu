@@ -445,6 +445,112 @@ extension RenderingTests {
         #expect(saved.openItems.isEmpty)
     }
 
+    /// #195: Archive Issue and Mark Obsolete take the issue out of the table, the counts and its
+    /// sidebar page as soon as they are confirmed, before GitHub answers; asking again meanwhile
+    /// sends nothing, and the page the owner opened meanwhile stays open. A refusal brings the
+    /// issue back with an alert whose Try Again asks GitHub once more.
+    @Test func closedIssuesLeaveBeforeGitHubAnswersAndComeBackWhenRefused() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-issue-closure-pending-\(UUID().uuidString)")
+        let domain = "BotChu.IssueClosurePendingTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: domain) }
+        let store = Store(root: root)
+        let orbit = "octocat/Orbit"
+        let items = [3, 4, 5].map { number in
+            GitHubLookup.OpenItem(repo: orbit, number: number, title: "Old idea \(number)", url: URL(string: "https://github.com/\(orbit)/issues/\(number)")!,
+                                  isPullRequest: false, author: "hubot", createdAt: .now, updatedAt: .now.addingTimeInterval(-Double(number)))
+        }
+        var snapshot = ProjectSnapshot(login: "octocat")
+        let listed = ProjectSnapshot.Listed(nameWithOwner: orbit, description: "Orbit", pushedAt: .now, updatedAt: .now, openCount: 3)
+        snapshot.takeList([ProjectSnapshot.Page(etag: "", repos: [listed])], complete: true)
+        snapshot.takeRecord(orbit, .success(try activeRecord("Orbit")), under: listed.fingerprint)
+        snapshot.takeWork([orbit], .success(GitHubLookup.OpenWork(items: items, counts: [orbit: .init(issues: 3, pullRequests: 0)])), under: [:], etags: [:])
+        snapshot.syncedAt = .now
+        snapshot.fullSyncedAt = .now
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let catalog = root.appendingPathComponent("projects.json")
+        try JSONEncoder().encode(snapshot).write(to: catalog)
+        func saved() throws -> [Int] { try JSONDecoder().decode(ProjectSnapshot.self, from: Data(contentsOf: catalog)).openItems.map(\.number).sorted() }
+        // gh answers each close when the test says: closed, or refused.
+        let github = HeldAnswers()
+        let app = AppModel(store: store, settings: AppSettings(defaults: defaults), usage: UsageCache { _, _ in ProviderUsage(windows: []) },
+                           openRouterKey: { nil }, projectGitHub: ProjectGitHub { arguments, _ in
+            guard arguments.starts(with: ["gh", "issue", "close"]) else {
+                Issue.record("Unexpected GitHub command: \(arguments)")
+                return await ProjectGitHub.command(["/usr/bin/false"], body: nil)
+            }
+            if await github.ask(arguments) { return await ProjectGitHub.command(["/usr/bin/true"], body: nil) }
+            return await ProjectGitHub.command(["/bin/sh", "-c", "echo 'Resource not accessible by integration (closeIssue)' >&2; exit 1"], body: nil)
+        }, workDetailLookup: { _, number, _ in
+            .failure(TaskWorktree.Failure(step: "Issue #\(number) isn't read in this test", output: ""))
+        })
+        defer { app.stopAll() }
+        app.destination = .projects
+        defaults.set("issues", forKey: "projectsScope")
+        let host = NSHostingView(rootView: ContentView().environment(app).defaultAppStorage(defaults))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1340, height: 860), styleMask: [.titled, .resizable, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        func rows() -> Int? { deletionTables(in: host).first { $0.tableColumns.contains { $0.title == "Title" } }?.numberOfRows }
+        try await until { app.openItems?.count == 3 && rows() == 3 }
+        func answerDialog(_ button: String) async throws {
+            try await until { window.attachedSheet != nil }
+            let dialog = try #require(window.attachedSheet)
+            try #require(deletionButtons(inSheet: dialog).first { $0.title == button }).performClick(nil)
+            try await until { window.attachedSheet == nil }
+        }
+
+        // Archive #3 from its sidebar page: it goes from the table, the count and the sidebar while
+        // GitHub hasn't answered, and stays saved until it has.
+        app.selectProject(orbit, tab: .issues, item: 3)
+        try await Task.sleep(for: .milliseconds(400))
+        app.askToCloseIssue(3, of: orbit, title: "Old idea 3", as: .archive)
+        try await answerDialog("Archive Issue")
+        try await until(asking: { await github.isWaiting(3) })
+        try await until { rows() == 2 && app.openItems?.map(\.number).sorted() == [4, 5] }
+        #expect(app.repositories?.first?.openIssues == 2)
+        #expect(app.projectSelection == ProjectSelection(repo: orbit, tab: .issues))
+        #expect(app.updatingIssues == ["\(orbit)#3"])
+        #expect(try saved() == [3, 4, 5])
+        // Asking again meanwhile sends nothing; another issue opened meanwhile stays open.
+        await app.closeIssue(IssueClosure(repo: orbit, number: 3, title: "Old idea 3", disposition: .archive))
+        app.selectProject(orbit, tab: .issues, item: 4)
+        await github.answer(3, ok: true)
+        try await until { app.updatingIssues.isEmpty }
+        #expect(app.projectSelection == ProjectSelection(repo: orbit, tab: .issues, item: 4))
+        #expect(rows() == 2)
+        #expect(app.repositories?.first?.openIssues == 2)
+        #expect(try saved() == [4, 5])
+
+        // Mark Obsolete #5, which GitHub refuses: it goes, then comes back, and the alert's Try
+        // Again asks once more.
+        app.selectProject(orbit, tab: .issues)
+        app.askToCloseIssue(5, of: orbit, title: "Old idea 5", as: .obsolete)
+        try await answerDialog("Mark Obsolete")
+        try await until(asking: { await github.isWaiting(5) })
+        try await until { rows() == 1 && app.openItems?.map(\.number) == [4] }
+        #expect(app.repositories?.first?.openIssues == 1)
+        await github.answer(5, ok: false)
+        try await until { app.issueClosure?.failure != nil && window.attachedSheet != nil && app.updatingIssues.isEmpty }
+        #expect(deletionTexts(in: window.attachedSheet).joined(separator: "\n").contains("Couldn’t Close Issue #5"))
+        #expect(app.issueClosure?.failure?.contains("permission to close") == true)
+        try await until { rows() == 2 && app.openItems?.map(\.number).sorted() == [4, 5] }
+        #expect(app.repositories?.first?.openIssues == 2)
+        try await answerDialog("Try Again")
+        try await until(asking: { await github.isWaiting(5) })
+        try await until { rows() == 1 }
+        await github.answer(5, ok: true)
+        try await until { app.updatingIssues.isEmpty && app.openItems?.map(\.number) == [4] }
+        #expect(app.issueClosure == nil)
+        #expect(window.attachedSheet == nil)
+        #expect(app.repositories?.first?.openIssues == 1)
+        #expect(try saved() == [4])
+        #expect(await github.asked.map { "\($0[2]) \($0[3])" } == ["close 3", "close 5", "close 5"])
+    }
+
     /// The PROJECT.md of an active app project.
     private func activeRecord(_ name: String) throws -> ProjectRecord {
         let metadata = ProjectMetadata(name: name, kind: .hosted, status: .active, deploy: "none", merge: "agent")

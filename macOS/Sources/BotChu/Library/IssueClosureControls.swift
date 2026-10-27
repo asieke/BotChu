@@ -25,7 +25,7 @@ struct IssueClosurePrompt: ViewModifier {
         content
             .confirmationDialog("\(request?.disposition.question ?? "Archive issue") #\(request?.number ?? 0) of \(request?.repo ?? "")?", isPresented: Binding(
                 get: { model.issueClosure != nil && model.issueClosure?.failure == nil },
-                set: { if !$0, model.issueClosure?.failure == nil { model.issueClosure = nil } }),
+                set: { if !$0, model.issueClosure?.failure == nil { model.dismissIssueClosure() } }),
                 titleVisibility: .visible, presenting: request) { request in
                 Button(request.disposition.action) { Task { await model.closeIssue(request) } }
             } message: { request in
@@ -33,8 +33,15 @@ struct IssueClosurePrompt: ViewModifier {
                      + "Its description, comments and link stay on GitHub, where you can reopen it.")
             }
             .alert("Couldn’t Close Issue #\(request?.number ?? 0)", isPresented: Binding(
-                get: { model.issueClosure?.failure != nil }, set: { if !$0 { model.issueClosure = nil } }), presenting: request) { _ in
-                Button("OK") {}
+                get: { model.issueClosure?.failure != nil }, set: { if !$0, model.issueClosure == request { model.dismissIssueClosure() } }),
+                presenting: request) { failed in
+                Button("Try Again") {
+                    var retry = failed
+                    retry.failure = nil
+                    model.dismissIssueClosure()
+                    Task { await model.closeIssue(retry) }
+                }
+                Button("Cancel", role: .cancel) {}
             } message: { request in
                 Text(request.failure ?? "")
             }

@@ -262,6 +262,7 @@ final class AppModel {
     /// didn't delete it; the issues being deleted, by `owner/name#number` (`Projects.swift`).
     var issueDeletion: IssueDeletion?
     var issueClosure: IssueClosure?
+    @ObservationIgnored var closureFailures: [IssueClosure] = []
     var updatingIssues: Set<String> = []
     var githubConnection: ProjectGitHub.Connection?
     var githubChecking = false
