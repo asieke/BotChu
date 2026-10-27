@@ -47,6 +47,9 @@ import Testing
             (.news(pullRequest: nil, at: now.addingTimeInterval(-7_200)), "Finished", "2h", "2 hours ago"),
             (.failed(at: now.addingTimeInterval(-86_400 * 3)), "Turn failed", "3d", "3 days ago"),
             (.failed(at: now.addingTimeInterval(-10)), "Turn failed", "now", "just now"),
+            (.stopped(at: now.addingTimeInterval(-180)), "Stopped", "3m", "3 minutes ago"),
+            (.needsInput(requests: 1, at: now.addingTimeInterval(-60)), "Needs input", "1m", "1 minute ago"),
+            (.needsInput(requests: 3, at: nil), "3 requests need input", nil, nil),
         ]
         for (state, text, time, spoken) in cases {
             #expect(state.text == text)
@@ -67,7 +70,9 @@ import Testing
         #expect(!Kind.idle.endsTurn(from: .news))
         #expect(!Kind.starting.endsTurn(from: .idle))
         #expect([Kind.preparing, .starting, .working].allSatisfy { $0.isActive })
-        #expect(![Kind.idle, .news, .failed].contains { $0.isActive })
+        #expect(![Kind.idle, .news, .failed, .stopped, .needsInput].contains { $0.isActive })
+        #expect(Kind.stopped.endsTurn(from: .working))
+        #expect(!Kind.needsInput.endsTurn(from: .idle) && !Kind.idle.endsTurn(from: .needsInput))
     }
 
     @Test func aTaskTabShowsItsRepositoryProminentlyAndWhatItIsDoing() {
@@ -195,14 +200,97 @@ import Testing
             .subtitle == "Working on GitChu")
         // Only Home working: its activity.
         #expect(BotRowSummary(account: "Claude Dev", home: working, tasks: [(issue, idle)]).subtitle == "Editing code…")
-        // Many: at most four dots in tab order, Home first, then +N.
+        // Many: at most four dots, the most urgent first (#218), in tab order among equals, then +N.
         let busy = BotRowSummary(account: "Claude Dev", home: .failed(at: now), tasks: [
             (issue, working), (brief, .preparing), (issue, idle), (issue, .news(pullRequest: 1, at: now)), (issue, working), (issue, .starting(since: now)),
         ])
-        #expect(busy.dots == [.failed, .working, .preparing, .news])
+        #expect(busy.dots == [.failed, .working, .preparing, .working])
         #expect(busy.more == 2)
         #expect(busy.subtitle == "4 tasks running")
-        #expect(busy.spokenDots == "1 preparing, 1 starting, 2 working, 1 finished, 1 failed")
+        #expect(busy.spokenDots == "1 failed, 1 preparing, 1 starting, 2 working, 1 finished")
+    }
+
+    /// #218: a full row keeps its urgent dots, however late their tabs come, and counts the rest.
+    @Test func aFullRowKeepsItsUrgentDotsAndCountsTheRest() {
+        let brief = BotTask(repo: "asieke/GitChu", checkout: "/w/GitChu", brief: "Speed up the sync")
+        let working = TabState.working(.coding, since: now)
+        let asking = TabState.needsInput(requests: 1, at: now)
+        let row = BotRowSummary(account: "Claude Dev", home: .news(pullRequest: nil, at: now), tasks: [
+            (issue, working), (issue, working), (issue, working), (issue, .idle(since: now)), (issue, working),
+            (issue, .stopped(at: now)), (brief, asking),
+        ])
+        #expect(row.dots == [.needsInput, .stopped, .working, .working])
+        #expect(row.more == 3)
+        #expect(row.spokenDots == "1 needs input, 1 stopped, 4 working, 1 finished")
+        // What waits on the owner leads the subtitle: which task, Home, or how many.
+        #expect(row.subtitle == "Needs input on GitChu")
+        #expect(BotRowSummary(account: "Claude Dev", home: asking, tasks: [(issue, working)]).subtitle == "Needs input")
+        let two = BotRowSummary(account: "Claude Dev", home: asking, tasks: [(issue, .needsInput(requests: 2, at: now))])
+        #expect(two.subtitle == "2 need input" && two.dots == [.needsInput, .needsInput] && two.spokenDots == "2 need input")
+        // An idle-only bot has no dots, however many tasks it has open.
+        let quiet = BotRowSummary(account: "Claude Dev", home: .idle(since: now), tasks: [(issue, .idle(since: now)), (brief, .idle(since: nil))])
+        #expect(quiet.dots.isEmpty && quiet.more == 0 && quiet.spokenDots.isEmpty)
+    }
+
+    /// #218: waiting on the owner outranks everything, then a failed or stopped turn, then a turn
+    /// under way, then a finished one not yet seen, then idle.
+    @Test func theMostUrgentStateWins() {
+        let last = now.addingTimeInterval(-120)
+        let asked = [now.addingTimeInterval(-600), now.addingTimeInterval(-60)]
+        let replied = [ChatMessage(role: .user, text: "Go", date: last.addingTimeInterval(-5)), ChatMessage(role: .assistant, text: "Done", date: last)]
+        let failed = replied + [ChatMessage(role: .error, text: "It broke", date: last)]
+        let stopped = replied + [.stopNote(byOwner: true, date: now)]
+        let running = RunState(startedAt: last, hasOutput: true, activity: .coding)
+        for status in [status(replied), status(failed), status(stopped), status(replied, run: running)] {
+            for unread in [false, true] {
+                #expect(TabState(status: status, unread: unread, awaitingInput: asked) == .needsInput(requests: 2, at: asked[1]))
+            }
+        }
+        #expect(TabState(status: status(failed), unread: true).kind == .failed)
+        #expect(TabState(status: status(stopped), unread: true).kind == .stopped)
+        #expect(TabState(status: status(replied, run: running), unread: true).kind == .working)
+        #expect(TabState(status: status(replied), unread: true).kind == .news)
+        #expect(TabState(status: status(replied), unread: false).kind == .idle)
+        let kinds: [TabState.Kind] = [.needsInput, .failed, .stopped, .working, .starting, .preparing, .news, .idle]
+        #expect(kinds.map(\.urgency) == [4, 3, 3, 2, 2, 2, 1, 0])
+    }
+
+    /// #218: the owner's Stop shows until the next turn, isn't a finished turn however it is looked
+    /// at, and comes back from the saved thread on relaunch, from the note's mark, not its words.
+    @Test func anOwnersStopLastsUntilTheNextTurnAndAcrossRelaunch() throws {
+        let last = now.addingTimeInterval(-120)
+        let replied = [ChatMessage(role: .user, text: "Go", date: last.addingTimeInterval(-5)), ChatMessage(role: .assistant, text: "Partial", date: last)]
+        let stopped = replied + [.stopNote(byOwner: true, date: now)]
+        #expect(TabState(status: status(stopped), unread: true) == .stopped(at: last))
+        // Opening it (no longer unread) leaves it stopped; a finished turn turns idle.
+        #expect(TabState(status: status(stopped), unread: false) == .stopped(at: last))
+        #expect(TabState(status: status(replied), unread: false) == .idle(since: last))
+        #expect(TabState(status: status(stopped + [ChatMessage(role: .note, text: "New session")]), unread: false).kind == .stopped)
+        #expect(TabState.stopped(at: last).text == "Stopped" && !TabState.Kind.stopped.isActive)
+        // The next turn clears it.
+        let again = stopped + [ChatMessage(role: .user, text: "Go on", date: now)]
+        #expect(TabState(status: status(again, run: RunState(startedAt: now)), unread: false) == .starting(since: now))
+        #expect(TabState(status: status(again + [ChatMessage(role: .assistant, text: "Done", date: now)]), unread: false) == .idle(since: now))
+        // Stopped to quit BotChu, or a "Stopped" note without the mark (as threads saved before
+        // have), is no stop of the owner's.
+        #expect(TabState(status: status(replied + [.stopNote(byOwner: false)]), unread: true).kind == .news)
+        #expect(TabState(status: status(replied + [ChatMessage(role: .note, text: "Stopped")]), unread: false).kind == .idle)
+        // Relaunch: from the saved transcript, and from a summary kept as the thread grew.
+        let saved = try JSONDecoder().decode([ChatMessage].self, from: JSONEncoder().encode(stopped))
+        #expect(ThreadSummary(saved).stoppedAt == now && ThreadSummary(saved) == ThreadSummary(stopped))
+        var kept = ThreadSummary(replied)
+        kept.extend(with: stopped, from: replied.count)
+        #expect(kept.stoppedAt == now)
+        kept.extend(with: stopped + [ChatMessage(role: .note, text: "New session")], from: stopped.count)
+        #expect(kept.stoppedAt == now)
+        kept.extend(with: again, from: stopped.count)
+        #expect(kept.stoppedAt == nil && kept == ThreadSummary(again))
+        let digest = try JSONDecoder().decode(ThreadDigest.self, from: JSONEncoder().encode(ThreadDigest(stopped)))
+        #expect(digest.summary.stoppedAt == now)
+        // A digest saved before #218 still reads, with no stop.
+        let old = #"{"summary":{"messageCount":2,"toolCallCount":0},"count":2,"lastReplyCut":false}"#
+        #expect(try JSONDecoder().decode(ThreadDigest.self, from: Data(old.utf8)).summary.stoppedAt == nil)
+        #expect(status(stopped).phase == .stopped && status(replied).phase == .idle)
     }
 
     @Test func theColumnFoldsIntoTheRailWhenTheChatWouldBeTooNarrow() {

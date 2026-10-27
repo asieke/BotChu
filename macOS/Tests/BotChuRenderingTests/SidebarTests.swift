@@ -77,7 +77,8 @@ extension RenderingTests {
         model.show(.task(fixture.tasks[0].id, of: bot.id))
         let summary = model.botRowSummary(of: bot)
         #expect(summary.subtitle == "3 tasks running")
-        #expect(summary.dots == [.news, .working, .working, .working])
+        // The most urgent first (#218): the turns under way, then Home's finished one.
+        #expect(summary.dots == [.working, .working, .working, .news])
         #expect(summary.more == 0)
         #expect(summary.spokenDots == "3 working, 1 finished")
 

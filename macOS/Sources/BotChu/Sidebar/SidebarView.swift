@@ -158,7 +158,8 @@ struct SidebarShade: ViewModifier {
 }
 
 /// A bot's row: its face, its name over what it is doing, and a small dot for each of its
-/// conversations that isn't idle (#128), at most four, then +N, at its end, centred on the row (#144).
+/// conversations that isn't idle (#128), at most four, the most urgent first, then +N, at its end,
+/// centred on the row (#144).
 struct BotRow: View {
     let bot: Bot
     let status: BotStatus
@@ -188,14 +189,16 @@ struct BotRow: View {
     }
 }
 
-/// The small dots at the end of a bot's row, in its tabs' colours.
+/// The small dots at the end of a bot's row, in its tabs' colours, the most urgent first (#218).
+/// On the selection's accent colour each sits on a white disc, so it keeps its colour.
 struct BotRowDots: View {
+    @Environment(\.backgroundProminence) private var prominence
     let summary: BotRowSummary
 
     var body: some View {
         HStack(spacing: 4) {
             ForEach(Array(summary.dots.enumerated()), id: \.offset) { _, kind in
-                StatusDot(kind: kind, size: 6)
+                StatusDot(kind: kind, size: 6, cutout: prominence == .increased ? .white : nil)
             }
             if summary.more > 0 {
                 Text("+\(summary.more)")

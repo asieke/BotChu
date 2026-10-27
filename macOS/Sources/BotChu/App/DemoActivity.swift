@@ -175,11 +175,12 @@ extension DemoActivity {
     }
 }
 
-/// `BOTCHU_DEMO=tasks` on throwaway data (`macOS/ui-review.sh`): the selected bot gets six more
+/// `BOTCHU_DEMO=tasks` on throwaway data (`macOS/ui-review.sh`): the selected bot gets seven more
 /// open tasks, in memory only, so its tabs show every state at once (#128): two working, one
-/// starting, one making its worktree, one with news and its pull request, and one idle since
-/// yesterday, beside the seeded tasks (one finished with a pull request, one failed); three have a
-/// summary. Nothing is saved and no CLI runs.
+/// starting, one making its worktree, one with news and its pull request, one the owner stopped
+/// (#218), and one idle since yesterday, beside the seeded tasks (one finished with a pull request,
+/// one failed); three have a summary. With `BOTCHU_INBOX=sample`, Home waits on the owner's input.
+/// Nothing is saved and no CLI runs.
 @MainActor
 enum DemoTabs {
     static func install(in model: AppModel, botID: UUID) {
@@ -204,6 +205,10 @@ enum DemoTabs {
             (BotTask(for: bot, repo: "asieke/BotChu", checkout: checkout,
                      work: issue(105, "Please make the providers > allowance column aligned"), brief: ""),
              nil, [ChatMessage(role: .assistant, text: "Done: the allowance windows share one column grid. Opened PR #122.", date: now.addingTimeInterval(-360))], true),
+            (BotTask(for: bot, repo: "asieke/BotChu", checkout: checkout, work: issue(118, "Answer Telegram before sub-agents finish"), brief: ""),
+             nil, [ChatMessage(role: .user, text: "Work on issue #118.", date: now.addingTimeInterval(-900)),
+                   ChatMessage(role: .assistant, text: "Reading the Telegram bridge first.", date: now.addingTimeInterval(-840)),
+                   .stopNote(byOwner: true, date: now.addingTimeInterval(-800))], false),
             (BotTask(for: bot, repo: "octocat/Spoon-Knife", checkout: checkout, work: nil, brief: "Tidy the fork instructions"),
              nil, [ChatMessage(role: .assistant, text: "Read the instructions. Ready when you are.", date: now.addingTimeInterval(-90_000))], false),
         ]

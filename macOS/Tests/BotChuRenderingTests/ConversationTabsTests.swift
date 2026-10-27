@@ -228,7 +228,7 @@ extension RenderingTests {
         model.runStates[tasks[1]] = RunState(startedAt: Date().addingTimeInterval(-252), hasOutput: true, activity: .coding)
         model.unread.insert(tasks[0])
         let summary = model.botRowSummary(of: bot)
-        try #require(summary.dots == [.news, .working])
+        try #require(summary.dots == [.working, .news])
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.contentView = nil; window.close() }
@@ -238,8 +238,8 @@ extension RenderingTests {
         window.setContentSize(host.fittingSize)
         window.makeKeyAndOrderFront(nil)
         try await settle(window)
-        // Right of the avatar, the dots are the only colour that isn't grey: blue, then violet (dark
-        // mode's is pale).
+        // Right of the avatar, the dots are the only colour that isn't grey: violet (dark mode's is
+        // pale), then green.
         let drawing = try Drawing(of: host)
         let dots = try #require(drawing.bounds(in: CGRect(x: 60, y: 0, width: host.bounds.width - 60, height: host.bounds.height)) {
             $0.alphaComponent > 0.5 && $0.saturationComponent > 0.25
@@ -248,6 +248,131 @@ extension RenderingTests {
         #expect(abs(dots.width - 16) <= 1 && abs(dots.height - 6) <= 1, "the dots are \(dots)")
         #expect(abs(dots.midY - host.bounds.height / 2) <= 1, "the dots' middle is \(dots.midY) in a row \(host.bounds.height) tall")
         #expect(host.bounds.width - dots.maxX < 8, "the dots end \(host.bounds.width - dots.maxX) from the row's end, \(dots) in \(host.bounds)")
+    }
+
+    /// #218: each state's dot has its own colour and shape, in light and dark: rings while idle
+    /// (grey) and preparing (violet), a violet dot while working, a green one for a finished turn
+    /// not yet seen, a red dot for a failure, a red square for the owner's Stop, and an orange
+    /// diamond while it waits on the owner's input.
+    @Test func eachStatusHasItsOwnColourAndShape() async throws {
+        _ = NSApplication.shared
+        enum Hue { case grey, violet, green, red, orange }
+        enum Shape { case ring, circle, square, diamond }
+        let cases: [(TabState.Kind, Hue, Shape)] = [
+            (.idle, .grey, .ring), (.preparing, .violet, .ring), (.starting, .violet, .ring), (.working, .violet, .circle),
+            (.news, .green, .circle), (.failed, .red, .circle), (.stopped, .red, .square), (.needsInput, .orange, .diamond),
+        ]
+        func hue(_ c: NSColor) -> Hue? {
+            if c.saturationComponent < 0.15 { return .grey }
+            let degrees = c.hueComponent * 360
+            switch degrees {
+            case ..<15, 345...: return .red
+            case 22..<50: return .orange
+            case 90..<160: return .green
+            case 240..<290: return .violet
+            default: return nil
+            }
+        }
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for (kind, expectedHue, expectedShape) in cases {
+                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 40, height: 40), styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: appearance)
+                defer { window.contentView = nil; window.close() }
+                let host = NSHostingView(rootView: StatusDot(kind: kind, size: 32).padding(4))
+                window.contentView = host
+                window.setContentSize(host.fittingSize)
+                window.orderFront(nil)
+                try await settle(window)
+                let drawing = try Drawing(of: host)
+                let label = "\(appearance.rawValue), \(kind)"
+                let bounds = try #require(drawing.bounds(in: host.bounds) { $0.alphaComponent > 0.5 }, "\(label): nothing drawn")
+                // As wide as the frame, whatever the shape; the square a little less, so it looks as big.
+                #expect((25...34).contains(bounds.width) && abs(bounds.height - bounds.width) <= 1, "\(label): \(bounds)")
+                var filled = 0, total = 0
+                var hues: [Hue?] = []
+                for y in stride(from: bounds.minY + 0.25, to: bounds.maxY, by: 0.5) {
+                    for x in stride(from: bounds.minX + 0.25, to: bounds.maxX, by: 0.5) {
+                        total += 1
+                        guard let colour = drawing.color(x: x, y: y), colour.alphaComponent > 0.5 else { continue }
+                        filled += 1
+                        if colour.alphaComponent > 0.95 { hues.append(hue(colour)) }
+                    }
+                }
+                // The share of its box it fills tells the shapes apart: a ring little, a diamond
+                // half, a circle π/4, a square nearly all.
+                let share = Double(filled) / Double(total)
+                let shape: Shape = share < 0.4 ? .ring : share < 0.65 ? .diamond : share < 0.88 ? .circle : .square
+                #expect(shape == expectedShape, "\(label): fills \(share) of its box")
+                let common = Dictionary(grouping: hues.compactMap { $0 }, by: { $0 }).max { $0.value.count < $1.value.count }?.key
+                let centre = drawing.color(x: bounds.midX, y: bounds.midY).map { "hue \(Int($0.hueComponent * 360))°, saturation \($0.saturationComponent)" }
+                #expect(common == expectedHue, "\(label): \(String(describing: common)); the centre's \(centre ?? "-")")
+            }
+        }
+    }
+
+    /// #218: a conversation waits on the owner while a Needs input delivery it sent isn't answered
+    /// or Done, whatever else it does, and reading it doesn't change that; the owner's Stop shows
+    /// until the next turn, also once looked at; and both come back after a relaunch.
+    @Test func needsInputAndAnOwnersStopLastUntilHandledAndAcrossRelaunch() async throws {
+        let fixture = try TabsFixture()
+        defer { fixture.cleanUp() }
+        let bot = fixture.bot
+        let home = ChatTarget.home(bot.id)
+        let tasks = fixture.tasks.map { ChatTarget.task($0.id, of: bot.id) }
+        let question = Delivery.Question(text: "Which filter?", choices: ["Status", "Owner"])
+        let asking = Delivery(botID: bot.id, taskID: fixture.tasks[0].id, title: "Which filter first?", question: question, purpose: .needsInput)
+        let homeAsks = Delivery(botID: bot.id, title: "Deploy now?", question: question, purpose: .needsInput)
+        let fyi = Delivery(botID: bot.id, taskID: fixture.tasks[2].id, title: "Found a leak", purpose: .fyi)
+        let folder = InboxFolder(home: BotHome(workspace: bot.workspace))
+        for delivery in [asking, homeAsks, fyi] { try folder.save(delivery, contents: [:]) }
+        let model = fixture.model
+        model.inbox.load(bots: [bot])
+        for _ in 0..<200 where model.inbox.all.count < 3 { try await Task.sleep(for: .milliseconds(20)) }
+        try #require(model.inbox.all.count == 3)
+
+        // Running, it still waits on the owner; an FYI asks nothing.
+        model.runStates[tasks[0]] = RunState(startedAt: Date(), hasOutput: true, activity: .coding)
+        #expect(model.tabState(of: tasks[0]).kind == .needsInput)
+        #expect(model.conversationTab(of: tasks[0])?.status == "Needs input")
+        #expect(model.tabState(of: tasks[2]).kind == .idle)
+        #expect(model.botRowSummary(of: bot).dots == [.needsInput, .needsInput])
+        #expect(model.botRowSummary(of: bot).subtitle == "2 need input")
+        // Shown, its deliveries are read, and it still waits; Done, it doesn't.
+        model.show(tasks[0])
+        #expect(!model.inbox.isUnread(asking.id) && model.tabState(of: tasks[0]).kind == .needsInput)
+        model.inbox.setDone(asking.id, true)
+        #expect(model.tabState(of: tasks[0]).kind == .working)
+        model.runStates[tasks[0]] = nil
+
+        // The owner stops a turn: red until the next one, shown or not.
+        model.conversation(tasks[1]).replace([ChatMessage(role: .user, text: "Go"), ChatMessage(role: .assistant, text: "Partial")])
+        model.runStates[tasks[1]] = RunState(startedAt: Date(), preparing: true)
+        model.stop(tasks[1])
+        #expect(model.tabState(of: tasks[1]).kind == .stopped)
+        #expect(model.conversationTab(of: tasks[1])?.status == "Stopped")
+        model.unread.insert(tasks[1])
+        model.show(tasks[1])
+        #expect(model.tabState(of: tasks[1]).kind == .stopped)
+        // A finished turn not yet seen is green, until it is shown.
+        model.conversation(tasks[2]).replace([ChatMessage(role: .user, text: "Go"), ChatMessage(role: .assistant, text: "Done")])
+        model.unread.insert(tasks[2])
+        #expect(model.tabState(of: tasks[2]).kind == .news)
+        model.show(tasks[2])
+        #expect(model.tabState(of: tasks[2]).kind == .idle)
+        #expect(model.botRowSummary(of: bot).dots == [.needsInput, .stopped])
+
+        // Relaunched: Home still waits on the owner, and the task is still stopped.
+        model.saveThread(tasks[1])
+        await model.storage.settle()
+        let again = fixture.relaunch()
+        defer { again.stopAll() }
+        for _ in 0..<200 where again.inbox.all.count < 3 || again.tabState(of: tasks[1]).kind != .stopped {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(again.tabState(of: home).kind == .needsInput)
+        #expect(again.tabState(of: tasks[0]).kind == .idle)
+        #expect(again.tabState(of: tasks[1]).kind == .stopped)
     }
 
     /// What the tabs and the bot's row read from the model: each conversation's state, its tab's
@@ -276,7 +401,8 @@ extension RenderingTests {
         #expect(model.conversationTab(of: tasks[2])?.subject == "Speed up the sync")
         #expect(model.conversationTab(of: home)?.detail == bot.account.name)
         let summary = model.botRowSummary(of: bot)
-        #expect(summary.dots == [.news, .working, .failed])
+        // The most urgent first (#218).
+        #expect(summary.dots == [.failed, .working, .news])
         #expect(summary.subtitle == "Working on #42")
         // Shown, the news is read; the failure stays until the next turn starts.
         model.show(tasks[0])
@@ -590,6 +716,12 @@ private struct HoveredRow: View {
         try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace), Store.Entry(id: quiet.id, workspace: quiet.workspace)])
         model = AppModel(store: store, settings: AppSettings(defaults: defaults),
                          usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
+    }
+
+    /// The model BotChu makes on its next launch, from what this one saved.
+    func relaunch() -> AppModel {
+        AppModel(store: Store(root: root.appendingPathComponent("index")), settings: AppSettings(defaults: defaults),
+                 usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
     }
 
     func cleanUp() {

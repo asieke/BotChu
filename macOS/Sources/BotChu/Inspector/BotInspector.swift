@@ -176,6 +176,8 @@ struct AvatarCard: View {
                 Text(status.lastError ?? "The last turn failed")
                     .lineLimit(4)
                     .textSelection(.enabled)
+            case .stopped:
+                Text(status.lastActivity.map { "Stopped · last active \(BotInspector.ago($0))" } ?? "Stopped")
             case .idle:
                 Text(status.lastActivity.map { "Last active \(BotInspector.ago($0))" } ?? "No messages yet")
             }
@@ -338,13 +340,14 @@ struct ClosedTaskRow: View {
 
 /// A conversation's status ring and the bot list's activity color.
 enum StatusLook {
-    case idle, working, error
+    case idle, working, error, stopped
 
     init(_ status: BotStatus) {
         switch status.phase {
         case .idle: self = .idle
         case .preparing, .starting, .working: self = .working
         case .failed: self = .error
+        case .stopped: self = .stopped
         }
     }
 
@@ -353,6 +356,7 @@ enum StatusLook {
         case .idle: "Idle"
         case .working: "Working"
         case .error: "Error"
+        case .stopped: "Stopped"
         }
     }
 
@@ -360,14 +364,14 @@ enum StatusLook {
         switch self {
         case .idle: Palette.dynamic(0x8E8E93, 0x8E8E93)
         case .working: Palette.dynamic(0x7C5CFA, 0x9D84FF)
-        case .error: Palette.dynamic(0xD93A2F, 0xFF6B60)
+        case .error, .stopped: Palette.dynamic(0xD93A2F, 0xFF6B60)
         }
     }
 
 }
 
 /// A bot's face in a ring: grey when idle, a spinning violet arc while it works, red after a
-/// failed turn. This is the character card's only status indicator.
+/// failed or stopped turn. This is the character card's only status indicator.
 struct StatusAvatar: View {
     let bot: Bot
     let status: BotStatus
@@ -399,7 +403,7 @@ struct StatusAvatar: View {
         switch look {
         case .idle:
             Circle().fill(Palette.dynamic(0xC9C3DA, 0x4A4560))
-        case .error:
+        case .error, .stopped:
             Circle().fill(look.dot)
         case .working:
             Circle()

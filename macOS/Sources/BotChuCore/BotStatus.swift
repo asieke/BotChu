@@ -64,6 +64,8 @@ public struct BotStatus: Equatable, Sendable {
         case working
         /// The last turn ended in an error.
         case failed
+        /// The owner stopped the last turn (`ThreadSummary.stoppedAt`).
+        case stopped
     }
 
     public enum Session: Equatable, Sendable {
@@ -102,7 +104,7 @@ public struct BotStatus: Equatable, Sendable {
         if let run {
             phase = run.preparing ? .preparing : run.hasOutput ? .working : .starting
         } else {
-            phase = lastError == nil ? .idle : .failed
+            phase = summary.stoppedAt != nil ? .stopped : lastError == nil ? .idle : .failed
         }
         let session: Session
         if let id = settings.resumableSessionID {
@@ -177,6 +179,9 @@ public struct ThreadSummary: Codable, Equatable, Sendable {
     public private(set) var lastActivity: Date?
     /// That message's text, when it is an error.
     public private(set) var lastError: String?
+    /// When the owner stopped the last turn (`ChatMessage.stopped`); nil once a message from the
+    /// owner or the bot follows, as the next turn starts with one.
+    public private(set) var stoppedAt: Date?
 
     public init() {}
 
@@ -196,11 +201,20 @@ public struct ThreadSummary: Codable, Equatable, Sendable {
             case .error, .note, .receipt: break
             }
         }
-        for index in (start..<messages.count).reversed() where !messages[index].role.isNote {
-            lastActivity = messages[index].date
-            lastError = messages[index].role == .error ? messages[index].text : nil
-            break
+        var stop: Date?
+        for index in (start..<messages.count).reversed() {
+            let message = messages[index]
+            guard !message.role.isNote else {
+                if stop == nil, message.stopped == true { stop = message.date }
+                continue
+            }
+            lastActivity = message.date
+            lastError = message.role == .error ? message.text : nil
+            stoppedAt = stop
+            return
         }
+        // Only BotChu's lines were added: a stop among them is the newest.
+        if let stop { stoppedAt = stop }
     }
 }
 
