@@ -5,9 +5,11 @@ import Foundation
 ///
 /// A follow-up reaches the bot in one of two ways: as the next turn, once the running one ends,
 /// or, for a CLI that takes input mid-turn (`CommandBuilder.takesInputMidTurn`), written to the
-/// running CLI, which takes it at its next tool call. A message written to the CLI stays queued
-/// (`inFlight`) until the CLI says it took it; if the run ends first, it waits for the next turn.
-/// A message the CLI took is kept (`taken`) until a saved transcript holds it.
+/// running CLI, which takes it once its current step ends (after the running tool call returns, or
+/// as its next turn); until then the model hasn't seen it. A message written to the CLI stays
+/// queued (`inFlight`) until the CLI says it took it; if the run ends first, it waits for the next
+/// turn. A message the CLI took is kept (`taken`) until a saved transcript holds it.
+/// Interrupt & send (`interrupt`) stops the running turn so the next message goes out at once.
 public struct MessageQueue: Equatable, Sendable {
     public private(set) var messages: [ChatMessage]
     public private(set) var isPaused: Bool
@@ -26,6 +28,10 @@ public struct MessageQueue: Equatable, Sendable {
     /// runs: they show in the conversation rather than the queue, and stay in the saved queue
     /// until a saved transcript holds them (`saved`), or go back to waiting (`undeliver`).
     public private(set) var delivering: [UUID] = []
+    /// The owner chose Interrupt & send: the running turn is stopping, and once it has ended
+    /// (`finishTurn`) the queue sends on, unpaused. Not saved: after a relaunch the queue sends on
+    /// its own anyway.
+    public private(set) var isInterrupting = false
 
     /// Recovered messages are sent again automatically, unless the owner's Stop or a failed turn
     /// had paused the queue (`paused`, saved beside it). A crash between saving the transcript and
@@ -48,6 +54,24 @@ public struct MessageQueue: Equatable, Sendable {
     public var pending: [ChatMessage] { delivering.isEmpty ? messages : messages.filter { !delivering.contains($0.id) } }
 
     public func isInFlight(_ id: UUID) -> Bool { inFlight.contains(id) }
+
+    /// The message Interrupt & send sends: the oldest one the CLI hasn't taken, also one already
+    /// written to it, once a saved queue holds it. Nil while an interruption is under way.
+    public var interruptible: ChatMessage? {
+        guard !isInterrupting, let message = messages.first(where: { !delivering.contains($0.id) }),
+              !unsaved.contains(message.id) else { return nil }
+        return message
+    }
+
+    /// Interrupt & send: the caller stops the running turn, and its end (`finishTurn`) leaves the
+    /// queue to send its next message. False with nothing to send, or an interruption already under
+    /// way, so a second click can't stop the turn that follows.
+    @discardableResult
+    public mutating func interrupt() -> Bool {
+        guard interruptible != nil else { return false }
+        isInterrupting = true
+        return true
+    }
 
     /// Adds a message; `unsaved` holds it back until a saved queue holds it (`accepted`).
     public mutating func enqueue(_ message: ChatMessage, unsaved: Bool = false) {
@@ -90,9 +114,11 @@ public struct MessageQueue: Equatable, Sendable {
 
     public mutating func resume() { isPaused = false }
 
-    /// Stop and a failed turn keep unsent text but withdraw automatic delivery.
+    /// Stop and a failed turn keep unsent text but withdraw automatic delivery, and call off an
+    /// interruption under way.
     public mutating func pause() {
         isPaused = true
+        isInterrupting = false
     }
 
     /// The message was written to the running CLI's input.
@@ -136,13 +162,20 @@ public struct MessageQueue: Equatable, Sendable {
         return transcript + missing + [ChatMessage(role: .note, text: note)]
     }
 
-    /// Called only after the old process and both output pipes have finished. Messages the CLI
-    /// never took wait for the next turn. Stop and failures require the owner to resume the queue;
-    /// anything else, including a turn that ended with a nonzero exit after the stream said it
-    /// finished, leaves it to send on its own.
+    /// Called only after the old process and both output pipes have finished, so every message the
+    /// CLI took has been acknowledged. Messages the CLI never took (it drops what it hadn't taken
+    /// when stopped) wait for the next turn. Stop and failures require the owner to resume the
+    /// queue; anything else, including a turn that ended with a nonzero exit after the stream said
+    /// it finished, leaves it to send on its own, as does the Stop of an interruption.
     public mutating func finishTurn(stopped: Bool, failed: Bool) {
         inFlight = []
-        if failed || stopped { pause() }
+        let interrupted = isInterrupting
+        isInterrupting = false
+        if failed || (stopped && !interrupted) {
+            pause()
+        } else if interrupted {
+            isPaused = false
+        }
     }
 }
 
@@ -182,7 +215,9 @@ public struct TurnOutcome: Equatable, Sendable {
 }
 
 /// What a CLI that takes input mid-turn has been given on stdin during one run, and has taken
-/// back (Claude Code echoes each message it takes with `--replay-user-messages`). The first
+/// back (Claude Code echoes each message it takes with `--replay-user-messages`, as it adds it to
+/// the conversation: a follow-up written during a tool call comes back after that call returns,
+/// minutes later for a long one, and one the CLI hadn't taken when stopped never does). The first
 /// message is the turn's prompt; follow-ups are written only once the CLI has echoed it, which
 /// shows this CLI echoes, so a message written to it is never taken without BotChu knowing.
 public struct InputLedger: Equatable, Sendable {

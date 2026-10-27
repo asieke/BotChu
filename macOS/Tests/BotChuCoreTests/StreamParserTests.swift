@@ -83,6 +83,33 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         ])
         #expect(events == [.inputTaken, .toolFinished(id: "toolu_014mbfyb6J2TnMub9WuxJd7h", name: "Tool", output: "one", isError: false), .inputTaken])
     }
+
+    /// #223, Claude Code 2.1.311: a follow-up written during a long tool call is taken only once the
+    /// call returns; the task and heartbeat lines in between carry no events. (The model it reports
+    /// is left out here.)
+    @Test func followUpDuringALongToolIsTakenAfterItsResult() {
+        let events = run(.claude, ClaudeInputSamples.followUpDuringALongTool)
+        let shape = events.compactMap { event -> String? in
+            switch event {
+            case .inputTaken: "taken"
+            case .toolStarted: "tool"
+            case .toolFinished(_, _, let output, let isError, _): "result:\(output):\(isError)"
+            case .text(let text): "text:\(text)"
+            case .finished: "finished"
+            default: nil
+            }
+        }
+        #expect(shape == ["taken", "tool", "result:1:false", "taken", "text:slept PELICAN", "finished"])
+    }
+
+    /// #223: Stop while a follow-up waits on stdin. The CLI rejects the running call and ends with an
+    /// error result, never echoing the follow-up, so it is still undelivered.
+    @Test func stopDuringALongToolLeavesTheFollowUpUntaken() {
+        let events = run(.claude, ClaudeInputSamples.stoppedWithAnUntakenFollowUp)
+        #expect(events.filter { $0 == .inputTaken }.count == 1)
+        #expect(events.contains { if case .toolFinished(_, _, _, true, _) = $0 { true } else { false } })
+        guard case .failed = events.last else { Issue.record("Expected a failed result, got \(String(describing: events.last))"); return }
+    }
 }
 
 @Suite struct CodexParserTests {
