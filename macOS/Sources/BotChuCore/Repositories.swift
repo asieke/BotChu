@@ -429,6 +429,13 @@ public enum GitHubLookup {
         public var fromFork: Bool
         /// `OPEN`, `CLOSED` or `MERGED`.
         public var state: String
+
+        public init(work: BotTask.Work, branch: String?, fromFork: Bool, state: String) {
+            self.work = work
+            self.branch = branch
+            self.fromFork = fromFork
+            self.state = state
+        }
     }
 
     /// A repository the owner's GitHub account can work on.

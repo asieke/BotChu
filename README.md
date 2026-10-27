@@ -433,7 +433,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     usual receipts. It records which conversation asked (shown to the bot in its first message).
     The asking conversation gets a receipt that opens the Task, and the command prints the bot, the
     Task and whether it was created, its first turn started, or why not: pending, created, started,
-    start failed, or failed (with nothing made, so it can be run again). The same command run again
+    start failed, or failed (with nothing made, so it can be run again, or with the open task already
+on that pull request's branch to continue in instead). The same command run again
     from the same conversation, also in a later turn or after a relaunch, returns the same Task
     rather than a second. "New subagent @bot" (or "delegate this to @bot as a sub-agent") is a
     **sub-agent run** (above): child work of the turn, in its Sub-agents inspector, with no tab of

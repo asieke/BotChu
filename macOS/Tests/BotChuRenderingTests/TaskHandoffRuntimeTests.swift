@@ -114,6 +114,63 @@ extension RenderingTests {
         #expect(app.tasks[fixture.fox.id]?.count == 1)
     }
 
+    /// #215: Fox's task opened pull request #213 on its own branch, with no work item. Continuing
+    /// #213, by `botchu-task create` or a dispatch file, is turned away before a Task or tab is
+    /// made, naming Fox's task; an unowned pull request starts once, an independent coordinator
+    /// still starts, and two requests racing for one pull request make one Task.
+    @Test func aPullRequestBranchAnotherTaskOwnsIsTurnedAwayBeforeATaskIsMade() async throws {
+        let fixture = try HandoffFixture(ownerBranch: "feat/own-work-end-end",
+                                         heads: [213: "feat/own-work-end-end", 214: "feat/free-branch", 215: "feat/race-branch"])
+        defer { fixture.cleanUp() }
+        let app = fixture.app, home = ChatTarget.home(fixture.fox.id), owner = try #require(fixture.foxTask.taskID)
+        func workerTasks() -> [BotTask] { app.tasks[fixture.worker.id] ?? [] }
+
+        app.send("HAND_OFF_PR_213", to: home)
+        try await fixture.wait { !app.isRunning(home) }
+        let refused = try #require(app.thread(home).last { $0.role == .assistant }?.text)
+        #expect(refused.contains("Working Task: Intake (\(owner.uuidString))") && refused.contains("Agent: Fox (\(fixture.fox.id.uuidString))"))
+        #expect(refused.contains("“Intake” already works on it") && refused.contains("No Task was created") && refused.contains("EXIT=1"))
+        #expect(workerTasks().isEmpty && app.tasks[fixture.fox.id]?.count == 1)
+        #expect(!app.thread(home).contains { $0.role == .receipt })
+
+        // A dispatch file asking the same: why, in the Home it was written for, and no Task.
+        app.send("DISPATCH_PR_213", to: home)
+        try await fixture.wait { !app.isRunning(home) }
+        try await fixture.wait { app.thread(.home(fixture.worker.id)).contains { $0.role == .receipt } }
+        let receipt = try #require(app.thread(.home(fixture.worker.id)).last { $0.role == .receipt })
+        #expect(receipt.text == "Couldn't start the task in dispatch/pr.json: “Intake” already works on it; send it a message instead")
+        #expect(receipt.taskID == nil && workerTasks().isEmpty)
+
+        // A pull request no task owns starts on its head branch, and asking again reuses it.
+        app.send("HAND_OFF_PR_214_TWICE", to: home)
+        try await fixture.wait { !app.isRunning(home) }
+        let free = try #require(workerTasks().first)
+        #expect(workerTasks().count == 1 && free.branch == "feat/free-branch" && free.work?.title == "Pull request 214")
+        let replies = try #require(app.thread(home).last { $0.role == .assistant }?.text).components(separatedBy: "---")
+        #expect(replies.count == 2 && replies.allSatisfy { $0.contains("Task: project #214 (\(free.id.uuidString))") && $0.contains("EXIT=0") })
+        #expect(replies[1].contains("no second Task was made"))
+        try await fixture.wait { app.task(.task(free.id, of: fixture.worker.id))?.folder != nil }
+
+        // An independent coordinator starts in a worktree of its own.
+        app.send("HAND_OFF", to: home)
+        try await fixture.wait { !app.isRunning(home) }
+        let batch = try #require(workerTasks().first { $0.title == "Batch" })
+        #expect(app.isRunning(.task(batch.id, of: fixture.worker.id)))
+        #expect(batch.branch != free.branch && batch.branch != "feat/own-work-end-end")
+
+        // Two different requests for one pull request, both waiting on GitHub at once: one Task.
+        app.send("HAND_OFF_PR_215_RACE", to: home)
+        try await fixture.wait { !app.isRunning(home) }
+        let raced = workerTasks().filter { $0.work?.number == 215 }
+        let race = try #require(app.thread(home).last { $0.role == .assistant }?.text)
+        #expect(raced.count == 1)
+        if let made = raced.first {
+            #expect(race.contains("Status: started") && race.contains("Working Task: \(made.title) (\(made.id.uuidString))"))
+        }
+        #expect(workerTasks().count == 3)
+        try Data().write(to: fixture.root.appendingPathComponent("release-work"))
+    }
+
     /// The batch journey: one Task for the destination bot, whose parallel workers are its own
     /// sub-agent runs; the asking turn ends while they work, and stopping the Task stops them.
     @Test func aBatchHandoffIsOneTaskWhoseWorkersAreItsOwnSubagents() async throws {
@@ -149,7 +206,10 @@ extension RenderingTests {
     let checkout: String
     let originalSSH: String
 
-    init(remote: Bool = false) throws {
+    /// - Parameters:
+    ///   - ownerBranch: the branch Fox's task works on, having opened pull request #213 there.
+    ///   - heads: pull requests' head branches, as GitHub has them, read a little slowly.
+    init(remote: Bool = false, ownerBranch: String = "", heads: [Int: String] = [:]) throws {
         originalSSH = Machine.ssh
         store = Store(root: root.appendingPathComponent("index"))
         settings = AppSettings(defaults: UserDefaults(suiteName: domain)!)
@@ -196,14 +256,23 @@ extension RenderingTests {
                            commands: [fox.accountID: "/usr/bin/python3 \(Shell.quote(script.path))"])
             settings.hosts = [host!]
         }
-        var task = BotTask(for: fox, repo: "fixture/project", checkout: checkout, work: nil, brief: "Intake", title: "Intake", host: host)
+        var task = BotTask(for: fox, repo: "fixture/project", checkout: checkout, work: nil, brief: "Intake", branch: ownerBranch,
+                           title: "Intake", host: host)
+        if !ownerBranch.isEmpty { task.pullRequest = 213 }
         let folder = root.appendingPathComponent("fox-worktree")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         task.folder = folder.path
         try BotHome(workspace: fox.workspace).save(task)
         foxTask = .task(task.id, of: fox.id)
         try store.saveIndex([Store.Entry(id: fox.id, workspace: fox.workspace), Store.Entry(id: worker.id, workspace: worker.workspace)])
-        app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests") })
+        app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests") },
+                       workLookup: { repo, number, pull in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard pull, let head = heads[number] else { return .failure(TaskWorktree.Failure(step: "#\(number) isn't read in tests", output: "")) }
+            let url = URL(string: "https://github.com/\(repo)/pull/\(number)")!
+            return .success(GitHubLookup.Found(work: BotTask.Work(number: number, title: "Pull request \(number)", url: url, isPullRequest: true),
+                                               branch: head, fromFork: false, state: "OPEN"))
+        })
         // Your repositories as gh would list them, read just now.
         app.repositories = [GitHubLookup.Repo(nameWithOwner: "fixture/project")]
         app.repositoriesReadAt = Date()
@@ -255,6 +324,17 @@ extension RenderingTests {
         answer = run("botchu-task", "create", "--agent", "missing-bot", "--repo", "fixture/project", "--brief", "WORK")
     elif brief == "HAND_OFF_NO_REPO":
         answer = run("botchu-task", "create", "--agent", "Worker", "--repo", "fixture/nowhere", "--brief", "WORK")
+    elif brief == "HAND_OFF_PR_213":
+        answer = run(*create, "--pr", "213")
+    elif brief == "HAND_OFF_PR_214_TWICE":
+        answer = run(*create, "--pr", "214") + "\n---\n" + run(*create, "--pr", "214")
+    elif brief == "HAND_OFF_PR_215_RACE":
+        racing = [subprocess.Popen(create + ["--pr", "215", "--brief", word], text=True, stdout=subprocess.PIPE)
+                  for word in ("RACE-A", "RACE-B")]
+        answer = "\n---\n".join(p.communicate()[0] + "EXIT=" + str(p.returncode) for p in racing)
+    elif brief == "DISPATCH_PR_213":
+        request(os.path.join(root, "worker", ".botchu", "dispatch"), "pr.json", {"repo": "fixture/project", "pullRequest": 213})
+        answer = "Written"
     elif brief == "HAND_OFF_BATCH":
         answer = run(*create, "--brief", "FANOUT")
     elif brief == "DISPATCH_FILE":

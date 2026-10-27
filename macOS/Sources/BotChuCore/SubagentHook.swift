@@ -223,8 +223,9 @@ def task_result(request_id):
 def task_report(request_id, result):
     phase = result["phase"] if result else "pending"
     agent = str(result.get("targetBotName") or "the bot") if result else "the bot"
+    working = bool(result and result.get("alreadyWorking"))
     if result and result.get("taskID"):
-        print("Task: " + str(result.get("taskTitle", "")) + " (" + result["taskID"] + ")")
+        print(("Working Task: " if working else "Task: ") + str(result.get("taskTitle", "")) + " (" + result["taskID"] + ")")
     if result and result.get("targetBotID"):
         print("Agent: " + agent + " (" + result["targetBotID"] + ")")
     reason = str(result.get("errorMessage") or "") if result else ""
@@ -234,7 +235,8 @@ def task_report(request_id, result):
         "created": "created — the Task is recorded under " + agent + " and its first turn is still starting." + earlier,
         "started": "started — the Task's first turn is running under " + agent + "; it goes on independently of this turn." + earlier,
         "startFailed": "start failed — the Task is recorded under " + agent + ", but its first turn couldn't start: " + reason + earlier,
-        "failed": "failed — " + reason + ("" if result and result.get("taskID") else " No Task was created; fix that and run the same command again."),
+        "failed": "failed — " + reason + (" No Task was created; continue in the Working Task instead." if working
+                                          else "" if result and result.get("taskID") else " No Task was created; fix that and run the same command again."),
     }[phase])
     print("Request: " + request_id, flush=True)
     return 1 if phase in ("startFailed", "failed") else 0

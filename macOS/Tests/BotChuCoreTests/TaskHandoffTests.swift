@@ -131,6 +131,18 @@ private final class HandoffFixture {
         let startFailed = try fixture.run("botchu-task", ["status", startFailedID.uuidString])
         #expect(startFailed.code == 1 && startFailed.output.contains(taskID.uuidString) && startFailed.output.contains("Couldn't make the worktree"))
 
+        // Turned away from the open Task already on its pull request's branch (#215): that Task to
+        // continue in, no Task of its own, and not a success.
+        let workingID = UUID(), ownerTask = UUID(), ownerBot = UUID()
+        try fixture.answer(TaskHandoffResult(id: workingID, phase: .failed, targetBotID: ownerBot, targetBotName: "Fox",
+                                             taskID: ownerTask, taskTitle: "Redesign connectors", alreadyWorking: true,
+                                             errorMessage: "“Redesign connectors” already works on it; send it a message instead"))
+        let working = try fixture.run("botchu-task", ["status", workingID.uuidString])
+        #expect(working.code == 1)
+        #expect(working.output.contains("Working Task: Redesign connectors (\(ownerTask.uuidString))"))
+        #expect(working.output.contains("Agent: Fox (\(ownerBot.uuidString))"))
+        #expect(working.output.contains("already works on it") && working.output.contains("No Task was created; continue in the Working Task"))
+
         // Neither command passes for the other.
         let wrongWait = try fixture.run("botchu-subagent", ["wait", startFailedID.uuidString])
         #expect(wrongWait.code == 1 && wrongWait.error.contains("is a Task, not a sub-agent run"))
