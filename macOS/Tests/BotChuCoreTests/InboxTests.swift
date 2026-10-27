@@ -73,10 +73,11 @@ private final class InboxFixture {
         try "# Summary\nAnswer first.".write(to: report, atomically: true, encoding: .utf8)
         let note = fixture.root.appendingPathComponent("note.md")
         try "Research Assistant looked into #118. $(touch injected)".write(to: note, atomically: true, encoding: .utf8)
-        let started = try fixture.start(["send", "--title", "Should sub-agent work block Telegram?", "--note-file", note.path,
-                                         "--file", report.path, "--issue", "asieke/BotChu#118",
+        let started = try fixture.start(["send", "--purpose", "needs-input", "--title", "Should sub-agent work block Telegram?",
+                                         "--note-file", note.path, "--file", report.path, "--issue", "asieke/BotChu#118",
                                          "--pr", "https://github.com/asieke/BotChu/pull/153", "--ask", "Which should I file?",
-                                         "--choice", "Answer first", "--choice", "Hold, but say so", "--credit", "Research Assistant"])
+                                         "--choice", "Answer first", "--choice", "Hold, but say so", "--recommend", "Answer first",
+                                         "--credit", "Research Assistant"])
         defer { if started.0.isRunning { started.0.terminate() } }
         let pending = try fixture.request()
         #expect(InboxRequest.isDelivery(pending.data))
@@ -87,7 +88,9 @@ private final class InboxFixture {
         #expect(request.note == "Research Assistant looked into #118. $(touch injected)")
         #expect(request.links == [Delivery.Link(repo: "asieke/BotChu", number: 153, isPullRequest: true),
                                   Delivery.Link(repo: "asieke/BotChu", number: 118, isPullRequest: false)])
-        #expect(request.question == Delivery.Question(text: "Which should I file?", choices: ["Answer first", "Hold, but say so"]))
+        #expect(request.question == Delivery.Question(text: "Which should I file?", choices: ["Answer first", "Hold, but say so"],
+                                                      recommended: "Answer first"))
+        #expect(request.purpose == .needsInput && request.updates == nil)
         #expect(request.credits == ["Research Assistant"])
         #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("injected").path))
 
@@ -117,9 +120,10 @@ private final class InboxFixture {
 
     @Test func theHelperReportsAnUpdateAFailureAndRefusesWhatItCantSend() throws {
         let fixture = try InboxFixture()
-        let updating = try fixture.start(["send", "--title", "Providers, today and improved", "--note", "v2"], subagent: UUID())
+        let updating = try fixture.start(["send", "--purpose", "review", "--title", "Providers, today and improved", "--note", "v2"],
+                                         subagent: UUID())
         let asked = try InboxRequest.parse(fixture.request().data)
-        #expect(asked.parentSubagentID != nil && asked.files.isEmpty && asked.question == nil)
+        #expect(asked.parentSubagentID != nil && asked.files.isEmpty && asked.question == nil && asked.purpose == .review)
         // A sub-agent's request doesn't match the turn it claims to be.
         #expect(throws: InboxRequest.Problem.self) { try asked.validate(fixture.context) }
         try fixture.answer(InboxResult(id: asked.id, deliveryID: UUID(), updated: true))
@@ -127,7 +131,16 @@ private final class InboxFixture {
         #expect(updated.code == 0 && updated.output.contains("Updated to your owner's Inbox"))
         _ = fixture.ipc.removeRequest(fixture.ipc.requestURL(asked.id))
 
-        let failing = try fixture.start(["send", "--title", "Report"])
+        // A delivery from an earlier turn, named by the ID the helper printed.
+        let earlier = UUID()
+        let naming = try fixture.start(["send", "--purpose", "completed", "--title", "Dashboard is live", "--update", earlier.uuidString])
+        let renewed = try InboxRequest.parse(fixture.request().data)
+        #expect(renewed.updates == earlier && renewed.purpose == .completed)
+        try fixture.answer(InboxResult(id: renewed.id, deliveryID: earlier, updated: true))
+        #expect(fixture.finish(naming).code == 0)
+        _ = fixture.ipc.removeRequest(fixture.ipc.requestURL(renewed.id))
+
+        let failing = try fixture.start(["send", "--purpose", "fyi", "--title", "Report"])
         let failed = try InboxRequest.parse(fixture.request().data)
         try fixture.answer(InboxResult(id: failed.id, errorMessage: "its bot is gone"))
         let refused = fixture.finish(failing)
@@ -137,10 +150,14 @@ private final class InboxFixture {
         // Refused before anything reaches BotChu.
         let hidden = fixture.root.appendingPathComponent(".env")
         try "SECRET=1".write(to: hidden, atomically: true, encoding: .utf8)
-        for arguments in [["send", "--title", " "], ["send", "--title", "A", "--file", hidden.path],
-                          ["send", "--title", "A", "--file", fixture.root.appendingPathComponent("missing.md").path],
-                          ["send", "--title", "A", "--choice", "Yes"], ["send", "--title", "A", "--pr", "not a link"],
-                          ["send", "--title", "A", "--issue", "12"]] {
+        let fyi = ["send", "--purpose", "fyi", "--title"]
+        for arguments in [fyi + [" "], fyi + ["A", "--file", hidden.path],
+                          fyi + ["A", "--file", fixture.root.appendingPathComponent("missing.md").path],
+                          fyi + ["A", "--choice", "Yes"], fyi + ["A", "--pr", "not a link"], fyi + ["A", "--issue", "12"],
+                          // Senders say what it is for, and a question goes with Needs input or For review.
+                          ["send", "--title", "A"], ["send", "--purpose", "urgent", "--title", "A"],
+                          ["send", "--purpose", "needs-input", "--title", "A"], fyi + ["A", "--ask", "Which?"],
+                          ["send", "--purpose", "review", "--title", "A", "--recommend", "Yes"], fyi + ["A", "--update", "not-an-id"]] {
             let result = fixture.finish(try fixture.start(arguments))
             #expect(result.code != 0, "\(arguments)")
         }
@@ -191,6 +208,127 @@ private final class InboxFixture {
             #expect(throws: InboxRequest.Problem.self, "\(delivery.keys.sorted())") { try InboxRequest.parse(request(delivery)) }
         }
         #expect(throws: InboxRequest.Problem.self) { try InboxRequest.parse(Data(#"{"kind": "task"}"#.utf8)) }
+    }
+
+    @Test func aRequestSaysWhatItIsForAndRecommendsAnAnswer() throws {
+        let invocation = UUID(), bot = UUID()
+        func parse(_ delivery: [String: Any]) throws -> InboxRequest {
+            try InboxRequest.parse(JSONSerialization.data(withJSONObject: ["kind": "inbox", "id": UUID().uuidString,
+                                                                           "invocationID": invocation.uuidString,
+                                                                           "callerBotID": bot.uuidString, "delivery": delivery]))
+        }
+        // From a helper before purposes: a question needs input, anything else is for review.
+        #expect(try parse(["title": "A", "question": ["text": "Which?"]]).purpose == .needsInput)
+        #expect(try parse(["title": "A"]).purpose == .review)
+        for purpose in Delivery.Purpose.allCases where ![.needsInput].contains(purpose) {
+            #expect(try parse(["title": "A", "purpose": purpose.rawValue]).purpose == purpose)
+        }
+        // The recommended answer is one click too, first when it wasn't offered.
+        let asked = try parse(["title": "A", "purpose": "needs-input",
+                               "question": ["text": "Which?", "choices": ["Hold"], "recommended": " Answer first "]])
+        #expect(asked.question == Delivery.Question(text: "Which?", choices: ["Answer first", "Hold"], recommended: "Answer first"))
+        let offered = try parse(["title": "A", "purpose": "review", "question": ["text": "Merge it?", "choices": ["No", "Yes"], "recommended": "Yes"]])
+        #expect(offered.question?.choices == ["No", "Yes"] && offered.purpose == .review)
+        let update = UUID()
+        #expect(try parse(["title": "A", "purpose": "completed", "updates": update.uuidString]).updates == update)
+
+        let problems: [[String: Any]] = [
+            ["title": "A", "purpose": "urgent"],
+            ["title": "A", "purpose": "needs-input"],
+            ["title": "A", "purpose": "fyi", "question": ["text": "Which?"]],
+            ["title": "A", "purpose": "completed", "question": ["text": "Which?"]],
+            ["title": "A", "question": ["text": "Which?", "recommended": ""]],
+            ["title": "A", "question": ["text": "Which?", "choices": (1...6).map(String.init), "recommended": "7"]],
+            ["title": "A", "updates": "not-an-id"],
+        ]
+        for delivery in problems {
+            #expect(throws: InboxRequest.Problem.self, "\(delivery)") { try parse(delivery) }
+        }
+    }
+
+    /// Deliveries kept before purposes (#217) load with the purpose their content suggests, as does
+    /// one with a purpose this version doesn't know.
+    @Test func deliveriesKeptBeforePurposesLoadWithAFallback() throws {
+        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-inbox-legacy-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let folder = InboxFolder(home: BotHome(workspace: workspace.path))
+        let bot = UUID()
+        func keep(_ id: UUID, _ extra: String) throws {
+            let record = """
+                {"id": "\(id.uuidString)", "botID": "\(bot.uuidString)", "title": "Old", "note": "", "files": [], "links": [],
+                 "credits": [], "sentAt": "2026-10-20T09:00:00Z", "updatedAt": "2026-10-20T09:00:00Z"\(extra)}
+                """
+            try FileManager.default.createDirectory(at: folder.folder(id), withIntermediateDirectories: true)
+            try Data(record.utf8).write(to: folder.folder(id).appendingPathComponent("delivery.json"))
+        }
+        let report = UUID(), asking = UUID(), future = UUID(), done = UUID()
+        try keep(report, "")
+        try keep(asking, #", "question": {"text": "Which?", "choices": ["A", "B"]}"#)
+        try keep(future, #", "purpose": "celebrate""#)
+        try keep(done, #", "purpose": "completed""#)
+        let loaded = Dictionary(uniqueKeysWithValues: folder.load().map { ($0.id, $0) })
+        #expect(loaded.count == 4)
+        #expect(loaded[report]?.purpose == .review && loaded[future]?.purpose == .review && loaded[done]?.purpose == .completed)
+        #expect(loaded[asking]?.purpose == .needsInput && loaded[asking]?.question?.recommended == nil)
+        // Saved again, it keeps its purpose.
+        let kept = try #require(loaded[asking])
+        #expect(try Store.decoder.decode(Delivery.self, from: Store.encoder.encode(kept)) == kept)
+    }
+
+    /// Sent again (the same title in the turn, or `--update` later), a delivery that says something
+    /// new is renewed: unread, out of Done and unanswered. One that says nothing new keeps all that.
+    @Test func onlyAChangedUpdateAsksForTheOwnerAgain() {
+        let first = Delivery(botID: UUID(), title: "Which?", note: "v1", question: Delivery.Question(text: "Which?", choices: ["A"]),
+                             sentAt: Delivery.stamp(Date(timeIntervalSinceNow: -600)))
+        var state = InboxState()
+        state.received(first.id, renewed: true, shown: false)
+        #expect(state.isUnread(first) && state.needsInput(first))
+        state.answer(first.id, at: Delivery.stamp(Date(timeIntervalSinceNow: -300)))
+        #expect(!state.needsInput(first) && state[first.id].done)
+
+        var same = first
+        same.updatedAt = Delivery.stamp()
+        let (unchanged, renewed) = Delivery.resent(same, replacing: first)
+        #expect(!renewed && unchanged.updatedAt == first.updatedAt && unchanged.sentAt == first.sentAt)
+        state.received(unchanged.id, renewed: renewed, shown: false)
+        #expect(state[first.id].done && state.isAnswered(unchanged) && !state.isUnread(unchanged))
+
+        var changed = first
+        changed.note = "v2: the options changed"
+        changed.updatedAt = Delivery.stamp()
+        let (again, asks) = Delivery.resent(changed, replacing: first)
+        #expect(asks && again.sentAt == first.sentAt && again.updatedAt > first.updatedAt)
+        state.received(again.id, renewed: asks, shown: false)
+        #expect(!state[first.id].done && state.isUnread(again) && state.needsInput(again) && !state.isAnswered(again))
+        // Arriving where the owner is looking, it is read there, still not Done.
+        state.received(again.id, renewed: true, shown: true)
+        #expect(!state.isUnread(again) && !state[again.id].done)
+        #expect(Delivery.resent(changed, replacing: nil).renewed)
+        // A different purpose is a change too.
+        var review = first
+        review.purpose = .review
+        #expect(Delivery.resent(review, replacing: first).renewed)
+    }
+
+    /// For #218: each conversation with unresolved Needs input deliveries waits on the owner.
+    @Test func aConversationAwaitsInputWhileItsNeedsInputIsUnresolved() {
+        let bot = UUID(), task = UUID()
+        let question = Delivery.Question(text: "Which?", choices: ["A"])
+        let home = Delivery(botID: bot, title: "Home asks", question: question, sentAt: Delivery.stamp(Date(timeIntervalSinceNow: -60)))
+        let newer = Delivery(botID: bot, title: "Home asks again", question: question, sentAt: Delivery.stamp())
+        let inTask = Delivery(botID: bot, taskID: task, title: "Task asks", question: question)
+        let review = Delivery(botID: bot, taskID: task, title: "Review", question: question, purpose: .review)
+        let fyi = Delivery(botID: UUID(), title: "FYI", purpose: .fyi)
+        var state = InboxState()
+        let all = [home, newer, inTask, review, fyi]
+        #expect(state.awaitingInput(all) == [Delivery.Origin(botID: bot, taskID: nil): [newer.id, home.id],
+                                             Delivery.Origin(botID: bot, taskID: task): [inTask.id]])
+        // Answered, or Done without an answer, it no longer waits; read, it still does.
+        state[home.id].read = true
+        state.answer(newer.id, at: Delivery.stamp())
+        state[inTask.id].done = true
+        #expect(state.awaitingInput(all) == [Delivery.Origin(botID: bot, taskID: nil): [home.id]])
+        #expect(state.needsInput(home) && !state.needsInput(review) && !state.needsInput(fyi))
     }
 
     @Test func linksAreReadAsGitHubWritesThem() {
@@ -317,23 +455,27 @@ private final class InboxFixture {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
         let now = try #require(ISO8601DateFormatter().date(from: "2026-10-25T12:00:00Z"))
-        func delivery(_ hours: Double, asks: Bool = false) -> Delivery {
-            Delivery(botID: UUID(), title: "\(hours)", question: asks ? Delivery.Question(text: "Which?") : nil,
+        func delivery(_ hours: Double, asks: Bool = false, _ purpose: Delivery.Purpose? = nil) -> Delivery {
+            Delivery(botID: UUID(), title: "\(hours)", question: asks ? Delivery.Question(text: "Which?") : nil, purpose: purpose,
                      sentAt: now.addingTimeInterval(-hours * 3600))
         }
-        let question = delivery(20, asks: true), today = delivery(1), earlierToday = delivery(3), yesterday = delivery(14)
-        let older = delivery(60), done = delivery(2)
+        let question = delivery(20, asks: true), today = delivery(1, .completed), earlierToday = delivery(3, .fyi)
+        let yesterday = delivery(14, asks: true, .review), older = delivery(60), done = delivery(2, asks: true)
         var state = InboxState()
         state[done.id].done = true
+        // Read, it is still unfinished and keeps its place.
+        state[question.id].read = true
+        state[today.id].read = true
         let groups = InboxList.groups([today, older, done, question, yesterday, earlierToday], state: state, now: now, calendar: calendar)
-        #expect(groups.map(\.section) == [.needsYou, .today, .yesterday, .day(calendar.startOfDay(for: older.updatedAt)), .done])
+        #expect(groups.map(\.section) == [.needsInput, .today, .yesterday, .day(calendar.startOfDay(for: older.updatedAt)), .done])
         #expect(groups.map(\.ids) == [[question.id], [today.id, earlierToday.id], [yesterday.id], [older.id], [done.id]])
+        #expect(state.unfinishedCount([today, older, done, question, yesterday, earlierToday]) == 5)
 
         // Answered while it is read, it stays where it was until the owner leaves it.
         state[question.id].repliedAt = now
         #expect(InboxList.section(of: question, state: state, now: now, calendar: calendar) == .yesterday)
-        let pinned = InboxList.groups([question, today], state: state, now: now, calendar: calendar, pinned: [question.id: .needsYou])
-        #expect(pinned.map(\.section) == [.needsYou, .today])
+        let pinned = InboxList.groups([question, today], state: state, now: now, calendar: calendar, pinned: [question.id: .needsInput])
+        #expect(pinned.map(\.section) == [.needsInput, .today])
 
         // Done while it is read moves it to Done at once, and both counts change.
         state[today.id].done = true
@@ -346,6 +488,22 @@ private final class InboxFixture {
         let moved = InboxList.groups([today, earlierToday], state: state, now: now, calendar: calendar, pinned: [today.id: .done])
         #expect(moved.map(\.section) == [.today])
         #expect(moved.map(\.ids) == [[today.id, earlierToday.id]])
+    }
+
+    /// The order ↑ and ↓ (and #219's shortcuts) move through: every group's, Done's while open.
+    @Test func theListIsSteppedThroughInTheOrderShown() {
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID()
+        let groups = [InboxList.Group(section: .needsInput, ids: [a]), InboxList.Group(section: .today, ids: [b, c]),
+                      InboxList.Group(section: .done, ids: [d])]
+        #expect(InboxList.shown(groups, showsDone: false) == [a, b, c])
+        #expect(InboxList.shown(groups, showsDone: true) == [a, b, c, d])
+        #expect(InboxList.first(groups) == a)
+        #expect(InboxList.first([InboxList.Group(section: .done, ids: [d])]) == nil)
+        let shown = InboxList.shown(groups, showsDone: false)
+        #expect(InboxList.step(from: a, by: 1, in: shown) == b && InboxList.step(from: c, by: -1, in: shown) == b)
+        // At either end it stays; one not shown (or none) doesn't move.
+        #expect(InboxList.step(from: c, by: 1, in: shown) == c && InboxList.step(from: a, by: -1, in: shown) == a)
+        #expect(InboxList.step(from: d, by: 1, in: shown) == nil && InboxList.step(from: nil, by: 1, in: shown) == nil)
     }
 
     @Test func whenTheSelectedDeliveryLeavesTheListTheNextOneShownIsSelected() {
@@ -405,10 +563,13 @@ private final class InboxFixture {
     @Test func everySessionLearnsHowToDeliver() {
         let roster = [BotRosterEntry(bot: Bot(name: "Worker", workspace: "/tmp/worker"))]
         let home = BotContext.subagentsSection(availableBots: roster)
-        for text in ["botchu-inbox send --title", "--note-file", "--ask", "--choice", "--credit <bot>", "same title again",
-                     "names the delivery it answers"] {
+        for text in ["botchu-inbox send --purpose <purpose> --title", "`needs-input`", "`review`", "`completed`", "`fyi`",
+                     "--note-file", "--ask", "--choice", "--recommend", "--credit <bot>", "same title again", "`--update <id>`",
+                     "25–50 words", "Done isn't approval", "https://example.com/dash", "names the delivery it answers"] {
             #expect(home.contains(text), "Missing \(text)")
         }
+        // Routine updates stay out of the Inbox.
+        #expect(home.contains("Never deliver a turn ending, a task starting, progress or a minor note."))
         #expect(BotContext.subagentsSection(availableBots: roster, depth: 1).contains("You are a sub-agent run"))
         #expect(BotContext.subagentsSection(availableBots: roster, depth: SubagentLimits.maxDepth).contains("botchu-inbox send"))
     }

@@ -508,7 +508,7 @@ import Testing
         let roster = [BotRosterEntry(bot: bot), BotRosterEntry(bot: Bot(name: "Worker", workspace: "/tmp/worker"))]
         let text = JobSchedule.plainText(JobLaunch.preamble(bot: bot, job: job, run: run, startedAt: at("2026-10-26T10:00:05Z"),
                                                             memory: "", sharedMemory: "", availableBots: roster))
-        for expected in ["botchu-inbox send --title", "botchu-subagent call", "--ask", "names the delivery it answers",
+        for expected in ["botchu-inbox send --purpose", "botchu-subagent call", "--ask", "names the delivery it answers",
                          "your report reaches their Inbox, linked to this run's task", "BotChu delivers your final reply there when you sent nothing",
                          "you send nothing to their Inbox", JobResult.quietMarker] {
             #expect(text.contains(expected), "Missing \(expected)")
@@ -536,6 +536,8 @@ import Testing
         #expect(delivery?.title == "10x Product Analysis")
         #expect(delivery?.note == "## 20 recommendations\n\n1. Saved searches\n2. Bulk close")
         #expect(delivery?.sentAt == at("2026-10-26T10:06:20Z") && delivery?.files.isEmpty == true && delivery?.question == nil)
+        // A finding that asks nothing of the owner (#217).
+        #expect(delivery?.purpose == .fyi)
         #expect(JobReport.delivery(job: job, run: run, reply: "<remember>- private</remember>") == nil)
         // A reply too long for a note is cut at a character, within the limit.
         let long = try! #require(JobReport.delivery(job: job, run: run, reply: String(repeating: "é", count: InboxRequest.maxNoteBytes))).note

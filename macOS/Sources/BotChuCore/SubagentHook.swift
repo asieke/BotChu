@@ -333,8 +333,18 @@ def inbox_send(args):
             fail("Couldn't read the note file: " + str(error))
     if len(note.encode("utf-8")) > INBOX_NOTE_BYTES:
         fail("The note must be at most 160 KB; send a longer text as a file (--file).")
-    if args.choice and not args.ask:
-        fail("--choice offers an answer to a question: ask it with --ask.")
+    if (args.choice or args.recommend) and not args.ask:
+        fail("--choice and --recommend answer a question: ask it with --ask.")
+    if args.purpose == "needs-input" and not args.ask:
+        fail("Needs input asks the one question you can't go on without: add --ask.")
+    if args.ask and args.purpose not in ("needs-input", "review"):
+        fail("A question (--ask) is for --purpose needs-input or review.")
+    updates = None
+    if args.update:
+        try:
+            updates = str(uuid.UUID(args.update.strip()))
+        except ValueError:
+            fail("--update takes the delivery ID that botchu-inbox send printed.")
     sources = []
     for path in args.file or []:
         source = pathlib.Path(path).expanduser().resolve()
@@ -362,9 +372,13 @@ def inbox_send(args):
             if size > INBOX_FILE_BYTES:
                 fail(str(source) + " grew past 20 MB while it was copied.")
             files.append({"name": source.name, "staged": "inbox/" + request_id + "/" + source.name, "bytes": size, "source": str(source)})
-    delivery = {"title": title, "note": note, "files": files, "links": links, "credits": args.credit or []}
+    delivery = {"purpose": args.purpose, "title": title, "note": note, "files": files, "links": links, "credits": args.credit or []}
+    if updates:
+        delivery["updates"] = updates
     if args.ask:
         delivery["question"] = {"text": args.ask, "choices": args.choice or []}
+        if args.recommend:
+            delivery["question"]["recommended"] = args.recommend
     atomic_json(ROOT / "requests" / (request_id + ".json"), {
         "kind": "inbox",
         "id": request_id,
@@ -397,14 +411,19 @@ def inbox_main():
         "a note, copies of files, pull requests and issues, and a question with choices. Their reply comes back into this conversation.")
     commands = parser.add_subparsers(dest="command", required=True)
     send = commands.add_parser("send", help="Send a delivery, or update the one sent with the same title in this turn")
+    send.add_argument("--purpose", required=True, choices=["needs-input", "review", "completed", "fyi"],
+                      help="needs-input: a question you can't go on without; review: work that needs their judgment; "
+                      "completed: a meaningful finished outcome; fyi: an important finding that needs no answer")
     send.add_argument("--title", required=True)
-    send.add_argument("--note", help="What it is, in Markdown")
+    send.add_argument("--note", help="25-50 words in Markdown: the outcome, its context or your recommendation, the next action")
     send.add_argument("--note-file", help="A Markdown file to use as the note")
     send.add_argument("--file", action="append", help="A file to copy into the delivery (repeatable)")
     send.add_argument("--pr", action="append", help="A pull request: owner/name#n, n in this repository, or its URL (repeatable)")
     send.add_argument("--issue", action="append", help="An issue: owner/name#n, n in this repository, or its URL (repeatable)")
     send.add_argument("--ask", help="The question you can't go on without")
     send.add_argument("--choice", action="append", help="An answer to --ask your owner can pick in one click (repeatable)")
+    send.add_argument("--recommend", help="The answer to --ask you would pick; it is offered in one click too")
+    send.add_argument("--update", help="The ID of a delivery this conversation sent, to update it in a later turn")
     send.add_argument("--credit", action="append", help="Another bot whose work it is: its name, slug or UUID (repeatable)")
     send.add_argument("--wait", type=float, default=60, help="Seconds to wait for BotChu to take it (default 60)")
     args = parser.parse_args()

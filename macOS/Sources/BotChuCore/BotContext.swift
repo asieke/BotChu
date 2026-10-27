@@ -359,7 +359,7 @@ public enum BotContext {
             """
     }
 
-    /// How to hand the owner something to review or decide: `botchu-inbox send`, which works as
+    /// How to hand the owner something with its purpose (#217): `botchu-inbox send`, which works as
     /// `botchu-task` does. From a sub-agent run, a delivery is its caller's, crediting it.
     public static func inboxSection(subagent: Bool = false) -> String {
         let from = subagent
@@ -370,20 +370,27 @@ public enum BotContext {
         return """
             <inbox>
             ## Your owner's Inbox: `botchu-inbox send`
-            When you hand your owner something to review, or need their decision to go on (a report, a mockup, pull \
-            requests, a question), deliver it to their Inbox rather than only mentioning a path in your reply:
-            `botchu-inbox send --title "<short title>" --note "<Markdown: what it is, and what you'd do>" [--file <path>]… [--pr owner/name#n]… [--issue owner/name#n]… [--ask "<question>" --choice "<answer>"…]`
-            - `--note-file <path>` instead of `--note` for a longer note. Files are copied as they are when you send \
-            them (up to 20 MB each), so later edits don't change what your owner reviews: Markdown shows as a \
-            document, an HTML page as a page that opens without network access (make it self-contained), images as \
-            images. `--pr` and `--issue` also take a number in the current repository, or a GitHub URL.
-            - `--ask` asks the one question you can't go on without; each `--choice` is an answer your owner can pick \
-            in one click.
-            - It prints the delivery's ID. Sending the same title again in this turn updates that delivery instead of \
-            making another.
+            Deliver to your owner's Inbox what needs them or what they'd want to know, rather than only mentioning it \
+            in your reply, and say what it asks of them with `--purpose`:
+            - `needs-input`: a decision, access or information you can't go on without. `--ask` one specific question, \
+            offer one-click answers with `--choice`, and `--recommend` the one you'd pick.
+            - `review`: work that needs their judgment (pull requests, a mockup, a plan). Say what to judge; their reply \
+            accepts it or asks for changes.
+            - `completed`: a meaningful finished outcome. Looking at it is optional, and Done isn't approval.
+            - `fyi`: an important finding that needs no answer.
+            `botchu-inbox send --purpose <purpose> --title "<short title>" --note "<25–50 words>" [--file <path>]… [--pr owner/name#n]… [--issue owner/name#n]… [--ask "<question>" --choice "<answer>"… --recommend "<answer>"]`
+            - The note is 25–50 words: the outcome, its context or your recommendation, and the next action. Put the \
+            evidence in files, pull requests or issues, or a longer `--note-file`; never cut a question short.
+            - For example: `--purpose completed --title "Dashboard is live" --note "Deployed v1.4 to https://example.com/dash. \
+            Optional: open Settings to check the new chart. Nothing else needed; mark it Done."`
+            - Files are copied as they are when you send them (up to 20 MB each): Markdown shows as a document, an HTML \
+            page as a page that opens without network access (make it self-contained), images as images. `--pr` and \
+            `--issue` also take a number in the current repository, or a GitHub URL.
+            - It prints the delivery's ID. The same title again in this turn updates that delivery; in a later turn, \
+            `--update <id>` does. A changed update asks for your owner again.
             - Your owner's reply comes back into this conversation as a message that names the delivery it answers.
             - \(from)
-            Deliver only what your owner should look at: a turn ending, a task starting and progress don't belong there.
+            Never deliver a turn ending, a task starting, progress or a minor note.
             </inbox>
             """
     }

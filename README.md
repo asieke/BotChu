@@ -440,12 +440,22 @@ on that pull request's branch to continue in instead). The same command run agai
     **sub-agent run** (above): child work of the turn, in its Sub-agents inspector, with no tab of
     its own. A batch goes to one bot as one Task, whose turn spawns a sub-agent run per issue.
   - **Deliveries:** a bot hands the owner something on purpose with `botchu-inbox send` (the same
-    helper under a third name, found from the conversation's environment as the others are): a
-    `--title`, a Markdown `--note` (or `--note-file`), `--file`s, which are copied as they are when
+    helper under a third name, found from the conversation's environment as the others are): its
+    `--purpose` (`needs-input`, a decision, access or information the bot can't go on without, with
+    the one question it needs answered; `review`, work that needs the owner's judgment; `completed`,
+    a meaningful finished outcome, looking at it optional; `fyi`, an important finding that needs no
+    answer), a `--title`, a Markdown `--note` (or `--note-file`), `--file`s, which are copied as they are when
     sent (up to 20 MB each, so later edits don't change what the owner reviews), `--pr` and
     `--issue` links (`owner/name#n`, a number in the current checkout, or a GitHub URL), and an
-    optional `--ask` with `--choice`s. It prints the delivery's ID; the same title sent again in the
-    turn updates that delivery. Sent from a sub-agent run, it is the delivery of the conversation at
+    `--ask` (Needs input or For review) with `--choice`s and the `--recommend`ed one, which is
+    offered in one click too. Every session's instructions ask for a 25–50-word note (the outcome,
+    its context or recommendation, the next action), with the evidence in files and links, and keep
+    routine starts, progress and minor notes out of the Inbox. It prints the delivery's ID; the
+    same title sent again in the turn updates that delivery, and so does `--update <id>` in a later
+    turn (only a delivery of the same conversation). An update that says something new is unread
+    and out of Done again, its question unanswered; one that says nothing new keeps its state.
+    Deliveries kept before purposes read as Needs input when they ask something, else For review.
+    Sent from a sub-agent run, it is the delivery of the conversation at
     the top of the chain, crediting the sub-agent's bot (and its files are kept under that bot's
     name); `--credit <bot>` credits others. A delivery is kept in the sending bot's
     `.botchu/inbox/<id>/` (`delivery.json` and `files/`), works from a task on a host too (its files
@@ -467,18 +477,21 @@ on that pull request's branch to continue in instead). The same command run agai
     time a delivery arrives, not at launch. The Dock tile's badge shows the unread deliveries.
   - **Inbox:** first under Workspace (⇧⌘I), with how many deliveries aren't Done, read or not (none
     shown at zero). A 392-point list
-    (320 in a narrower window) in the tasks column's idiom: **Needs you** (questions not answered
-    since they were sent), **Today**, **Yesterday**, then each earlier day, newest first, with
-    **Done** collapsed at the end with its count. A row has the sender's pet (a credited bot's on its
+    (320 in a narrower window) in the tasks column's idiom: **Needs input** (Needs input deliveries
+    not answered since they were sent), **Today**, **Yesterday**, then each earlier day, newest first, with
+    **Done** collapsed at the end with its count. Reading never files a delivery as Done; only Done
+    or a reply does, and Done means handled, never approval. A row has the sender's pet (a credited bot's on its
     corner), the sender, the conversation it came from (Home, a task or a job's run) and the time,
-    the title (semibold while unread, with a blue dot), and chips for what waits on the owner and
-    what came with it. The row being read keeps its place until the owner leaves it; ↑ and ↓ move
-    through the list. The reading pane shows the repository and issue, the title, the sender with
+    the title (semibold while unread, with a blue dot), its purpose (**Needs input**, **For
+    review**, **Completed** or **FYI**, in colour while it waits on the owner; **Working** while
+    the bot works on a reply), **Not sent** for a reply the queue didn't take, and chips for what
+    came with it. The row being read keeps its place until the owner leaves it; ↑ and ↓ move
+    through the list. The reading pane shows the purpose, the repository and issue, the title, the sender with
     whom it credits, where and when; the note in the chat's Markdown; then a card for each file
     (a document's first 260 points, then **Show all**; an HTML page in a web view with its scripts on
     and the network off, links opening in the browser; an image; any other file) and for each
     repository's pull requests or issues, read from GitHub, each opening in Projects. A question's
-    choices sit above a composer that names where a reply goes; a choice (also ⌘1 to ⌘9) is sent as
+    choices (the recommended one filled) sit above a composer that names where a reply goes; a choice (also ⌘1 to ⌘9) is sent as
     the reply, word for word, and once its conversation's queue holds the reply the delivery is
     Done and that conversation opens (Home, the task, opened again if it was closed, or the job's
     run). One reply goes at a time; one the queue can't take keeps the draft and the choices and
@@ -560,7 +573,7 @@ on that pull request's branch to continue in instead). The same command run agai
     skipped or interrupted, and a line about it; the history keeps the latest 50 and always the last
     success. A run whose reply ends with `NOTHING_TO_REPORT` stays in the history and its task, with
     nothing marked as news, and nothing in the Inbox. A finding the run delivered nothing of itself
-    is delivered by BotChu: its whole final reply, as its task's delivery titled after the job, once
+    is delivered by BotChu: its whole final reply, as its task's FYI delivery titled after the job, once
     (its ID is the run's). Until the Inbox has it the run keeps it waiting in `job.json`; a save that
     fails says so in the task and is tried again at each tick and launch. A finding, a failure or an interrupted run adds one receipt to its
     agent's Home, with **Open Run** (which opens the run's task), marked as news, which Home's next
@@ -1532,8 +1545,8 @@ on that pull request's branch to continue in instead). The same command run agai
   `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
   tab and an issue or pull request there, read with your `gh` login.
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
-  `BOTCHU_INBOX=sample` gives the Inbox sample deliveries from both demo bots (a report with a
-  question crediting the other bot, a page from a task, pull requests, older and done ones), with the
+  `BOTCHU_INBOX=sample` gives the Inbox sample deliveries from both demo bots, one of each purpose (a report with a
+  question and a recommended answer crediting the other bot, a page from a task for review, merged pull requests, an FYI, and an older done one kept before purposes), with the
   first one's card in the first bot's Home; `replied` has it answered from the Inbox (Done), with the
   bot's answer in that Home; `done` has every one Done. `BOTCHU_OPEN=inbox` opens the Inbox, on the delivery `BOTCHU_INBOX_ITEM` names
   (`00000000-0000-4000-9000-00000000000<n>`); the window's snapshot draws web views in too.

@@ -1,7 +1,7 @@
 import SwiftUI
 import BotChuCore
 
-/// A delivery being read: where it is about and who sent it, its note, what came with it as cards,
+/// A delivery being read: what it asks of the owner, where it is about and who sent it, its note, what came with it as cards,
 /// and a composer that replies into the conversation that sent it, with its question's choices above
 /// it. What the bot does with a reply shows in that conversation, which opens once the reply is in
 /// its queue.
@@ -38,11 +38,14 @@ struct InboxReader: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let context = context {
-                Text(context)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.secondaryText)
-                    .lineLimit(1)
+            HStack(spacing: 8) {
+                PurposeLabel(delivery: delivery)
+                if let context = context {
+                    Text(context)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Palette.secondaryText)
+                        .lineLimit(1)
+                }
             }
             Text(delivery.title)
                 .font(.system(size: 24, weight: .bold))
@@ -161,8 +164,9 @@ private struct QuestionBar: View {
     }
 }
 
-/// A question's choices, each sent as the reply word for word in one click; none while a reply to the
-/// delivery is being taken. With `shortcuts`, ⌘1 to ⌘9 send the first nine.
+/// A question's choices, each sent as the reply word for word in one click, the bot's recommended one
+/// filled; none while a reply to the delivery is being taken. With `shortcuts`, ⌘1 to ⌘9 send the
+/// first nine.
 struct DeliveryChoices: View {
     @Environment(AppModel.self) private var model
     let delivery: Delivery
@@ -174,19 +178,21 @@ struct DeliveryChoices: View {
         let choices = Array((delivery.question?.choices ?? []).enumerated())
         FlowRow(spacing: compact ? 6 : 8) {
             ForEach(choices, id: \.offset) { index, choice in
+                let recommended = choice == delivery.question?.recommended
                 Button { model.inbox.reply(choice, to: delivery.id) } label: {
                     Text(choice)
-                        .font(.system(size: compact ? 12 : 13, weight: .medium))
+                        .font(.system(size: compact ? 12 : 13, weight: recommended ? .semibold : .medium))
+                        .foregroundStyle(recommended ? Color.white : Color.primary)
                         .padding(.horizontal, compact ? 11 : 14)
                         .frame(height: compact ? 26 : 30)
-                        .background(Capsule().fill(compact ? Palette.needsBackground : Palette.card))
+                        .background(Capsule().fill(recommended ? Palette.needs : compact ? Palette.needsBackground : Palette.card))
                         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
                         .shadow(color: .black.opacity(compact ? 0 : 0.05), radius: 1, y: 1)
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .modifier(ChoiceShortcut(index: shortcuts && index < 9 ? index : nil))
-                .accessibilityLabel(choice)
+                .accessibilityLabel(recommended ? "\(choice), recommended" : choice)
                 .accessibilityIdentifier("\(compact ? "delivery" : "inbox")-choice-\(choice)")
             }
         }
