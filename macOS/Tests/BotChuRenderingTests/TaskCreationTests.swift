@@ -168,4 +168,77 @@ extension RenderingTests {
             DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("new-task-review"))
         }
     }
+
+    /// #215: opened to continue a pull request whose head branch another open task owns (it opened
+    /// the pull request there, with no work of its own), New Task starts nothing; one whose branch
+    /// no task owns starts on that branch.
+    @Test func newTaskWontContinueAPullRequestWhoseBranchAnotherTaskOwns() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-new-task-pr-\(UUID().uuidString)")
+        let suite = "BotChu.NewTaskPR.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let bot = Bot(name: "Builder", accountID: "codex-dev", workspace: root.appendingPathComponent("bot").path)
+        try BotHome(workspace: bot.workspace).save(bot)
+        let checkout = root.appendingPathComponent("repos/project").path
+        #expect(await Shell.run(["git", "init", "-b", "main", checkout], in: root.path).ok)
+        #expect(await Shell.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+                                 "commit", "--allow-empty", "-m", "Initial"], in: checkout).ok)
+        let cli = root.appendingPathComponent("fixture.py")
+        try """
+        import json
+        print(json.dumps({'type': 'thread.started', 'thread_id': 'fixture-session'}))
+        print(json.dumps({'type': 'item.completed', 'item': {'id': 'answer', 'type': 'agent_message', 'text': 'Done.'}}))
+        print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 1, 'output_tokens': 1}}))
+        """.write(to: cli, atomically: true, encoding: .utf8)
+        let settings = AppSettings(defaults: defaults)
+        settings.reposRoot = root.appendingPathComponent("repos").path
+        settings.commands[bot.accountID] = "/usr/bin/python3 \(Shell.quote(cli.path))"
+        let store = Store(root: root.appendingPathComponent("index"))
+        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        let heads = [213: "feat/own-work-end-end", 214: "feat/free-branch"]
+        let model = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No usage in tests") },
+                             workLookup: { repo, number, _ in
+            let url = URL(string: "https://github.com/\(repo)/pull/\(number)")!
+            return .success(GitHubLookup.Found(work: BotTask.Work(number: number, title: "Pull request \(number)", url: url, isPullRequest: true),
+                                               branch: heads[number], fromFork: false, state: "OPEN"))
+        })
+        defer { model.stopAll() }
+        model.repositories = [GitHubLookup.Repo(nameWithOwner: "fixture/project")]
+        model.repositoriesReadAt = Date()
+        var owner = BotTask(for: bot, repo: "fixture/project", checkout: checkout, work: nil, brief: "Redesign connectors",
+                            branch: "feat/own-work-end-end", title: "Redesign connectors")
+        owner.pullRequest = 213
+        model.tasks[bot.id] = [owner]
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 720), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.makeKeyAndOrderFront(nil)
+        let start = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+                                                  windowNumber: window.windowNumber, context: nil, characters: "\r",
+                                                  charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        for number in [213, 214] {
+            let pull = BotTask.Work(number: number, url: URL(string: "https://github.com/fixture/project/pull/\(number)")!, isPullRequest: true)
+            window.contentView = NSHostingView(rootView: NewTaskSheet(botID: bot.id, initialRepo: "fixture/project", initialWork: pull)
+                .environment(model).defaultAppStorage(defaults))
+            try await Task.sleep(for: .milliseconds(400))
+            if !window.performKeyEquivalent(with: start) { window.sendEvent(start) }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let tasks = model.tasks[bot.id] ?? []
+        #expect(tasks.count == 2 && tasks.filter { $0.work?.number == 213 }.isEmpty)
+        let continued = try #require(tasks.first { $0.work?.number == 214 })
+        #expect(continued.branch == "feat/free-branch" && continued.work?.title == "Pull request 214")
+        let target = ChatTarget.task(continued.id, of: bot.id)
+        for _ in 0..<250 {
+            if !model.isRunning(target) && model.thread(target).contains(where: { $0.role == .assistant }) { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(model.thread(target).filter { $0.role == .error }.isEmpty)
+        #expect(model.task(target)?.folder != nil)
+    }
 }

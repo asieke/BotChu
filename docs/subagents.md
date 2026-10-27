@@ -34,7 +34,11 @@ tells the bot who handed it over. The asking conversation gets a receipt that op
 the command prints the bot and Task IDs and one status: `pending`, `created` (its first turn still
 starting when `--wait`, 120 seconds by default, ran out), `started`, `start failed` (the Task is
 there, with why) or `failed` (nothing was made: run the same command again once the reason is
-fixed). It exits nonzero for the last two. Running the same command again from the same
+fixed). It exits nonzero for the last two. A pull request to continue is read from GitHub before
+anything is made, and when another open task already works on its head branch (a task that
+opened it there, say), the request fails with that task as `Working Task:`, its bot and ID, to
+message instead; no Task or tab is made. A dispatch file asking the same gets the same answer in
+Home. Running the same command again from the same
 conversation, in the same turn, a later one or after a relaunch, returns the same Task: BotChu
 recognizes it by the conversation, the bot and what it asks for. A request seen again in the same
 turn gets the same answer. The Task doesn't count against sub-agent limits and never waits for
