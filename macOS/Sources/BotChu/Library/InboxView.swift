@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit
 import BotChuCore
 
 /// The Inbox's colours, beside the conversation column's.
@@ -29,6 +30,7 @@ struct InboxView: View {
     @State private var showsDone = false
     @State private var width: CGFloat = 1240
     @FocusState private var listFocused: Bool
+    @State private var keys = InboxKeys()
 
     var body: some View {
         let inbox = model.inbox!
@@ -41,11 +43,6 @@ struct InboxView: View {
                 .focusable()
                 .focused($listFocused)
                 .focusEffectDisabled()
-                .onKeyPress(keys: [.upArrow, .downArrow]) { press in
-                    guard let next = InboxList.step(from: inbox.selected, by: press.key == .upArrow ? -1 : 1, in: visible) else { return .ignored }
-                    inbox.selected = next
-                    return .handled
-                }
             Group {
                 if let id = inbox.selected, let delivery = inbox.delivery(id), visible.contains(id) {
                     InboxReader(delivery: delivery)
@@ -57,6 +54,18 @@ struct InboxView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
         }
+        // J/↓, K/↑ and E (#219), from the list or the reader, never into text, a page or past a sheet.
+        .onKeyPress { press in
+            let modified = !press.modifiers.isDisjoint(with: [.command, .control, .option, .shift])
+            guard let key = InboxList.Key(press.key.character, modified: modified), keys.reachInbox else { return .ignored }
+            guard press.phase == .down || key.repeats else { return .handled }
+            if let move = InboxList.move(key, from: inbox.selected, in: groups, showsDone: showsDone) {
+                if let done = move.done { inbox.setDone(done, true) }
+                inbox.selected = move.selected
+            }
+            return .handled
+        }
+        .background { InboxKeys.Probe(keys: keys) }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .frame(minWidth: 640, maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Inbox")
@@ -79,6 +88,8 @@ struct InboxView: View {
             // Choosing a Done delivery (from a notification or a card) opens Done to show it.
             if let selected, inbox.isDone(selected) { showsDone = true }
             read(selected, in: groups)
+            // The reader read before goes with its composer; the keys are the list's again.
+            listFocused = true
         }
         // Done while Done is closed: the selection moves on rather than staying hidden.
         .onChange(of: visible) { was, now in
@@ -97,6 +108,46 @@ struct InboxView: View {
         guard let id else { pinned = [:]; return }
         pinned = groups.first { $0.ids.contains(id) }.map { [id: $0.section] } ?? [:]
         model.inbox.markRead(id)
+    }
+}
+
+/// Where the Inbox's plain keys may act: its window, as `Probe` finds it.
+@MainActor final class InboxKeys {
+    weak var window: NSWindow?
+
+    /// Not while text is edited (a reply, a search, a field), a delivered page has the keyboard,
+    /// or a sheet or modal is open.
+    var reachInbox: Bool {
+        guard NSApp.modalWindow == nil, let window, window.attachedSheet == nil else { return false }
+        var view = window.firstResponder as? NSView
+        while let current = view {
+            if current is NSText || current is WKWebView { return false }
+            view = current.superview
+        }
+        return true
+    }
+
+    struct Probe: NSViewRepresentable {
+        let keys: InboxKeys
+
+        func makeNSView(context: Context) -> ProbeView {
+            let view = ProbeView()
+            view.keys = keys
+            return view
+        }
+
+        func updateNSView(_ view: ProbeView, context: Context) { view.keys = keys }
+    }
+
+    final class ProbeView: NSView {
+        weak var keys: InboxKeys? { didSet { keys?.window = window } }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            keys?.window = window
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 
@@ -534,7 +585,7 @@ private struct InboxToolbar: View {
             Label(done ? "Move to Inbox" : "Done", systemImage: done ? "tray.and.arrow.up" : "checkmark")
                 .labelStyle(.titleAndIcon)
         }
-        .help(done ? "Move to Inbox" : "Done (⌃⌘A)")
+        .help(done ? "Move to Inbox" : "Done (E or ⌃⌘A)")
         .keyboardShortcut("a", modifiers: [.command, .control])
         .accessibilityIdentifier("inbox-done")
         Menu {

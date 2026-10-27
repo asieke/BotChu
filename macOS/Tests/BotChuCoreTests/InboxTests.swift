@@ -516,6 +516,45 @@ private final class InboxFixture {
         #expect(InboxList.selection(after: c, was: [a, b, c, UUID()], now: [a, b]) == b)
     }
 
+    @Test func gmailsKeysAreReadAloneAndEDoesntRepeat() {
+        #expect(InboxList.Key("j", modified: false) == .next && InboxList.Key("\u{F701}", modified: false) == .next)
+        #expect(InboxList.Key("k", modified: false) == .previous && InboxList.Key("\u{F700}", modified: false) == .previous)
+        #expect(InboxList.Key("e", modified: false) == .done)
+        // Caps Lock gives capitals; with ⌘, ⌃, ⌥ or ⇧ the key is the app's.
+        #expect(InboxList.Key("J", modified: false) == .next && InboxList.Key("E", modified: false) == .done)
+        #expect(InboxList.Key("j", modified: true) == nil && InboxList.Key("e", modified: true) == nil)
+        #expect(InboxList.Key("\u{F701}", modified: true) == nil)
+        #expect(InboxList.Key("a", modified: false) == nil && InboxList.Key(" ", modified: false) == nil)
+        #expect(InboxList.Key.next.repeats && InboxList.Key.previous.repeats && !InboxList.Key.done.repeats)
+    }
+
+    @Test func theKeysStepThroughWhatIsShownAndEFilesTheOneReadOnce() {
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID()
+        let groups = [InboxList.Group(section: .needsInput, ids: [a]), InboxList.Group(section: .today, ids: [b, c]),
+                      InboxList.Group(section: .done, ids: [d])]
+        // J and K walk what is shown, staying at either end; closed, Done is skipped.
+        #expect(InboxList.move(.next, from: a, in: groups, showsDone: false) == InboxList.Move(selected: b))
+        #expect(InboxList.move(.previous, from: b, in: groups, showsDone: false) == InboxList.Move(selected: a))
+        #expect(InboxList.move(.next, from: c, in: groups, showsDone: false) == InboxList.Move(selected: c))
+        #expect(InboxList.move(.previous, from: a, in: groups, showsDone: false) == InboxList.Move(selected: a))
+        #expect(InboxList.move(.next, from: c, in: groups, showsDone: true) == InboxList.Move(selected: d))
+        // E files the one read and reads the next not Done, else the one before, else none.
+        #expect(InboxList.move(.done, from: a, in: groups, showsDone: false) == InboxList.Move(done: a, selected: b))
+        #expect(InboxList.move(.done, from: c, in: groups, showsDone: false) == InboxList.Move(done: c, selected: b))
+        // With Done open it still moves on, never into Done.
+        #expect(InboxList.move(.done, from: c, in: groups, showsDone: true) == InboxList.Move(done: c, selected: b))
+        let last = [InboxList.Group(section: .today, ids: [c]), InboxList.Group(section: .done, ids: [d])]
+        #expect(InboxList.move(.done, from: c, in: last, showsDone: true) == InboxList.Move(done: c, selected: nil))
+        // On a Done one, or with none read, nothing happens.
+        #expect(InboxList.move(.done, from: d, in: groups, showsDone: true) == nil)
+        #expect(InboxList.move(.done, from: nil, in: groups, showsDone: false) == nil)
+        // An empty list is safe.
+        for key in [InboxList.Key.next, .previous, .done] {
+            #expect(InboxList.move(key, from: nil, in: [], showsDone: false) == nil)
+            #expect(InboxList.move(key, from: a, in: [], showsDone: true) == nil)
+        }
+    }
+
     @Test func aReplyNamesItsDelivery() {
         let delivery = Delivery(botID: UUID(), title: "Should sub-agent work block Telegram?")
         #expect(InboxReply.prompt("Answer first.", delivery: delivery)
