@@ -103,6 +103,7 @@ struct ProvidersView: View {
         if model.providerSelection == account.id { model.providerSelection = nil }
         model.settings.customAccounts.removeAll { $0.id == account.id }
         model.settings.commands[account.id] = nil
+        model.connectorBoard.prune()
     }
 }
 
@@ -626,8 +627,8 @@ private struct AvatarGap: View {
     }
 }
 
-/// The profile selected in Providers, on the right: its allowance as Model & Usage shows it, the
-/// agents set to it, its command, and, for one added here, Remove Profile.
+/// The profile selected in Providers, on the right: its allowance as Model & Usage shows it, its
+/// connectors, the agents set to it, its command, and, for one added here, Remove Profile.
 private struct ProviderInspector: View {
     @Environment(AppModel.self) private var model
     let account: Account
@@ -658,6 +659,7 @@ private struct ProviderInspector: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     AccountUsageSection(request: request, isRunning: false).id(request)
+                    ProviderConnectorsSection(account: account).id(account.id)
                     if !bots.isEmpty {
                         InspectorSection("Agents", trailing: "\(bots.count)", preferenceKey: "provider.agents") {
                             InspectorCard {

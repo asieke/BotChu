@@ -128,7 +128,8 @@ enum DevHooks {
         return { _ in throw ImageDelivery.Failure("The window isn't on screen.") }
     }
 
-    /// `BOTCHU_CONNECTORS`, as the mock's states: connected names and a row of each other state.
+    /// `BOTCHU_CONNECTORS`, as the mock's states: connected services, ones needing sign-in, failed or
+    /// off, Computer Use configured, and the provider's own entries.
     static var connectorCheck: (@Sendable (AgentKind, String, String) async throws -> ConnectorReport)? {
         guard dataDir != nil, let fixture = env["BOTCHU_CONNECTORS"], ["sample", "stale", "unavailable"].contains(fixture) else { return nil }
         let checks = UsageChecks()
@@ -137,11 +138,25 @@ enum DevHooks {
             if fixture == "unavailable" || (fixture == "stale" && count > 1) {
                 throw ConnectorFailure("\(kind.displayName) didn’t answer within 20 seconds.")
             }
-            let names: [(String, Connector.State)] = [
+            let service: Connector.Origin = kind == .codex ? .codexApp : .claudeAI
+            let services: [(String, Connector.State)] = [
                 ("GitHub", .connected), ("Gmail", .connected), ("Google Drive", .connected), ("Linear", .connected), ("Notion", .connected),
-                ("Google Calendar", .needsAuth), ("Slack", .needsAuth), ("Postgres", .failed), ("Figma", .off), ("computer-use", .unconfirmed),
+                ("Google Calendar", .needsAuth), ("Figma", .off),
             ]
-            return ConnectorReport(connectors: names.map { Connector(name: $0.0, state: $0.1, origin: kind == .codex ? .codexApp : .claudeAI) },
+            var connectors = services.map { Connector(name: $0.0, state: $0.1, origin: service, toolCount: $0.1 == .connected ? 6 : nil,
+                                                      id: kind == .codex ? "connector_\($0.0.lowercased())" : "claude.ai \($0.0)") }
+            connectors += [
+                Connector(name: "Slack", state: .needsAuth, origin: .mcpServer, id: "slack"),
+                Connector(name: "Postgres", state: .failed, origin: .mcpServer, id: "postgres"),
+                Connector(name: "Computer Use", state: .configured, origin: .mcpServer, toolCount: 0, id: "computer-use"),
+                Connector(name: "link", state: .connected, origin: .mcpServer, toolCount: 4, id: "link"),
+                Connector(name: "node_repl", state: .connected, origin: .mcpServer, toolCount: 4, id: "node_repl"),
+            ]
+            if kind == .codex {
+                connectors += [Connector(name: "Pets", state: .connected, origin: .codexApp, id: "connector_openai_chatgpt_pets"),
+                               Connector(name: "Hotline", state: .connected, origin: .codexApp, id: "connector_openai_hotline")]
+            }
+            return ConnectorReport(connectors: connectors,
                                    at: Date().addingTimeInterval(fixture == "stale" ? -7_200 : -180))
         }
     }

@@ -5,8 +5,9 @@
 // Prints each thread and exits non-zero when an account fails. Needs the CLIs signed in.
 // `--usage` reads each account's allowance instead; `--review` runs one turn the way a run review
 // does, without tools, asking the CLI to read a file outside its folder: it must answer, without
-// a tool call and without the file's word. `--connectors` checks each Codex account's connectors as
-// the inspector does (Claude Code reports its own in each turn, printed with the turn). `--summary`
+// a tool call and without the file's word. `--connectors` checks each Claude Code and Codex
+// account's connectors as the inspector does, printing each one's category and action (#212); a
+// turn's Claude Code report is printed with the turn too. `--summary`
 // names a new task the way Quick tasks do (#192), on each account's smallest model unless
 // BOTCHU_SMOKE_MODEL names one: it must reply with a label of three or four words.
 //
@@ -44,11 +45,19 @@ struct Turn {
     var connectors: [Connector]?
 }
 
-/// A connector report as the inspector's card has it: connected names, then each other state's.
-func showConnectors(_ connectors: [Connector]) {
+/// A connector report as the inspector's card has it: connected names, then each other state's;
+/// with `kind`, each category as Providers lists it, with the action each row offers.
+func showConnectors(_ connectors: [Connector], kind: AgentKind? = nil) {
     let report = ConnectorReport(connectors: connectors)
     print("    connectors: \(report.connected.map(\.name).joined(separator: ", "))" + (connectors.isEmpty ? "none" : ""))
     for row in report.rows { print("      \(row.state.label): \(row.connectors.map(\.name).joined(separator: ", "))") }
+    guard let kind else { return }
+    for category in Connector.Category.allCases {
+        let listed = report.listed(category).map { connector in
+            connector.name + (ConnectorAction.make(for: connector, kind: kind, local: true).map { " [\($0.title)]" } ?? "")
+        }
+        if !listed.isEmpty { print("      \(category.title): \(listed.joined(separator: ", "))") }
+    }
 }
 
 /// `followUp` is written to a CLI that takes input mid-turn at its first tool call.
@@ -169,15 +178,16 @@ Task {
         }
         if connectorsOnly {
             print("== \(account.name) connectors")
-            guard account.kind == .codex else {
-                print("    skipped: \(account.kind == .claude ? "Claude Code reports its connectors in each turn" : "no discovery for \(account.kind.displayName)")")
+            guard ConnectorSettings(account.kind) != nil else {
+                print("    skipped: no discovery for \(account.kind.displayName)")
                 continue
             }
             let folder = root.appendingPathComponent(account.id)
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let started = Date()
             do {
-                showConnectors(try await ConnectorClient.codex(command: account.defaultCommand, folder: folder.path).connectors)
+                showConnectors(try await ConnectorClient.check(account.kind, command: account.defaultCommand, folder: folder.path).connectors,
+                               kind: account.kind)
                 print("    OK in \(Int(Date().timeIntervalSince(started)))s")
             } catch {
                 print("    FAIL: \((error as? ConnectorFailure)?.message ?? "Connector check failed")")
