@@ -73,10 +73,11 @@ public struct ProjectRecord: Equatable, Codable, Sendable {
         public var errorDescription: String? { message }
     }
 
-    private var newline: String { text.contains("\r\n") ? "\r\n" : "\n" }
+    /// Looked for in the bytes: Foundation's `contains` took most of the time Projects spends reading
+    /// every repository's PROJECT.md each time it draws (#188).
+    private var newline: String { zip(text.utf8, text.utf8.dropFirst()).contains { $0 == 13 && $1 == 10 } ? "\r\n" : "\n" }
     private var lines: [String] { text.components(separatedBy: newline) }
-    /// The line closing the frontmatter. `lines` is read once by each caller: it splits the whole file,
-    /// which Projects parses for every repository each time it draws (#188).
+    /// The line closing the frontmatter. Each caller reads `lines` once, since that splits the whole file.
     private static func end(of lines: [String]) -> Int? { lines.first == "---" ? lines.dropFirst().firstIndex(of: "---") : nil }
     private static let keys = ["name", "type", "status", "deploy", "merge"]
 

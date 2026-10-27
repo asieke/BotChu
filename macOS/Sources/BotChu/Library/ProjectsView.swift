@@ -261,7 +261,7 @@ struct ProjectsView: View {
 /// row of its own below, or, narrower still, each on its own row. Each control is measured once when
 /// it changes, and only placed as the width changes, which it does on every frame of the sidebar's
 /// slide (#188); `ViewThatFits` measured every copy of every control again on each of those frames.
-private struct HeaderControls: Layout {
+struct HeaderControls: Layout {
     struct Cache {
         /// The scope picker's, the search's and the filters' ideal sizes.
         var sizes: [CGSize]
@@ -317,43 +317,27 @@ private struct HeaderControls: Layout {
     }
 }
 
-/// A table's column choices (shown, order, widths), saved between launches. The table works on them
-/// in memory, saved once they stop changing: its columns resize on every frame of the sidebar's slide
-/// (#188), and saving each of those drew the whole table again.
+/// A table's column choices (shown, order, widths), saved between launches.
 private struct SavedColumns<Row: Identifiable>: DynamicProperty {
     @AppStorage private var data: Data
-    @State private var shown: TableColumnCustomization<Row>?
-    @State private var saved = Saved<Row>()
+    /// The table reads them many times a frame while its columns resize, as in the sidebar's slide (#188).
+    @State private var decoded = Decoded<Row>()
     init(_ key: String) { _data = AppStorage(wrappedValue: Data(), key) }
-    @MainActor var customization: TableColumnCustomization<Row> {
-        get { shown ?? saved.decoded(data) }
-        nonmutating set {
-            shown = newValue
-            let data = _data
-            saved.save(after: .milliseconds(500)) { data.wrappedValue = (try? JSONEncoder().encode(newValue)) ?? Data() }
-        }
+    var customization: TableColumnCustomization<Row> {
+        get { decoded.value(of: data) }
+        nonmutating set { data = (try? JSONEncoder().encode(newValue)) ?? Data() }
     }
 }
 
-/// What `SavedColumns` last read, and the save it is waiting to make.
-private final class Saved<Row: Identifiable> {
-    private var read: (data: Data, value: TableColumnCustomization<Row>)?
-    private var pending: Task<Void, Never>?
+/// What a table's saved column choices last decoded to.
+private final class Decoded<Row: Identifiable> {
+    private var last: (data: Data, value: TableColumnCustomization<Row>)?
 
-    func decoded(_ data: Data) -> TableColumnCustomization<Row> {
-        if let read, read.data == data { return read.value }
+    func value(of data: Data) -> TableColumnCustomization<Row> {
+        if let last, last.data == data { return last.value }
         let value = (try? JSONDecoder().decode(TableColumnCustomization<Row>.self, from: data)) ?? TableColumnCustomization()
-        read = (data, value)
+        last = (data, value)
         return value
-    }
-
-    /// Saves after `delay`, unless another save is asked for first.
-    @MainActor func save(after delay: Duration, _ write: @escaping @MainActor () -> Void) {
-        pending?.cancel()
-        pending = Task { @MainActor in
-            try? await Task.sleep(for: delay)
-            if !Task.isCancelled { write() }
-        }
     }
 }
 
