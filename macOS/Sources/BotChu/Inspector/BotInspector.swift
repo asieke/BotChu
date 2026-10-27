@@ -39,6 +39,7 @@ struct BotInspector: View {
                     let usageRequest = model.usageRequest(for: bot.account)
                     AccountUsageSection(request: usageRequest, isRunning: model.isRunning(.home(botID)))
                         .id(usageRequest)
+                    ConnectorsSection(target: .home(botID))
                 case .session:
                     InspectorSection("Session") {
                         SessionCard(session: status.session)

@@ -16,8 +16,11 @@ struct SidebarView: View {
             })) {
             Section("Workspace") {
                 ForEach(LibraryDestination.sidebar, id: \.self) { destination in
+                    let count = destination == .inbox ? model.inbox.unfinishedCount : 0
+                    // What in the Inbox isn't Done, read or not (#189); the Dock counts what is unread.
                     Label(destination.title, systemImage: destination.symbol)
-                        .badge(destination == .inbox ? model.inbox.unreadCount : 0)
+                        .badge(count)
+                        .accessibilityValue(count > 0 ? "\(count) not done" : "")
                         .tag(SidebarDestination.library(destination))
                 }
             }

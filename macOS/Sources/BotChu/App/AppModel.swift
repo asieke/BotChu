@@ -166,6 +166,13 @@ final class AppModel {
     var petJobs: [UUID: PetJob] = [:]
     @ObservationIgnored var petRuns: [UUID: AgentRun] = [:]
     @ObservationIgnored var petTasks: [UUID: Task<Void, Never>] = [:]
+    /// New tasks waiting for their issue's title before their summary is asked for, and the
+    /// summaries asked for, one at a time (#192, `TaskSummaries.swift`).
+    @ObservationIgnored var summariesWanted: Set<UUID> = []
+    @ObservationIgnored var summaryRuns: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored var lastSummaryRun: Task<Void, Never>?
+    /// Runs a summary; nil runs it on this Mac (`EvaluationCLI`). Tests set it.
+    @ObservationIgnored var summaryRunner: RunEvaluator.Runner?
     var editor: EditorRequest?
     var taskSheet: TaskSheetRequest?
     /// The repository selected in Projects, shown in its sidebar; nil hides the sidebar.
@@ -185,6 +192,8 @@ final class AppModel {
     /// What Providers and a conversation's Model & Usage show of it, kept current in the background
     /// in the app itself, so both open on numbers instead of checking.
     let usageBoard = ProviderUsageBoard()
+    /// The connectors each conversation's CLI reported or a check found (#183).
+    let connectorBoard = ConnectorBoard()
     @ObservationIgnored private var usageWatch: Task<Void, Never>?
     /// Usage views inject this lookup in tests so they never read the owner's Keychain.
     let openRouterKey: @MainActor () -> String?
@@ -253,6 +262,7 @@ final class AppModel {
     /// didn't delete it; the issues being deleted, by `owner/name#number` (`Projects.swift`).
     var issueDeletion: IssueDeletion?
     var issueClosure: IssueClosure?
+    @ObservationIgnored var closureFailures: [IssueClosure] = []
     var updatingIssues: Set<String> = []
     var githubConnection: ProjectGitHub.Connection?
     var githubChecking = false
@@ -662,6 +672,7 @@ final class AppModel {
         postReceipt(TaskReceipt.started(task), task: task.id, for: botID)
         if show { self.show(target) }
         send(task.opening, to: target, images: images)
+        summarizeNewTask(target)
     }
 
     /// Records a scheduled job's run as a new task of its agent (#146), whose conversation the job's
@@ -1123,6 +1134,7 @@ final class AppModel {
             tasks[botID]?[i].head = task.head
         }
         saveTask(tasks[botID]![i], of: botID)
+        summarizeIfReady(target)
         let on = task.isRemote ? " on \(machineName(task.hostID, fallback: task.hostName))" : ""
         if let failure {
             append(ChatMessage(role: .error, text: "Couldn't make this task's worktree\(on). " + failure.message), to: target)
@@ -1614,7 +1626,8 @@ final class AppModel {
                 }
 
                 // On a host, its own command for the account when it has one.
-                let command = task.flatMap { settings.host($0.hostID)?.command(for: account) } ?? settings.command(for: account)
+                let command = effectiveCommand(for: account, task: task)
+                let connectorScope = ConnectorScope(accountID: account.id, command: command, folder: directory, hostID: task?.hostID)
                 let run = machine.isRemote
                     ? AgentRun(command: command, invocation: invocation, on: machine, folder: directory)
                     : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: directory, isDirectory: true))
@@ -1641,6 +1654,7 @@ final class AppModel {
                     }
                     var sessions: [String] = []
                     var reported: String?
+                    var connectors: [Connector]?
                     var settles: [TimeInterval] = []
                     var delivered = false
                     conversation.stream { messages in
@@ -1654,6 +1668,8 @@ final class AppModel {
                                 sessions.append(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: reported))
                             case .model(let id):
                                 reported = id
+                            case .connectors(let list):
+                                connectors = list
                             case .inputTaken:
                                 guard self.inputs[target] != nil else { break }
                                 if self.inputs[target]?.ledger.taken() == true {
@@ -1695,6 +1711,9 @@ final class AppModel {
                         self.delegationSessions[target, default: []].insert(session)
                     }
                     if let reported { self.recordReportedModel(reported, requested: current.model, accountID: accountID, for: target) }
+                    if let connectors {
+                        self.connectorBoard.record(connectors, scope: connectorScope, sessionID: sessions.last ?? self.runSettings(of: target)?.resumableSessionID, for: target)
+                    }
                     if delivered {
                         // The taken message leaves the saved queue only once the saved transcript holds it.
                         self.saveThread(target)
@@ -1933,6 +1952,7 @@ final class AppModel {
         for target in Array(runStates.keys) { stop(target) }
         for run in petRuns.values { run.stop() }
         for task in petTasks.values { task.cancel() }
+        for run in summaryRuns.values { run.cancel() }
         // Sidebar changes that couldn't be saved get one more try.
         if indexFailure != nil { saveIndex() }
         unsavedAtQuit = storage.wait(timeout: quitTimeout)
@@ -2276,7 +2296,7 @@ final class AppModel {
     static let warmedReplies = 60
     static let warmedBytes = 256 << 10
 
-    private func taskIndex(_ target: ChatTarget) -> Int? {
+    func taskIndex(_ target: ChatTarget) -> Int? {
         target.taskID.flatMap { id in tasks[target.botID]?.firstIndex { $0.id == id } }
     }
 
@@ -2331,7 +2351,7 @@ final class AppModel {
     }
 
     /// Writes the task's `task.json` off the main thread, after its earlier saves.
-    private func saveTask(_ task: BotTask, of botID: UUID, saved: (@MainActor @Sendable (Error?) -> Void)? = nil) {
+    func saveTask(_ task: BotTask, of botID: UUID, saved: (@MainActor @Sendable (Error?) -> Void)? = nil) {
         guard let bot = bot(botID) else {
             saved?(CocoaError(.fileNoSuchFile))
             return

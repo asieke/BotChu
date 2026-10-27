@@ -133,8 +133,9 @@ public struct Delivery: Identifiable, Codable, Hashable, Sendable {
         self.links = links
         self.question = question
         self.credits = credits
-        self.sentAt = sentAt
-        self.updatedAt = updatedAt ?? sentAt
+        // As its record keeps them, so an answer stamped in the same second still counts.
+        self.sentAt = Self.stamp(sentAt)
+        self.updatedAt = Self.stamp(updatedAt ?? sentAt)
     }
 
     /// A date as its record keeps it: in whole seconds.
@@ -409,6 +410,10 @@ public struct InboxState: Codable, Equatable, Sendable {
     }
 
     public func unreadCount(_ deliveries: [Delivery]) -> Int { deliveries.filter(isUnread).count }
+
+    /// The deliveries not Done, read or not: the count beside Inbox in the sidebar (#189). The Dock
+    /// and the dots keep counting what is unread.
+    public func unfinishedCount(_ deliveries: [Delivery]) -> Int { deliveries.filter { !self[$0.id].done }.count }
 
     /// Forgets deliveries that are gone, so the file doesn't grow with them.
     public mutating func keep(only ids: Set<UUID>) {

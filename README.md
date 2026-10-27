@@ -47,19 +47,30 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     The list shows active projects (`status: active` in `PROJECT.md`) unless its status filter says
     otherwise: every status, or only paused, maintenance, deprecated or unclassified ones (no
     `PROJECT.md`); the choice is remembered. A repository whose `PROJECT.md` isn't read yet appears
-    once it is known to be active.
+    once it is known to be active. The type filter (all projects, code or non-code) is remembered too;
+    a repository without a readable `PROJECT.md` has no type, so it shows only under all projects.
     **Pull Requests** and **Issues** list the open ones across the repositories (up to 30 most
     recently updated per repository, saying so when there are more), with checks, review state,
-    labels, author and any bot's task on them, filtered by repository or search. Selecting one opens
+    labels, author and any bot's task on them, filtered by repository or search. They cover the same
+    repositories as the list, by the same status and type filters, which all three views show (#186):
+    the repository menu, the counts beside their names (GitHub's totals) and the note about what
+    wasn't read leave the others out, and a chosen repository narrows that further. A repository
+    chosen before the filters left it out counts as all repositories until they cover it again. When
+    the filters leave out everything open, the view says so and offers **Show All Projects**. The
+    search matches an item's title, number, labels, author or branch. Selecting one opens
     it in the repository's sidebar, and double-click on GitHub; its menu reviews a pull request
     (**Review with**, **Review and Comment with**), continues it (unless it comes from a fork) or
     starts a task on an issue with a bot, opening New Task with it chosen, or opens the task already
     on it. They are read with one GraphQL query per ten repositories whose open work changed (below).
     An issue’s menu has **Archive Issue…** and **Mark Obsolete…** (#162). Both close it as **not planned**
     on GitHub, preserving its description, comments and link; it can be reopened on GitHub. After
-    confirming, it leaves the open lists, counts and saved catalog immediately, including during a
-    sync. If GitHub refuses or is unreachable, it stays and the app says why. The archive menu beside
-    Delete on an issue’s sidebar page offers the same actions.
+    confirming, it leaves the open lists, counts and its sidebar page at once, before GitHub answers
+    (#195); a sync meanwhile can't bring it back. Once GitHub has closed it, it leaves the saved
+    catalog too, so a relaunch before then shows it again until a sync asks GitHub. Asking again
+    while GitHub answers sends no second request. If GitHub refuses or is unreachable, it comes back
+    (with whatever a sync read meanwhile), and an alert says why and offers **Try Again**; a late
+    answer after another account signed in changes nothing. The archive menu beside Delete on an
+    issue’s sidebar page offers the same actions.
     An issue's menu also has **Delete Issue…**, as its page in the sidebar has Delete (#154): after
     an alert naming the repository and number says it can't be undone, `gh issue delete <n> --repo
     <owner/name> --yes` deletes it on GitHub for good. It then leaves the lists, the counts and
@@ -138,15 +149,20 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     highest share used. The heading says when the newest reading was made ("Updated 3m ago"), with
     **Refresh**, which checks every profile again within its own limit (Muse at most every five
     minutes); a row adds its age only when its reading is 10 minutes older than that. While all is
-    well a row's second line is its family; otherwise, in the warning colour, **Stale · 2h ago**
+    well a row's second line is its family, and its plan when the CLI itself reports one (Codex's
+    plan type: "Codex · Pro"; never worked out from allowance, prices or names, so Claude,
+    Antigravity, Muse and OpenRouter rows show none); otherwise, in the warning colour, **Stale · 2h ago**
     (older than the background's interval, or a later check failed; its bars and shares are
     dimmed), **Usage unavailable** or **Command not found**, a button that shows why, with **Try
     Again** (labelled with the time the profile's limit allows it) and, for a missing command,
     **Change Command…**; a profile not read yet says Checking…, over empty tracks. Selecting a
-    profile shows it on the right: its allowance as **Model & Usage** shows it, the agents set to
+    profile shows it on the right: its family and plan, its allowance as **Model & Usage** shows it, the agents set to
     it, each opening its Home, and its command, with Copy and Change… (Settings ▸ Accounts). A row's
-    menu has Refresh, Copy Command and Change Command…, and, for a profile added here, **Remove
-    Profile…**, which asks first; agents set to a removed profile keep its CLI family and command.
+    menu has Refresh, Copy Command and Change Command…; **Assign to Agent**, the local agents with
+    those set to the profile checked, which moves the chosen agent's Home and the Tasks it starts
+    afterwards to the profile (Tasks under way keep theirs; an agent whose Home is running can't be
+    chosen until it is idle; a profile of another family clears its model and effort); and, for a
+    profile added here, **Remove Profile…**, which asks first; agents set to a removed profile keep its CLI family and command.
     Readings are saved between launches (`usage.json` beside the bot index; usage fields only; one
     saved before windows had model groups takes them from its windows' titles) and kept current in
     the background, every 15 minutes for a CLI profile and hourly for Muse, and every 5 minutes
@@ -321,13 +337,14 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     pinned at the top, then a **Tasks** heading with their count, **+** (New Task, ⌘T) and **«**
     (collapse), then the open tasks in the order they were opened, which scroll. A tab's first,
     prominent line is the repository it works in and its issue's or pull request's number
-    ("BotChu #113"; a review's with an eye, a host's name after it); its second says what it is
-    doing, with a time on the right that is never cut off: making the worktree or starting (a
+    ("BotChu #113"; a review's with an eye, a host's name after it); a task's second says what it
+    is about: its summary, a label of three or four words saved when it started (see Quick tasks,
+    below), or for a task without one its issue's title or a brief's words; its third says what it
+    is doing, with a time on the right that is never cut off: making the worktree or starting (a
     violet ring), working (violet, what it is doing and its elapsed time, ticking each second),
     finished since it was last shown (blue, with its pull request), or its last turn failed (red,
-    until its next turn starts); while idle (a faint ring), what it is about (its issue's title, or
-    a brief's words) and its last activity (2m, 1h, 1d). Home's tab names its account, or its own
-    turn's state. The rows are inset 8 points from both of the column's edges, and the selected
+    until its next turn starts); while idle (a faint ring), **Idle** and its last activity (2m, 1h,
+    1d). Home's tab has two lines: Home, then its account, or its own turn's state. The rows are inset 8 points from both of the column's edges, and the selected
     one is a card with its edge all round, as the rail's selected tile is. Dots hold still; when a
     turn ends, its dot pops once (with Reduce Motion, it only crossfades). A click, **⌘1** (Home) to **⌘9** (the first eight tasks, in the Bot menu), ⌃Tab,
     and ↑ and ↓ while a tab has keyboard focus switch conversations. Hovering a task's tab turns its
@@ -337,7 +354,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     The column is 240 points wide; drag its edge to make it 200 to 320, which is remembered. **«**
     or **View ▸ Collapse Tasks** folds it into a 56-point rail of tiles (a house for Home, each
     task's number, or a checklist for a brief, then **+**), with a dot in the corner of each tile
-    that isn't idle and the tab's two lines on hover; **»** or **View ▸ Expand Tasks** brings it
+    that isn't idle and the tab's lines on hover; **»** or **View ▸ Expand Tasks** brings it
     back, and the choice survives a relaunch. The column also becomes the rail by itself while the
     chat beside it would be less than 600 points wide to read, and comes back when the window
     widens; as the chat's text never grows past 760 points, on windows of 1,680 points and wider
@@ -446,7 +463,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     clicking it brings BotChu forward on the delivery in the Inbox. An answer from a banner that
     launched BotChu is sent once the deliveries are read. BotChu asks for notifications the first
     time a delivery arrives, not at launch. The Dock tile's badge shows the unread deliveries.
-  - **Inbox:** first under Workspace (⇧⌘I), with how many deliveries are unread. A 392-point list
+  - **Inbox:** first under Workspace (⇧⌘I), with how many deliveries aren't Done, read or not (none
+    shown at zero). A 392-point list
     (320 in a narrower window) in the tasks column's idiom: **Needs you** (questions not answered
     since they were sent), **Today**, **Yesterday**, then each earlier day, newest first, with
     **Done** collapsed at the end with its count. A row has the sender's pet (a credited bot's on its
@@ -941,6 +959,24 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     an expired window hides its old percentage until a new reading arrives. CLI output and
     credentials are not written to disk by BotChu; of a reading, only its usage fields are
     (`usage.json`).
+  - **Connectors (#183):** under Usage, **Connectors** shows the connectors the conversation's
+    CLI profile already has, as its provider reports them, for the conversation's profile, command
+    (a host's own included), folder and host; BotChu never installs, signs in or configures one.
+    On this Mac a Claude Code or Codex profile is checked in the conversation's folder when the
+    section shows and the last check is over an hour old, or with Refresh (at most once a minute),
+    each within 20 seconds: `claude mcp list` (which health-checks the servers it may connect to,
+    claude.ai connectors and plugins' among them) or a `codex app-server` that asks for every
+    page of `mcpServerStatus/list` and a refreshed `app/installed`. Neither starts a model turn or
+    calls a connector's tool. The card is **Enabled for this profile**: a check of the profile,
+    not of the conversation's session. On a host, Claude Code's report from its turn's start
+    (`system/init`) is **Connected at last report**, an earlier session's in the same profile,
+    command, folder and host **Last session report**, and otherwise **Not reported yet**; Codex
+    there is **Not checked on <host>**, and Antigravity, Muse and Pi **Discovery unavailable for
+    <CLI>**. Connected names are chips (twelve, then **+N more**); **Needs sign-in**, **Failed**,
+    **Off** and **Not confirmed** (pending, not started, or with no callable tool) are rows with a
+    symbol each. Unknown is a sentence, never an empty list; **None** only when a report came back
+    empty. A failed check keeps the last list, all of it marked stale, with the error. Only names,
+    states and tool counts are kept, in memory: no endpoints, commands, errors or credentials.
   - **Settings:** a page of the main window, beside the sidebar, opened by the sidebar's gear,
     ⌘, or BotChu ▸ Settings…, like a gallery: the conversation shown keeps its tab, its draft and its
     turns. Its nine pages (General, Accounts, GitHub, Hosts, Run reviews, Pets, OpenRouter, Telegram,
@@ -955,6 +991,17 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     on repositories, each account's command, the Codex account that draws pets' stills, the
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
     and default OpenRouter model, whether each bot's work gets a daily run review and at what time, and the Telegram gateway (below).
+  - **Quick tasks:** Settings ▸ General ▸ **Quick tasks** picks the profile and model of small
+    background asks: for now, each new task's summary, the label of three or four words on its
+    tab's second line. It is **Off** until you pick a profile (Claude Code, Codex or Muse, which
+    BotChu can run without tools); picking one starts on its family's smallest model (Haiku, GPT-6
+    Luna, Muse Spark), which you can change. Each task started afterwards is summarized once, in the
+    background (its turn doesn't wait), from its issue's or pull request's title once looked up, else
+    its brief, in a fresh session with every tool turned off by the CLI itself, in an empty folder,
+    as a run review is, on that profile's allowance and never another's, and logged in its bot's
+    turn log as a "task summary". A reply that isn't a label of three or four words, a failure, or
+    none within 90 seconds leaves the task named as before. The summary is saved in its
+    `task.json`; nothing is asked at launch, while drawing tabs, or for tasks from before.
   - **Remote queue bots:** choose **Remote queue** in New Bot to message an agent such as Danny
     on its own computer. BotChu serves an authenticated HTTP queue, while the remote runtime
     polls for messages and posts complete replies or errors into Home. Documents go both ways: attach
@@ -1050,8 +1097,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     (`ComposerLayout.swift`), what
     the status sidebar shows about a bot, from a summary of its thread kept as the thread grows, and
     its `MEMORY.md` (`BotStatus.swift`), what a conversation's tab and its bot's row say: its state,
-    the tab's two lines, the row's dots and subtitle, and when the column folds into the rail
-    (`ConversationTabs.swift`), replies' parsed Markdown, cached by their text within a
+    the tab's lines, the row's dots and subtitle, and when the column folds into the rail
+    (`ConversationTabs.swift`), a new task's summary on the Quick tasks profile: what it is made
+    from, its prompt and which replies are kept (`TaskSummaries.swift`), replies' parsed Markdown, cached by their text within a
     budget of bytes (`MarkdownCache.swift`), and parsed off the main thread as they are written, one
     revision at a time for each reply (`MarkdownPreparation.swift`), a reply's text as it is selected
     and copied: its texts in reading order, what goes between them, words and paragraphs
@@ -1191,7 +1239,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     bot while `index.json` can't be saved, then the retry and a reload; how tall the message box
     grows and how far its text scrolls; each account's allowance, with Muse's check through a
     stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
-    answered empty, and none at all; Model & Usage showing the reading the background keeps,
+    answered empty, and none at all; connector discovery: Claude Code's `mcp list` and init and
+    Codex's app-server, from captured samples, every page, an older Codex, late checks from
+    another conversation, stale and empty lists; Model & Usage showing the reading the background keeps,
     checking only one missing or as old as its interval, and Refresh's limits; Providers' model
     groups, time left and reset times, credits and free resets with their expiry, a row's status by
     exception, and the widths of its columns and meters; skills: their frontmatter, finding and making them, which a
@@ -1475,6 +1525,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   current frame is drawn into its circle, and
   `pets.txt` lists each pet player's clip, state and time.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
+  `BOTCHU_CONNECTORS=sample` (or `stale`, `unavailable`) gives profile checks in Connectors
+  sample results, a check that fails after the first, or one that always fails, without starting
+  a CLI.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
   querying any account (`sample` is Providers as its mock's main state: Claude's Fable week,
   Codex profiles' credits and free resets, and the Pi profile a key with a spending limit);
@@ -1572,6 +1625,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   folder, and passes when the CLI answers without a tool call and without the file's word. Accounts
   whose CLI has no tool-free mode are skipped. It spends a little of each account's allowance and
   isn't part of `check`; run it after changing how reviews run a CLI.
+- Task summaries (Quick tasks) without tools: `swift run --package-path macOS botchu-smoke --summary
+  [account id …]` names a sample task on each account the way a new task's summary is asked for, on
+  its family's smallest model (or `BOTCHU_SMOKE_MODEL`), and passes when the reply is a label of
+  three or four words. It spends a little of each account's allowance; run it after changing how
+  summaries are asked for.
 - Telegram end to end: the gateway's tests use stand-ins for Telegram, so a real exchange is
   checked by hand, with your own Telegram bot: see
   [Checking it end to end](docs/telegram.md#checking-it-end-to-end).

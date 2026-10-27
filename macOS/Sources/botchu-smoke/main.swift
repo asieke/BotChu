@@ -5,11 +5,15 @@
 // Prints each thread and exits non-zero when an account fails. Needs the CLIs signed in.
 // `--usage` reads each account's allowance instead; `--review` runs one turn the way a run review
 // does, without tools, asking the CLI to read a file outside its folder: it must answer, without
-// a tool call and without the file's word.
+// a tool call and without the file's word. `--connectors` checks each Codex account's connectors as
+// the inspector does (Claude Code reports its own in each turn, printed with the turn). `--summary`
+// names a new task the way Quick tasks do (#192), on each account's smallest model unless
+// BOTCHU_SMOKE_MODEL names one: it must reply with a label of three or four words.
 //
 //   swift run --package-path macOS botchu-smoke claude-personal codex-dev
 //   OPENROUTER_API_KEY=… swift run --package-path macOS botchu-smoke openrouter
 //   swift run --package-path macOS botchu-smoke --review claude-dev codex-dev muse
+//   swift run --package-path macOS botchu-smoke --summary claude-dev codex-dev
 import Foundation
 import BotChuCore
 
@@ -21,7 +25,9 @@ let smokeImage = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_IMAGE"].map {
 let imageExpected = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_IMAGE_EXPECT"]
 let usageOnly = CommandLine.arguments.dropFirst().first == "--usage"
 let reviewOnly = CommandLine.arguments.dropFirst().first == "--review"
-let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly ? 2 : 1))
+let connectorsOnly = CommandLine.arguments.dropFirst().first == "--connectors"
+let summaryOnly = CommandLine.arguments.dropFirst().first == "--summary"
+let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly || connectorsOnly || summaryOnly ? 2 : 1))
 let accounts = requested.isEmpty ? Accounts.all : requested.map { Accounts.account(id: $0) }
 let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-smoke-\(UUID().uuidString)")
 
@@ -34,6 +40,15 @@ struct Turn {
     var followUpsTaken = 0
     /// The model the CLI said it ran, where it says.
     var model: String?
+    /// The connectors it reported as the turn started, where it does.
+    var connectors: [Connector]?
+}
+
+/// A connector report as the inspector's card has it: connected names, then each other state's.
+func showConnectors(_ connectors: [Connector]) {
+    let report = ConnectorReport(connectors: connectors)
+    print("    connectors: \(report.connected.map(\.name).joined(separator: ", "))" + (connectors.isEmpty ? "none" : ""))
+    for row in report.rows { print("      \(row.state.label): \(row.connectors.map(\.name).joined(separator: ", "))") }
 }
 
 /// `followUp` is written to a CLI that takes input mid-turn at its first tool call.
@@ -66,6 +81,8 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
                     turn.session = CommandBuilder.resumeID(kind: kind, invocation: invocation, reported: reported)
                 case .model(let id):
                     turn.model = id
+                case .connectors(let list):
+                    turn.connectors = list
                 case .inputTaken:
                     if ledger.taken(), let followUp {
                         turn.followUpsTaken += 1
@@ -142,9 +159,28 @@ Task {
                 }
                 for badge in reading.badges(at: .now) { print("    \(badge.text)") }
                 if let note = reading.note { print("    \(note)") }
+                print("    Plan: \(reading.planLabel ?? "not reported")")
                 print("    OK")
             } catch {
                 print("    FAIL: \((error as? UsageFailure)?.message ?? "Usage query failed")")
+                failures.append(account.id)
+            }
+            continue
+        }
+        if connectorsOnly {
+            print("== \(account.name) connectors")
+            guard account.kind == .codex else {
+                print("    skipped: \(account.kind == .claude ? "Claude Code reports its connectors in each turn" : "no discovery for \(account.kind.displayName)")")
+                continue
+            }
+            let folder = root.appendingPathComponent(account.id)
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let started = Date()
+            do {
+                showConnectors(try await ConnectorClient.codex(command: account.defaultCommand, folder: folder.path).connectors)
+                print("    OK in \(Int(Date().timeIntervalSince(started)))s")
+            } catch {
+                print("    FAIL: \((error as? ConnectorFailure)?.message ?? "Connector check failed")")
                 failures.append(account.id)
             }
             continue
@@ -177,6 +213,23 @@ Task {
             }
             continue
         }
+        if summaryOnly {
+            print("== \(account.name) task summary, without tools")
+            let model = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_MODEL"] ?? QuickTasks.suggestedModel(for: account.kind)
+            guard let quick = QuickTasks(accountID: account.id, model: model, accounts: Accounts.all) else {
+                print("    skipped: \(RunEvaluator.unavailable(account.kind))")
+                continue
+            }
+            let task = BotTask(repo: "asieke/BotChu", checkout: root.path,
+                               brief: "Show three-line Task labels with saved summaries and a Quick tasks setting in the conversation column")
+            let started = Date()
+            let label = await TaskSummary.run(TaskSummary.job(for: task, botID: UUID(), quick: quick)!, with: { job in
+                try await EvaluationCLI.run(job, command: account.defaultCommand, model: job.model, log: nil, what: "task summary")
+            })
+            print("    \(label.map { "OK: “\($0)” on \(model)" } ?? "FAIL: no label of three or four words on \(model)") in \(Int(Date().timeIntervalSince(started)))s")
+            if label == nil { failures.append(account.id) }
+            continue
+        }
         let word = "ZEBRA\(Int.random(in: 100...999))"
         var bot = Bot(name: "Smoke", title: "A test bot", instructions: "Answer in as few words as possible.",
                       accountID: account.id, workspace: root.appendingPathComponent(account.id).path)
@@ -195,6 +248,7 @@ Task {
         let first = await runTurn(bot, prompt: "The code word is \(word). Use your shell tool to run `ls`, then reply with: stored." + imageRequest, history: [])
         show(first.messages)
         showModel(first, of: bot)
+        if let connectors = first.connectors { showConnectors(connectors) }
         guard let session = first.session, !first.messages.contains(where: { $0.role == .error }),
               first.messages.contains(where: { $0.role == .assistant }),
               imageExpected.map({ expected in first.messages.filter { $0.role == .assistant }.map(\.text).joined().localizedCaseInsensitiveContains(expected) }) ?? true else {

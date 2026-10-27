@@ -132,6 +132,11 @@ extension RenderingTests {
         #expect(home.loadBot()?.reasoningEffort == .xhigh)
         #expect(home.loadBot()?.resumableSessionID == nil)
         #expect(home.loadTasks().first?.resumableSessionID == "task-session")
+        // A Task started after Home's change (as Providers' Assign to Agent makes it) takes the new
+        // profile and Home's choices; the one under way keeps its own.
+        let next = BotTask(for: try #require(app.bot(bot.id)), repo: "test/repo", checkout: root.path, work: nil, brief: "Next")
+        #expect(next.account == custom && next.model == "gpt-6-astra" && next.reasoningEffort == .xhigh)
+        #expect(app.task(taskTarget)?.accountID == "codex-work")
 
         // Both kinds of conversation reject account changes while their own turn is active.
         app.runStates[homeTarget] = RunState()

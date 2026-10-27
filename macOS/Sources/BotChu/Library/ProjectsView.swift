@@ -16,29 +16,27 @@ struct ProjectsView: View {
     /// Which statuses the repositories show: active ones, unless chosen otherwise.
     @AppStorage("projectsStatus") private var status = ProjectStatusFilter.active
     @State private var query = ""
-    @State private var category = "all"
+    /// Which types the repositories show; with the status, the scope of all three views.
+    @AppStorage("projectsKind") private var category = ProjectKindFilter.all
     /// The repository the pull request and issue tables show, or nil for all.
     @State private var repoFilter: String?
 
-    private var rows: [ProjectRow] {
+    private var projectScope: ProjectScope { ProjectScope(status: status, kind: category) }
+
+    /// Every repository's row, before the scope and search.
+    private var allRows: [ProjectRow] {
         ProjectRow.rows(repos: model.repositories ?? [], records: model.projectRecords, errors: model.projectErrors, chosen: model.settings.repoLocations,
                         hosts: model.settings.hosts, reposRoot: model.settings.expandedReposRoot,
                         taskRepos: model.openTasks.map(\.task.repo))
-        .filter { row in
-            let kind = row.metadata?.kind
-            return (category == "all" || category == "docs" && kind == .docs || category == "code" && kind != nil && kind != .docs)
-                && status.includes(row) && row.matches(query)
-        }
     }
 
-    private func items(pulls: Bool) -> [GitHubLookup.OpenItem] {
-        (model.openItems ?? []).filter { item in
-            item.isPullRequest == pulls && (repoFilter == nil || item.repo == repoFilter)
-                && query.split(whereSeparator: \.isWhitespace).allSatisfy { word in
-                    [item.title, item.repo, "#\(item.number)", item.author, item.branch ?? ""].contains { $0.localizedCaseInsensitiveContains(word) }
-                        || item.labels.contains { $0.name.localizedCaseInsensitiveContains(word) }
-                }
-        }
+    private var rows: [ProjectRow] {
+        let scope = projectScope
+        return allRows.filter { scope.includes($0) && $0.matches(query) }
+    }
+
+    private func openWork(pulls: Bool, in rows: [ProjectRow]) -> ProjectWork {
+        ProjectWork(rows: rows, items: model.openItems ?? [], scope: projectScope, pulls: pulls, repo: repoFilter, query: query)
     }
 
     private var loading: Bool { model.projectsLoading }
@@ -53,7 +51,7 @@ struct ProjectsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             LibraryHeading(title: "Projects", subtitle: "Your repositories, their open pull requests and issues, and where they work.",
-                           count: scope == .repositories && model.repositories != nil ? rows.count : model.repositories?.count) {
+                           count: model.repositories == nil ? nil : scope == .repositories ? rows.count : allRows.filter(projectScope.includes).count) {
                 if loading { ProgressView().controlSize(.small) }
                 TimelineView(.everyMinute) { context in
                     if let freshness = freshness(now: context.date) {
@@ -64,7 +62,8 @@ struct ProjectsView: View {
                 // Never disabled: asked for during a sync, it runs once that one ends.
                 Button { Task { await model.refreshProjects() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
             }
-            // One row when it fits; in a narrow window, the search goes on a row of its own.
+            // One row when it fits; in a narrow window, the search goes on a row of its own, and in a
+            // narrower one the filters too.
             HeaderControls { scopePicker; search.frame(minWidth: 160); HStack { filters } }
                 .padding(.horizontal, 24).padding(.bottom, 16)
             if let error = model.repositoriesError ?? (scope == .repositories ? nil : model.openItemsError) {
@@ -102,10 +101,11 @@ struct ProjectsView: View {
     }
 
     private var scopePicker: some View {
-        Picker("Show", selection: $scope) {
+        let rows = model.repositories == nil ? nil : allRows
+        return Picker("Show", selection: $scope) {
             Text("Repositories").tag(Scope.repositories)
-            Text(count("Pull Requests", model.repositories?.reduce(0) { $0 + $1.openPullRequests })).tag(Scope.pulls)
-            Text(count("Issues", model.repositories?.reduce(0) { $0 + $1.openIssues })).tag(Scope.issues)
+            Text(count("Pull Requests", rows.map { projectScope.openCount(in: $0, pulls: true) })).tag(Scope.pulls)
+            Text(count("Issues", rows.map { projectScope.openCount(in: $0, pulls: false) })).tag(Scope.issues)
         }
         .pickerStyle(.segmented).labelsHidden().fixedSize()
     }
@@ -114,25 +114,26 @@ struct ProjectsView: View {
         LibrarySearch(text: $query, prompt: scope == .repositories ? "Search projects" : scope == .pulls ? "Search pull requests" : "Search issues")
     }
 
+    /// The status and type, in all three views; then the layout, or the repository.
     @ViewBuilder private var filters: some View {
+        Picker("Status", selection: $status) {
+            Text(ProjectStatusFilter.active.label).tag(ProjectStatusFilter.active)
+            Text(ProjectStatusFilter.all.label).tag(ProjectStatusFilter.all)
+            Divider()
+            ForEach([ProjectStatusFilter.paused, .maintenance, .deprecated, .unclassified], id: \.self) { Text($0.label).tag($0) }
+        }.labelsHidden().fixedSize().help("Show projects by the status in their PROJECT.md")
+        Picker("Project kind", selection: $category) {
+            ForEach(ProjectKindFilter.allCases, id: \.self) { Text($0.label).tag($0) }
+        }.labelsHidden().fixedSize()
         if scope == .repositories {
-            Picker("Status", selection: $status) {
-                Text(ProjectStatusFilter.active.label).tag(ProjectStatusFilter.active)
-                Text(ProjectStatusFilter.all.label).tag(ProjectStatusFilter.all)
-                Divider()
-                ForEach([ProjectStatusFilter.paused, .maintenance, .deprecated, .unclassified], id: \.self) { Text($0.label).tag($0) }
-            }.labelsHidden().fixedSize().help("Show projects by the status in their PROJECT.md")
-            Picker("Project kind", selection: $category) {
-                Text("All projects").tag("all")
-                Text("Code").tag("code")
-                Text("Non-code").tag("docs")
-            }.labelsHidden().fixedSize()
             LibraryLayoutPicker(layout: $layout)
         } else {
-            Picker("Repository", selection: $repoFilter) {
+            let work = openWork(pulls: scope == .pulls, in: allRows)
+            // A repository the scope no longer covers shows as All repositories, and comes back with it.
+            Picker("Repository", selection: Binding(get: { work.repo }, set: { repoFilter = $0 })) {
                 Text("All repositories").tag(String?.none)
                 Divider()
-                ForEach(reposWithWork(pulls: scope == .pulls), id: \.self) { Text(TaskNaming.repoName($0)).tag(String?.some($0)) }
+                ForEach(work.repos, id: \.self) { Text(TaskNaming.repoName($0)).tag(String?.some($0)) }
             }.labelsHidden().frame(maxWidth: 170).fixedSize()
         }
     }
@@ -140,12 +141,6 @@ struct ProjectsView: View {
     private func count(_ title: String, _ value: Int?) -> String {
         guard let value, value > 0 else { return title }
         return "\(title) \(value)"
-    }
-
-    private func reposWithWork(pulls: Bool) -> [String] {
-        var seen = Set<String>()
-        let names = (model.openItems ?? []).filter { $0.isPullRequest == pulls }.map(\.repo).filter { seen.insert($0).inserted }
-        return (names + [repoFilter].compactMap { $0 }.filter { !seen.contains($0) }).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
     @ViewBuilder private var repositories: some View {
@@ -159,7 +154,7 @@ struct ProjectsView: View {
             ContentUnavailableView {
                 Label(status == .unclassified ? "No unclassified projects" : "No \(status.label.lowercased()) projects", systemImage: "line.3.horizontal.decrease.circle")
             } description: {
-                Text(query.isEmpty && category == "all" ? "No repository’s PROJECT.md gives it this status." : "Try another search, kind or status.")
+                Text(query.isEmpty && category == .all ? "No repository’s PROJECT.md gives it this status." : "Try another search, kind or status.")
             } actions: {
                 Button("Show All Statuses") { status = .all }
             }
@@ -182,41 +177,49 @@ struct ProjectsView: View {
     }
 
     @ViewBuilder private func work(pulls: Bool) -> some View {
-        let items = items(pulls: pulls)
+        let allRows = allRows
+        let work = openWork(pulls: pulls, in: allRows)
         let kind = pulls ? "pull requests" : "issues"
-        if items.isEmpty {
+        if work.items.isEmpty {
             if model.openItems == nil && model.projectsLoading {
                 LibraryEmpty(title: "Loading open \(kind)", subtitle: "Reading them with your GitHub CLI login.", symbol: "arrow.triangle.2.circlepath")
-            } else if !query.isEmpty || repoFilter != nil {
+            } else if work.outOfScope > 0, model.projectsLoading, allRows.contains(where: { $0.record == .loading }) {
+                // Statuses and types come from PROJECT.md, read after the repositories.
+                LibraryEmpty(title: "Loading open \(kind)", subtitle: "Reading each repository’s PROJECT.md for its status and type.", symbol: "arrow.triangle.2.circlepath")
+            } else if !query.isEmpty || work.repo != nil {
                 ContentUnavailableView {
                     Label("No matching \(kind)", systemImage: "line.3.horizontal.decrease.circle")
                 } description: {
                     // The search covers only what was read; say so when that isn't everything.
-                    Text("Nothing open matches the search\(repoFilter.map { " in \(TaskNaming.repoName($0))" } ?? "")."
-                         + (truncation(pulls: pulls).map { "\n\n" + $0 } ?? ""))
+                    Text("Nothing open matches the search\(work.repo.map { " in \(TaskNaming.repoName($0))" } ?? "")."
+                         + (truncation(work).map { "\n\n" + $0 } ?? ""))
                 } actions: {
                     Button("Show All") { query = ""; repoFilter = nil }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if work.outOfScope > 0 {
+                ContentUnavailableView {
+                    Label("No open \(kind) in \(projectScope.projects)", systemImage: "line.3.horizontal.decrease.circle")
+                } actions: {
+                    Button("Show All Projects") { status = .all; category = .all }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                LibraryEmpty(title: "Nothing open", subtitle: "No open \(kind) in your repositories.", symbol: "checkmark.circle")
+                LibraryEmpty(title: "Nothing open", subtitle: "No open \(kind) in your \(projectScope.isNarrowed ? projectScope.projects : "repositories").", symbol: "checkmark.circle")
             }
         } else {
-            WorkTable(items: items, pulls: pulls)
-            if let note = truncation(pulls: pulls) {
+            WorkTable(items: work.items, pulls: pulls)
+            if let note = truncation(work) {
                 Text(note).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 24).padding(.vertical, 8)
             }
         }
     }
 
-    /// The repositories with more open pull requests or issues than were read, when any are shown.
-    private func truncation(pulls: Bool) -> String? {
-        let read = Dictionary(grouping: (model.openItems ?? []).filter { $0.isPullRequest == pulls }, by: \.repo).mapValues(\.count)
-        let cut = (model.repositories ?? []).filter { repo in
-            (repoFilter == nil || repo.id == repoFilter) && (pulls ? repo.openPullRequests : repo.openIssues) > (read[repo.id] ?? 0)
-        }
+    /// The repositories shown with more open pull requests or issues than were read, when any are.
+    private func truncation(_ work: ProjectWork) -> String? {
+        let cut = work.truncated
         guard !cut.isEmpty else { return nil }
-        return "Showing the most recently updated \(pulls ? "pull requests" : "issues") of \(cut.map(\.name).joined(separator: ", ")). Open \(cut.count == 1 ? "it" : "them") on GitHub for the rest."
+        return "Showing the most recently updated \(work.pulls ? "pull requests" : "issues") of \(cut.map(\.name).joined(separator: ", ")). Open \(cut.count == 1 ? "it" : "them") on GitHub for the rest."
     }
 
     private func projectCard(_ row: ProjectRow, selected: Bool) -> some View {
@@ -255,9 +258,9 @@ struct ProjectsView: View {
 }
 
 /// Projects' scope picker, search and filters: on one row when they fit, else with the search on a
-/// row of its own below. Each control is measured once when it changes, and only placed as the width
-/// changes, which it does on every frame of the sidebar's slide (#188); `ViewThatFits` measured two
-/// copies of every control again on each of those frames.
+/// row of its own below, or, narrower still, each on its own row. Each control is measured once when
+/// it changes, and only placed as the width changes, which it does on every frame of the sidebar's
+/// slide (#188); `ViewThatFits` measured every copy of every control again on each of those frames.
 private struct HeaderControls: Layout {
     struct Cache {
         /// The scope picker's, the search's and the filters' ideal sizes.
@@ -283,9 +286,11 @@ private struct HeaderControls: Layout {
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         guard subviews.count == 3 else { return .zero }
-        guard let width = proposal.width, width.isFinite else { return CGSize(width: cache.rowWidth, height: cache.sizes.map(\.height).max()!) }
-        if width >= cache.rowWidth { return CGSize(width: width, height: cache.sizes.map(\.height).max()!) }
-        return CGSize(width: max(width, cache.pairWidth), height: cache.pairHeight + rowSpacing + cache.sizes[1].height)
+        let sizes = cache.sizes
+        guard let width = proposal.width, width.isFinite else { return CGSize(width: cache.rowWidth, height: sizes.map(\.height).max()!) }
+        if width >= cache.rowWidth { return CGSize(width: width, height: sizes.map(\.height).max()!) }
+        if width >= cache.pairWidth { return CGSize(width: width, height: cache.pairHeight + rowSpacing + sizes[1].height) }
+        return CGSize(width: max(width, sizes[0].width, sizes[2].width), height: sizes.map(\.height).reduce(0, +) + 2 * rowSpacing)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
@@ -297,12 +302,16 @@ private struct HeaderControls: Layout {
             subviews[1].place(at: CGPoint(x: bounds.minX + sizes[0].width + cache.gaps[0], y: bounds.midY), anchor: .leading,
                               proposal: ProposedViewSize(width: search, height: nil))
             subviews[2].place(at: CGPoint(x: bounds.maxX, y: bounds.midY), anchor: .trailing, proposal: ProposedViewSize(sizes[2]))
-        } else {
+        } else if bounds.width >= cache.pairWidth {
             let middle = bounds.minY + cache.pairHeight / 2
             subviews[0].place(at: CGPoint(x: bounds.minX, y: middle), anchor: .leading, proposal: ProposedViewSize(sizes[0]))
-            subviews[2].place(at: CGPoint(x: max(bounds.maxX, bounds.minX + cache.pairWidth), y: middle), anchor: .trailing,
-                              proposal: ProposedViewSize(sizes[2]))
+            subviews[2].place(at: CGPoint(x: bounds.maxX, y: middle), anchor: .trailing, proposal: ProposedViewSize(sizes[2]))
             subviews[1].place(at: CGPoint(x: bounds.minX, y: bounds.minY + cache.pairHeight + rowSpacing), anchor: .topLeading,
+                              proposal: ProposedViewSize(width: bounds.width, height: nil))
+        } else {
+            subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(sizes[0]))
+            subviews[2].place(at: CGPoint(x: bounds.minX, y: bounds.minY + sizes[0].height + rowSpacing), proposal: ProposedViewSize(sizes[2]))
+            subviews[1].place(at: CGPoint(x: bounds.minX, y: bounds.minY + sizes[0].height + sizes[2].height + 2 * rowSpacing),
                               proposal: ProposedViewSize(width: bounds.width, height: nil))
         }
     }
