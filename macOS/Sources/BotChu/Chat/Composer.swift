@@ -29,7 +29,7 @@ struct Composer<Controls: View>: View {
     let placeholder: String
     let running: Bool
     var canStop = true
-    /// Follow-ups reach the bot at its next tool call rather than when the turn ends.
+    /// Follow-ups reach the bot when its current step ends rather than when the turn ends.
     var midTurn = false
     let onSend: () -> Void
     let onStop: () -> Void
@@ -79,7 +79,7 @@ struct Composer<Controls: View>: View {
                     button("stop.fill", label: "Stop", help: "Stop (⌘.)", action: onStop)
                 }
                 button("arrow.up", label: running ? "Queue message" : "Send", enabled: !isEmpty,
-                       help: running ? (midTurn ? "Send at the bot’s next tool call" : "Queue for when this turn ends") + " (Return; Shift-Return for a new line)"
+                       help: running ? (midTurn ? "Send when the bot’s current step ends" : "Queue for when this turn ends") + " (Return; Shift-Return for a new line)"
                            : "Send (Return; Shift-Return for a new line)", action: onSend)
             }
         }

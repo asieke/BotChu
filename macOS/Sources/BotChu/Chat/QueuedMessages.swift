@@ -6,15 +6,19 @@ struct QueuedMessages: View {
     let queue: MessageQueue
     let running: Bool
     let preparing: Bool
-    /// The CLI takes follow-ups during a turn, at its next tool call (Claude Code on This Mac).
+    /// The CLI takes follow-ups during a turn, once its current step ends (Claude Code on This Mac).
     let midTurn: Bool
+    /// A turn of the CLI runs, which Interrupt & send can stop for the next message.
+    let canInterrupt: Bool
     let resume: () -> Void
     let edit: (UUID) -> Void
     let remove: (UUID) -> Void
+    let interrupt: () -> Void
 
     private var explanation: String {
+        if queue.isInterrupting { return "Stopping this turn to send the next message…" }
         if queue.isPaused { return "Paused · send when you’re ready" }
-        if midTurn { return running ? "Will reach the bot at its next tool call" : "Sending…" }
+        if midTurn { return running ? "Reaches the bot when its current step ends" : "Sending…" }
         if preparing { return "Will send after the first turn" }
         return running ? "Will send when this turn ends" : "Sending…"
     }
@@ -44,10 +48,17 @@ struct QueuedMessages: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .help(message.text)
                             if queue.isInFlight(message.id) {
-                                // Already written to the CLI, which takes it at its next tool call.
-                                Text("Sent").font(.system(size: 11)).foregroundStyle(.secondary)
-                                    .help("Sent to the bot, which reads it at its next tool call")
-                            } else {
+                                // Written to the CLI, which hasn't added it to the conversation yet.
+                                Text("Not read yet").font(.system(size: 11)).foregroundStyle(.secondary).fixedSize()
+                            }
+                            if running, canInterrupt, queue.interruptible?.id == message.id {
+                                Button("Interrupt & send", action: interrupt)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .fixedSize()
+                                    .help("Stop this turn and its sub-agents, then send this message")
+                            }
+                            if !queue.isInFlight(message.id) {
                                 Button { edit(message.id) } label: { Image(systemName: "pencil") }
                                     .help("Move this message back to the composer")
                                     .accessibilityLabel("Edit queued message")

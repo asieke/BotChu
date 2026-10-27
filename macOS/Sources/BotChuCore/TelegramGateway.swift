@@ -288,7 +288,7 @@ public enum TelegramProgress: Equatable, Sendable {
             return .answered(TelegramReply.compose(after: id, in: thread, botName: botName) ?? "")
         }
         if let queue, queue.messages.contains(where: { $0.id == id }) {
-            // Written to a running CLI, which takes it at its next tool call.
+            // Written to a running CLI, which takes it when its current step ends.
             if running, queue.isInFlight(id) { return .working }
             return .queued(paused: queue.isPaused)
         }

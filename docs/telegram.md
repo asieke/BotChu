@@ -38,7 +38,7 @@ polling, `getUpdates`), so nothing on this Mac has to be reachable from the inte
   they share its Home. `/task` starts a task of its own, whose conversation stays in BotChu. An
   existing task's conversation can't be reached from Telegram.
 - **While a turn works:** a message waits in the queue and the chat is told so. Claude Code on this
-  Mac takes it at its next tool call; every other account gets it as the next turn. If the queue
+  Mac takes it when its current step ends; every other account gets it as the next turn. If the queue
   is paused (after Stop or a failed turn), the chat is told once, and the message waits until you
   choose **Send next** in BotChu. At most **10 accepted messages per chat**, and **100 across the
   gateway**, can be waiting for replies. Further messages aren't queued: send them again once
