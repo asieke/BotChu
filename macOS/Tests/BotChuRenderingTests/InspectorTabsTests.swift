@@ -142,7 +142,7 @@ extension RenderingTests {
         // runs Claude Code on a host, where only its session's report counts, and it has none yet.
         let homeScope = try #require(model.connectorScope(of: .home(bot.id)))
         #expect(await connectorChecks.calls == ["codex \(homeScope.command) \(bot.workspace)"])
-        let check = try #require(model.connectorBoard.evidence.checks[homeScope])
+        let check = try #require(model.connectorBoard.evidence.check(for: homeScope))
         #expect(model.connectorCard(of: .home(bot.id)) == .profile(check))
         #expect(check.report?.connected.map(\.name) == ["Linear"])
         #expect(model.connectorCard(of: taskTarget) == .notReported)

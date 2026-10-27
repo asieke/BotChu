@@ -54,6 +54,18 @@ enum ConnectorSamples {
     {"apps":[{"id":"asdk_app_0001","runtimeName":"Linear","enabled":true,"callable":true},{"id":"connector_0002","runtimeName":"Gmail","enabled":true,"callable":true},{"id":"connector_0003","runtimeName":"Google Drive","enabled":true,"callable":true},{"id":"connector_0004","runtimeName":"GitHub","enabled":true,"callable":true},{"id":"connector_0005","runtimeName":"Search Service","enabled":true,"callable":true}]}
     """#
 
+    /// Codex 0.164.0 `app-server`, `codex-personal`, captured again on 2026-10-27 (#212) with
+    /// only these fields printed: third-party app ids are made up, Codex's own (`connector_openai_…`)
+    /// are as reported, tool catalogs are stubs of the reported size or less. Its own apps and the
+    /// link and node_repl servers are the provider's, Computer Use lists no tools outside a thread,
+    /// and a service can come both as an app and as a server of the owner's.
+    static let codexInstalledSystem = #"""
+    {"apps":[{"id":"asdk_app_0001","runtimeName":"Circleback","enabled":true,"callable":true},{"id":"connector_0011","runtimeName":"Sites","enabled":true,"callable":true},{"id":"connector_0012","runtimeName":"Gmail","enabled":true,"callable":true},{"id":"connector_openai_chatgpt_pets","runtimeName":"Pets","enabled":true,"callable":true},{"id":"connector_openai_codex_document_control","runtimeName":"Codex Document Control","enabled":true,"callable":true},{"id":"connector_openai_hotline","runtimeName":"Hotline","enabled":true,"callable":true},{"id":"connector_openai_search_service","runtimeName":"Search Service","enabled":true,"callable":true}]}
+    """#
+    static let codexServersSystem = #"""
+    {"data":[{"name":"circleback","authStatus":"oAuth","runtimeStatus":null,"pluginId":null,"tools":{"search_meetings":{},"get_meeting":{}},"toolsError":null},{"name":"codex_apps","authStatus":"bearerToken","runtimeStatus":null,"pluginId":null,"tools":{"gmail_search":{}},"toolsError":null},{"name":"computer-use","authStatus":"unsupported","runtimeStatus":null,"pluginId":null,"tools":{},"toolsError":null},{"name":"knowledge-bridge","authStatus":"notLoggedIn","runtimeStatus":null,"pluginId":null,"tools":{},"toolsError":"MCP startup failed: OAuth authorization required"},{"name":"link","authStatus":"unsupported","runtimeStatus":null,"pluginId":null,"tools":{"a":{},"b":{},"c":{},"d":{}},"toolsError":null},{"name":"node_repl","authStatus":"unsupported","runtimeStatus":null,"pluginId":null,"tools":{"a":{},"b":{},"c":{},"d":{}},"toolsError":null}],"nextCursor":null}
+    """#
+
     static func object(_ json: String) -> [String: Any] {
         (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
     }

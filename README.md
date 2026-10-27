@@ -156,7 +156,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     dimmed), **Usage unavailable** or **Command not found**, a button that shows why, with **Try
     Again** (labelled with the time the profile's limit allows it) and, for a missing command,
     **Change Command…**; a profile not read yet says Checking…, over empty tracks. Selecting a
-    profile shows it on the right: its family and plan, its allowance as **Model & Usage** shows it, the agents set to
+    profile shows it on the right: its family and plan, its allowance as **Model & Usage** shows it, its
+    **Connectors** (below), the agents set to
     it, each opening its Home, and its command, with Copy and Change… (Settings ▸ Accounts). A row's
     menu has Refresh, Copy Command and Change Command…; **Assign to Agent**, the local agents with
     those set to the profile checked, which moves the chosen agent's Home and the Tasks it starts
@@ -959,7 +960,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     an expired window hides its old percentage until a new reading arrives. CLI output and
     credentials are not written to disk by BotChu; of a reading, only its usage fields are
     (`usage.json`).
-  - **Connectors (#183):** under Usage, **Connectors** shows the connectors the conversation's
+  - **Connectors (#183, #212):** under Usage, **Connectors** shows the connectors the conversation's
     CLI profile already has, as its provider reports them, for the conversation's profile, command
     (a host's own included), folder and host; BotChu never installs, signs in or configures one.
     On this Mac a Claude Code or Codex profile is checked in the conversation's folder when the
@@ -972,11 +973,37 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     (`system/init`) is **Connected at last report**, an earlier session's in the same profile,
     command, folder and host **Last session report**, and otherwise **Not reported yet**; Codex
     there is **Not checked on <host>**, and Antigravity, Muse and Pi **Discovery unavailable for
-    <CLI>**. Connected names are chips (twelve, then **+N more**); **Needs sign-in**, **Failed**,
-    **Off** and **Not confirmed** (pending, not started, or with no callable tool) are rows with a
-    symbol each. Unknown is a sentence, never an empty list; **None** only when a report came back
-    empty. A failed check keeps the last list, all of it marked stale, with the error. Only names,
-    states and tool counts are kept, in memory: no endpoints, commands, errors or credentials.
+    <CLI>**. Unknown is a sentence, never an empty list; **None** only when a report came back
+    empty. Each entry is a **Connection** (a service), a **Tool** (Computer Use) or **System**:
+    the provider's own, matched exactly (Codex's link and node_repl servers and its own apps,
+    `connector_openai_…`, such as Hotline and Pets); anything else stays a connection. The card
+    lists first what needs you, **Needs sign-in**, **Failed** or **Pending approval**, each with its
+    action; then connected services as chips (twelve, then **+N more**); **Off**, **Not confirmed**
+    (not started, starting, or an app with no callable tool) and **Configured · not checked** (a
+    server that lists nothing outside a turn: neither working nor broken) as rows with a symbol
+    each; then **Tools**. System entries are left to Providers. **Manage** opens Providers on the
+    conversation's profile and its exact folder and host.
+    In Providers, the selected profile's **Connectors** names the **Folder** it is checked in: the
+    one a conversation's Manage chose, else the first Home or open task on this Mac set to the
+    profile, else the home folder; its menu lists those (and a host's, by name). Never another
+    folder's, profile's, command's or host's check. Below are **Connections**, **Tools** and a
+    folded **System** (remembered when opened), each entry with its state and, where it needs one,
+    the action its provider supports: **Sign In…** runs the CLI's own `mcp login <name>` (the name
+    as configured, such as `claude.ai Slack`) in Terminal, as the profile's command in that folder,
+    each word quoted; **Open in Terminal** opens the profile's CLI there (its `/mcp` approves or
+    turns on servers); **Manage** opens the provider's settings in the browser
+    (claude.ai ▸ Customize ▸ Connectors, or ChatGPT's settings), with whichever account is signed
+    in there; **Retry** checks again. **Manage on claude.ai** (or **Open ChatGPT Settings**) and
+    **Open in Terminal** are below. A host's CLI is never run from here. After any of these, every
+    folder's list for that profile on this Mac is marked stale (sign-ins are the profile's), and the
+    folder it was for is checked again when BotChu is in front again; the others when next shown.
+    Checks are saved between launches (`connectors.json` beside the bot index, under opaque keys:
+    names, states, tool counts and BotChu's own error sentences, never commands, paths, endpoints or
+    the CLI's errors), so a relaunch shows the last list without checking. A list over an hour old,
+    one whose check failed (kept, with the error) or one invalidated by management is **Stale**
+    while it is checked again. One check per scope runs at a time; Refresh meanwhile starts none,
+    and an answer overtaken by management or a changed command or removed profile is dropped.
+    Session reports stay in memory, per conversation.
   - **Settings:** a page of the main window, beside the sidebar, opened by the sidebar's gear,
     ⌘, or BotChu ▸ Settings…, like a gallery: the conversation shown keeps its tab, its draft and its
     turns. Its nine pages (General, Accounts, GitHub, Hosts, Run reviews, Pets, OpenRouter, Telegram,
@@ -1241,7 +1268,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     stand-in `muse serve`: a reading that comes long after the answer, or announced while a read is
     answered empty, and none at all; connector discovery: Claude Code's `mcp list` and init and
     Codex's app-server, from captured samples, every page, an older Codex, late checks from
-    another conversation, stale and empty lists; Model & Usage showing the reading the background keeps,
+    another conversation, stale and empty lists; connectors' categories, actions and Terminal
+    handoffs (quoted, run in a shell), saved checks by opaque key across a relaunch, invalidation
+    after management and late answers it overtakes, and Providers' folder, Manage's scope and the
+    folded System (#212); Model & Usage showing the reading the background keeps,
     checking only one missing or as old as its interval, and Refresh's limits; Providers' model
     groups, time left and reset times, credits and free resets with their expiry, a row's status by
     exception, and the widths of its columns and meters; skills: their frontmatter, finding and making them, which a
@@ -1526,8 +1556,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `pets.txt` lists each pet player's clip, state and time.
   `BOTCHU_APPEARANCE=dark` (or `light`) reviews that appearance without changing the system setting.
   `BOTCHU_CONNECTORS=sample` (or `stale`, `unavailable`) gives profile checks in Connectors
-  sample results, a check that fails after the first, or one that always fails, without starting
-  a CLI.
+  sample results (every state, an action of each kind, Computer Use and System entries), a check
+  that fails after the first, or one that always fails, without starting a CLI.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
   querying any account (`sample` is Providers as its mock's main state: Claude's Fable week,
   Codex profiles' credits and free resets, and the Pi profile a key with a spending limit);

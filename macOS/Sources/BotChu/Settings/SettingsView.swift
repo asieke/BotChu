@@ -320,7 +320,7 @@ private struct AccountsSettings: View {
                     HStack(spacing: 8) {
                         TextField("Command", text: Binding(
                             get: { settings.commands[account.id] ?? "" },
-                            set: { settings.commands[account.id] = $0 }), prompt: Text(account.defaultCommand))
+                            set: { settings.commands[account.id] = $0; model.connectorBoard.prune() }), prompt: Text(account.defaultCommand))
                             .labelsHidden()
                             .settingsField()
                             .font(.system(size: 12, design: .monospaced))

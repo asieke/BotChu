@@ -122,7 +122,10 @@ final class AppModel {
     /// Turns in progress, by conversation.
     var runStates: ConversationField<RunState> { ConversationField(model: self, field: \.run) }
     /// Nil shows the remembered conversation; galleries never discard that conversation.
-    var destination: LibraryDestination?
+    var destination: LibraryDestination? {
+        // A folder chosen for Providers' Connectors lasts while Providers shows.
+        didSet { if destination != .providers { providerConnectorWorkspace = nil } }
+    }
     var visibleBotID: UUID? { destination == nil ? selection : nil }
     var selection: UUID? {
         didSet {
@@ -179,6 +182,12 @@ final class AppModel {
     var projectSelection: ProjectSelection?
     /// The profile selected in Providers, by account id, shown in its sidebar; nil hides the sidebar.
     var providerSelection: String?
+    /// The folder (and host) Providers checks the selected profile's connectors in, as a
+    /// conversation's Manage or its menu chose; nil is the profile's default (`connectorWorkspace(for:)`).
+    var providerConnectorWorkspace: ConnectorWorkspace?
+    /// What opens a provider's settings and a Terminal handoff; tests record them instead.
+    @ObservationIgnored var openURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    @ObservationIgnored var openTerminal: (ConnectorHandoffRequest) -> Bool = AppModel.openInTerminal
     var documentEditor: DocumentEditorRequest?
     /// Report a Bug or Feature, what files its issues: gh, or a stand-in (`DevHooks`, tests), what
     /// takes its window's screenshot, and whether one is being taken, before the sheet opens.
@@ -192,8 +201,9 @@ final class AppModel {
     /// What Providers and a conversation's Model & Usage show of it, kept current in the background
     /// in the app itself, so both open on numbers instead of checking.
     let usageBoard = ProviderUsageBoard()
-    /// The connectors each conversation's CLI reported or a check found (#183).
-    let connectorBoard = ConnectorBoard()
+    /// The connectors each conversation's CLI reported or a check found (#183), its checks saved
+    /// between launches (`connectors.json`, #212).
+    let connectorBoard: ConnectorBoard
     @ObservationIgnored private var usageWatch: Task<Void, Never>?
     /// Usage views inject this lookup in tests so they never read the owner's Keychain.
     let openRouterKey: @MainActor () -> String?
@@ -289,12 +299,15 @@ final class AppModel {
         self.usage = usage ?? UsageCache(fetch: DevHooks.usageFetch ?? { try await ProviderUsageClient.read($0, openRouterKey: $1) },
                                          file: self.store.root.appendingPathComponent("usage.json"))
         self.openRouterKey = openRouterKey
+        connectorBoard = ConnectorBoard(file: self.store.root.appendingPathComponent("connectors.json"))
         self.store.migrateIfNeeded()
         let loaded = self.store.loadBots()
         bots = loaded.bots
         missing = loaded.missing
         sections = loaded.sections
         arrange(botSections, save: false)
+        connectorBoard.profiles = { [weak self] in self?.connectorProfiles }
+        connectorBoard.prune()
         // Only the bots' and tasks' settings are read here; conversations are read when they are
         // needed (#109). A Home's or open task's queue with something in its files is recovered off
         // the main thread, with its transcript only when messages wait in it; the others have nothing

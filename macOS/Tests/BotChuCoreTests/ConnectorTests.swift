@@ -54,7 +54,10 @@ import Testing
 
         let local = try ConnectorParser.claudeList(ConnectorSamples.claudeListLocal)
         #expect(local.map(\.name) == ["broken", "remote-docs", "local-notes"])
-        #expect(local.map(\.state) == [.failed, .failed, .unconfirmed])
+        #expect(local.map(\.state) == [.failed, .failed, .pending])
+        // The names as configured stay beside the shown ones, for the CLI's own management.
+        #expect(connectors.first { $0.name == "Slack" }?.id == "claude.ai Slack")
+        #expect(connectors.first { $0.name == "github" }?.id == "plugin:github:github")
         #expect(local.allSatisfy { $0.origin == .mcpServer })
 
         // Nothing configured is none; output BotChu can't read is a failure, never none.
@@ -79,7 +82,7 @@ import Testing
     @Test func liveInputInitIsASnapshotOfPendingServers() {
         var parser = ClaudeParser()
         let events = parser.parse(line: ConnectorSamples.claudeLiveInit)
-        #expect(events.last == .connectors([Connector(name: "github", state: .unconfirmed, origin: .plugin)]))
+        #expect(events.last == .connectors([Connector(name: "github", state: .unconfirmed, origin: .plugin, id: "plugin:github:github")]))
     }
 
     @Test func codexAppsAndServersFromTheCapture() throws {
@@ -89,9 +92,12 @@ import Testing
         // codex_apps is how Codex reaches its apps, so the apps stand for it.
         #expect(!connectors.contains { $0.name == "codex_apps" })
         #expect(report.connected.map(\.name) == ["circleback", "GitHub", "Gmail", "Google Drive", "Linear", "link", "Search Service"])
-        #expect(report.rows.map(\.state) == [.needsAuth, .unconfirmed])
+        // Computer Use lists no tools outside a thread: configured, neither working nor broken.
+        #expect(report.rows.map(\.state) == [.needsAuth, .configured])
         #expect(report.rows[0].connectors.map(\.name) == ["knowledge-bridge"])
-        #expect(report.rows[1].connectors.map(\.name) == ["computer-use"])
+        #expect(report.rows[1].connectors.map(\.name) == ["Computer Use"])
+        #expect(report.rows[1].connectors.map(\.id) == ["computer-use"])
+        #expect(connectors.first { $0.name == "Gmail" }?.id == "connector_0002")
         #expect(connectors.first { $0.name == "link" }?.detail == "MCP server · 4 tools listed")
         #expect(connectors.first { $0.name == "Gmail" }?.detail == "Codex app")
     }
@@ -104,12 +110,13 @@ import Testing
         {"data":[{"name":"a","authStatus":"oAuth","runtimeStatus":"connected","tools":{}},{"name":"b","authStatus":"oAuth","runtimeStatus":"authenticationRequired","tools":{}}],"nextCursor":"2"}
         """#)
         let page2 = ConnectorSamples.object(#"""
-        {"data":[{"name":"c","authStatus":"unsupported","runtimeStatus":"failed","tools":{}},{"name":"d","authStatus":"unsupported","runtimeStatus":"disabled","tools":{}},{"name":"e","authStatus":"unsupported","runtimeStatus":"starting","tools":{}},{"name":"f","authStatus":"unsupported","toolsError":"boom","tools":{}},{"name":"g","authStatus":"unsupported","pluginId":"p@1","tools":{"t":{}}}],"nextCursor":null}
+        {"data":[{"name":"c","authStatus":"unsupported","runtimeStatus":"failed","tools":{}},{"name":"d","authStatus":"unsupported","runtimeStatus":"disabled","tools":{}},{"name":"e","authStatus":"unsupported","runtimeStatus":"starting","tools":{}},{"name":"f","authStatus":"unsupported","toolsError":"boom","tools":{}},{"name":"g","authStatus":"unsupported","pluginId":"p@1","tools":{"t":{}}},{"name":"h","authStatus":"unsupported","tools":{}}],"nextCursor":null}
         """#)
         let connectors = try ConnectorParser.codex(installed: installed, servers: [page1, page2])
         let states = Dictionary(connectors.map { ($0.name, $0.state) }, uniquingKeysWith: { a, _ in a })
         #expect(states == ["Off app": .off, "No tools": .unconfirmed, "connector_x": .connected,
-                           "a": .connected, "b": .needsAuth, "c": .failed, "d": .off, "e": .unconfirmed, "f": .failed, "g": .connected])
+                           "a": .connected, "b": .needsAuth, "c": .failed, "d": .off, "e": .unconfirmed, "f": .failed, "g": .connected,
+                           "h": .configured])
         #expect(connectors.first { $0.name == "g" }?.origin == .plugin)
         #expect(throws: ConnectorFailure.self) { try ConnectorParser.codex(installed: [:], servers: []) }
     }
@@ -163,13 +170,15 @@ import Testing
     @Test func aFailedCheckKeepsTheListAsStale() {
         let start = Date(timeIntervalSince1970: 1_000)
         let first = ConnectorCheck(triedAt: .distantPast).next(.success(report), at: start)
-        #expect(first.report == report && !first.isStale)
+        #expect(first.report == report && !first.isStale(at: start))
         let failed = first.next(.failure(ConnectorFailure("Codex didn’t answer within 20 seconds.")), at: start.addingTimeInterval(120))
         #expect(failed.report == report)
-        #expect(failed.isStale)
+        #expect(failed.isStale(at: start.addingTimeInterval(120)))
         #expect(failed.error == "Codex didn’t answer within 20 seconds.")
         let recovered = failed.next(.success(ConnectorReport(connectors: [], at: start.addingTimeInterval(200))), at: start.addingTimeInterval(200))
-        #expect(!recovered.isStale && recovered.report?.connectors.isEmpty == true)
+        #expect(!recovered.isStale(at: start.addingTimeInterval(200)) && recovered.report?.connectors.isEmpty == true)
+        // Age alone makes a list stale once it is due again.
+        #expect(recovered.isStale(at: start.addingTimeInterval(200 + ConnectorCheck.freshFor)))
         // Never checked: a first failure has no list, only its error.
         let never = ConnectorCheck(triedAt: .distantPast).next(.failure(ConnectorFailure("x")), at: start)
         #expect(never.report == nil && never.error == "x")
@@ -199,37 +208,83 @@ import Testing
     }
 
     private func card(_ evidence: ConnectorEvidence<String>, _ scope: ConnectorScope) -> ConnectorCard {
-        ConnectorCard.make(kind: .codex, scope: scope, host: nil, sessionID: nil, session: nil, check: evidence.checks[scope])
+        ConnectorCard.make(kind: .codex, scope: scope, host: nil, sessionID: nil, session: nil, check: evidence.check(for: scope))
     }
 
-    @Test func aLateCheckOfTheLastContextNeverShowsInTheNext() {
+    @Test func aLateCheckOfTheLastContextNeverShowsInTheNext() throws {
         var evidence = ConnectorEvidence<String>()
-        do { let started = evidence.begin(a, now: start); #expect(started) }
+        let first = try required(&evidence, a, now: start)
         // The inspector moves to B, whose check starts and ends first.
-        do { let started = evidence.begin(b, now: start); #expect(started) }
-        evidence.finish(b, .success(report("Linear", at: start)), at: start.addingTimeInterval(1))
+        let second = try required(&evidence, b, now: start)
+        evidence.finish(b, token: second, .success(report("Linear", at: start)), at: start.addingTimeInterval(1))
         // A's answer arrives late: it is A's, and B's card doesn't change.
-        evidence.finish(a, .success(report("Gmail", at: start)), at: start.addingTimeInterval(5))
-        #expect(card(evidence, b) == .profile(evidence.checks[b]))
-        #expect(evidence.checks[b]?.report?.connected.map(\.name) == ["Linear"])
-        #expect(evidence.checks[a]?.report?.connected.map(\.name) == ["Gmail"])
+        evidence.finish(a, token: first, .success(report("Gmail", at: start)), at: start.addingTimeInterval(5))
+        #expect(card(evidence, b) == .profile(evidence.check(for: b)))
+        #expect(evidence.check(for: b)?.report?.connected.map(\.name) == ["Linear"])
+        #expect(evidence.check(for: a)?.report?.connected.map(\.name) == ["Gmail"])
         #expect(evidence.checking.isEmpty)
     }
 
-    @Test func oneCheckAtATimeAndAFailureKeepsTheListStale() {
+    @Test func oneCheckAtATimeAndAFailureKeepsTheListStale() throws {
         var evidence = ConnectorEvidence<String>()
-        do { let started = evidence.begin(a, now: start); #expect(started) }
-        do { let started = evidence.begin(a, force: true, now: start); #expect(!started) }
-        evidence.finish(a, .success(report("Gmail", at: start)), at: start)
-        // Shown again within the hour: nothing to do; Refresh within a minute: not yet.
-        do { let started = evidence.begin(a, now: start.addingTimeInterval(600)); #expect(!started) }
-        do { let started = evidence.begin(a, force: true, now: start.addingTimeInterval(30)); #expect(!started) }
-        do { let started = evidence.begin(a, force: true, now: start.addingTimeInterval(90)); #expect(started) }
-        evidence.finish(a, .failure(ConnectorFailure("Codex didn’t answer within 20 seconds.")), at: start.addingTimeInterval(110))
-        let check = evidence.checks[a]
-        #expect(check?.isStale == true)
+        let token = try required(&evidence, a, now: start)
+        // Refresh while it runs coalesces into it: nothing new starts.
+        #expect(begun(&evidence, a, force: true, now: start) == nil)
+        #expect(evidence.isChecking(a))
+        evidence.finish(a, token: token, .success(report("Gmail", at: start)), at: start)
+        // Shown again within the hour (A, B, then A again): nothing to do; Refresh within a minute: not yet.
+        #expect(begun(&evidence, a, now: start.addingTimeInterval(600)) == nil)
+        #expect(begun(&evidence, a, force: true, now: start.addingTimeInterval(30)) == nil)
+        let retry = try required(&evidence, a, force: true, now: start.addingTimeInterval(90))
+        evidence.finish(a, token: retry, .failure(ConnectorFailure("Codex didn’t answer within 20 seconds.")), at: start.addingTimeInterval(110))
+        let check = evidence.check(for: a)
+        #expect(check?.isStale(at: start.addingTimeInterval(110)) == true)
         #expect(check?.report?.connected.map(\.name) == ["Gmail"])
         #expect(check?.report?.at == start)
+    }
+
+    @Test func managementInvalidatesTheProfileInEveryFolderOnThisMacOnly() throws {
+        let other = ConnectorScope(accountID: "codex-work", command: "codex-work", folder: "/bots/a")
+        let newCommand = ConnectorScope(accountID: a.accountID, command: "codex-personal --profile x", folder: a.folder)
+        var evidence = ConnectorEvidence<String>()
+        for scope in [a, b, other, newCommand] {
+            let token = try required(&evidence, scope, now: start)
+            evidence.finish(scope, token: token, .success(report("Gmail", at: start)), at: start)
+        }
+        // B's check is under way when the owner opens the provider's settings from A.
+        let late = try required(&evidence, b, force: true, now: start.addingTimeInterval(120))
+        evidence.invalidate(profileOf: a)
+        let soon = start.addingTimeInterval(130)
+        // A and B keep their lists, shown as stale, and are due at once, whatever Refresh's limit.
+        for scope in [a, b] {
+            let check = try #require(evidence.check(for: scope))
+            #expect(check.invalidated && check.isStale(at: soon) && check.isDue(at: soon) && check.canRetry(at: soon))
+            #expect(check.report?.connected.map(\.name) == ["Gmail"])
+        }
+        // Another profile, or the same one with another command, is a profile of its own.
+        #expect(evidence.check(for: other)?.invalidated == false)
+        #expect(evidence.check(for: newCommand)?.invalidated == false)
+        // B's late answer, from before the change, doesn't make it current again.
+        #expect(!finished(&evidence, b, token: late, .success(report("Old", at: soon)), at: soon))
+        #expect(evidence.check(for: b)?.invalidated == true)
+        #expect(evidence.check(for: b)?.report?.connected.map(\.name) == ["Gmail"])
+        // The check after it does.
+        let fresh = try required(&evidence, b, now: soon)
+        #expect(finished(&evidence, b, token: fresh, .success(report("Slack", at: soon)), at: soon))
+        #expect(evidence.check(for: b)?.invalidated == false)
+        #expect(evidence.check(for: b)?.report?.connected.map(\.name) == ["Slack"])
+    }
+
+    @Test func aRemovedProfileOrChangedCommandForgetsItsChecks() throws {
+        var evidence = ConnectorEvidence<String>()
+        let done = try required(&evidence, a, now: start)
+        evidence.finish(a, token: done, .success(report("Gmail", at: start)), at: start)
+        let running = try required(&evidence, b, now: start)
+        evidence.retain(profiles: [ConnectorScope.profile(accountID: a.accountID, command: "codex-personal --profile x")])
+        #expect(evidence.checks.isEmpty && evidence.checking.isEmpty)
+        // The check that ran for the old command ends: it changes nothing.
+        #expect(!finished(&evidence, b, token: running, .success(report("Gmail", at: start)), at: start))
+        #expect(evidence.check(for: b) == nil)
     }
 
     @Test func sessionReportsBelongToTheirConversationAndScope() {
@@ -245,6 +300,199 @@ import Testing
         moved.hostID = UUID()
         #expect(make(moved, "s1") == .notReported)
         #expect(evidence.sessions["home"] == nil)
+        // Providers finds it by its exact scope, never another host's or folder's.
+        #expect(evidence.session(in: claude)?.sessionID == "s1")
+        #expect(evidence.session(in: moved) == nil)
+        var elsewhere = claude
+        elsewhere.folder = "~/apps/y"
+        #expect(evidence.session(in: elsewhere) == nil)
+    }
+}
+
+@Suite struct ConnectorCacheTests {
+    let start = Date(timeIntervalSince1970: 80_000)
+
+    @Test func savedChecksComeBackByScopeWithoutCommandsOrPaths() throws {
+        let scope = ConnectorScope(accountID: "claude-personal", command: "~/.local/bin/claude-personal --secret-flag", folder: "/Users/me/private-folder")
+        let report = try ConnectorReport(connectors: ConnectorParser.claudeList(ConnectorSamples.claudeList), at: start)
+        var evidence = ConnectorEvidence<String>()
+        let token = try required(&evidence, scope, now: start)
+        evidence.finish(scope, token: token, .success(report), at: start)
+        // A host's session report is the conversation's, never saved.
+        evidence.record(report.connectors, scope: ConnectorScope(accountID: "claude-work", command: "c", folder: "/x", hostID: UUID()),
+                        sessionID: "s", for: "task")
+        let data = try #require(ConnectorCacheFile.encode(evidence.checks, now: start))
+        let text = String(decoding: data, as: UTF8.self)
+        for secret in ["claude-personal", "secret-flag", "private-folder", "/Users/me", "example", "HTTP", "req_"] {
+            #expect(!text.contains(secret), "connectors.json holds \(secret)")
+        }
+        // Relaunched: the same scope shows the same list at once, with the raw names kept for management.
+        var restored = ConnectorEvidence<String>(checks: ConnectorCacheFile.decode(data))
+        let check = try #require(restored.check(for: scope))
+        #expect(check.report == report)
+        #expect(check.report?.connectors.first { $0.name == "Slack" }?.id == "claude.ai Slack")
+        #expect(begun(&restored, scope, now: start.addingTimeInterval(600)) == nil)
+        // Never for another folder, profile, command or host.
+        for other in [ConnectorScope(accountID: scope.accountID, command: scope.command, folder: "/Users/me/other"),
+                      ConnectorScope(accountID: "claude-work", command: scope.command, folder: scope.folder),
+                      ConnectorScope(accountID: scope.accountID, command: "claude", folder: scope.folder),
+                      ConnectorScope(accountID: scope.accountID, command: scope.command, folder: scope.folder, hostID: UUID())] {
+            #expect(restored.check(for: other) == nil)
+        }
+    }
+
+    @Test func aDamagedOrOldCacheStartsEmpty() throws {
+        #expect(ConnectorCacheFile.decode(Data("{not json".utf8)).isEmpty)
+        #expect(ConnectorCacheFile.decode(Data()).isEmpty)
+        #expect(ConnectorCacheFile.decode(Data(#"[{"key":{"scope":"x"}}]"#.utf8)).isEmpty)
+        let scope = ConnectorScope(accountID: "codex-dev", command: "codex-dev", folder: "/bots/a")
+        let checks = [scope.key: ConnectorCheck(report: ConnectorReport(connectors: [], at: start), triedAt: start)]
+        let week = try #require(ConnectorCacheFile.encode(checks, now: start.addingTimeInterval(ConnectorCheck.keptFor + 1)))
+        #expect(ConnectorCacheFile.decode(week).isEmpty)
+        // An invalidated list stays invalidated across a relaunch.
+        var invalidated = checks
+        invalidated[scope.key]?.invalidated = true
+        let saved = try #require(ConnectorCacheFile.encode(invalidated, now: start))
+        #expect(ConnectorCacheFile.decode(saved)[scope.key]?.invalidated == true)
+    }
+}
+
+@Suite struct ConnectorCategoryTests {
+    @Test func theProvidersOwnEntriesAreSystemAndUnknownServicesStay() throws {
+        let connectors = try ConnectorParser.codex(installed: ConnectorSamples.object(ConnectorSamples.codexInstalledSystem),
+                                                   servers: [ConnectorSamples.object(ConnectorSamples.codexServersSystem)])
+        let report = ConnectorReport(connectors: connectors)
+        #expect(report.listed(.system).map(\.name) == ["Codex Document Control", "Hotline", "link", "node_repl", "Pets", "Search Service"])
+        #expect(report.listed(.tool).map(\.name) == ["Computer Use"])
+        #expect(report.listed(.tool).first?.state == .configured)
+        // Services, the owner's MCP servers and a newly bundled app all stay in view.
+        #expect(report.listed(.connection).map(\.name) == ["knowledge-bridge", "Circleback", "circleback", "Gmail", "Sites"])
+    }
+
+    @Test func namesAreMatchedExactlyAfterNormalizing() {
+        func category(_ name: String, _ origin: Connector.Origin, id: String? = nil) -> Connector.Category {
+            Connector(name: name, state: .connected, origin: origin, id: id).category
+        }
+        #expect(category("node-repl", .mcpServer) == .system)
+        #expect(category("Node REPL", .plugin) == .system)
+        #expect(category("computer_use", .mcpServer) == .tool)
+        #expect(category("Computer Use", .claudeAI) == .tool)
+        // Close isn't the same: these are the owner's.
+        #expect(category("linkedin", .mcpServer) == .connection)
+        #expect(category("pets-store", .mcpServer) == .connection)
+        #expect(category("Link", .claudeAI) == .connection)
+        #expect(category("Pets", .codexApp, id: "asdk_app_1") == .connection)
+        #expect(category("Pets", .codexApp, id: "connector_openai_chatgpt_pets") == .system)
+    }
+
+    @Test func listsPutWhatNeedsTheOwnerFirst() {
+        let report = ConnectorReport(connectors: [
+            Connector(name: "Zeta", state: .connected, origin: .claudeAI), Connector(name: "Alpha", state: .off, origin: .claudeAI),
+            Connector(name: "Mid", state: .failed, origin: .claudeAI), Connector(name: "Beta", state: .needsAuth, origin: .claudeAI),
+            Connector(name: "Gamma", state: .connected, origin: .claudeAI), Connector(name: "Local", state: .pending, origin: .mcpServer),
+        ])
+        #expect(report.listed(.connection).map(\.name) == ["Beta", "Mid", "Local", "Gamma", "Zeta", "Alpha"])
+    }
+}
+
+@Suite struct ConnectorActionTests {
+    private func action(_ state: Connector.State, _ origin: Connector.Origin, kind: AgentKind = .claude, local: Bool = true,
+                        id: String = "x") -> ConnectorAction? {
+        ConnectorAction.make(for: Connector(name: "X", state: state, origin: origin, id: id), kind: kind, local: local)
+    }
+
+    @Test func eachStateGetsWhatItsProviderSupports() {
+        // Sign-in needed: the CLI's own login for a server or a claude.ai connector; ChatGPT for a Codex app.
+        #expect(action(.needsAuth, .claudeAI) == .signIn)
+        #expect(action(.needsAuth, .mcpServer, kind: .codex) == .signIn)
+        #expect(action(.needsAuth, .codexApp, kind: .codex) == .settings(.chatGPT))
+        // Failed: check again; pending approval: the CLI, where /mcp approves it.
+        #expect(action(.failed, .mcpServer) == .retry)
+        #expect(action(.pending, .mcpServer) == .terminal)
+        // Off: where it was turned off.
+        #expect(action(.off, .claudeAI) == .settings(.claudeAI))
+        #expect(action(.off, .codexApp, kind: .codex) == .settings(.chatGPT))
+        #expect(action(.off, .mcpServer) == .terminal)
+        // An app enabled without a callable tool isn't assumed to need a sign-in.
+        #expect(action(.unconfirmed, .codexApp, kind: .codex) == .settings(.chatGPT))
+        #expect(action(.unconfirmed, .mcpServer) == nil)
+        // Working, or configured with nothing reported: nothing to do.
+        #expect(action(.connected, .claudeAI) == nil)
+        #expect(action(.configured, .mcpServer) == nil)
+        // No discovery, no actions.
+        #expect(action(.needsAuth, .mcpServer, kind: .pi) == nil)
+    }
+
+    @Test func aHostsCLIIsNeverRunFromHere() {
+        #expect(action(.needsAuth, .claudeAI, local: false) == .settings(.claudeAI))
+        #expect(action(.needsAuth, .mcpServer, local: false) == nil)
+        #expect(action(.failed, .mcpServer, local: false) == nil)
+        #expect(action(.pending, .mcpServer, local: false) == nil)
+        #expect(action(.off, .claudeAI, local: false) == .settings(.claudeAI))
+    }
+
+    @Test func anIdentifierThatCantBePassedSafelyGetsNoCLIAction() {
+        #expect(action(.needsAuth, .mcpServer, id: "bad\nname") == nil)
+        #expect(action(.needsAuth, .claudeAI, id: "bad\u{1B}[0m") == .settings(.claudeAI))
+        #expect(action(.pending, .mcpServer, id: "") == nil)
+    }
+
+    @Test func settingsNeverClaimTheProfilesAccount() {
+        #expect(ConnectorSettings.claudeAI.url.absoluteString == "https://claude.ai/customize/connectors")
+        #expect(ConnectorSettings.chatGPT.url.absoluteString == "https://chatgpt.com/#settings/Connectors")
+        for settings in [ConnectorSettings.claudeAI, .chatGPT] {
+            #expect(settings.title.hasPrefix("Manage") || settings.title.hasPrefix("Open"))
+            #expect(!settings.title.localizedCaseInsensitiveContains("sign"))
+        }
+        #expect(ConnectorSettings(.claude) == .claudeAI && ConnectorSettings(.codex) == .chatGPT && ConnectorSettings(.muse) == nil)
+    }
+}
+
+@Suite struct ConnectorHandoffTests {
+    @Test func theLoginRunsAsTheProfileInItsFolderWithEachArgumentQuoted() throws {
+        let slack = Connector(name: "Slack", state: .needsAuth, origin: .claudeAI, id: "claude.ai Slack")
+        let arguments = try #require(ConnectorHandoff.arguments(for: .signIn, connector: slack))
+        let script = try #require(ConnectorHandoff.script(command: "~/.local/bin/claude-personal", folder: "/Users/me/Bot's $HOME `x`",
+                                                          arguments: arguments))
+        let lines = script.split(separator: "\n").map(String.init)
+        #expect(lines == [
+            "#!/bin/zsh -l",
+            #"rm -f -- "$0""#,
+            #"cd -- '/Users/me/Bot'\''s $HOME `x`' || exit 1"#,
+            "~/.local/bin/claude-personal 'mcp' 'login' 'claude.ai Slack'",
+        ])
+        #expect(ConnectorHandoff.arguments(for: .terminal, connector: nil) == [])
+        #expect(ConnectorHandoff.arguments(for: .retry, connector: slack) == nil)
+    }
+
+    @Test func theScriptRunsWhatItSaysInAShell() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-handoff-\(UUID().uuidString) it's")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let command = "/usr/bin/printf '%s|' \"$PWD\""
+        let script = try #require(ConnectorHandoff.script(command: command, folder: directory.path, arguments: ["mcp", "login", "a'b; touch pwned $(id)"]))
+        let file = directory.appendingPathComponent("run.command")
+        try script.write(to: file, atomically: true, encoding: .utf8)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-f", file.path]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        process.waitUntilExit()
+        let printed = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        #expect(printed.hasSuffix("|mcp|login|a'b; touch pwned $(id)|"))
+        #expect(URL(fileURLWithPath: String(printed.split(separator: "|")[0])).resolvingSymlinksInPath() == directory.resolvingSymlinksInPath())
+        // The script removed itself, and nothing in it ran as a command of its own.
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("pwned").path))
+    }
+
+    @Test func unsafeValuesMakeNoScript() {
+        #expect(ConnectorHandoff.script(command: "claude\nrm -rf ~", folder: "/tmp") == nil)
+        #expect(ConnectorHandoff.script(command: "claude", folder: "/tmp\n") == nil)
+        #expect(ConnectorHandoff.script(command: "claude", folder: "/tmp", arguments: ["mcp", "login", "a\rb"]) == nil)
+        #expect(ConnectorHandoff.script(command: "  ", folder: "/tmp") == nil)
     }
 }
 
@@ -357,4 +605,19 @@ import Testing
             _ = try await ConnectorClient.codex(command: "/bin/false", folder: "/nonexistent-\(UUID().uuidString)", timeout: 2)
         }
     }
+}
+
+/// `begin` and `finish` for expectations, which can't call mutating methods.
+private func begun<T>(_ evidence: inout ConnectorEvidence<T>, _ scope: ConnectorScope, force: Bool = false, now: Date) -> Int? {
+    evidence.begin(scope, force: force, now: now)
+}
+
+private func required<T>(_ evidence: inout ConnectorEvidence<T>, _ scope: ConnectorScope, force: Bool = false, now: Date) throws -> Int {
+    let token = evidence.begin(scope, force: force, now: now)
+    return try #require(token)
+}
+
+private func finished<T>(_ evidence: inout ConnectorEvidence<T>, _ scope: ConnectorScope, token: Int,
+                         _ result: Result<ConnectorReport, ConnectorFailure>, at date: Date) -> Bool {
+    evidence.finish(scope, token: token, result, at: date)
 }
