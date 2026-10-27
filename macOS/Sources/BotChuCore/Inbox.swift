@@ -133,8 +133,9 @@ public struct Delivery: Identifiable, Codable, Hashable, Sendable {
         self.links = links
         self.question = question
         self.credits = credits
-        self.sentAt = sentAt
-        self.updatedAt = updatedAt ?? sentAt
+        // As its record keeps them, so an answer stamped in the same second still counts.
+        self.sentAt = Self.stamp(sentAt)
+        self.updatedAt = Self.stamp(updatedAt ?? sentAt)
     }
 
     /// A date as its record keeps it: in whole seconds.

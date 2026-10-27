@@ -354,6 +354,21 @@ private final class InboxFixture {
         #expect(state.needsAnswer(again) && !state.isAnswered(again))
     }
 
+    /// A delivery's dates are as its record keeps them, in whole seconds: an answer in the second it
+    /// was made answers it, in memory as after a relaunch.
+    @Test func anAnswerInTheSecondADeliveryWasMadeAnswersIt() throws {
+        let made = Date(timeIntervalSinceReferenceDate: 800_000_000.75)
+        let asking = Delivery(botID: UUID(), title: "Which?", question: Delivery.Question(text: "Which?", choices: ["A"]), sentAt: made)
+        #expect(asking.sentAt == Delivery.stamp(made) && asking.updatedAt == asking.sentAt)
+        #expect(Delivery(botID: UUID(), title: "Again", sentAt: made, updatedAt: made.addingTimeInterval(2)).updatedAt
+                == Delivery.stamp(made.addingTimeInterval(2)))
+        var state = InboxState()
+        state.answer(asking.id, at: Delivery.stamp(made.addingTimeInterval(0.2)))
+        #expect(state.isAnswered(asking) && !state.needsAnswer(asking))
+        let read = try Store.decoder.decode(Delivery.self, from: Store.encoder.encode(asking))
+        #expect(read == asking && state.isAnswered(read))
+    }
+
     @Test func everySessionLearnsHowToDeliver() {
         let roster = [BotRosterEntry(bot: Bot(name: "Worker", workspace: "/tmp/worker"))]
         let home = BotContext.subagentsSection(availableBots: roster)
