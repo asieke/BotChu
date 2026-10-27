@@ -49,6 +49,11 @@ final class AppSettings {
     var remoteQueueAddress: String { didSet { defaults.set(remoteQueueAddress, forKey: "remoteQueueAddress") } }
     var remoteQueuePort: Int { didSet { defaults.set(remoteQueuePort, forKey: "remoteQueuePort") } }
     var telegramChats: [TelegramChat] { didSet { save(telegramChats, forKey: "telegramChats") } }
+    /// Quick tasks (#192): the profile and model of small background asks, such as a new task's
+    /// summary; nil until the owner chooses one, and until then nothing is asked.
+    var quickTaskAccountID: String? { didSet { defaults.set(quickTaskAccountID, forKey: "quickTaskAccountID") } }
+    var quickTaskModel: String { didSet { defaults.set(quickTaskModel, forKey: "quickTaskModel") } }
+    var quickTasks: QuickTasks? { QuickTasks(accountID: quickTaskAccountID, model: quickTaskModel, accounts: accounts) }
     /// The page of Settings shown last, which Settings opens on when nothing asks for another.
     var settingsPage: SettingsPage { didSet { defaults.set(settingsPage.rawValue, forKey: "settingsPage") } }
     /// Invalidates allowance readings when the saved OpenRouter key changes, without retaining it.
@@ -83,6 +88,8 @@ final class AppSettings {
         remoteQueuePort = defaults.object(forKey: "remoteQueuePort") as? Int ?? 18765
         telegramEnabled = defaults.bool(forKey: "telegramEnabled")
         telegramChats = Self.load([TelegramChat].self, from: defaults, forKey: "telegramChats") ?? []
+        quickTaskAccountID = defaults.string(forKey: "quickTaskAccountID")
+        quickTaskModel = defaults.string(forKey: "quickTaskModel") ?? ""
         settingsPage = defaults.string(forKey: "settingsPage").flatMap(SettingsPage.init(rawValue:)) ?? .general
         Task { [weak self, macName] in
             let name = await macName.value

@@ -47,10 +47,17 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     The list shows active projects (`status: active` in `PROJECT.md`) unless its status filter says
     otherwise: every status, or only paused, maintenance, deprecated or unclassified ones (no
     `PROJECT.md`); the choice is remembered. A repository whose `PROJECT.md` isn't read yet appears
-    once it is known to be active.
+    once it is known to be active. The type filter (all projects, code or non-code) is remembered too;
+    a repository without a readable `PROJECT.md` has no type, so it shows only under all projects.
     **Pull Requests** and **Issues** list the open ones across the repositories (up to 30 most
     recently updated per repository, saying so when there are more), with checks, review state,
-    labels, author and any bot's task on them, filtered by repository or search. Selecting one opens
+    labels, author and any bot's task on them, filtered by repository or search. They cover the same
+    repositories as the list, by the same status and type filters, which all three views show (#186):
+    the repository menu, the counts beside their names (GitHub's totals) and the note about what
+    wasn't read leave the others out, and a chosen repository narrows that further. A repository
+    chosen before the filters left it out counts as all repositories until they cover it again. When
+    the filters leave out everything open, the view says so and offers **Show All Projects**. The
+    search matches an item's title, number, labels, author or branch. Selecting one opens
     it in the repository's sidebar, and double-click on GitHub; its menu reviews a pull request
     (**Review with**, **Review and Comment with**), continues it (unless it comes from a fork) or
     starts a task on an issue with a bot, opening New Task with it chosen, or opens the task already
@@ -138,15 +145,20 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     highest share used. The heading says when the newest reading was made ("Updated 3m ago"), with
     **Refresh**, which checks every profile again within its own limit (Muse at most every five
     minutes); a row adds its age only when its reading is 10 minutes older than that. While all is
-    well a row's second line is its family; otherwise, in the warning colour, **Stale · 2h ago**
+    well a row's second line is its family, and its plan when the CLI itself reports one (Codex's
+    plan type: "Codex · Pro"; never worked out from allowance, prices or names, so Claude,
+    Antigravity, Muse and OpenRouter rows show none); otherwise, in the warning colour, **Stale · 2h ago**
     (older than the background's interval, or a later check failed; its bars and shares are
     dimmed), **Usage unavailable** or **Command not found**, a button that shows why, with **Try
     Again** (labelled with the time the profile's limit allows it) and, for a missing command,
     **Change Command…**; a profile not read yet says Checking…, over empty tracks. Selecting a
-    profile shows it on the right: its allowance as **Model & Usage** shows it, the agents set to
+    profile shows it on the right: its family and plan, its allowance as **Model & Usage** shows it, the agents set to
     it, each opening its Home, and its command, with Copy and Change… (Settings ▸ Accounts). A row's
-    menu has Refresh, Copy Command and Change Command…, and, for a profile added here, **Remove
-    Profile…**, which asks first; agents set to a removed profile keep its CLI family and command.
+    menu has Refresh, Copy Command and Change Command…; **Assign to Agent**, the local agents with
+    those set to the profile checked, which moves the chosen agent's Home and the Tasks it starts
+    afterwards to the profile (Tasks under way keep theirs; an agent whose Home is running can't be
+    chosen until it is idle; a profile of another family clears its model and effort); and, for a
+    profile added here, **Remove Profile…**, which asks first; agents set to a removed profile keep its CLI family and command.
     Readings are saved between launches (`usage.json` beside the bot index; usage fields only; one
     saved before windows had model groups takes them from its windows' titles) and kept current in
     the background, every 15 minutes for a CLI profile and hourly for Muse, and every 5 minutes
@@ -321,13 +333,14 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     pinned at the top, then a **Tasks** heading with their count, **+** (New Task, ⌘T) and **«**
     (collapse), then the open tasks in the order they were opened, which scroll. A tab's first,
     prominent line is the repository it works in and its issue's or pull request's number
-    ("BotChu #113"; a review's with an eye, a host's name after it); its second says what it is
-    doing, with a time on the right that is never cut off: making the worktree or starting (a
+    ("BotChu #113"; a review's with an eye, a host's name after it); a task's second says what it
+    is about: its summary, a label of three or four words saved when it started (see Quick tasks,
+    below), or for a task without one its issue's title or a brief's words; its third says what it
+    is doing, with a time on the right that is never cut off: making the worktree or starting (a
     violet ring), working (violet, what it is doing and its elapsed time, ticking each second),
     finished since it was last shown (blue, with its pull request), or its last turn failed (red,
-    until its next turn starts); while idle (a faint ring), what it is about (its issue's title, or
-    a brief's words) and its last activity (2m, 1h, 1d). Home's tab names its account, or its own
-    turn's state. The rows are inset 8 points from both of the column's edges, and the selected
+    until its next turn starts); while idle (a faint ring), **Idle** and its last activity (2m, 1h,
+    1d). Home's tab has two lines: Home, then its account, or its own turn's state. The rows are inset 8 points from both of the column's edges, and the selected
     one is a card with its edge all round, as the rail's selected tile is. Dots hold still; when a
     turn ends, its dot pops once (with Reduce Motion, it only crossfades). A click, **⌘1** (Home) to **⌘9** (the first eight tasks, in the Bot menu), ⌃Tab,
     and ↑ and ↓ while a tab has keyboard focus switch conversations. Hovering a task's tab turns its
@@ -337,7 +350,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     The column is 240 points wide; drag its edge to make it 200 to 320, which is remembered. **«**
     or **View ▸ Collapse Tasks** folds it into a 56-point rail of tiles (a house for Home, each
     task's number, or a checklist for a brief, then **+**), with a dot in the corner of each tile
-    that isn't idle and the tab's two lines on hover; **»** or **View ▸ Expand Tasks** brings it
+    that isn't idle and the tab's lines on hover; **»** or **View ▸ Expand Tasks** brings it
     back, and the choice survives a relaunch. The column also becomes the rail by itself while the
     chat beside it would be less than 600 points wide to read, and comes back when the window
     widens; as the chat's text never grows past 760 points, on windows of 1,680 points and wider
@@ -389,11 +402,16 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     model and effort in a fresh CLI session; its Home conversation is separate. By default it works
     in the caller's workspace, on the same machine; `--workspace bot_home` uses the called bot's
     folder on this Mac. Shared-workspace delegates should own separate files or review without editing.
-    The **Sub-agents** inspector shows expandable nested runs, live tools/replies, duration, handoffs,
-    Copy and Stop. Runs under way come first; finished ones fold into one **Finished** row, newest
-    first, which counts any failures. A run that finishes while the tab shows it stays in view until
-    the tab is shown again, as does one opened from the chat. Home also groups delegations
-    belonging to its tasks. These runs never add tabs. Stop cascades through
+    The **Sub-agents** inspector lists each run as a compact row (its title, its bot, and its state in
+    a word and a time) with the runs it delegated to beneath it, grouped by the turn that started
+    them (older records by day). The turn under way comes first; a tree that ends completed or stopped
+    with no failure folds into **Finished** at once, newest turn first, while a tree with a failure
+    anywhere stays in view, open down to it, until Clear Run removes it. A row, or the chat's
+    **Open**, shows that run's details in place of the list: its handoff, error or stop reason first,
+    then the runs it delegated to, its transcript, brief and run facts, with Copy and Stop. Back
+    (Escape, ⌘[) returns to the list where it was, opening Finished if the run moved there meanwhile.
+    A row's context menu opens, copies, stops or clears it. Home also lists its tasks with runs, each
+    opening its own list. These runs never add tabs. Stop cascades through
     descendants; callers must wait before finishing their turn. A run whose CLI said its turn
     ended but doesn't exit is ended as a turn's is (above), and its handoff goes back.
     Three nesting levels, twelve concurrent children and sixty-four delegations per root turn bound
@@ -427,8 +445,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     `.botchu/inbox/<id>/` (`delivery.json` and `files/`), works from a task on a host too (its files
     are fetched over SSH), and shows as a card in the sending conversation's chat after the turn's
     reply. A reply to it goes into that conversation through its queue like any message, marked
-    with the delivery, and the bot reads which delivery it answers; the bot's answer joins the
-    delivery's thread. One unread state: reading a delivery clears its conversation's news dot,
+    with the delivery, and the bot reads which delivery it answers. Once the queue has saved it (it
+    may wait there while the bot is busy), the delivery is answered and Done, and what the bot does
+    with it shows in that conversation; its answer doesn't bring the delivery back out of Done, only
+    a new delivery asks for the owner again. One unread state: reading a delivery clears its conversation's news dot,
     and showing the conversation reads what it delivered. What the owner did with each delivery
     (read, done, replied) is in `inbox.json` beside `index.json`. Every session's instructions
     describe the helper.
@@ -450,14 +470,17 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     whom it credits, where and when; the note in the chat's Markdown; then a card for each file
     (a document's first 260 points, then **Show all**; an HTML page in a web view with its scripts on
     and the network off, links opening in the browser; an image; any other file) and for each
-    repository's pull requests or issues, read from GitHub, each opening in Projects; then the
-    exchange under it: the owner's replies, what waits in the queue, the bot's answers and the bot
-    at work. A question's choices sit above a composer that names where a reply goes; a choice is
-    sent as the reply, word for word. The toolbar opens the conversation (**Open Home**, **Open
+    repository's pull requests or issues, read from GitHub, each opening in Projects. A question's
+    choices sit above a composer that names where a reply goes; a choice (also ⌘1 to ⌘9) is sent as
+    the reply, word for word, and once its conversation's queue holds the reply the delivery is
+    Done and that conversation opens (Home, the task, opened again if it was closed, or the job's
+    run). One reply goes at a time; one the queue can't take keeps the draft and the choices and
+    says so, with **Try Again**. Answered, the question says when. The toolbar opens the conversation (**Open Home**, **Open
     Task** or **Open Run**, ⌘O) and files the delivery as **Done** (⌃⌘A); its menu marks it read or
     unread and finds the copies and the originals. With nothing left to read it says when the last
     delivery came, with **Show Done**. In the sending conversation's chat, a delivery is a card with
-    **Show in Inbox**, and a reply from the Inbox shows under a "Reply from your Inbox" line.
+    **Show in Inbox** and its question's choices until it is answered, each sent as from the Inbox,
+    and a reply from the Inbox shows under a "Reply from your Inbox" line.
   - **Jobs:** an agent can own scheduled jobs, saved instructions it runs on a schedule, such as a
     morning issue triage on weekdays at 9:00. **Jobs** in the sidebar is one table of every agent's
     jobs: the job, its agent, its schedule and time zone, its next run, its state (on, paused,
@@ -963,6 +986,17 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     on repositories, each account's command, the Codex account that draws pets' stills, the
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
     and default OpenRouter model, whether each bot's work gets a daily run review and at what time, and the Telegram gateway (below).
+  - **Quick tasks:** Settings ▸ General ▸ **Quick tasks** picks the profile and model of small
+    background asks: for now, each new task's summary, the label of three or four words on its
+    tab's second line. It is **Off** until you pick a profile (Claude Code, Codex or Muse, which
+    BotChu can run without tools); picking one starts on its family's smallest model (Haiku, GPT-6
+    Luna, Muse Spark), which you can change. Each task started afterwards is summarized once, in the
+    background (its turn doesn't wait), from its issue's or pull request's title once looked up, else
+    its brief, in a fresh session with every tool turned off by the CLI itself, in an empty folder,
+    as a run review is, on that profile's allowance and never another's, and logged in its bot's
+    turn log as a "task summary". A reply that isn't a label of three or four words, a failure, or
+    none within 90 seconds leaves the task named as before. The summary is saved in its
+    `task.json`; nothing is asked at launch, while drawing tabs, or for tasks from before.
   - **Remote queue bots:** choose **Remote queue** in New Bot to message an agent such as Danny
     on its own computer. BotChu serves an authenticated HTTP queue, while the remote runtime
     polls for messages and posts complete replies or errors into Home. Documents go both ways: attach
@@ -1058,8 +1092,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     (`ComposerLayout.swift`), what
     the status sidebar shows about a bot, from a summary of its thread kept as the thread grows, and
     its `MEMORY.md` (`BotStatus.swift`), what a conversation's tab and its bot's row say: its state,
-    the tab's two lines, the row's dots and subtitle, and when the column folds into the rail
-    (`ConversationTabs.swift`), replies' parsed Markdown, cached by their text within a
+    the tab's lines, the row's dots and subtitle, and when the column folds into the rail
+    (`ConversationTabs.swift`), a new task's summary on the Quick tasks profile: what it is made
+    from, its prompt and which replies are kept (`TaskSummaries.swift`), replies' parsed Markdown, cached by their text within a
     budget of bytes (`MarkdownCache.swift`), and parsed off the main thread as they are written, one
     revision at a time for each reply (`MarkdownPreparation.swift`), a reply's text as it is selected
     and copied: its texts in reading order, what goes between them, words and paragraphs
@@ -1106,7 +1141,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     again, and holds what is written back. A delivery to the Inbox (`botchu-inbox send`) goes through
     it too: `Inbox.swift` reads and checks the request, keeps deliveries and their copies in a bot's
     folder, what the owner did with them (`InboxState`), the list's groups (`InboxList`) and a reply's
-    prompt and thread (`InboxReply`); the app's `InboxModel` takes them in and sends the replies.
+    prompt (`InboxReply`); the app's `InboxModel` takes them in and sends the replies, one at a time.
     `DeliveryBanner.swift` makes a delivery's banner (its text, buttons and category, the newest 20
     categories kept registered) and reads a click back into a reply or "show it"; the app's
     `InboxNotifications.swift` (`InboxNotifier`) posts banners, answers clicks and keeps the Dock
@@ -1458,8 +1493,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `BOTCHU_OPEN=memory` or `soul` opens the selected bot's Markdown editor.
   `BOTCHU_INBOX=sample` gives the Inbox sample deliveries from both demo bots (a report with a
   question crediting the other bot, a page from a task, pull requests, older and done ones), with the
-  first one's card in the first bot's Home; `replied` has it answered from the Inbox, with the bot's
-  answer; `done` has every one Done. `BOTCHU_OPEN=inbox` opens the Inbox, on the delivery `BOTCHU_INBOX_ITEM` names
+  first one's card in the first bot's Home; `replied` has it answered from the Inbox (Done), with the
+  bot's answer in that Home; `done` has every one Done. `BOTCHU_OPEN=inbox` opens the Inbox, on the delivery `BOTCHU_INBOX_ITEM` names
   (`00000000-0000-4000-9000-00000000000<n>`); the window's snapshot draws web views in too.
   `BOTCHU_JOBS=sample` gives the demo bots sample jobs, with a history of every kind of run, the
   latest a task beside the first bot's chat, and a receipt in the first bot's Home, and runs no job (Run Now records a failed run), so nothing starts a CLI; `BOTCHU_OPEN=job-editor`
@@ -1503,6 +1538,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   `BOTCHU_DEFAULT_MODEL` supplies an isolated OpenRouter default. `BOTCHU_OPEN=model` or `effort`
   opens the composer's picker, and `inspector-model` or `inspector-effort` opens the sidebar's.
   `BOTCHU_INSPECTOR=activity`, `subagents`, `model`, `session` or `memory` selects a status sidebar tab;
+  with `BOTCHU_DEMO=activity`, `BOTCHU_SUBAGENT=<title>` opens the details of the demo's sub-agent
+  whose title starts with it;
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
   `BOTCHU_WINDOW=compact` checks the minimum window width, where a bot's tasks show as the rail,
   `wide` (1,700 points) the column, and `BOTCHU_WINDOW=1908x960` a window of that size, as a
@@ -1583,6 +1620,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   folder, and passes when the CLI answers without a tool call and without the file's word. Accounts
   whose CLI has no tool-free mode are skipped. It spends a little of each account's allowance and
   isn't part of `check`; run it after changing how reviews run a CLI.
+- Task summaries (Quick tasks) without tools: `swift run --package-path macOS botchu-smoke --summary
+  [account id …]` names a sample task on each account the way a new task's summary is asked for, on
+  its family's smallest model (or `BOTCHU_SMOKE_MODEL`), and passes when the reply is a label of
+  three or four words. It spends a little of each account's allowance; run it after changing how
+  summaries are asked for.
 - Telegram end to end: the gateway's tests use stand-ins for Telegram, so a real exchange is
   checked by hand, with your own Telegram bot: see
   [Checking it end to end](docs/telegram.md#checking-it-end-to-end).

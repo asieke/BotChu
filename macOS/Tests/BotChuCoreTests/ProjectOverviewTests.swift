@@ -70,6 +70,97 @@ import Testing
         #expect(ProjectStatusFilter.maintenance.label == "Maintenance")
     }
 
+    /// Issues and Pull Requests cover the repositories Repositories shows, by status and type (#186):
+    /// their items, the repository picker, the counts and the note about what wasn't read.
+    @Test func scopesOpenWorkByStatusAndType() {
+        func row(_ name: String, _ record: ProjectRow.Record, issues: Int = 0, pulls: Int = 0) -> ProjectRow {
+            ProjectRow(repo: GitHubLookup.Repo(nameWithOwner: "octocat/\(name)", openIssues: issues, openPullRequests: pulls), record: record,
+                       deploy: [], workplace: "This Mac", location: RepoLocation(path: "/tmp/\(name)"), openTasks: 0)
+        }
+        let rows = [
+            row("App", .present(ProjectMetadata(name: "App", kind: .local)), issues: 40, pulls: 1),
+            row("Notes", .present(ProjectMetadata(name: "Notes", kind: .docs)), issues: 1),
+            row("Resting", .present(ProjectMetadata(name: "Resting", kind: .library, status: .paused)), issues: 1),
+            row("Bare", .missing, issues: 1), row("Unread", .loading, issues: 1), row("Broken", .invalid, issues: 1),
+        ]
+        func item(_ repo: String, _ number: Int, _ title: String, pull: Bool = false, labels: [String] = []) -> GitHubLookup.OpenItem {
+            GitHubLookup.OpenItem(repo: "octocat/\(repo)", number: number, title: title, url: URL(string: "https://github.com/octocat/\(repo)/issues/\(number)")!,
+                                  isPullRequest: pull, author: "hubot", createdAt: .distantPast, updatedAt: .distantPast,
+                                  labels: labels.map { .init(name: $0, color: "888888") })
+        }
+        // App has 40 open issues and two were read.
+        let items = [item("App", 1, "Crash on launch", labels: ["bug"]), item("App", 2, "Dark mode"), item("App", 3, "Ship it", pull: true),
+                     item("Notes", 4, "Typo"), item("Resting", 5, "Old idea"), item("Bare", 6, "Add PROJECT.md"),
+                     item("Unread", 7, "Unknown"), item("Broken", 8, "Fix metadata")]
+        func work(_ status: ProjectStatusFilter, _ kind: ProjectKindFilter, pulls: Bool = false, repo: String? = nil, query: String = "") -> ProjectWork {
+            ProjectWork(rows: rows, items: items, scope: ProjectScope(status: status, kind: kind), pulls: pulls, repo: repo, query: query)
+        }
+        func shown(_ work: ProjectWork) -> [Int] { work.items.map(\.number) }
+
+        // The same repositories as the Repositories view, for every status and type.
+        for status in ProjectStatusFilter.allCases {
+            for kind in ProjectKindFilter.allCases {
+                let scope = ProjectScope(status: status, kind: kind)
+                let eligible = Set(rows.filter { status.includes($0) && kind.includes($0) }.map(\.id))
+                let issues = work(status, kind)
+                #expect(Set(issues.items.map(\.repo)) == eligible.intersection(items.filter { !$0.isPullRequest }.map(\.repo)))
+                #expect(Set(issues.repos).isSubset(of: eligible))
+                #expect(issues.truncated.allSatisfy { eligible.contains($0.id) })
+                #expect(scope.openCount(in: rows, pulls: false) == rows.filter { eligible.contains($0.id) }.reduce(0) { $0 + $1.openIssues })
+            }
+        }
+        #expect(shown(work(.active, .all)) == [1, 2, 4])
+        #expect(shown(work(.active, .code)) == [1, 2])
+        #expect(shown(work(.active, .docs)) == [4])
+        #expect(shown(work(.paused, .all)) == [5])
+        #expect(shown(work(.maintenance, .all)).isEmpty)
+        #expect(shown(work(.deprecated, .all)).isEmpty)
+        // No PROJECT.md is unclassified, and has no type; not read yet or unreadable shows only under All.
+        #expect(shown(work(.unclassified, .all)) == [6])
+        #expect(shown(work(.unclassified, .code)).isEmpty)
+        #expect(shown(work(.all, .all)) == [1, 2, 4, 5, 6, 7, 8])
+        #expect(shown(work(.all, .code)) == [1, 2, 5])
+        #expect(shown(work(.active, .all, pulls: true)) == [3])
+        #expect(work(.active, .all).outOfScope == 4)
+        #expect(work(.all, .all).outOfScope == 0)
+
+        // Counts are GitHub's totals across the repositories in scope, not just what was read.
+        #expect(ProjectScope(status: .active, kind: .all).openCount(in: rows, pulls: false) == 41)
+        #expect(ProjectScope(status: .active, kind: .code).openCount(in: rows, pulls: true) == 1)
+        #expect(ProjectScope.everything.openCount(in: rows, pulls: false) == 45)
+        // The note about what wasn't read names only repositories in scope (and the chosen one).
+        #expect(work(.active, .all).truncated.map(\.name) == ["App"])
+        #expect(work(.paused, .all).truncated.isEmpty)
+        #expect(work(.all, .all, repo: "octocat/Notes").truncated.isEmpty)
+
+        // The picker lists the repositories in scope with work; choosing one narrows the scope further.
+        #expect(work(.active, .all).repos == ["octocat/App", "octocat/Notes"])
+        #expect(work(.active, .all, pulls: true).repos == ["octocat/App"])
+        let chosen = work(.active, .all, repo: "octocat/Notes")
+        #expect(chosen.repo == "octocat/Notes" && shown(chosen) == [4])
+        // A chosen repository without work of this kind stays listed, and explains an empty list.
+        #expect(work(.active, .all, pulls: true, repo: "octocat/Notes").repos == ["octocat/App", "octocat/Notes"])
+        // A choice the scope no longer covers counts as none: it neither shows its work nor empties the list.
+        let stale = work(.active, .code, repo: "octocat/Notes")
+        #expect(stale.repo == nil && shown(stale) == [1, 2] && !stale.repos.contains("octocat/Notes"))
+        #expect(work(.paused, .all, repo: "octocat/App").repo == nil)
+        #expect(work(.active, .all, repo: "OCTOCAT/app").repo == "octocat/App")
+
+        // The search finds an item by title, number or label without the repository's text matching.
+        #expect(shown(work(.active, .all, query: "crash")) == [1])
+        #expect(shown(work(.active, .all, query: "#4")) == [4])
+        #expect(shown(work(.active, .all, query: "bug launch")) == [1])
+        #expect(shown(work(.active, .all, query: "old idea")).isEmpty)
+        #expect(shown(work(.all, .all, query: "old idea")) == [5])
+
+        #expect(ProjectKindFilter(rawValue: "docs") == .docs)
+        #expect(ProjectKindFilter.docs.label == "Non-code")
+        #expect(ProjectScope(status: .active, kind: .code).projects == "active code projects")
+        #expect(ProjectScope(status: .all, kind: .docs).projects == "non-code projects")
+        #expect(ProjectScope(status: .unclassified, kind: .all).projects == "unclassified projects")
+        #expect(!ProjectScope.everything.isNarrowed && ProjectScope(status: .active, kind: .all).isNarrowed)
+    }
+
     @Test func readsAnIssueWithItsConversation() throws {
         // `gh issue view 14755 --repo cli/cli --json <issueDetailFields>`, its texts trimmed.
         let output = #"""

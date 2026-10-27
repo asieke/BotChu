@@ -17,6 +17,8 @@
 #                                          # ({down}, {up}, {tab}, {return}, {escape} press those)
 #   BOTCHU_OPEN=agents BOTCHU_SEARCH=res macOS/ui-review.sh  # open Agents with that search
 #   BOTCHU_DEMO=activity BOTCHU_TAB=1 macOS/ui-review.sh  # that tab as a long agent run (in memory)
+#   BOTCHU_DEMO=activity BOTCHU_INSPECTOR=subagents BOTCHU_SUBAGENT=Sample macOS/ui-review.sh
+#                                          # with the details of its sub-agent whose title starts so
 #   BOTCHU_DEMO=tasks BOTCHU_WINDOW=wide BOTCHU_TAB=3 macOS/ui-review.sh
 #                                          # six more tasks in memory, a tab in every state, in the
 #                                          # column beside the chat (BOTCHU_WINDOW=compact: the rail)
@@ -106,8 +108,8 @@ cat > "$tasks/7a0c2d4e-1b3f-4c5d-8e9f-0a1b2c3d4e60/thread.jsonl" <<'JSON'
 {"date":"2026-10-22T03:03:00Z","id":"00000000-0000-4000-8000-000000000021","role":"user","text":"Work on issue #3 “Fix the typo”."}
 {"date":"2026-10-22T03:03:05Z","id":"00000000-0000-4000-8000-000000000022","role":"error","text":"Couldn't make this task's worktree. Making the worktree for feat/3-fix-typo failed."}
 JSON
-# Sample deliveries in the Inbox (BOTCHU_INBOX=sample; replied: the first one answered from the Inbox
-# and the bot's answer under it; done: every one Done), from Scout's Home (crediting Coder), a task of Scout's, and Coder's Home.
+# Sample deliveries in the Inbox (BOTCHU_INBOX=sample; replied: the first one answered from the Inbox,
+# so Done, with the bot's answer in Scout's Home; done: every one Done), from Scout's Home (crediting Coder), a task of Scout's, and Coder's Home.
 # BOTCHU_INBOX_ITEM=<delivery id> reads that one; ids are 00000000-0000-4000-9000-00000000000<n>.
 if [ -n "${BOTCHU_INBOX:-}" ]; then
   python3 - "$data" "$BOTCHU_INBOX" <<'PY'
@@ -200,7 +202,7 @@ if mode == "replied":
       {"id": "00000000-0000-4000-9000-000000000104", "role": "user", "date": at(5), "text": "Answer first.", "delivery": did(1)},
       {"id": "00000000-0000-4000-9000-000000000105", "role": "assistant", "date": at(4), "text": "Filing it as #156, “Answer Telegram first, then send each handoff”, with the report's table as its outcome."},
     ]
-    state["entries"][did(1)] = {"read": False, "done": False, "repliedAt": at(5)}
+    state["entries"][did(1)] = {"read": True, "done": True, "repliedAt": at(5)}
 if mode == "done":
     for item in deliveries: state["entries"][item[2]] = {"read": True, "done": True}
 json.dump(thread, open(thread_path, "w"))
@@ -276,6 +278,8 @@ fi
 [ -n "${BOTCHU_DEFAULT_MODEL:-}" ] && args+=(--env "BOTCHU_DEFAULT_MODEL=$BOTCHU_DEFAULT_MODEL")
 [ -n "${BOTCHU_WINDOW:-}" ] && args+=(--env "BOTCHU_WINDOW=$BOTCHU_WINDOW")
 [ -n "${BOTCHU_DEMO:-}" ] && args+=(--env "BOTCHU_DEMO=$BOTCHU_DEMO")
+[ -n "${BOTCHU_SUBAGENT:-}" ] && args+=(--env "BOTCHU_SUBAGENT=$BOTCHU_SUBAGENT")
+[ -n "${BOTCHU_INSPECTOR:-}" ] && args+=(--env "BOTCHU_INSPECTOR=$BOTCHU_INSPECTOR")
 [ -n "${BOTCHU_DENSITY:-}" ] && args+=(--env "BOTCHU_DENSITY=$BOTCHU_DENSITY")
 [ -n "${BOTCHU_SECTION:-}" ] && args+=(--env "BOTCHU_SECTION=$BOTCHU_SECTION")
 [ -n "${BOTCHU_DRAFT:-}" ] && args+=(--env "BOTCHU_DRAFT=$BOTCHU_DRAFT")

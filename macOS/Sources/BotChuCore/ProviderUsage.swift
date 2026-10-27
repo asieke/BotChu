@@ -9,13 +9,29 @@ public struct ProviderUsage: Equatable, Sendable, Codable {
     public var credits: UsageCredits?
     /// Free resets of the account's limits, when its CLI reports them (Codex).
     public var resets: UsageResets?
+    /// The plan the account's CLI says it is on, in the CLI's own words (Codex's `planType`), when
+    /// it says. Never worked out from allowance, prices, command or profile names.
+    public var plan: String?
 
-    public init(windows: [UsageWindow], note: String? = nil, readAt: Date = .now, credits: UsageCredits? = nil, resets: UsageResets? = nil) {
+    public init(windows: [UsageWindow], note: String? = nil, readAt: Date = .now, credits: UsageCredits? = nil, resets: UsageResets? = nil,
+                plan: String? = nil) {
         self.windows = windows
         self.note = note
         self.readAt = readAt
         self.credits = credits
         self.resets = resets
+        self.plan = plan
+    }
+
+    /// The reported plan as Providers names it: Codex's plans by their names, any other as reported.
+    public var planLabel: String? { plan.flatMap(Self.planLabel) }
+
+    static func planLabel(_ plan: String) -> String? {
+        let names = ["free": "Free", "go": "Go", "plus": "Plus", "pro": "Pro", "prolite": "Pro Lite", "promax": "Pro Max",
+                     "team": "Team", "business": "Business", "enterprise": "Enterprise", "edu": "Edu"]
+        let plan = plan.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !plan.isEmpty, plan != "unknown" else { return nil }
+        return names[plan] ?? plan.split(separator: "_").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
     }
 }
 
@@ -375,9 +391,9 @@ public struct UsageMeterLayout: Equatable, Sendable {
 /// A profile's row in Providers: what line 2 under its name says, its windows by model group, what
 /// it has besides, and the shares it sorts by.
 public struct ProviderRow: Identifiable, Equatable, Sendable {
-    /// Line 2 under the name: the family while all is well, else what is wrong.
+    /// Line 2 under the name: the family (and plan) while all is well, else what is wrong.
     public enum Status: Equatable, Sendable {
-        /// Read with the page's newest: the family alone.
+        /// Read with the page's newest: the family, with its plan when reported.
         case current
         /// Read `behindAfter` or more before the page's newest reading: the family, and when.
         case behind(Date)
@@ -402,11 +418,15 @@ public struct ProviderRow: Identifiable, Equatable, Sendable {
     public var badges: [UsageBadge]
     /// What a reading with no windows says instead ("No key spending limit · $1.25 used").
     public var note: String?
+    /// The plan the profile's CLI reports, named for line 2; nil when it reports none.
+    public var plan: String?
     /// The highest share used of the row's short windows, and of its long ones: -1 for none.
     public var shortShare: Double
     public var longShare: Double
     public var id: String { account.id }
     public var name: String { account.name }
+    /// The family, and the plan its CLI reports: "Codex · Pro", or "Claude Code" when it reports none.
+    public var family: String { [account.kind.displayName, plan].compactMap(\.self).joined(separator: " · ") }
 
     /// `newest` is when the page's newest reading was made; `found`, whether the login shell finds
     /// the command, when that has been checked.
@@ -431,6 +451,7 @@ public struct ProviderRow: Identifiable, Equatable, Sendable {
         groups = reading?.groups(at: now) ?? []
         badges = reading?.badges(at: now) ?? []
         note = reading?.windows.isEmpty == true ? reading?.note : nil
+        plan = reading?.planLabel
         shortShare = groups.compactMap { $0.short?.percent }.max() ?? -1
         longShare = groups.compactMap { $0.long?.percent }.max() ?? -1
     }
@@ -533,6 +554,11 @@ public enum UsageParser {
             let unlimited = credits["unlimited"] as? Bool == true
             reading.credits = UsageCredits(available: available || unlimited, unlimited: unlimited,
                                            balance: (credits["balance"] as? String).flatMap(Double.init) ?? number(credits["balance"]))
+        }
+        // The plan the account is on, as Codex names it, unless it doesn't know.
+        if let plan = (result["rateLimits"] as? JSON)?["planType"] as? String ?? buckets["codex"]?["planType"] as? String,
+           plan.range(of: "^[A-Za-z0-9_]{1,40}$", options: .regularExpression) != nil, plan.lowercased() != "unknown" {
+            reading.plan = plan.lowercased()
         }
         if let resets = result["rateLimitResetCredits"] as? JSON {
             let available = (resets["credits"] as? [JSON] ?? []).filter { $0["status"] as? String == "available" }

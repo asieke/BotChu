@@ -101,8 +101,9 @@ public enum TabState: Equatable, Sendable {
 }
 
 /// What a conversation's tab says (#128): on its first, prominent line the repository it works in
-/// and its issue's number ("BotChu #113"), its job for a job's run, or Home; on the second what it
-/// is doing, with a time, or while idle what it is about.
+/// and its issue's number ("BotChu #113"), its job for a job's run, or Home. Home's second line says
+/// what it is doing, with a time, or while idle its account. A task's has three (#192): what it is
+/// about, in its saved summary's words when it has one, then what it is doing, with a time.
 public struct ConversationTab: Equatable, Sendable {
     public var isHome: Bool
     /// "Home", the task's repository, by its name without its owner, or a job's run's job (#146).
@@ -116,6 +117,9 @@ public struct ConversationTab: Equatable, Sendable {
     public var machine: String?
     /// What the task is about: its issue's or pull request's title, else its brief. Home's account.
     public var subject: String
+    /// The task's saved label of three or four words (`BotTask.summary`); nil for Home and a task
+    /// without one.
+    public var summary: String?
     public var state: TabState
     /// The tooltip's parts before the shortcut: `owner/name`, `Issue #105`, `This Mac`.
     var about: [String]
@@ -134,6 +138,7 @@ public struct ConversationTab: Equatable, Sendable {
         isJob = task.jobRun != nil
         self.machine = machine
         subject = Self.subject(of: task)
+        summary = task.summary.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
         self.state = state
         if let origin = task.jobRun {
             self.about = ["Job “\(origin.jobTitle)”", machine ?? "This Mac"]
@@ -187,11 +192,26 @@ public struct ConversationTab: Equatable, Sendable {
     /// account).
     public var detail: String { state.text ?? subject }
 
+    /// A task's second line: its summary, else what it is about.
+    public var label: String { summary ?? subject }
+
+    /// The last line's left side: a task's state, "Idle" when nothing is under way; Home's `detail`.
+    public var status: String { isHome ? detail : state.text ?? "Idle" }
+
     /// What VoiceOver reads for the tab: its title (and host), what it is about, what it is doing,
     /// and its time.
     public func spoken(at now: Date) -> String {
         let name = (isReview ? "Review of " : isJob ? "Run of job " : "") + title + (machine.map { " on \($0)" } ?? "")
-        return [name, subject, state.text, state.spokenTime(at: now)].compactMap { $0 }.joined(separator: ", ")
+        return [name, summary, subject, isHome ? state.text : status, state.spokenTime(at: now)].compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// A rail tile's tooltip: the first line (and its host), a task's label, then its status, time
+    /// and shortcut; Home's what it is doing while it works.
+    public func railHelp(at now: Date, shortcut: String?) -> String {
+        let first = title + (machine.map { " · \($0)" } ?? "")
+        let about = isHome ? [] : [label]
+        let last = [status, state.time(at: now), shortcut].compactMap { $0 }.joined(separator: " · ")
+        return ([first] + about + [last]).joined(separator: "\n")
     }
 
     /// The tooltip: what a task is about, then `owner/name · Issue #105 · This Mac · ⌘2`; Home's
