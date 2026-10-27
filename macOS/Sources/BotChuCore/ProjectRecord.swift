@@ -75,12 +75,15 @@ public struct ProjectRecord: Equatable, Codable, Sendable {
 
     private var newline: String { text.contains("\r\n") ? "\r\n" : "\n" }
     private var lines: [String] { text.components(separatedBy: newline) }
-    private var end: Int? { lines.first == "---" ? lines.dropFirst().firstIndex(of: "---") : nil }
+    /// The line closing the frontmatter. `lines` is read once by each caller: it splits the whole file,
+    /// which Projects parses for every repository each time it draws (#188).
+    private static func end(of lines: [String]) -> Int? { lines.first == "---" ? lines.dropFirst().firstIndex(of: "---") : nil }
     private static let keys = ["name", "type", "status", "deploy", "merge"]
 
     /// Only simple, single-line fields are editable. Refuse ambiguous YAML instead of rewriting it.
     public func fields() throws -> [String: String] {
-        guard let end else {
+        let lines = lines
+        guard let end = Self.end(of: lines) else {
             if !exists { return [:] }
             throw Problem("PROJECT.md needs YAML frontmatter between --- lines before it can be edited here.")
         }
@@ -120,7 +123,7 @@ public struct ProjectRecord: Equatable, Codable, Sendable {
         let values = ["name": metadata.name.trimmingCharacters(in: .whitespaces), "type": metadata.kind.rawValue,
                       "status": metadata.status.rawValue, "deploy": metadata.deploy.trimmingCharacters(in: .whitespaces), "merge": metadata.merge]
         var updated = lines
-        if let end {
+        if let end = Self.end(of: updated) {
             for index in 1..<end {
                 guard let colon = updated[index].firstIndex(of: ":") else { continue }
                 let key = String(updated[index][..<colon])

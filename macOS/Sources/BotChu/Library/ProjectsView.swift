@@ -308,13 +308,43 @@ private struct HeaderControls: Layout {
     }
 }
 
-/// A table's column choices (shown, order, widths), saved between launches.
+/// A table's column choices (shown, order, widths), saved between launches. The table works on them
+/// in memory, saved once they stop changing: its columns resize on every frame of the sidebar's slide
+/// (#188), and saving each of those drew the whole table again.
 private struct SavedColumns<Row: Identifiable>: DynamicProperty {
     @AppStorage private var data: Data
+    @State private var shown: TableColumnCustomization<Row>?
+    @State private var saved = Saved<Row>()
     init(_ key: String) { _data = AppStorage(wrappedValue: Data(), key) }
-    var customization: TableColumnCustomization<Row> {
-        get { (try? JSONDecoder().decode(TableColumnCustomization<Row>.self, from: data)) ?? TableColumnCustomization() }
-        nonmutating set { data = (try? JSONEncoder().encode(newValue)) ?? Data() }
+    @MainActor var customization: TableColumnCustomization<Row> {
+        get { shown ?? saved.decoded(data) }
+        nonmutating set {
+            shown = newValue
+            let data = _data
+            saved.save(after: .milliseconds(500)) { data.wrappedValue = (try? JSONEncoder().encode(newValue)) ?? Data() }
+        }
+    }
+}
+
+/// What `SavedColumns` last read, and the save it is waiting to make.
+private final class Saved<Row: Identifiable> {
+    private var read: (data: Data, value: TableColumnCustomization<Row>)?
+    private var pending: Task<Void, Never>?
+
+    func decoded(_ data: Data) -> TableColumnCustomization<Row> {
+        if let read, read.data == data { return read.value }
+        let value = (try? JSONDecoder().decode(TableColumnCustomization<Row>.self, from: data)) ?? TableColumnCustomization()
+        read = (data, value)
+        return value
+    }
+
+    /// Saves after `delay`, unless another save is asked for first.
+    @MainActor func save(after delay: Duration, _ write: @escaping @MainActor () -> Void) {
+        pending?.cancel()
+        pending = Task { @MainActor in
+            try? await Task.sleep(for: delay)
+            if !Task.isCancelled { write() }
+        }
     }
 }
 
@@ -335,7 +365,9 @@ struct ProjectsTable: View {
                 .width(min: 140, ideal: 190)
                 .customizationID("name")
                 .disabledCustomizationBehavior(.visibility)
-            TableColumn("Deploy", value: \ProjectRow.deployKey) { (row: ProjectRow) in DeployCell(row: row, machineLabel: machineLabel) }
+            TableColumn("Deploy", value: \ProjectRow.deployKey) { (row: ProjectRow) in
+                DeployCell(row: row, names: row.deploy.map { $0.kind == .local ? machineLabel($0.name) : $0.name })
+            }
                 .width(min: 60, ideal: 150, max: 300)
                 .customizationID("deploy")
             TableColumn("Owner", value: \ProjectRow.ownerKey) { (row: ProjectRow) in OwnerCell(repo: row.repo) }
