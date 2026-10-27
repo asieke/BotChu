@@ -17,6 +17,8 @@
 #                                          # ({down}, {up}, {tab}, {return}, {escape} press those)
 #   BOTCHU_OPEN=agents BOTCHU_SEARCH=res macOS/ui-review.sh  # open Agents with that search
 #   BOTCHU_DEMO=activity BOTCHU_TAB=1 macOS/ui-review.sh  # that tab as a long agent run (in memory)
+#   BOTCHU_DEMO=activity BOTCHU_INSPECTOR=subagents BOTCHU_SUBAGENT=Sample macOS/ui-review.sh
+#                                          # with the details of its sub-agent whose title starts so
 #   BOTCHU_DEMO=tasks BOTCHU_WINDOW=wide BOTCHU_TAB=3 macOS/ui-review.sh
 #                                          # six more tasks in memory, a tab in every state, in the
 #                                          # column beside the chat (BOTCHU_WINDOW=compact: the rail)
@@ -275,6 +277,8 @@ fi
 [ -n "${BOTCHU_DEFAULT_MODEL:-}" ] && args+=(--env "BOTCHU_DEFAULT_MODEL=$BOTCHU_DEFAULT_MODEL")
 [ -n "${BOTCHU_WINDOW:-}" ] && args+=(--env "BOTCHU_WINDOW=$BOTCHU_WINDOW")
 [ -n "${BOTCHU_DEMO:-}" ] && args+=(--env "BOTCHU_DEMO=$BOTCHU_DEMO")
+[ -n "${BOTCHU_SUBAGENT:-}" ] && args+=(--env "BOTCHU_SUBAGENT=$BOTCHU_SUBAGENT")
+[ -n "${BOTCHU_INSPECTOR:-}" ] && args+=(--env "BOTCHU_INSPECTOR=$BOTCHU_INSPECTOR")
 [ -n "${BOTCHU_DENSITY:-}" ] && args+=(--env "BOTCHU_DENSITY=$BOTCHU_DENSITY")
 [ -n "${BOTCHU_SECTION:-}" ] && args+=(--env "BOTCHU_SECTION=$BOTCHU_SECTION")
 [ -n "${BOTCHU_DRAFT:-}" ] && args+=(--env "BOTCHU_DRAFT=$BOTCHU_DRAFT")

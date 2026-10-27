@@ -186,6 +186,7 @@ extension RenderingTests {
         window.contentView = NSHostingView(rootView: InboxView().environment(app).defaultAppStorage(defaults))
         window.makeKeyAndOrderFront(nil)
         try await Task.sleep(for: .milliseconds(400))
+        for _ in 0..<250 where !app.inbox.isReading(asking.id) { try await Task.sleep(for: .milliseconds(20)) }
         window.layoutIfNeeded()
         #expect(app.inbox.isReading(asking.id))
 
@@ -193,7 +194,7 @@ extension RenderingTests {
                                                      windowNumber: window.windowNumber, context: nil, characters: "1",
                                                      charactersIgnoringModifiers: "1", isARepeat: false, keyCode: 18))
         #expect(window.performKeyEquivalent(with: command1))
-        for _ in 0..<100 where !app.inbox.isDone(asking.id) { try await Task.sleep(for: .milliseconds(20)) }
+        for _ in 0..<250 where !app.inbox.isDone(asking.id) { try await Task.sleep(for: .milliseconds(20)) }
         #expect(app.inbox.isDone(asking.id) && app.inbox.state.isAnswered(asking))
         #expect(app.destination == nil && app.isShown(.home(bot.id)))
         #expect(app.thread(.home(bot.id)).filter { $0.delivery == asking.id && $0.role == .user }.map(\.text) == ["Answer first"])

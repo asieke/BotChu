@@ -89,23 +89,260 @@ public struct SubagentRun: Identifiable, Codable, Equatable, Sendable, RunSettin
     }
 }
 
-/// How the Sub-agents tab lists a conversation's own runs, each with the runs it delegated to
-/// beneath it: those under way, and finished ones it keeps in view, first, in the order they were
-/// delegated; every other one in Finished, newest first.
-public struct SubagentSections: Equatable, Sendable {
-    public var current: [SubagentRun]
-    public var finished: [SubagentRun]
-
-    /// `runs` are a conversation's, oldest first. A run finishes only after the runs beneath it,
-    /// so its own phase says whether anything in its tree is under way.
-    public init(_ runs: [SubagentRun], keeping kept: Set<UUID> = []) {
-        let own = runs.filter { $0.parentSubagentID == nil }
-        current = own.filter { $0.phase.isActive || kept.contains($0.id) }
-        finished = own.filter { !$0.phase.isActive && !kept.contains($0.id) }
-            .sorted { ($0.createdAt, $0.id.uuidString) > ($1.createdAt, $1.id.uuidString) }
+/// How the Sub-agents tab lists a conversation's runs (#194). Each run the conversation started
+/// (a root) heads its tree, with the runs it delegated to beneath it. Roots are grouped by the turn
+/// that started them (`callerInvocationID`), or by day for records made before that was saved.
+///
+/// A root stays in view while anything in its tree is under way or has failed; once its tree has
+/// ended completed or stopped with no failure, it moves into Finished at once, nested runs and all.
+/// A failure never folds away: only clearing the run removes it.
+public struct SubagentOverview: Equatable, Sendable {
+    public enum GroupKey: Hashable, Sendable {
+        case invocation(UUID)
+        /// The start of the day, for records without an invocation.
+        case day(Date)
     }
 
-    public var failedCount: Int { finished.filter { $0.phase == .failed }.count }
+    public struct Group: Identifiable, Equatable, Sendable {
+        public var key: GroupKey
+        public var id: GroupKey { key }
+        /// When its turn delegated its first run.
+        public var date: Date
+        /// The roots it has in this part of the list, in the order they were delegated.
+        public var roots: [SubagentRun]
+        /// A run of its turn is under way: the turn the list leads with, without a caption.
+        public var isUnderWay: Bool
+    }
+
+    /// Turns under way first, then those holding only failures, newest first.
+    public var visible: [Group]
+    /// Trees that ended completed or stopped with no failure, newest turn first.
+    public var finished: [Group]
+    private var parents: [UUID: UUID]
+    private var failures: [UUID: Int]
+    private var finishedRoots: Set<UUID>
+    private var roots: [UUID: UUID]
+
+    /// `runs` are a conversation's, oldest first, descendants beside its own.
+    public init(runs: [SubagentRun], calendar: Calendar = .current) {
+        let ids = Set(runs.map(\.id))
+        let byParent = Dictionary(grouping: runs, by: \.parentSubagentID)
+        // A run whose parent is missing (cleared, or a damaged record) heads its own tree.
+        let heads = runs.filter { $0.parentSubagentID.map { !ids.contains($0) } ?? true }
+        var parents: [UUID: UUID] = [:]
+        var failures: [UUID: Int] = [:]
+        var roots: [UUID: UUID] = [:]
+        var underWay: Set<UUID> = []
+        var finishedRoots: Set<UUID> = []
+        for head in heads {
+            var active = false
+            var seen: Set<UUID> = []
+            // Depth-first, returning how many runs beneath failed; bounded and guarded, so a
+            // malformed saved tree can't loop.
+            func walk(_ run: SubagentRun, depth: Int) -> Int {
+                guard depth <= SubagentLimits.maxDepth + 1, seen.insert(run.id).inserted else { return 0 }
+                roots[run.id] = head.id
+                active = active || run.phase.isActive
+                var below = 0
+                for child in byParent[run.id] ?? [] where !seen.contains(child.id) {
+                    parents[child.id] = run.id
+                    below += walk(child, depth: depth + 1) + (child.phase == .failed ? 1 : 0)
+                }
+                if below > 0 { failures[run.id] = below }
+                return below
+            }
+            let failed = walk(head, depth: 0) + (head.phase == .failed ? 1 : 0)
+            if active { underWay.insert(head.id) } else if failed == 0 { finishedRoots.insert(head.id) }
+        }
+
+        func key(_ run: SubagentRun) -> GroupKey {
+            run.callerInvocationID.map(GroupKey.invocation) ?? .day(calendar.startOfDay(for: run.createdAt))
+        }
+        var order: [GroupKey] = []
+        var dates: [GroupKey: Date] = [:]
+        for head in heads {
+            let key = key(head)
+            if dates[key] == nil { order.append(key) }
+            dates[key] = min(dates[key] ?? head.createdAt, head.createdAt)
+        }
+        func groups(_ include: (SubagentRun) -> Bool) -> [Group] {
+            let members = Dictionary(grouping: heads.filter(include), by: key)
+            return order.compactMap { key in
+                guard let roots = members[key], let date = dates[key] else { return nil }
+                return Group(key: key, date: date, roots: roots, isUnderWay: roots.contains { underWay.contains($0.id) })
+            }
+        }
+        func newestFirst(_ a: Group, _ b: Group) -> Bool { a.date > b.date }
+        let shown = groups { !finishedRoots.contains($0.id) }
+        visible = shown.filter(\.isUnderWay) + shown.filter { !$0.isUnderWay }.sorted(by: newestFirst)
+        finished = groups { finishedRoots.contains($0.id) }.sorted(by: newestFirst)
+        self.parents = parents
+        self.failures = failures
+        self.roots = roots
+        self.finishedRoots = finishedRoots
+    }
+
+    /// How many trees Finished holds: the runs this conversation started, not their nested runs.
+    public var finishedCount: Int { finished.reduce(0) { $0 + $1.roots.count } }
+
+    /// How many runs beneath this one failed, at any depth.
+    public func failedBelow(_ id: UUID) -> Int { failures[id] ?? 0 }
+
+    /// Whether the run's tree is in Finished.
+    public func isFinished(_ id: UUID) -> Bool { roots[id].map(finishedRoots.contains) ?? false }
+
+    /// The run heading the tree this run is in.
+    public func root(of id: UUID) -> UUID? { roots[id] }
+
+    /// The runs above this one, its parent first.
+    public func ancestors(of id: UUID) -> [UUID] {
+        var result: [UUID] = []
+        var next = parents[id]
+        while let current = next, !result.contains(current), result.count <= SubagentLimits.maxDepth {
+            result.append(current)
+            next = parents[current]
+        }
+        return result
+    }
+
+    /// Whether `id` is `ancestor` or beneath it.
+    public func isInTree(_ id: UUID, of ancestor: UUID) -> Bool { id == ancestor || ancestors(of: id).contains(ancestor) }
+
+    /// The caption above a group that isn't the turn under way: "Today, 11:02 AM",
+    /// "Yesterday, 4:10 PM", "Saturday, Oct 24, 9:30 AM", or only the day for a group without an invocation.
+    public static func caption(_ group: Group, now: Date = Date(), calendar: Calendar = .current, locale: Locale = .current) -> String {
+        let time = DateFormatter()
+        time.locale = locale
+        time.calendar = calendar
+        time.timeZone = calendar.timeZone
+        time.dateStyle = .none
+        time.timeStyle = .short
+        let day: String
+        if calendar.isDate(group.date, inSameDayAs: now) {
+            day = "Today"
+        } else if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(group.date, inSameDayAs: yesterday) {
+            day = "Yesterday"
+        } else {
+            let format = DateFormatter()
+            format.locale = locale
+            format.calendar = calendar
+            format.timeZone = calendar.timeZone
+            format.setLocalizedDateFormatFromTemplate(calendar.isDate(group.date, equalTo: now, toGranularity: .year) ? "EEEEMMMd" : "EEEEMMMdy")
+            day = format.string(from: group.date)
+        }
+        if case .day = group.key { return day }
+        return "\(day), \(time.string(from: group.date))"
+    }
+}
+
+/// What a run's row and details say about it: only what was recorded (#194). Nothing is inferred:
+/// no progress, no blocked or accepted phase, and Done only for a run that ended with a handoff.
+public struct SubagentRowState: Equatable, Sendable {
+    public enum Kind: String, Equatable, Sendable {
+        case queued, preparing, running, stopping, done, noHandoff, failed, stopped
+    }
+
+    public var kind: Kind
+    /// The state's word: Queued, Preparing, the running activity (Reading files…), Done, No handoff…
+    public var word: String
+    /// When its time counts from: its start, or its creation until it starts.
+    public var since: Date
+    /// When it ended; nil while it ticks.
+    public var ended: Date?
+
+    /// `activity` is the running turn's (`RunState`), nil before it streams; `stopping`, that Stop
+    /// was asked for and the process hasn't exited yet.
+    public init(_ run: SubagentRun, activity: BotActivity? = nil, stopping: Bool = false) {
+        since = run.startedAt ?? run.createdAt
+        ended = run.phase.isActive ? nil : (run.finishedAt ?? run.startedAt ?? run.createdAt)
+        switch run.phase {
+        case .queued: (kind, word) = (.queued, "Queued")
+        case .preparing: (kind, word) = (.preparing, "Preparing")
+        case .running: (kind, word) = (.running, activity?.doing ?? "Working")
+        case .completed:
+            let empty = (run.handoffOutput ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            (kind, word) = empty ? (.noHandoff, "No handoff") : (.done, "Done")
+        case .failed: (kind, word) = (.failed, "Failed")
+        case .stopped: (kind, word) = (.stopped, "Stopped")
+        }
+        if stopping, run.phase.isActive { (kind, word) = (.stopping, "Stopping…") }
+    }
+
+    public var isLive: Bool { ended == nil }
+
+    /// Why a stopped run stopped, when it says more than "Stopped".
+    public static func stopReason(_ run: SubagentRun) -> String? {
+        guard run.phase == .stopped, let reason = run.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !reason.isEmpty, reason != "Stopped" else { return nil }
+        return reason
+    }
+}
+
+/// Where the Sub-agents tab is: its list, or a run's or a task's details pushed on it, each push
+/// remembering where the list it left was, to come back to (#194).
+public struct SubagentNavigation: Equatable, Sendable {
+    public enum Route: Hashable, Sendable {
+        case run(UUID)
+        /// One of Home's tasks: its own list.
+        case task(UUID)
+    }
+
+    /// A place in a list or details: the row opened from it, and the block on top of the view and
+    /// how far down it was (a fraction of the view), so the list comes back anchored on content
+    /// rather than pixels.
+    public struct Mark: Equatable, Sendable {
+        public var opened: UUID?
+        public var anchor: SubagentAnchor?
+        public var fraction: Double
+
+        public init(opened: UUID? = nil, anchor: SubagentAnchor? = nil, fraction: Double = 0) {
+            self.opened = opened
+            self.anchor = anchor
+            self.fraction = fraction
+        }
+    }
+
+    public private(set) var path: [Route] = []
+    private var marks: [Mark?] = []
+
+    public init() {}
+
+    public var top: Route? { path.last }
+
+    /// Opens a row's route from where the reader is.
+    public mutating func push(_ route: Route, from mark: Mark?) {
+        guard path.last != route else { return }
+        path.append(route)
+        marks.append(mark)
+    }
+
+    /// The chat's Open: that run's details directly, whatever was shown. Back returns to the list
+    /// as it was (`mark` has no row, so nothing opens to reveal one).
+    public mutating func open(_ id: UUID, from mark: Mark?) {
+        if path.last == .run(id) { return }
+        let place = path.isEmpty ? mark : marks.first ?? nil
+        path = [.run(id)]
+        marks = [place.map { Mark(anchor: $0.anchor, fraction: $0.fraction) }]
+    }
+
+    /// Goes back one step, returning where to put the reader in what shows now.
+    @discardableResult public mutating func back() -> Mark? {
+        guard !path.isEmpty else { return nil }
+        path.removeLast()
+        return marks.removeLast()
+    }
+
+    /// Forgets routes to runs that no longer exist (cleared).
+    public mutating func prune(keeping exists: (Route) -> Bool) {
+        while let last = path.last, !exists(last) { back() }
+    }
+}
+
+/// What the Sub-agents tab scrolls to and keeps in place: a run's row, or a block such as a
+/// caption, Finished's heading or a section of the details.
+public enum SubagentAnchor: Hashable, Sendable {
+    case run(UUID)
+    case block(String)
 }
 
 /// Caller metadata is descriptive only. The app resolves invocationID against its active turns

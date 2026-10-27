@@ -2,228 +2,1188 @@ import AppKit
 import SwiftUI
 import BotChuCore
 
+/// The Sub-agents tab (#194): a compact row for each run a conversation started, with the runs it
+/// delegated to beneath it. Trees that ended without a failure fold into Finished at once; a row
+/// opens that run's details in place of the list, and Back comes back to where the list was.
 struct SubagentsInspectorContent: View {
-    @Environment(AppModel.self) private var model
     let target: ChatTarget
     var includeBotTasksOverview = false
+    /// Where the tab is, for tests to drive; else its own.
+    var state: SubagentTabState?
+
+    var body: some View {
+        // One per conversation: Home's inspector stays as the bot changes, and where one bot's tab
+        // was shouldn't carry over to the next.
+        SubagentsTab(target: target, includesTasks: includeBotTasksOverview, state: state).id(target)
+    }
+}
+
+/// Where a conversation's Sub-agents tab is, and what its reader opened, folded and asked to stop.
+@MainActor @Observable
+final class SubagentTabState {
+    let target: ChatTarget
+    var navigation = SubagentNavigation()
+    /// Parents the reader opened or folded, and those that started open; the rest start folded.
+    var opened: [UUID: Bool] = [:]
+    /// Finished, in each list (Home's own and each of its tasks'): folded until the reader opens it.
+    var showsFinished: [ChatTarget: Bool] = [:]
+    /// Runs asked to stop, until their process exits.
+    var stopping: Set<UUID> = []
+    /// The row Back came back to, tinted for a moment.
+    var highlighted: UUID?
+    var focusRequest: SubagentAnchor?
+    /// Each run's transcript: open or folded, and the first item shown.
+    var transcriptOpen: [UUID: Bool] = [:]
+    var transcriptStart: [UUID: Int] = [:]
+    var toolsOpen: Set<UUID> = []
+    var briefsOpen: Set<UUID> = []
+    /// Sections the reader folded: Tasks, a run's Sub-agents, Handoff…
+    var folded: Set<String> = []
+    /// Where each row and block is in the visible part of the scroll view.
+    @ObservationIgnored var frames: [SubagentAnchor: CGRect] = [:]
+    @ObservationIgnored weak var model: AppModel?
+    @ObservationIgnored var scroll: ScrollViewProxy?
+    @ObservationIgnored var area: InspectorScrollArea?
+    @ObservationIgnored var reduceMotion = false
+    @ObservationIgnored private var highlightToken = 0
+
+    init(target: ChatTarget) { self.target = target }
+
+    /// The list the tab shows when no details are: the conversation's, or one of Home's tasks'.
+    var scope: ChatTarget {
+        if case .task(let id)? = navigation.path.last(where: { if case .task = $0 { true } else { false } }) {
+            return .task(id, of: target.botID)
+        }
+        return target
+    }
+
+    func overview(_ scope: ChatTarget) -> SubagentOverview {
+        SubagentOverview(runs: model?.delegation.records[scope] ?? [])
+    }
+
+    var isShowingRun: Bool {
+        if case .run? = navigation.top { return true }
+        return false
+    }
+
+    /// Whether a section is open: each starts open, and stays as the reader leaves it.
+    func section(_ key: String) -> Binding<Bool> {
+        Binding(get: { !self.folded.contains(key) }, set: { if $0 { self.folded.remove(key) } else { self.folded.insert(key) } })
+    }
+
+    func isStopping(_ run: SubagentRun) -> Bool { run.phase.isActive && stopping.contains(run.id) }
+
+    func stop(_ id: UUID) {
+        stopping.insert(id)
+        model?.delegation.stop(id)
+    }
+
+    /// Where the reader is: the topmost block whole in view, outside `excluded`, and how far down it is.
+    func place(opened: UUID? = nil, excluding excluded: (SubagentAnchor) -> Bool = { _ in false }) -> SubagentNavigation.Mark {
+        let height = area?.viewport.height ?? 0
+        let top = frames.filter { $0.value.minY >= -0.5 && $0.value.minY < height && !excluded($0.key) }
+            .min { $0.value.minY < $1.value.minY }
+        guard let top, height > 0 else { return SubagentNavigation.Mark(opened: opened) }
+        // A unit point lines up the same point of the block and of the view.
+        let room = height - top.value.height
+        let fraction = room > 0 ? min(1, max(0, Double(top.value.minY / room))) : 0
+        return SubagentNavigation.Mark(opened: opened, anchor: top.key, fraction: fraction)
+    }
+
+    /// Opens a row's details or a task's list, remembering where the reader was.
+    func push(_ route: SubagentNavigation.Route, opened: UUID?) {
+        let overview = overview(scope)
+        let mark = place(opened: opened) { anchor in
+            guard let opened, case .run(let id) = anchor else { return false }
+            return overview.isInTree(id, of: overview.root(of: opened) ?? opened)
+        }
+        navigation.push(route, from: mark)
+        scrollToTop()
+    }
+
+    /// The chat's Open: that run's details, nested or finished, from wherever the tab was.
+    func open(_ id: UUID) {
+        navigation.open(id, from: navigation.path.isEmpty ? place() : nil)
+        scrollToTop()
+    }
+
+    func back() {
+        guard !navigation.path.isEmpty else { return }
+        let mark = navigation.back()
+        // A run that ended meanwhile moved into Finished: open it to show the row.
+        if !isShowingRun, let opened = mark?.opened, overview(scope).isFinished(opened) {
+            showsFinished[scope] = true
+        }
+        DispatchQueue.main.async { [self] in
+            restore(mark)
+            guard let opened = mark?.opened else { return }
+            // Then only as far as it takes to bring the row whole into view.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [self] in
+                let height = area?.viewport.height ?? 0
+                if let frame = frames[.run(opened)], frame.minY < 0 || frame.maxY > height {
+                    scroll?.scrollTo(SubagentAnchor.run(opened))
+                } else if frames[.run(opened)] == nil {
+                    scroll?.scrollTo(SubagentAnchor.run(opened))
+                }
+                focusRequest = .run(opened)
+                highlight(opened)
+            }
+        }
+    }
+
+    func restore(_ mark: SubagentNavigation.Mark?) {
+        if let anchor = mark?.anchor {
+            scroll?.scrollTo(anchor, anchor: UnitPoint(x: 0, y: mark?.fraction ?? 0))
+        } else {
+            scroll?.scrollTo(SubagentAnchor.block("top"), anchor: .top)
+        }
+    }
+
+    /// Keeps the block on top where it was while what's above it changes (a run moving into
+    /// Finished, a result appearing above the transcript). Nothing moves while the view is at the top.
+    func keepPlace(excluding excluded: @escaping (SubagentAnchor) -> Bool = { _ in false }) {
+        if let top = frames[.block("top")], top.minY >= -0.5 { return }
+        let mark = place(excluding: excluded)
+        guard mark.anchor != nil else { return }
+        DispatchQueue.main.async { [self] in restore(mark) }
+    }
+
+    private func scrollToTop() {
+        DispatchQueue.main.async { [self] in
+            scroll?.scrollTo(SubagentAnchor.block("top"), anchor: .top)
+            focusRequest = .block("top")
+        }
+    }
+
+    private func highlight(_ id: UUID) {
+        highlightToken += 1
+        let token = highlightToken
+        highlighted = id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [self] in
+            guard highlightToken == token else { return }
+            if reduceMotion { highlighted = nil } else { withAnimation(.easeOut(duration: 0.4)) { highlighted = nil } }
+        }
+    }
+}
+
+private struct SubagentsTab: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.inspectorScroll) private var scroll
+    @Environment(\.inspectorArea) private var area
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let target: ChatTarget
+    let includesTasks: Bool
+    @State private var tab: SubagentTabState
+    @State private var owner = UUID()
+    @FocusState private var focus: SubagentAnchor?
+
+    init(target: ChatTarget, includesTasks: Bool, state: SubagentTabState?) {
+        self.target = target
+        self.includesTasks = includesTasks
+        _tab = State(initialValue: state ?? SubagentTabState(target: target))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            // One per conversation: Home's inspector stays as the bot changes, and what one bot's
-            // tab folded or kept shouldn't carry over to the next.
-            SubagentTree(target: target).id(target)
-            if includeBotTasksOverview {
-                ForEach(model.tasks[target.botID] ?? []) { task in
-                    let scope = ChatTarget.task(task.id, of: target.botID)
-                    if !(model.delegation.records[scope] ?? []).isEmpty {
-                        DisclosureGroup(task.title) { SubagentTree(target: scope) }
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                }
+            switch tab.navigation.top {
+            case nil:
+                SubagentList(scope: target, includesTasks: includesTasks, tab: tab, focus: $focus)
+            case .task(let id):
+                SubagentList(scope: .task(id, of: target.botID), includesTasks: false, tab: tab, focus: $focus)
+            case .run(let id):
+                SubagentDetail(runID: id, tab: tab, focus: $focus)
             }
             if let error = model.delegation.error {
-                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                Text(error).font(.caption).foregroundStyle(failureRed).textSelection(.enabled)
             }
         }
         .frame(minWidth: 0, idealWidth: 240, maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("subagents-inspector")
+        .onExitCommand { tab.back() }
+        .onAppear {
+            tab.model = model
+            tab.scroll = scroll
+            tab.area = area
+            tab.reduceMotion = reduceMotion
+        }
+        .onChange(of: reduceMotion) { _, reduce in tab.reduceMotion = reduce }
+        .onChange(of: tab.navigation.path.isEmpty, initial: true) { _, isEmpty in
+            if isEmpty { area?.unpin(owner: owner) } else { area?.pin(SubagentBar(tab: tab).environment(model), owner: owner) }
+        }
+        .onDisappear { area?.unpin(owner: owner) }
+        .onChange(of: tab.focusRequest) { _, request in
+            guard let request else { return }
+            focus = request
+            tab.focusRequest = nil
+        }
+        // The chat's Open on a sub-agent card: that run's details, wherever it is in the tree.
+        .onChange(of: SubagentFocus.shared.ticket, initial: true) { _, _ in
+            tab.model = model
+            tab.scroll = scroll
+            tab.area = area
+            guard let id = SubagentFocus.shared.take(from: model.delegation.records[target] ?? []) else { return }
+            tab.open(id)
+        }
     }
 }
 
-private struct SubagentTree: View {
+// MARK: The list
+
+private struct SubagentList: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.inspectorScroll) private var scroll
-    let target: ChatTarget
-    @State private var expanded: Set<UUID> = []
-    @State private var seen: Set<UUID> = []
-    /// Runs that stay with those under way after they finish, until the tab is shown again: they
-    /// were running when it showed them, or the chat's Open asked for them.
-    @State private var kept: Set<UUID> = []
-    @State private var showsFinished = false
-    private var runs: [SubagentRun] { model.delegation.records[target] ?? [] }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let scope: ChatTarget
+    let includesTasks: Bool
+    let tab: SubagentTabState
+    var focus: FocusState<SubagentAnchor?>.Binding
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            let count = runs.filter { $0.phase.isActive }.count
-            Text("Sub-agents" + (count > 0 ? " · \(count) running" : ""))
-                .font(.system(size: 12, weight: .semibold))
-            if runs.isEmpty {
-                Text("When this conversation delegates work to another bot, its progress and handoff appear here.")
-                    .font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
+        let runs = model.delegation.records[scope] ?? []
+        let overview = SubagentOverview(runs: runs)
+        let tasks = includesTasks ? (model.tasks[scope.botID] ?? []).filter { !(model.delegation.records[.task($0.id, of: scope.botID)] ?? []).isEmpty } : []
+        VStack(alignment: .leading, spacing: 14) {
+            if runs.isEmpty && tasks.isEmpty {
+                Text("No sub-agents").font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
             }
-            let sections = SubagentSections(runs, keeping: kept)
-            ForEach(sections.current) { run in
-                node(run, ancestry: [])
+            ForEach(overview.visible) { group in
+                SubagentGroup(group: group, caption: !group.isUnderWay, overview: overview, scope: scope, tab: tab, focus: focus)
             }
-            if !sections.finished.isEmpty {
-                DisclosureGroup(isExpanded: $showsFinished) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(sections.finished) { run in node(run, ancestry: []) }
-                    }
-                } label: {
-                    HStack(spacing: 0) {
-                        Text("Finished · \(sections.finished.count)")
-                        if sections.failedCount > 0 {
-                            Text(" · \(sections.failedCount) failed").foregroundStyle(Color.red)
+            if !overview.finished.isEmpty {
+                SubagentDisclosure("Finished", trailing: "\(overview.finishedCount)", expanded: Binding(
+                    get: { tab.showsFinished[scope] ?? false }, set: { tab.showsFinished[scope] = $0 })) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(overview.finished) { group in
+                            SubagentGroup(group: group, caption: true, overview: overview, scope: scope, tab: tab, focus: focus)
                         }
-                        Spacer(minLength: 0)
                     }
-                    .font(.system(size: 12, weight: .medium))
                 }
-                .disclosureGroupStyle(InspectorDisclosureStyle())
+                .id(SubagentAnchor.block("finished"))
+                .modifier(Placed(anchor: .block("finished"), tab: tab))
+            }
+            if !tasks.isEmpty {
+                SubagentDisclosure("Tasks", expanded: tab.section("tasks")) {
+                    InspectorCard {
+                        ForEach(Array(tasks.enumerated()), id: \.element.id) { index, task in
+                            SubagentTaskRow(task: task, botID: scope.botID, first: index == 0, tab: tab)
+                        }
+                    }
+                }
             }
         }
-        .onChange(of: runs.map(\.id), initial: true) { _, _ in
-            for run in runs where seen.insert(run.id).inserted && run.phase.isActive {
-                expanded.insert(run.id)
-                kept.insert(run.id)
+        .overlay(alignment: .top) {
+            Color.clear.frame(height: 1).id(SubagentAnchor.block("top")).modifier(Placed(anchor: .block("top"), tab: tab))
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: overview.finished.map(\.id))
+        // A tree moving into Finished above the reader leaves the rest where it was.
+        .onChange(of: overview.visible.flatMap(\.roots).map(\.id)) { old, new in
+            let moved = Set(old).subtracting(new)
+            guard !moved.isEmpty else { return }
+            tab.keepPlace { anchor in
+                guard case .run(let id) = anchor else { return false }
+                return moved.contains { overview.isInTree(id, of: $0) }
             }
         }
-        // The chat's Open on a sub-agent card: expand that run (and those above it), keep it in
-        // view if it has finished, and scroll to it.
-        .onChange(of: SubagentFocus.shared.ticket, initial: true) { _, _ in
-            guard let id = SubagentFocus.shared.take(from: runs) else { return }
-            // Three levels at most; the bound also stops a malformed saved tree from looping.
-            var next: UUID? = id
-            for _ in 0..<SubagentLimits.maxDepth + 1 {
-                guard let current = next, let run = runs.first(where: { $0.id == current }) else { break }
-                expanded.insert(run.id)
-                kept.insert(run.id)
-                next = run.parentSubagentID
-            }
-            DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.2)) { scroll?.scrollTo(id, anchor: .top) } }
-        }
-    }
-
-    // Type erasure breaks the recursive View type. An ancestry guard also keeps a malformed
-    // persisted tree from recursing forever; normal runs are capped at three levels.
-    private func node(_ run: SubagentRun, ancestry: Set<UUID>) -> AnyView {
-        guard !ancestry.contains(run.id) else { return AnyView(EmptyView()) }
-        let path = ancestry.union([run.id])
-        return AnyView(VStack(alignment: .leading, spacing: 8) {
-            SubagentCard(run: run, expanded: Binding(get: { expanded.contains(run.id) }, set: {
-                if $0 { expanded.insert(run.id) } else { expanded.remove(run.id) }
-            }))
-            .id(run.id)
-            ForEach(model.delegation.children(of: run.id, in: target)) { child in
-                node(child, ancestry: path)
-                    .padding(.leading, 14)
-                    .overlay(alignment: .leading) { Rectangle().fill(Palette.hairline).frame(width: 1) }
-            }
-        })
     }
 }
 
-private struct SubagentCard: View {
+/// The runs one turn started: under a caption, unless it's the turn under way, in one card.
+private struct SubagentGroup: View {
+    let group: SubagentOverview.Group
+    let caption: Bool
+    let overview: SubagentOverview
+    let scope: ChatTarget
+    let tab: SubagentTabState
+    var focus: FocusState<SubagentAnchor?>.Binding
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if caption {
+                Text(SubagentOverview.caption(group))
+                    .font(.system(size: 11.5)).foregroundStyle(Palette.secondaryText)
+                    .padding(.horizontal, 4)
+            }
+            InspectorCard {
+                ForEach(Array(group.roots.enumerated()), id: \.element.id) { index, run in
+                    SubagentBranch(run: run, depth: 0, first: index == 0, ancestry: [], overview: overview, scope: scope, tab: tab, focus: focus)
+                }
+            }
+        }
+    }
+}
+
+/// A run's row and, while it's open, the runs it delegated to beneath it.
+private struct SubagentBranch: View {
     @Environment(AppModel.self) private var model
     let run: SubagentRun
-    @Binding var expanded: Bool
-    private var activity: BotActivity { model.delegation.states[run.id]?.activity ?? (run.phase == .failed ? .failed : .idle) }
-    private var avatarBot: Bot {
-        model.bot(run.targetBotID) ?? Bot(id: run.targetBotID, name: run.targetBotName, emoji: run.targetBotEmoji,
-                                        workspace: run.targetBotWorkspace, appearance: run.targetBotAppearance)
+    let depth: Int
+    let first: Bool
+    let ancestry: Set<UUID>
+    let overview: SubagentOverview
+    let scope: ChatTarget
+    let tab: SubagentTabState
+    var focus: FocusState<SubagentAnchor?>.Binding
+
+    var body: some View {
+        let children = model.delegation.children(of: run.id, in: scope)
+        let failed = overview.failedBelow(run.id)
+        // Parents with work under way or a failure below start open; the reader's choice sticks.
+        let startsOpen = run.phase.isActive || children.contains { $0.phase.isActive } || failed > 0
+        let open = Binding(get: { tab.opened[run.id] ?? startsOpen }, set: { tab.opened[run.id] = $0 })
+        VStack(alignment: .leading, spacing: 0) {
+            SubagentRow(run: run, depth: depth, first: first, hasChildren: !children.isEmpty, open: open,
+                        failedBelow: failed, tab: tab, focus: focus) {
+                tab.push(.run(run.id), opened: run.id)
+            }
+            if open.wrappedValue, !ancestry.contains(run.id) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(children) { child in
+                        SubagentBranch(run: child, depth: depth + 1, first: false, ancestry: ancestry.union([run.id]),
+                                       overview: overview, scope: scope, tab: tab, focus: focus)
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    // A hairline under the parent's chevron.
+                    Rectangle().fill(Palette.hairline).frame(width: 1)
+                        .padding(.leading, 4 + 18 * CGFloat(depth) + 7)
+                }
+            }
+        }
+        .onAppear {
+            if tab.opened[run.id] == nil, startsOpen, !children.isEmpty { tab.opened[run.id] = true }
+        }
+        .onChange(of: startsOpen && !children.isEmpty) { _, opens in
+            if opens, tab.opened[run.id] == nil { tab.opened[run.id] = true }
+        }
     }
-    private var modelLabel: ModelPickerData {
-        ModelPickerData(kind: run.account.kind, model: run.model, openRouterDefault: model.settings.openRouterModel,
-                        catalog: model.modelCatalog.models, resolved: run.resolvedModel)
+}
+
+/// A run in a list: its title, its bot, and its state in a word and a time. It never expands into
+/// details; it opens them.
+private struct SubagentRow: View {
+    @Environment(AppModel.self) private var model
+    let run: SubagentRun
+    let depth: Int
+    let first: Bool
+    let hasChildren: Bool
+    @Binding var open: Bool
+    let failedBelow: Int
+    let tab: SubagentTabState
+    var focus: FocusState<SubagentAnchor?>.Binding
+    let action: () -> Void
+    @State private var textWidth: CGFloat = 300
+
+    var body: some View {
+        let state = SubagentRowState(run, activity: model.delegation.states[run.id]?.activity, stopping: tab.isStopping(run))
+        HStack(alignment: .top, spacing: 0) {
+            Button { open.toggle() } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .rotationEffect(.degrees(open ? 90 : 0))
+                    .frame(width: 14, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Palette.secondaryText)
+            .opacity(hasChildren ? 1 : 0)
+            .disabled(!hasChildren)
+            .accessibilityHidden(!hasChildren)
+            .accessibilityLabel(open ? "Fold \(run.title)" : "Show what \(run.title) delegated")
+            HStack(alignment: .top, spacing: 0) {
+                SubagentStateSymbol(kind: state.kind)
+                    .frame(width: 16, height: 16)
+                    .padding(.leading, 6)
+                    .padding(.trailing, 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(run.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    SubagentMetaLine(run: run, state: state, failedBelow: open ? 0 : failedBelow, width: textWidth)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: action)
+        }
+        .padding(.vertical, 7)
+        .padding(.trailing, 10)
+        .padding(.leading, 4 + 18 * CGFloat(depth))
+        .frame(minHeight: 44, alignment: .top)
+        .background {
+            if tab.highlighted == run.id { RoundedRectangle(cornerRadius: 9).fill(Palette.violet.opacity(0.16)).padding(1) }
+        }
+        .overlay(alignment: .top) {
+            if !first {
+                Rectangle().fill(Palette.rowDivider).frame(height: 1).padding(.leading, 48 + 18 * CGFloat(depth))
+            }
+        }
+        .overlay {
+            if focus.wrappedValue == .run(run.id) {
+                RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.violet, lineWidth: 2).padding(1).allowsHitTesting(false)
+            }
+        }
+        .focusable()
+        .focused(focus, equals: .run(run.id))
+        .focusEffectDisabled()
+        .onKeyPress(keys: [.return, .space, .leftArrow, .rightArrow]) { press in
+            switch press.key {
+            case .rightArrow where hasChildren: open = true
+            case .leftArrow where hasChildren: open = false
+            case .return, .space: action()
+            default: return .ignored
+            }
+            return .handled
+        }
+        .id(SubagentAnchor.run(run.id))
+        .modifier(Placed(anchor: .run(run.id), tab: tab))
+        .help("\(run.title)\n\(run.targetBotName) · \(state.word)")
+        .contextMenu { SubagentMenu(run: run, tab: tab, open: action) }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(run.title), \(run.targetBotName), \(state.word)" + (failedBelow > 0 && !open ? ", \(failedBelow) failed" : ""))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { action() }
+        .accessibilityIdentifier("subagent-\(run.id.uuidString)")
+    }
+}
+
+/// The row's second line. At narrow widths it gives way in a fixed order: the bot's name truncates,
+/// then goes, then its avatar, and at last the time goes under the word; both stay whole.
+private struct SubagentMetaLine: View {
+    let run: SubagentRun
+    let state: SubagentRowState
+    let failedBelow: Int
+    let width: CGFloat
+
+    var body: some View {
+        Group {
+            if width >= 250 {
+                HStack(spacing: 5) {
+                    SubagentAvatar(run: run, size: 14)
+                    Text(run.targetBotName).lineLimit(1).truncationMode(.tail).layoutPriority(-1)
+                    Text("·")
+                    word.fixedSize()
+                    Spacer(minLength: 6)
+                    SubagentTime(state: state)
+                }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 5) {
+                        SubagentAvatar(run: run, size: 14)
+                        word.fixedSize()
+                        Spacer(minLength: 6)
+                        SubagentTime(state: state)
+                    }
+                    HStack(spacing: 5) {
+                        word.fixedSize()
+                        Spacer(minLength: 6)
+                        SubagentTime(state: state)
+                    }
+                    // Deep rows at the narrowest widths, past an hour: the time goes under the word.
+                    VStack(alignment: .leading, spacing: 1) {
+                        word
+                        SubagentTime(state: state)
+                    }
+                }
+            }
+        }
+        .font(.system(size: 11.5))
+        .foregroundStyle(Palette.secondaryText)
+    }
+
+    private var word: some View {
+        HStack(spacing: 0) {
+            Text(state.word).foregroundStyle(state.kind == .failed ? failureRed : Palette.secondaryText)
+            if failedBelow > 0 {
+                Text(" · \(failedBelow) failed").foregroundStyle(failureRed)
+            }
+        }
+        .lineLimit(1)
+    }
+}
+
+private struct SubagentAvatar: View {
+    @Environment(AppModel.self) private var model
+    let run: SubagentRun
+    let size: CGFloat
+
+    var body: some View {
+        BotAvatar(bot: model.bot(run.targetBotID) ?? Bot(id: run.targetBotID, name: run.targetBotName, emoji: run.targetBotEmoji,
+                                                          workspace: run.targetBotWorkspace, appearance: run.targetBotAppearance),
+                  size: size)
+    }
+}
+
+/// How long a run has taken: ticking while under way (`m:ss`), its duration once ended (`9m 51s`).
+private struct SubagentTime: View {
+    let state: SubagentRowState
+
+    var body: some View {
+        Group {
+            if let ended = state.ended {
+                Text(ActivityStyle.duration(ended.timeIntervalSince(state.since)) ?? "0s")
+            } else {
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                    Text(BotStatus.formatElapsed(from: state.since, to: max(timeline.date, Date())))
+                }
+            }
+        }
+        .monospacedDigit()
+        .fixedSize()
+    }
+}
+
+private struct SubagentStateSymbol: View {
+    let kind: SubagentRowState.Kind
+
+    var body: some View {
+        switch kind {
+        case .running: ActivitySpinner(size: 13).foregroundStyle(Palette.violet)
+        case .stopping: Image(systemName: "rays").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.secondaryText)
+        case .failed: Image(systemName: "xmark.circle.fill").font(.system(size: 14)).foregroundStyle(failureRed)
+        default: Image(systemName: symbol).font(.system(size: 14)).foregroundStyle(Palette.secondaryText)
+        }
+    }
+
+    private var symbol: String {
+        switch kind {
+        case .queued: "clock"
+        case .preparing: "circle.dashed"
+        case .stopped: "stop.circle"
+        default: "checkmark.circle"
+        }
+    }
+}
+
+private struct SubagentMenu: View {
+    @Environment(AppModel.self) private var model
+    let run: SubagentRun
+    let tab: SubagentTabState
+    let open: () -> Void
+
+    var body: some View {
+        Button("Open", action: open)
+        if let handoff = run.handoffOutput, !handoff.isEmpty, !run.phase.isActive {
+            Button("Copy Handoff") { copyToPasteboard(handoff) }
+        }
+        if run.phase == .failed, let error = run.errorMessage, !error.isEmpty {
+            Button("Copy Error") { copyToPasteboard(error) }
+        }
+        Button("Copy Brief") { copyToPasteboard(run.brief) }
+        Divider()
+        if run.phase.isActive {
+            Button(tab.isStopping(run) ? "Stopping…" : "Stop") { tab.stop(run.id) }.disabled(tab.isStopping(run))
+        } else {
+            Button("Clear Run") { model.delegation.clear(run.id) }
+                .disabled(model.delegation.children(of: run.id).contains { $0.phase.isActive })
+        }
+    }
+}
+
+/// System red (`ActivityStyle.failure`), as fixed colors: the sidebar's vibrancy draws
+/// `Color.red` in black. Light uses its higher-contrast shade, readable at 11.5 pt on white.
+private let failureRed = Palette.dynamic(0xD70015, 0xFF453A)
+
+private func copyToPasteboard(_ text: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+}
+
+/// One of Home's tasks with runs of its own: whether one is under way or failed, and its list.
+private struct SubagentTaskRow: View {
+    @Environment(AppModel.self) private var model
+    let task: BotTask
+    let botID: UUID
+    let first: Bool
+    let tab: SubagentTabState
+
+    var body: some View {
+        let runs = model.delegation.records[.task(task.id, of: botID)] ?? []
+        Button { tab.push(.task(task.id), opened: nil) } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "checklist").font(.system(size: 12)).foregroundStyle(Palette.secondaryText).frame(width: 16, height: 16)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(task.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                    if !task.repo.isEmpty {
+                        Text(task.repo).font(.system(size: 11.5)).foregroundStyle(Palette.secondaryText).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 4)
+                if runs.contains(where: { $0.phase.isActive }) {
+                    ActivitySpinner(size: 12).foregroundStyle(Palette.violet)
+                } else if runs.contains(where: { $0.phase == .failed }) {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(failureRed).accessibilityLabel("Failed")
+                }
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.secondaryText)
+            }
+            .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 10))
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .top) {
+            if !first { Rectangle().fill(Palette.rowDivider).frame(height: 1).padding(.leading, 36) }
+        }
+    }
+}
+
+// MARK: The details
+
+/// What Back says and Stop: pinned above the details as they scroll.
+private struct SubagentBar: View {
+    @Environment(AppModel.self) private var model
+    let tab: SubagentTabState
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button { tab.back() } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
+                    Text(destination).lineLimit(1)
+                }
+                .font(.system(size: 12.5))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Palette.secondaryText)
+            .keyboardShortcut("[", modifiers: .command)
+            .help("Back to \(destination) (⌘[)")
+            .accessibilityLabel("Back to \(destination)")
+            Spacer(minLength: 8)
+            if case .run(let id)? = tab.navigation.top, let run = model.delegation.run(id), run.phase.isActive {
+                let stopping = tab.isStopping(run)
+                Button { tab.stop(id) } label: {
+                    Label(stopping ? "Stopping…" : "Stop", systemImage: "stop.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 10)
+                        .frame(height: 24)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Palette.button))
+                        .foregroundStyle(Palette.buttonText)
+                        .opacity(stopping ? 0.55 : 1)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(stopping)
+                .help("Stop this sub-agent and the runs it delegated to")
+            }
+        }
+        .frame(minHeight: 26)
+        .onExitCommand { tab.back() }
+    }
+
+    private var destination: String {
+        let path = tab.navigation.path
+        guard path.count > 1 else { return "Sub-agents" }
+        switch path[path.count - 2] {
+        case .run(let id): return model.delegation.run(id)?.title ?? "Sub-agent"
+        case .task(let id): return model.task(.task(id, of: tab.target.botID))?.title ?? "Task"
+        }
+    }
+}
+
+private struct SubagentDetail: View {
+    @Environment(AppModel.self) private var model
+    let runID: UUID
+    let tab: SubagentTabState
+    var focus: FocusState<SubagentAnchor?>.Binding
+
+    var body: some View {
+        if let run = model.delegation.run(runID) {
+            SubagentDetailContent(run: run, tab: tab, focus: focus)
+        } else {
+            // Cleared meanwhile: back to where the reader came from.
+            Color.clear.frame(height: 0).onAppear { tab.navigation.prune { route in
+                if case .run(let id) = route { return model.delegation.run(id) != nil }
+                return true
+            } }
+        }
+    }
+}
+
+private struct SubagentDetailContent: View {
+    @Environment(AppModel.self) private var model
+    let run: SubagentRun
+    let tab: SubagentTabState
+    var focus: FocusState<SubagentAnchor?>.Binding
+
+    var body: some View {
+        let state = SubagentRowState(run, activity: model.delegation.states[run.id]?.activity, stopping: tab.isStopping(run))
+        let children = model.delegation.children(of: run.id)
+        let messages = model.delegation.threads[run.id] ?? []
+        VStack(alignment: .leading, spacing: 18) {
+            head(state)
+                .id(SubagentAnchor.block("top"))
+                .modifier(Placed(anchor: .block("top"), tab: tab))
+            if !run.phase.isActive {
+                SubagentResult(run: run, messages: messages)
+                    .modifier(Placed(anchor: .block("result"), tab: tab))
+            }
+            if !children.isEmpty {
+                SubagentDisclosure("Sub-agents", trailing: "\(children.count)", expanded: tab.section("sub-agents")) {
+                    InspectorCard {
+                        ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
+                            SubagentDetailBranch(run: child, depth: 0, first: index == 0, tab: tab, focus: focus)
+                        }
+                    }
+                }
+                .id(SubagentAnchor.block("sub-agents"))
+                .modifier(Placed(anchor: .block("sub-agents"), tab: tab))
+            }
+            SubagentTranscript(run: run, messages: messages, tab: tab)
+                .id(SubagentAnchor.block("transcript"))
+                .modifier(Placed(anchor: .block("transcript"), tab: tab))
+            SubagentBrief(run: run, tab: tab)
+                .modifier(Placed(anchor: .block("brief"), tab: tab))
+            SubagentRunFacts(run: run)
+                .modifier(Placed(anchor: .block("run"), tab: tab))
+        }
+        // The result appears above what the reader was reading without moving it.
+        .onChange(of: run.phase) { tab.keepPlace() }
+    }
+
+    private func head(_ state: SubagentRowState) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Its caller, when Back doesn't lead there already.
+            if let parent = run.parentSubagentID.flatMap({ model.delegation.run($0) }),
+               tab.navigation.path.dropLast().last != .run(parent.id) {
+                Text(parent.title).font(.system(size: 11.5)).foregroundStyle(Palette.secondaryText).lineLimit(1)
+            }
+            Text(run.title).font(.system(size: 15, weight: .semibold)).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                SubagentAvatar(run: run, size: 18)
+                Text(run.targetBotName).font(.system(size: 12)).foregroundStyle(Palette.secondaryText).lineLimit(1)
+            }
+            HStack(spacing: 6) {
+                SubagentStateSymbol(kind: state.kind).frame(width: 16, height: 16)
+                Text(state.word).foregroundStyle(state.kind == .failed ? failureRed : Palette.secondaryText)
+                Spacer(minLength: 6)
+                SubagentTime(state: state).foregroundStyle(state.kind == .failed ? failureRed : Palette.secondaryText)
+            }
+            .font(.system(size: 12))
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.updatesFrequently)
+        }
+        // Where Escape is heard once the details show.
+        .focusable()
+        .focused(focus, equals: .block("top"))
+        .focusEffectDisabled()
+    }
+}
+
+/// A child in the details' Sub-agents: every one, whatever its state, opening its own details.
+private struct SubagentDetailBranch: View {
+    @Environment(AppModel.self) private var model
+    let run: SubagentRun
+    let depth: Int
+    let first: Bool
+    let tab: SubagentTabState
+    var focus: FocusState<SubagentAnchor?>.Binding
+
+    var body: some View {
+        let children = model.delegation.children(of: run.id)
+        let failed = children.reduce(0) { $0 + ($1.phase == .failed ? 1 : 0) }
+        let startsOpen = run.phase.isActive || failed > 0 || children.contains { $0.phase.isActive }
+        let open = Binding(get: { tab.opened[run.id] ?? startsOpen }, set: { tab.opened[run.id] = $0 })
+        VStack(alignment: .leading, spacing: 0) {
+            SubagentRow(run: run, depth: depth, first: first, hasChildren: !children.isEmpty, open: open,
+                        failedBelow: failed, tab: tab, focus: focus) {
+                tab.push(.run(run.id), opened: run.id)
+            }
+            if open.wrappedValue, depth < SubagentLimits.maxDepth {
+                ForEach(children) { child in
+                    SubagentDetailBranch(run: child, depth: depth + 1, first: false, tab: tab, focus: focus)
+                }
+            }
+        }
+    }
+}
+
+/// What a run came to, first once it has ended: its handoff, its error or why it stopped.
+private struct SubagentResult: View {
+    let run: SubagentRun
+    let messages: [ChatMessage]
+    @State private var expanded = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) { result }
+    }
+
+    @ViewBuilder private var result: some View {
+        switch run.phase {
+        case .completed:
+            let handoff = run.handoffOutput ?? ""
+            if handoff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                SubagentDisclosure("Handoff", expanded: $expanded) {
+                    SubagentText(text: "No handoff text", secondary: true)
+                }
+            } else {
+                SubagentDisclosure("Handoff", copy: handoff, expanded: $expanded) { SubagentText(text: handoff) }
+            }
+        case .failed:
+            let error = run.errorMessage ?? "Failed without a message."
+            SubagentDisclosure("Error", copy: error, expanded: $expanded) { SubagentText(text: error, mono: true) }
+            lastReply
+        case .stopped:
+            if let reason = SubagentRowState.stopReason(run) {
+                SubagentDisclosure("Stopped", expanded: $expanded) { SubagentText(text: reason) }
+            }
+            lastReply
+        case .queued, .preparing, .running:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder private var lastReply: some View {
+        if let reply = messages.last(where: { $0.role == .assistant && !$0.text.isEmpty })?.text {
+            SubagentLastReply(text: reply)
+        }
+    }
+}
+
+private struct SubagentLastReply: View {
+    let text: String
+    @State private var expanded = true
+
+    var body: some View {
+        SubagentDisclosure("Last reply", copy: text, expanded: $expanded) { SubagentText(text: text) }
+    }
+}
+
+private struct SubagentText: View {
+    let text: String
+    var mono = false
+    var secondary = false
+
+    var body: some View {
+        InspectorCard(padded: true) {
+            Text(text)
+                .font(mono ? .system(size: 11.5, design: .monospaced) : .system(size: 12.5))
+                .foregroundStyle(secondary ? Palette.secondaryText : Palette.text)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// The run's transcript: open while it's under way, folded once it has ended (then as the reader
+/// leaves it), showing its last items with the earlier ones a click away.
+private struct SubagentTranscript: View {
+    @Environment(AppModel.self) private var model
+    let run: SubagentRun
+    let messages: [ChatMessage]
+    let tab: SubagentTabState
+    static let window = 12
+
+    var body: some View {
+        let items = messages.filter { $0.role == .assistant || $0.role == .tool || $0.role == .error }
+            .filter { $0.role == .tool || !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let start = min(tab.transcriptStart[run.id] ?? max(0, items.count - Self.window), items.count)
+        SubagentDisclosure("Transcript", trailing: items.isEmpty ? nil : "\(items.count)", expanded: Binding(
+            get: { tab.transcriptOpen[run.id] ?? run.phase.isActive }, set: { tab.transcriptOpen[run.id] = $0 })) {
+            InspectorCard {
+                if items.isEmpty {
+                    Text(run.phase.isActive ? "Nothing yet" : "Nothing recorded")
+                        .font(.system(size: 12)).foregroundStyle(Palette.secondaryText).padding(10)
+                }
+                if start > 0 {
+                    let earlier = min(start, 100)
+                    Button("Show \(earlier) earlier") { tab.transcriptStart[run.id] = start - earlier }
+                        .buttonStyle(.link).font(.system(size: 12)).foregroundStyle(Palette.accent)
+                        .padding(EdgeInsets(top: 8, leading: 10, bottom: 4, trailing: 10))
+                }
+                ForEach(items[start...]) { message in
+                    SubagentTranscriptItem(message: message, run: run, tab: tab)
+                }
+            }
+        }
+        .onAppear {
+            // The window's start stays put once shown, so new items add below and nothing moves.
+            if tab.transcriptStart[run.id] == nil { tab.transcriptStart[run.id] = start }
+            if tab.transcriptOpen[run.id] == nil { tab.transcriptOpen[run.id] = run.phase.isActive }
+        }
+    }
+}
+
+private struct SubagentTranscriptItem: View {
+    @Environment(AppModel.self) private var model
+    let message: ChatMessage
+    let run: SubagentRun
+    let tab: SubagentTabState
+
+    var body: some View {
+        if message.role == .tool {
+            let activity = ToolActivity.describe(message, root: run.workingDirectory)
+            let delegated = activity.runIDs.compactMap { id in model.delegation.children(of: run.id).first { $0.id == id } }
+            if !delegated.isEmpty {
+                ForEach(delegated) { child in
+                    Button { tab.push(.run(child.id), opened: nil) } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.triangle.branch").foregroundStyle(Palette.violet).frame(width: 16)
+                            Text(child.title).lineLimit(1).truncationMode(.tail)
+                            Spacer(minLength: 4)
+                            SubagentStateSymbol(kind: SubagentRowState(child).kind)
+                        }
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open \(child.title)")
+                }
+            } else {
+                tool(activity)
+            }
+        } else {
+            Text(message.text)
+                .font(.system(size: 12.5))
+                .foregroundStyle(message.role == .error ? failureRed : Palette.text)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+        }
+    }
+
+    private func tool(_ activity: ToolActivity) -> some View {
+        let open = tab.toolsOpen.contains(message.id)
+        let state = message.displayedToolState(for: run.account.kind)
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                if open { tab.toolsOpen.remove(message.id) } else { tab.toolsOpen.insert(message.id) }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: Self.glyph(activity.intent)).foregroundStyle(Palette.secondaryText).frame(width: 16)
+                    Text(message.toolName ?? "Tool").fontWeight(.semibold).lineLimit(1).fixedSize()
+                    Text([activity.title, activity.subtitle].filter { !$0.isEmpty }.joined(separator: " "))
+                        .foregroundStyle(Palette.secondaryText).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    if state == .running {
+                        ActivitySpinner(size: 10).foregroundStyle(Palette.violet)
+                    } else if state == .failed {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(failureRed)
+                    }
+                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                        .rotationEffect(.degrees(open ? 90 : 0)).foregroundStyle(Palette.secondaryText)
+                }
+                .font(.system(size: 12))
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(activity.command ?? message.toolInput ?? "")
+            if open {
+                ToolDetail(message: message, kind: run.account.kind).padding(10)
+            }
+        }
+    }
+
+    static func glyph(_ intent: ToolIntent) -> String {
+        switch intent {
+        case .read: "doc"
+        case .list: "folder"
+        case .search: "magnifyingglass"
+        case .fetch: "globe"
+        case .inspect: "eye"
+        case .command: "apple.terminal"
+        case .edit: "pencil"
+        case .subagent: "arrow.triangle.branch"
+        case .plan: "checklist"
+        case .question: "questionmark.bubble"
+        case .other: "wrench.and.screwdriver"
+        }
+    }
+}
+
+/// What the run was asked, and by whom.
+private struct SubagentBrief: View {
+    @Environment(AppModel.self) private var model
+    let run: SubagentRun
+    let tab: SubagentTabState
+    @State private var expanded = true
+
+    var body: some View {
+        let all = tab.briefsOpen.contains(run.id)
+        SubagentDisclosure("Brief", copy: run.brief, expanded: $expanded) {
+            InspectorCard(padded: true) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 5) {
+                        Text("From").foregroundStyle(Palette.secondaryText)
+                        caller
+                    }
+                    .font(.system(size: 12))
+                    Text(run.brief).font(.system(size: 12.5)).textSelection(.enabled)
+                        .lineLimit(all ? nil : 8)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if !all, run.brief.count > 400 || run.brief.split(separator: "\n", omittingEmptySubsequences: false).count > 8 {
+                        Button("Show all") { tab.briefsOpen.insert(run.id) }
+                            .buttonStyle(.link).font(.system(size: 12)).foregroundStyle(Palette.accent)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var caller: some View {
+        if let parent = run.parentSubagentID.flatMap({ model.delegation.run($0) }) {
+            Button {
+                if tab.navigation.path.dropLast().last == .run(parent.id) { tab.back() } else { tab.push(.run(parent.id), opened: nil) }
+            } label: {
+                HStack(spacing: 4) {
+                    SubagentAvatar(run: parent, size: 16)
+                    Text(parent.targetBotName).lineLimit(1)
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Palette.accent)
+            .help("Open \(parent.title)")
+        } else if let bot = model.bot(run.rootBotID) {
+            BotAvatar(bot: bot, size: 16)
+            Text(bot.name).lineLimit(1)
+        }
+    }
+}
+
+/// Where and how the run ran.
+private struct SubagentRunFacts: View {
+    @Environment(AppModel.self) private var model
+    let run: SubagentRun
+    @State private var expanded = true
+
+    var body: some View {
+        let label = ModelPickerData(kind: run.account.kind, model: run.model, openRouterDefault: model.settings.openRouterModel,
+                                    catalog: model.modelCatalog.models, resolved: run.resolvedModel)
+        SubagentDisclosure("Run", expanded: $expanded) {
+            InspectorCard {
+                SubagentFact("Account") {
+                    ProviderLabel(title: run.account.name, kind: run.account.kind, size: 12)
+                }
+                SubagentFact("Model") { Text(label.title).help(label.detail) }
+                SubagentFact("Workspace") {
+                    Text(run.workspaceMode == .sharedCallerWorkspace ? "Shared workspace" : "\(run.targetBotName)'s workspace")
+                }
+                SubagentFact("Folder", stacked: true) {
+                    Text(run.workingDirectory).font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                SubagentFact("Started") { Text(run.startedAt.map(Self.when) ?? "—") }
+                SubagentFact("Ended", last: true) { Text(run.phase.isActive ? "—" : (run.finishedAt.map(Self.when) ?? "—")) }
+            }
+        }
+    }
+
+    static func when(_ date: Date) -> String { date.formatted(date: .abbreviated, time: .shortened) }
+}
+
+/// A key and its value, side by side, or the key above the value where they don't fit.
+private struct SubagentFact<Value: View>: View {
+    let key: String
+    var stacked = false
+    var last = false
+    @ViewBuilder let value: Value
+
+    init(_ key: String, stacked: Bool = false, last: Bool = false, @ViewBuilder value: () -> Value) {
+        self.key = key
+        self.stacked = stacked
+        self.last = last
+        self.value = value()
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 6) {
-                Button { expanded.toggle() } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 9, weight: .semibold))
-                        BotAvatar(bot: avatarBot, size: 25, activity: activity, animates: run.phase.isActive)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(run.targetBotName).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                            Text(run.title).font(.system(size: 11)).lineLimit(2).foregroundStyle(Palette.secondaryText)
-                        }
-                        Spacer(minLength: 0)
-                    }.contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(expanded ? "Collapse" : "Expand") \(run.targetBotName): \(run.title)")
-                if run.phase.isActive {
-                    Button { model.delegation.stop(run.id) } label: { Image(systemName: "stop.fill").font(.system(size: 10)) }
-                        .buttonStyle(.plain).help("Stop this sub-agent and its children")
-                        .accessibilityLabel("Stop \(run.targetBotName)")
-                }
-            }
-            // Only a run under way ticks; a finished one's time doesn't change.
-            if run.phase.isActive {
-                TimelineView(.periodic(from: .now, by: 1)) { timeline in progress(now: timeline.date) }
+        Group {
+            if stacked {
+                above
             } else {
-                progress(now: run.finishedAt ?? run.createdAt)
-            }
-            if expanded {
-                Divider()
-                Text("Asked by \(callerName)").font(.system(size: 11, weight: .semibold))
-                Text(run.brief).font(.system(size: 11)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                let messages = model.delegation.threads[run.id] ?? []
-                if !messages.isEmpty {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 8) {
-                            ForEach(messages.filter { $0.role != .user }.suffix(30)) { message in
-                                if message.role == .tool {
-                                    DisclosureGroup {
-                                        Text([message.toolInput, message.toolOutput].compactMap { $0 }.joined(separator: "\n"))
-                                            .font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
-                                    } label: {
-                                        Label(message.toolName ?? "Tool", systemImage: message.toolState == .running ? "hourglass" : "checkmark")
-                                            .font(.system(size: 11))
-                                    }
-                                } else {
-                                    Text(message.text).font(.system(size: 11)).textSelection(.enabled)
-                                        .foregroundStyle(message.role == .error ? Color.red : Palette.text)
-                                }
-                            }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }.frame(maxHeight: 220)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        Text(key).foregroundStyle(Palette.secondaryText)
+                        Spacer(minLength: 8)
+                        value.lineLimit(1).fixedSize()
+                    }
+                    above
                 }
-                if let handoff = run.handoffOutput, !handoff.isEmpty, !run.phase.isActive {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Handoff").font(.system(size: 11, weight: .semibold))
-                            Spacer()
-                            Button("Copy") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(handoff, forType: .string)
-                            }.buttonStyle(.borderless).font(.system(size: 11))
-                        }
-                        Text(handoff).font(.system(size: 11)).textSelection(.enabled)
-                    }.padding(8).background(RoundedRectangle(cornerRadius: 6).fill(Palette.accent.opacity(0.08)))
-                }
-                if let error = run.errorMessage { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
-                ProviderLabel(title: [run.account.name, modelLabel.title,
-                                      run.workspaceMode == .sharedCallerWorkspace ? "Shared workspace" : "Bot workspace"].joined(separator: " · "),
-                              kind: run.account.kind, size: 11)
-                    .font(.system(size: 10)).foregroundStyle(Palette.secondaryText)
-                    .help(modelLabel.detail)
-                Text(run.workingDirectory).font(.system(size: 10, design: .monospaced))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .foregroundStyle(Palette.secondaryText).textSelection(.enabled)
-                if !run.phase.isActive { Button("Clear run") { model.delegation.clear(run.id) }.font(.system(size: 11)).buttonStyle(.borderless) }
             }
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Palette.card))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Palette.cardEdge))
-        .accessibilityIdentifier("subagent-\(run.id.uuidString)")
+        .font(.system(size: 12.5))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(minHeight: 34)
+        .overlay(alignment: .bottom) {
+            if !last { Rectangle().fill(Palette.rowDivider).frame(height: 1) }
+        }
     }
 
-    private func progress(now: Date) -> some View {
-        HStack {
-            Text(run.phase.isActive ? activity.doing : run.phase.displayName)
-                .foregroundStyle(run.phase == .failed ? Color.red : Palette.secondaryText)
-            Spacer(minLength: 0)
-            Text(BotStatus.formatElapsed(from: run.startedAt ?? run.createdAt, to: run.finishedAt ?? now))
-                .monospacedDigit().foregroundStyle(Palette.secondaryText)
-        }.font(.system(size: 10))
+    private var above: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(key).foregroundStyle(Palette.secondaryText)
+            value
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: Shared pieces
+
+/// A titled group like `InspectorSection`, whose folding belongs to the tab rather than to every
+/// conversation, with Copy beside the title where it applies.
+private struct SubagentDisclosure<Content: View>: View {
+    let title: String
+    var trailing: String?
+    var copy: String?
+    @Binding var expanded: Bool
+    @ViewBuilder let content: Content
+
+    init(_ title: String, trailing: String? = nil, copy: String? = nil, expanded: Binding<Bool>, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.trailing = trailing
+        self.copy = copy
+        _expanded = expanded
+        self.content = content()
     }
 
-    private var callerName: String {
-        run.parentSubagentID.flatMap { model.delegation.run($0)?.targetBotName } ?? model.bot(run.rootBotID)?.name ?? "Bot"
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            content
+        } label: {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .kerning(0.6)
+                    .textCase(.uppercase)
+                Spacer()
+                if let trailing, copy == nil { Text(trailing).font(.system(size: 11)).monospacedDigit() }
+            }
+            .foregroundStyle(Palette.secondaryText)
+            .padding(.horizontal, 4)
+        }
+        .disclosureGroupStyle(InspectorDisclosureStyle())
+        .overlay(alignment: .topTrailing) {
+            if let copy {
+                Button {
+                    copyToPasteboard(copy)
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc").font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Palette.secondaryText)
+                .help("Copy the \(title.lowercased())")
+                .padding(.trailing, 4)
+            }
+        }
+    }
+}
+
+/// Records where a row or block is in the visible part of the inspector's scroll view, so Back and
+/// changes above the reader can keep it in place.
+private struct Placed: ViewModifier {
+    let anchor: SubagentAnchor
+    let tab: SubagentTabState
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(InspectorScrollArea.space)) } action: { tab.frames[anchor] = $0 }
+            .onDisappear { tab.frames[anchor] = nil }
     }
 }
 

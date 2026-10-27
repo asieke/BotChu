@@ -135,33 +135,204 @@ private final class SubagentFixture {
         #expect(home.loadSubagents(taskID: taskID) == [child])
     }
 
-    @Test func tabListsRunsUnderWayFirstAndFoldsFinishedOnesNewestFirst() {
+    /// Runs for the Sub-agents tab's tests: each started by a turn (`turn`) or, as older records
+    /// were, without one; `minute` after a fixed start.
+    private struct Batch {
         let bot = Bot(name: "QA Bot", workspace: "/test")
         let start = Date(timeIntervalSince1970: 1_800_000_000)
-        func run(_ title: String, _ phase: SubagentPhase, minute: Double, parent: SubagentRun? = nil) -> SubagentRun {
-            SubagentRun(rootBotID: bot.id, parentSubagentID: parent?.id, depth: parent == nil ? 1 : 2, targetBot: bot, title: title,
-                        brief: title, workingDirectory: "/test", phase: phase, createdAt: start.addingTimeInterval(minute * 60))
+        var calendar: Calendar {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: "UTC")!
+            return calendar
         }
-        let audit = run("Audit", .completed, minute: 0)
-        let build = run("Build", .running, minute: 1)
-        let checks = run("Checks", .completed, minute: 2, parent: build)
-        let docs = run("Docs", .failed, minute: 3)
-        let review = run("Review", .stopped, minute: 4)
-        let runs = [audit, build, checks, docs, review]
 
-        // A finished run beneath one under way stays in that run's tree.
-        let sections = SubagentSections(runs)
-        #expect(sections.current.map(\.title) == ["Build"])
-        #expect(sections.finished.map(\.title) == ["Review", "Docs", "Audit"])
-        #expect(sections.failedCount == 1)
+        func run(_ title: String, _ phase: SubagentPhase, minute: Double, parent: SubagentRun? = nil, turn: UUID? = nil,
+                 handoff: String? = nil) -> SubagentRun {
+            var run = SubagentRun(rootBotID: bot.id, parentSubagentID: parent?.id, depth: (parent?.depth ?? 0) + 1, targetBot: bot,
+                                  title: title, brief: title, workingDirectory: "/test", callerInvocationID: turn ?? parent?.callerInvocationID,
+                                  phase: phase, createdAt: start.addingTimeInterval(minute * 60))
+            if !phase.isActive {
+                run.finishedAt = run.createdAt.addingTimeInterval(30)
+                run.handoffOutput = handoff ?? (phase == .completed ? "Done: \(title)" : nil)
+            }
+            return run
+        }
+    }
 
-        // Finished runs the tab keeps in view stay with those under way, in the order delegated.
-        let kept = SubagentSections(runs, keeping: [audit.id, docs.id])
-        #expect(kept.current.map(\.title) == ["Audit", "Build", "Docs"])
-        #expect(kept.finished.map(\.title) == ["Review"])
-        #expect(kept.failedCount == 0)
-        #expect(SubagentSections([]) == SubagentSections([], keeping: [audit.id]))
-        #expect(SubagentSections([]).current.isEmpty && SubagentSections([]).finished.isEmpty)
+    @Test func tabListsTurnsUnderWayFirstAndFoldsFinishedTreesAtOnce() {
+        let batch = Batch()
+        let earlier = UUID(), now = UUID()
+        let audit = batch.run("Audit", .completed, minute: 0, turn: earlier)
+        let lint = batch.run("Lint", .stopped, minute: 1, turn: earlier)
+        let build = batch.run("Build", .running, minute: 10, turn: now)
+        let checks = batch.run("Checks", .completed, minute: 11, parent: build)
+        let docs = batch.run("Docs", .completed, minute: 12, turn: now)
+        let review = batch.run("Review", .preparing, minute: 13, turn: now)
+        let overview = SubagentOverview(runs: [audit, lint, build, checks, docs, review], calendar: batch.calendar)
+
+        // The turn under way leads, its trees still under way in the order delegated; a finished
+        // run beneath one under way stays in that run's tree. Its finished tree folds at once.
+        #expect(overview.visible.map(\.key) == [.invocation(now)])
+        #expect(overview.visible.first?.isUnderWay == true)
+        #expect(overview.visible.first?.roots.map(\.title) == ["Build", "Review"])
+        #expect(!overview.isFinished(checks.id) && overview.root(of: checks.id) == build.id)
+        // Finished: newest turn first, counting the runs the conversation started.
+        #expect(overview.finished.map(\.key) == [.invocation(now), .invocation(earlier)])
+        #expect(overview.finished.map { $0.roots.map(\.title) } == [["Docs"], ["Audit", "Lint"]])
+        #expect(overview.finishedCount == 3)
+        #expect(overview.isFinished(docs.id) && overview.isFinished(lint.id))
+
+        // When Build's tree ends, it moves into Finished with its nested run, without waiting.
+        var ended = build
+        ended.phase = .completed
+        ended.finishedAt = build.createdAt.addingTimeInterval(60)
+        let after = SubagentOverview(runs: [audit, lint, ended, checks, docs, review], calendar: batch.calendar)
+        #expect(after.visible.first?.roots.map(\.title) == ["Review"])
+        #expect(after.finished.first?.roots.map(\.title) == ["Build", "Docs"])
+        #expect(after.isFinished(checks.id) && after.finishedCount == 4)
+
+        #expect(SubagentOverview(runs: []).visible.isEmpty && SubagentOverview(runs: []).finished.isEmpty)
+    }
+
+    @Test func aFailureAnywhereKeepsItsTreeInViewOpenDownToIt() {
+        let batch = Batch()
+        let turn = UUID()
+        // A batch: one implementer done whose helper's helper failed, one failed, one under way.
+        let solve184 = batch.run("Solve #184", .completed, minute: 0, turn: turn)
+        let profile = batch.run("Profile retries", .completed, minute: 1, parent: solve184)
+        let guidance = batch.run("URLSession guidance", .failed, minute: 2, parent: profile)
+        let solve185 = batch.run("Solve #185", .failed, minute: 3, turn: turn)
+        let solve186 = batch.run("Solve #186", .completed, minute: 4, turn: turn)
+        let runs = [solve184, profile, guidance, solve185, solve186]
+        let overview = SubagentOverview(runs: runs, calendar: batch.calendar)
+
+        #expect(overview.visible.first?.roots.map(\.title) == ["Solve #184", "Solve #185"])
+        #expect(overview.visible.first?.isUnderWay == false)
+        #expect(overview.finished.first?.roots.map(\.title) == ["Solve #186"])
+        // The path to the failed grandchild says so at each level; the failure itself doesn't count itself.
+        #expect(overview.failedBelow(solve184.id) == 1 && overview.failedBelow(profile.id) == 1)
+        #expect(overview.failedBelow(guidance.id) == 0 && overview.failedBelow(solve185.id) == 0)
+        #expect(overview.ancestors(of: guidance.id) == [profile.id, solve184.id])
+        #expect(overview.isInTree(guidance.id, of: solve184.id) && !overview.isInTree(solve186.id, of: solve184.id))
+        // Reading a failure changes nothing it is computed from: it stays until cleared.
+        #expect(SubagentOverview(runs: runs, calendar: batch.calendar) == overview)
+        #expect(SubagentOverview(runs: runs.filter { $0.id != guidance.id }, calendar: batch.calendar).isFinished(solve184.id))
+    }
+
+    @Test func olderRecordsGroupByDayAndOrphansHeadTheirOwnTree() {
+        let batch = Batch()
+        // Records saved before the turn was: no invocation, grouped by the day they were made.
+        let monday = batch.run("Monday's audit", .completed, minute: 0)
+        let mondayLate = batch.run("Monday's docs", .stopped, minute: 300)
+        let tuesday = batch.run("Tuesday's tests", .failed, minute: 24 * 60)
+        // A run whose parent was cleared heads its own tree rather than vanishing.
+        var orphan = batch.run("Orphan", .completed, minute: 24 * 60 + 5)
+        orphan.parentSubagentID = UUID()
+        orphan.depth = 2
+        let overview = SubagentOverview(runs: [monday, mondayLate, tuesday, orphan], calendar: batch.calendar)
+        let mondayKey = SubagentOverview.GroupKey.day(batch.calendar.startOfDay(for: monday.createdAt))
+        let tuesdayKey = SubagentOverview.GroupKey.day(batch.calendar.startOfDay(for: tuesday.createdAt))
+        #expect(overview.visible.map(\.key) == [tuesdayKey])
+        #expect(overview.finished.map(\.key) == [tuesdayKey, mondayKey])
+        #expect(overview.finished.map { $0.roots.map(\.title) } == [["Orphan"], ["Monday's audit", "Monday's docs"]])
+        #expect(overview.finished.last?.date == monday.createdAt)
+
+        // A malformed tree that loops is listed once and never recurses forever.
+        var a = batch.run("A", .completed, minute: 0)
+        var b = batch.run("B", .completed, minute: 1)
+        a.parentSubagentID = b.id
+        b.parentSubagentID = a.id
+        let looped = SubagentOverview(runs: [a, b], calendar: batch.calendar)
+        #expect(looped.visible.isEmpty && looped.finished.isEmpty)
+        #expect(looped.ancestors(of: a.id).isEmpty)
+    }
+
+    @Test func captionsSayTheDayAndTimeOfTheTurn() {
+        let batch = Batch()
+        let locale = Locale(identifier: "en_US")
+        let now = batch.start.addingTimeInterval(3 * 86_400 + 15 * 3600)
+        func group(_ date: Date, turn: Bool) -> SubagentOverview.Group {
+            .init(key: turn ? .invocation(UUID()) : .day(batch.calendar.startOfDay(for: date)), date: date, roots: [], isUnderWay: false)
+        }
+        let today = batch.calendar.startOfDay(for: now).addingTimeInterval(11 * 3600 + 120)
+        let caption = { (date: Date, turn: Bool) in SubagentOverview.caption(group(date, turn: turn), now: now, calendar: batch.calendar, locale: locale) }
+        #expect(caption(today, true).hasPrefix("Today, 11:02"))
+        #expect(caption(today.addingTimeInterval(-86_400 + 5 * 3600 + 8 * 60), true).hasPrefix("Yesterday, 4:10"))
+        #expect(caption(today.addingTimeInterval(-2 * 86_400), false) == "Saturday, Jan 16")
+        #expect(caption(today.addingTimeInterval(-2 * 86_400), true).hasPrefix("Saturday, Jan 16, 11:02"))
+        #expect(caption(today.addingTimeInterval(-400 * 86_400), false) == "Sunday, Dec 14, 2025")
+    }
+
+    @Test func rowsSayOnlyWhatWasRecorded() {
+        let batch = Batch()
+        let queued = batch.run("Q", .queued, minute: 0)
+        var preparing = batch.run("P", .preparing, minute: 0)
+        var running = batch.run("R", .running, minute: 0)
+        running.startedAt = running.createdAt.addingTimeInterval(5)
+        let done = batch.run("D", .completed, minute: 0)
+        let empty = batch.run("E", .completed, minute: 0, handoff: "  \n")
+        var failed = batch.run("F", .failed, minute: 0)
+        failed.errorMessage = "exit 1"
+        var stopped = batch.run("S", .stopped, minute: 0)
+        stopped.errorMessage = "Stopped"
+        var restarted = stopped
+        restarted.errorMessage = "BotChu restarted before this sub-agent finished."
+
+        #expect(SubagentRowState(queued).word == "Queued" && SubagentRowState(queued).isLive)
+        // A preparing run's turn defaults to thinking; it still reads Preparing.
+        #expect(SubagentRowState(preparing, activity: .thinking).word == "Preparing")
+        #expect(SubagentRowState(preparing).since == preparing.createdAt)
+        preparing.phase = .running
+        #expect(SubagentRowState(preparing).word == "Working")
+        #expect(SubagentRowState(running, activity: .researching).word == "Reading files…")
+        #expect(SubagentRowState(running).since == running.startedAt)
+        #expect(SubagentRowState(running, activity: .coding, stopping: true).kind == .stopping)
+        #expect(SubagentRowState(done, stopping: true).kind == .done)
+        #expect(SubagentRowState(done).word == "Done" && SubagentRowState(done).ended == done.finishedAt)
+        #expect(SubagentRowState(empty).kind == .noHandoff && SubagentRowState(empty).word == "No handoff")
+        #expect(SubagentRowState(failed).kind == .failed && !SubagentRowState(failed).isLive)
+        #expect(SubagentRowState(stopped).word == "Stopped")
+        #expect(SubagentRowState.stopReason(stopped) == nil)
+        #expect(SubagentRowState.stopReason(restarted) == "BotChu restarted before this sub-agent finished.")
+        #expect(SubagentRowState.stopReason(failed) == nil)
+        // Every recorded phase has its own word; none is blocked, accepted or a percentage.
+        let words = SubagentPhase.allCases.map { phase in
+            var run = batch.run("X", phase, minute: 0)
+            run.handoffOutput = phase == .completed ? "ok" : nil
+            return SubagentRowState(run, activity: .working).word
+        }
+        #expect(words == ["Queued", "Preparing", "Running a tool…", "Done", "Failed", "Stopped"])
+    }
+
+    @Test func navigationComesBackToWhereTheListWas() {
+        let parent = UUID(), child = UUID(), other = UUID(), task = UUID()
+        var navigation = SubagentNavigation()
+        let place = SubagentNavigation.Mark(opened: parent, anchor: .run(other), fraction: 0.4)
+        navigation.push(.run(parent), from: place)
+        navigation.push(.run(parent), from: nil)
+        #expect(navigation.path == [.run(parent)])
+        let inDetails = SubagentNavigation.Mark(opened: child, anchor: .block("sub-agents"), fraction: 0.1)
+        navigation.push(.run(child), from: inDetails)
+        #expect(navigation.top == .run(child))
+        #expect(navigation.back() == inDetails)
+        #expect(navigation.back() == place)
+        #expect(navigation.back() == nil && navigation.path.isEmpty)
+
+        // The chat's Open goes straight to a run, nested or finished, from wherever the tab was;
+        // Back returns to the list as it was, with no row to reveal.
+        navigation.push(.task(task), from: place)
+        navigation.push(.run(parent), from: nil)
+        navigation.open(child, from: nil)
+        #expect(navigation.path == [.run(child)])
+        #expect(navigation.back() == .init(anchor: .run(other), fraction: 0.4))
+        navigation.open(child, from: place)
+        #expect(navigation.back()?.opened == nil)
+
+        // A cleared run's details close.
+        navigation.push(.run(parent), from: place)
+        navigation.push(.run(child), from: nil)
+        navigation.prune { $0 != .run(parent) && $0 != .run(child) }
+        #expect(navigation.path.isEmpty)
     }
 
     @Test func contextUsesTargetIdentityAndEnforcesDepthLimit() throws {

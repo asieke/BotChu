@@ -1003,6 +1003,50 @@ actor Gate {
 
     // MARK: Without tools
 
+    /// #192: a new task's summary runs as a review does, in a fresh session with no tools in an
+    /// empty folder, logged as a "task summary"; a timeout, a failure or a reply that isn't a label
+    /// gives none.
+    @Test func aTaskSummaryRunsAsAToolFreeQuickTask() async throws {
+        let fixture = try ReviewFixture()
+        defer { fixture.remove() }
+        let script = fixture.root.appendingPathComponent("codex.py")
+        try #"""
+        import json, os, sys
+        args = sys.argv[1:]
+        open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "args.json"), "w").write(json.dumps(args[:-1]))
+        label = "Fix login timeout" if "<task>" in args[-1] and not os.listdir(".") else "No"
+        print(json.dumps({"type": "thread.started", "thread_id": "summary-session"}), flush=True)
+        print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": label}}), flush=True)
+        print(json.dumps({"type": "turn.completed"}), flush=True)
+        """#.write(to: script, atomically: true, encoding: .utf8)
+        let quick = try #require(QuickTasks(accountID: "codex-dev", model: "gpt-6-luna", accounts: Accounts.all))
+        let task = BotTask(repo: "asieke/BotChu", checkout: "/w/BotChu", brief: "The login times out after a minute on slow networks")
+        let job = try #require(TaskSummary.job(for: task, botID: fixture.bot.id, quick: quick))
+        let home = BotHome(workspace: fixture.bot.workspace)
+        let summary = await TaskSummary.run(job, with: { job in
+            try await EvaluationCLI.run(job, command: "/usr/bin/python3 \(Shell.quote(script.path))", model: job.model, log: home, what: "task summary")
+        })
+        #expect(summary == "Fix login timeout")
+        let args = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: fixture.root.appendingPathComponent("args.json"))) as? [String])
+        #expect(args == Array(try #require(CommandBuilder.toolFreeInvocation(kind: .codex, prompt: "x", model: "gpt-6-luna",
+                                                                              reasoningEffort: .low)).arguments.dropLast()))
+        let log = try String(contentsOf: try #require(FileManager.default.contentsOfDirectory(at: home.logsURL, includingPropertiesForKeys: nil).first),
+                             encoding: .utf8)
+        #expect(log.contains("task summary started · Codex Dev · new session"))
+        #expect(log.contains("task summary finished"))
+        #expect(!log.contains("slow networks"), "The log gives the prompt's length, not the prompt")
+
+        // No label, a failure, or no reply in time: no summary, and the task keeps its name.
+        #expect(await TaskSummary.run(job, with: { _ in "Here is a label you could use for it" }) == nil)
+        #expect(await TaskSummary.run(job, with: { _ in throw EvaluationRunError("Not signed in") }) == nil)
+        let started = ContinuousClock.now
+        #expect(await TaskSummary.run(job, with: { _ in
+            try await Task.sleep(for: .seconds(30))
+            return "Fix login timeout"
+        }, timeout: 0.1) == nil)
+        #expect(ContinuousClock.now - started < .seconds(10))
+    }
+
     @Test func reviewsRunWithoutToolsAsEachCLIEnforcesItAndSkipTheOthers() throws {
         func arguments(_ kind: AgentKind, model: String? = nil, effort: ReasoningEffort? = nil) throws -> [String] {
             try #require(CommandBuilder.toolFreeInvocation(kind: kind, prompt: "-review this", model: model, reasoningEffort: effort,
