@@ -264,13 +264,19 @@ import Testing
         // Another profile, or the same one with another command, is a profile of its own.
         #expect(evidence.check(for: other)?.invalidated == false)
         #expect(evidence.check(for: newCommand)?.invalidated == false)
-        // B's late answer, from before the change, doesn't make it current again.
-        #expect(!finished(&evidence, b, token: late, .success(report("Old", at: soon)), at: soon))
+        // B's check still runs: asking for B now starts none beside it, but queues one after it, once.
+        #expect(evidence.isChecking(b))
+        #expect(begun(&evidence, b, now: soon) == nil)
+        #expect(begun(&evidence, b, force: true, now: soon) == nil)
+        #expect(evidence.queued == [b.key])
+        // B's late answer, from before the change, doesn't make it current again; the queued check follows.
+        #expect(finished(&evidence, b, token: late, .success(report("Old", at: soon)), at: soon) == .init(recorded: false, again: true))
         #expect(evidence.check(for: b)?.invalidated == true)
         #expect(evidence.check(for: b)?.report?.connected.map(\.name) == ["Gmail"])
+        #expect(evidence.checking.isEmpty && evidence.overtaken.isEmpty && evidence.queued.isEmpty)
         // The check after it does.
-        let fresh = try required(&evidence, b, now: soon)
-        #expect(finished(&evidence, b, token: fresh, .success(report("Slack", at: soon)), at: soon))
+        let fresh = try required(&evidence, b, force: true, now: soon)
+        #expect(finished(&evidence, b, token: fresh, .success(report("Slack", at: soon)), at: soon) == .init(recorded: true, again: false))
         #expect(evidence.check(for: b)?.invalidated == false)
         #expect(evidence.check(for: b)?.report?.connected.map(\.name) == ["Slack"])
     }
@@ -280,11 +286,17 @@ import Testing
         let done = try required(&evidence, a, now: start)
         evidence.finish(a, token: done, .success(report("Gmail", at: start)), at: start)
         let running = try required(&evidence, b, now: start)
+        // Managed while it runs, and asked for again: a check is queued after it.
+        evidence.invalidate(profileOf: b)
+        #expect(begun(&evidence, b, now: start) == nil)
+        #expect(evidence.queued == [b.key])
         evidence.retain(profiles: [ConnectorScope.profile(accountID: a.accountID, command: "codex-personal --profile x")])
-        #expect(evidence.checks.isEmpty && evidence.checking.isEmpty)
-        // The check that ran for the old command ends: it changes nothing.
-        #expect(!finished(&evidence, b, token: running, .success(report("Gmail", at: start)), at: start))
-        #expect(evidence.check(for: b) == nil)
+        // The old command's check is forgotten, and nothing is queued for it; its run still counts as running.
+        #expect(evidence.checks.isEmpty && evidence.queued.isEmpty)
+        #expect(evidence.isChecking(b) && evidence.overtaken == [b.key])
+        // The check that ran for the old command ends: it changes nothing, and nothing follows it.
+        #expect(finished(&evidence, b, token: running, .success(report("Gmail", at: start)), at: start) == .init(recorded: false, again: false))
+        #expect(evidence.check(for: b) == nil && evidence.checking.isEmpty)
     }
 
     @Test func sessionReportsBelongToTheirConversationAndScope() {
@@ -362,7 +374,7 @@ import Testing
         let connectors = try ConnectorParser.codex(installed: ConnectorSamples.object(ConnectorSamples.codexInstalledSystem),
                                                    servers: [ConnectorSamples.object(ConnectorSamples.codexServersSystem)])
         let report = ConnectorReport(connectors: connectors)
-        #expect(report.listed(.system).map(\.name) == ["Codex Document Control", "Hotline", "link", "node_repl", "Pets", "Search Service"])
+        #expect(report.listed(.system).map(\.name) == ["Codex Document Control", "Hotline", "link", "node_repl", "Pets", "Search Service", "cua_repl"])
         #expect(report.listed(.tool).map(\.name) == ["Computer Use"])
         #expect(report.listed(.tool).first?.state == .configured)
         // Services, the owner's MCP servers and a newly bundled app all stay in view.
@@ -383,6 +395,13 @@ import Testing
         #expect(category("Link", .claudeAI) == .connection)
         #expect(category("Pets", .codexApp, id: "asdk_app_1") == .connection)
         #expect(category("Pets", .codexApp, id: "connector_openai_chatgpt_pets") == .system)
+        // Codex's computer-use runtime and its apps' bridge, by their exact names; Computer Use stays a tool.
+        #expect(category("cua_repl", .mcpServer) == .system)
+        #expect(category("codex_app", .mcpServer) == .system)
+        #expect(category("codex_apps", .mcpServer) == .system)
+        #expect(category("cua", .mcpServer) == .connection)
+        #expect(category("cua_repl_tools", .mcpServer) == .connection)
+        #expect(category("codex_app_store", .mcpServer) == .connection)
     }
 
     @Test func listsPutWhatNeedsTheOwnerFirst() {
@@ -618,6 +637,6 @@ private func required<T>(_ evidence: inout ConnectorEvidence<T>, _ scope: Connec
 }
 
 private func finished<T>(_ evidence: inout ConnectorEvidence<T>, _ scope: ConnectorScope, token: Int,
-                         _ result: Result<ConnectorReport, ConnectorFailure>, at date: Date) -> Bool {
+                         _ result: Result<ConnectorReport, ConnectorFailure>, at date: Date) -> ConnectorEvidence<T>.Finish {
     evidence.finish(scope, token: token, result, at: date)
 }

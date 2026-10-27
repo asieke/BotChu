@@ -975,8 +975,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     there is **Not checked on <host>**, and Antigravity, Muse and Pi **Discovery unavailable for
     <CLI>**. Unknown is a sentence, never an empty list; **None** only when a report came back
     empty. Each entry is a **Connection** (a service), a **Tool** (Computer Use) or **System**:
-    the provider's own, matched exactly (Codex's link and node_repl servers and its own apps,
-    `connector_openai_…`, such as Hotline and Pets); anything else stays a connection. The card
+    the provider's own, matched exactly (Codex's link, node_repl and `cua_repl`, its computer-use
+    runtime, servers, its `codex_apps` bridge and its own apps, `connector_openai_…`, such as
+    Hotline and Pets); anything else stays a connection. The card
     lists first what needs you, **Needs sign-in**, **Failed** or **Pending approval**, each with its
     action; then connected services as chips (twelve, then **+N more**); **Off**, **Not confirmed**
     (not started, starting, or an app with no callable tool) and **Configured · not checked** (a
@@ -1001,8 +1002,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     names, states, tool counts and BotChu's own error sentences, never commands, paths, endpoints or
     the CLI's errors), so a relaunch shows the last list without checking. A list over an hour old,
     one whose check failed (kept, with the error) or one invalidated by management is **Stale**
-    while it is checked again. One check per scope runs at a time; Refresh meanwhile starts none,
-    and an answer overtaken by management or a changed command or removed profile is dropped.
+    while it is checked again. One check per scope runs at a time, even one overtaken by
+    management: its answer is dropped, the list before it stays meanwhile, and a check asked for
+    while it runs (the return, a Refresh, showing the folder) follows it once. Refresh during a
+    current check starts none. A changed command or removed profile drops its checks, any queued
+    check and a return still awaited, so nothing runs for it.
     Session reports stay in memory, per conversation.
   - **Settings:** a page of the main window, beside the sidebar, opened by the sidebar's gear,
     ⌘, or BotChu ▸ Settings…, like a gallery: the conversation shown keeps its tab, its draft and its
@@ -1270,8 +1274,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     Codex's app-server, from captured samples, every page, an older Codex, late checks from
     another conversation, stale and empty lists; connectors' categories, actions and Terminal
     handoffs (quoted, run in a shell), saved checks by opaque key across a relaunch, invalidation
-    after management and late answers it overtakes, and Providers' folder, Manage's scope and the
-    folded System (#212); Model & Usage showing the reading the background keeps,
+    after management and late answers it overtakes, a handoff and return during a suspended check
+    (never two at once, one fresh check after it), nothing run for a removed profile or changed
+    command, and Providers' folder, Manage's scope and the folded System (#212); Model & Usage showing the reading the background keeps,
     checking only one missing or as old as its interval, and Refresh's limits; Providers' model
     groups, time left and reset times, credits and free resets with their expiry, a row's status by
     exception, and the widths of its columns and meters; skills: their frontmatter, finding and making them, which a

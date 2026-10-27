@@ -30,14 +30,20 @@ import BotChuCore
     }
 
     /// Checks the profile in `scope` when that is due (`force`: Refresh, within its limit). One
-    /// check of a scope runs at a time; asking meanwhile waits for nothing and starts nothing.
+    /// check of a scope runs at a time; asking meanwhile starts nothing, unless the running one was
+    /// overtaken by a handoff, when one more check follows it.
     func check(_ scope: ConnectorScope, kind: AgentKind, force: Bool = false) async {
-        guard scope.isLocal, let token = evidence.begin(scope, force: force) else { return }
-        let result: Result<ConnectorReport, ConnectorFailure>
-        do { result = .success(try await checkProfile(kind, scope.command, scope.folder)) }
-        catch let failure as ConnectorFailure { result = .failure(failure) }
-        catch { result = .failure(ConnectorFailure("\(kind.displayName) couldn’t list its connectors.")) }
-        if evidence.finish(scope, token: token, result) { save() }
+        guard scope.isLocal, isKnown(scope), var token = evidence.begin(scope, force: force) else { return }
+        while true {
+            let result: Result<ConnectorReport, ConnectorFailure>
+            do { result = .success(try await checkProfile(kind, scope.command, scope.folder)) }
+            catch let failure as ConnectorFailure { result = .failure(failure) }
+            catch { result = .failure(ConnectorFailure("\(kind.displayName) couldn’t list its connectors.")) }
+            let finish = evidence.finish(scope, token: token, result)
+            if finish.recorded { save() }
+            guard finish.again, isKnown(scope), let next = evidence.begin(scope, force: true) else { return }
+            token = next
+        }
     }
 
     /// The provider's settings or CLI were opened for `scope`: every folder's list for its profile
@@ -49,19 +55,27 @@ import BotChuCore
         save()
     }
 
-    /// BotChu is in front again after a handoff: the scope it was for is checked again.
+    /// BotChu is in front again after a handoff: the scope it was for is checked again, if its
+    /// profile and command are still in Settings.
     func returned() {
         guard let (scope, kind) = awaitingReturn else { return }
         awaitingReturn = nil
         Task { await check(scope, kind: kind) }
     }
 
-    /// Drops the checks of profiles no longer in Settings, or whose command changed.
+    /// Drops the checks of profiles no longer in Settings, or whose command changed, and a return
+    /// awaited for one.
     func prune() {
         guard let profiles = profiles() else { return }
-        let before = evidence.checks.count + evidence.checking.count
+        if let scope = awaitingReturn?.scope, !profiles.contains(scope.key.profile) { awaitingReturn = nil }
+        let before = evidence.checks.count
         evidence.retain(profiles: profiles)
-        if evidence.checks.count + evidence.checking.count != before { save() }
+        if evidence.checks.count != before { save() }
+    }
+
+    /// Whether `scope`'s profile, with its command, is in Settings now.
+    private func isKnown(_ scope: ConnectorScope) -> Bool {
+        profiles().map { $0.contains(scope.key.profile) } ?? true
     }
 
     /// Writes every check off the main thread, in order; one that can't be written stays in memory.

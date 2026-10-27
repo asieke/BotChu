@@ -98,9 +98,10 @@ public struct Connector: Hashable, Sendable, Codable {
         }
     }
 
-    /// Servers by these names are Codex's own: link, node_repl, Hotline, Pets, and the bridge to its
-    /// apps; its own apps are told by their ids (`connector_openai_…`).
-    static let systemNames: Set<String> = ["hotline", "link", "noderepl", "pets", "codexapps"]
+    /// Servers by these names are Codex's own: link, node_repl, Hotline, Pets, the computer-use
+    /// runtime (`cua_repl`) and the bridge to its apps (`codex_apps`, `codex_app`); its own apps are
+    /// told by their ids (`connector_openai_…`).
+    static let systemNames: Set<String> = ["hotline", "link", "noderepl", "pets", "cuarepl", "codexapps", "codexapp"]
     static let toolNames: Set<String> = ["computeruse"]
 
     /// Lowercased letters and digits only, so `node_repl`, `node-repl` and `Node REPL` are one name.
@@ -264,9 +265,13 @@ public struct ConnectorCheck: Equatable, Sendable, Codable {
 public struct ConnectorEvidence<Target: Hashable & Sendable>: Sendable {
     public private(set) var sessions: [Target: SessionConnectorReport] = [:]
     public private(set) var checks: [ConnectorKey: ConnectorCheck]
-    /// The checks running, each with its token: an answer whose token isn't there any more was
-    /// overtaken (its scope was invalidated or forgotten) and changes nothing.
+    /// The checks running, each with its token. One check of a scope runs at a time, even after
+    /// it was overtaken: its answer is dropped then, and a check asked for meanwhile runs after it.
     public private(set) var checking: [ConnectorKey: Int] = [:]
+    /// Running checks whose answer changes nothing: their scope was invalidated or forgotten since.
+    public private(set) var overtaken: Set<ConnectorKey> = []
+    /// Overtaken checks after which their scope is checked once more, as asked meanwhile.
+    public private(set) var queued: Set<ConnectorKey> = []
     private var tokens = 0
 
     public init(checks: [ConnectorKey: ConnectorCheck] = [:]) {
@@ -287,24 +292,42 @@ public struct ConnectorEvidence<Target: Hashable & Sendable>: Sendable {
     }
 
     /// Starts a check of `scope` when one is due (`force`: Refresh, within its limit) and none is
-    /// running; its token, which `finish` needs, or nil when it shouldn't start.
+    /// running; its token, which `finish` needs, or nil when it shouldn't start. Asked while an
+    /// overtaken check runs, it queues one check for when that ends.
     public mutating func begin(_ scope: ConnectorScope, force: Bool = false, now: Date = Date()) -> Int? {
         let key = scope.key
-        guard checking[key] == nil else { return nil }
         if let last = checks[key], !(force ? last.canRetry(at: now) : last.isDue(at: now)) { return nil }
+        guard checking[key] == nil else {
+            if overtaken.contains(key) { queued.insert(key) }
+            return nil
+        }
         tokens += 1
         checking[key] = tokens
         return tokens
     }
 
-    /// Records a check's answer, unless it was overtaken; whether it was recorded.
+    /// What became of a check's answer: whether it was recorded, and whether its scope is to be
+    /// checked again now (`begin`), because that was asked while it was overtaken.
+    public struct Finish: Equatable, Sendable {
+        public var recorded: Bool
+        public var again: Bool
+
+        public init(recorded: Bool, again: Bool) {
+            self.recorded = recorded
+            self.again = again
+        }
+    }
+
+    /// Records a check's answer, unless it was overtaken.
     @discardableResult
-    public mutating func finish(_ scope: ConnectorScope, token: Int, _ result: Result<ConnectorReport, ConnectorFailure>, at now: Date = Date()) -> Bool {
+    public mutating func finish(_ scope: ConnectorScope, token: Int, _ result: Result<ConnectorReport, ConnectorFailure>, at now: Date = Date()) -> Finish {
         let key = scope.key
-        guard checking[key] == token else { return false }
+        guard checking[key] == token else { return Finish(recorded: false, again: false) }
         checking[key] = nil
+        let again = queued.remove(key) != nil
+        guard overtaken.remove(key) == nil else { return Finish(recorded: false, again: again) }
         checks[key] = (checks[key] ?? ConnectorCheck(triedAt: .distantPast)).next(result, at: now)
-        return true
+        return Finish(recorded: true, again: again)
     }
 
     /// After its provider's settings or CLI were opened for `scope`: every folder of that profile on
@@ -313,14 +336,16 @@ public struct ConnectorEvidence<Target: Hashable & Sendable>: Sendable {
     public mutating func invalidate(profileOf scope: ConnectorScope) {
         let profile = scope.key.profile
         for key in checks.keys where key.local && key.profile == profile { checks[key]?.invalidated = true }
-        for key in checking.keys where key.local && key.profile == profile { checking[key] = nil }
+        for key in checking.keys where key.local && key.profile == profile { overtaken.insert(key) }
     }
 
     /// Keeps the checks of the given profiles only (`ConnectorScope.profile`): a removed profile's,
-    /// or one whose command changed, go, with any check of theirs still running.
+    /// or one whose command changed, go; any check of theirs still running is overtaken and
+    /// nothing is queued after it.
     public mutating func retain(profiles: Set<String>) {
         checks = checks.filter { profiles.contains($0.key.profile) }
-        checking = checking.filter { profiles.contains($0.key.profile) }
+        for key in checking.keys where !profiles.contains(key.profile) { overtaken.insert(key) }
+        queued = queued.filter { profiles.contains($0.profile) }
     }
 }
 
