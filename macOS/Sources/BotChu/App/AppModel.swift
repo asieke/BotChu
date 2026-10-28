@@ -217,6 +217,8 @@ final class AppModel {
     let modelCatalog = ModelCatalog()
 
     private let store: Store
+    /// BotChu's data folder (`~/Library/Application Support/BotChu`, or a test's).
+    var dataFolder: URL { store.root }
     /// Where conversations, settings, logs, memory, sub-agents' and jobs' files are written, off the
     /// main thread, each target in order (`StorageQueue`, #107).
     let storage: StorageQueue
