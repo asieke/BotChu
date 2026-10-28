@@ -68,7 +68,7 @@ struct TaskInspector: View {
                     InspectorSection("Runs on") {
                         RunsOnCard(settings: task, target: target)
                     }
-                    let usageRequest = model.usageRequest(for: task.account)
+                    let usageRequest = model.usageRequest(for: task)
                     AccountUsageSection(request: usageRequest, isRunning: model.isRunning(target))
                         .id(usageRequest)
                     ConnectorsSection(target: target)

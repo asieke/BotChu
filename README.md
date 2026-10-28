@@ -210,13 +210,12 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     while Providers shows, so it opens on the last numbers and updates them in place; a
     conversation's **Model & Usage** shows the same readings, with the same refresh limits. It
     searches by name or family. **New Profile** adds a named profile of Claude Code, Codex,
-    Antigravity, Muse or Pi, with an installed command or wrapper and **Test Command**; for Pi, it
-    shows whether the shared OpenRouter key is saved, or **Add Key in Settings…** (which closes
-    the sheet, so only before anything is typed). Sign in through that CLI in Terminal; BotChu does not create its
+    Antigravity, Muse or Pi, with an installed command or wrapper and **Test Command**. New Pi profiles
+    use their own OAuth or environment credentials. Sign in through that CLI in Terminal; BotChu does not create its
     login. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
     Codex profiles can also draw pets. Bots and tasks retain a copy of their custom profile’s CLI
-    family and command across relaunches. Command overrides remain editable in Settings. Pi profiles
-    use the shared OpenRouter key. Muse is checked with its existing brief request, at most
+    family and command across relaunches. Command overrides remain editable in Settings. Legacy Pi profiles
+    retain the shared key only for OpenRouter. Muse is checked with its existing brief request, at most
     hourly by itself.
   - **Bots:** create, edit and delete bots. A bot has a name, an emoji, a one-line title, private
     instructions, an account, an optional model and a workspace folder (default `~/BotChu/<name>`).
@@ -261,8 +260,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   - **Accounts:** any bot can run on any account, switchable in **Edit Bot**:
     Claude Personal, Claude Dev and Claude Work (`claude-personal`, `claude-dev`, `claude-work`),
     Codex Personal, Codex Dev and Codex Work (`codex-personal`, `codex-dev`, `codex-work`), Google
-    (Antigravity, `agy`), Muse (`muse`), OpenRouter (the Pi agent, `pi`, with an OpenRouter key
-    and any OpenRouter model), and Sail Research (`sail`: BotChu's own agent, below, with a Sail key
+    (Antigravity, `agy`), Muse (`muse`), Pi (`pi`, with providers, models and efforts discovered from its installed runtime), and Sail Research (`sail`: BotChu's own agent, below, with a Sail key
     and model of its own). Each account's command can be changed in Settings.
     Wherever an account or a CLI family is shown, so is the family's logo, as in GitChu: Claude's
     spark, OpenAI's knot for Codex, Google's G for Antigravity, Facebook's f for Muse, π for Pi, and a
@@ -697,8 +695,8 @@ on that pull request's branch to continue in instead). The same command run agai
     job leaves its runs' tasks, as it leaves the tasks it asked for. Runs from before runs were tasks
     keep their transcripts in the history, and a run that never started (its agent's folder gone, or
     in a review copy) has only its reason there. A job's own choice is saved with it, and a
-    job saved before jobs had one runs on its agent's. When its account is gone from Providers, or
-    OpenRouter's catalog no longer lists its OpenRouter model, its runs use the agent's account,
+    job saved before jobs had one runs on its agent's. When its account is gone from Providers,
+    its runs use the agent's account,
     model and effort instead, never another provider, and the editor (which shows the choice as
     unavailable), the job's row, its history and the run's first line say so; it keeps the choice for
     when the account is back. A CLI's own models and custom IDs run as chosen: one the CLI rejects
@@ -1806,6 +1804,26 @@ on that pull request's branch to continue in instead). The same command run agai
   pkill -x BotChu; macOS/build.sh && open macOS/build/BotChu.app
   ```
 
+## Sensitive input
+
+An agent running on this Mac can call `botchu-secret request --label "Service API key"
+--destination "/absolute/path/to/new/file"`. BotChu opens a floating popup naming the bot and the
+exact destination. The owner pastes into a secure field and chooses **Save to File** or **Cancel**.
+The app writes the exact text, without a newline, straight to that new file with mode `0600`.
+Only a status reaches the helper, conversation and logs; request and reply mailboxes never contain
+the entered value. The destination is a persistent file readable by programs running as the owner,
+so use a location outside source control, or ignore it before requesting it, and delete it when done.
+The agent's instructions say to configure the intended program to consume it without reading,
+printing or logging its contents.
+
+The folder must already exist. Existing files, symbolic links anywhere in the path, dot components,
+control characters, `.git` and `.botchu` paths, and BotChu's IPC directory are refused. Files aren't
+overwritten; dotenv updates, command interpolation and remote delivery aren't supported. Requests
+expire after five minutes, and cancelling the helper, stopping the turn or quitting BotChu dismisses
+the prompt. At most eight prompts wait at once. Secrets are held transiently by the secure field and
+the direct write; BotChu doesn't promise forensic erasure of process memory or protect the approved
+file from other programs running as the same user.
+
 ## Test
 - While editing, run the suites the change touches: `swift test --package-path macOS --filter <Suite>`.
   Rendering suites still need the shared window-test gate.
@@ -2084,3 +2102,19 @@ on that pull request's branch to continue in instead). The same command run agai
 - **Recovery:** After a failed deploy, fix it (or revert the change) through a pull request and deploy again; `scripts/deploy.sh` retries, and reinstalls what is checked out when nothing new merged.
 - **Scheduled jobs:** none.
 - **Development:** On this Mac, in task worktrees of `~/Desktop/WORKSPACE/BotChu` (`.claude/worktrees/<type>-<slug>`, from `origin/main`). Changes reach the live app only by merging a pull request to `main` and deploying it.
+
+### Pi runtime providers
+
+Pi profiles choose **Account → Provider → Model → Effort**. BotChu reads available providers,
+models and each model's supported thinking levels from that profile's installed Pi using
+`get_available_models` RPC. The provider is separate from the model ID; an OpenRouter model such
+as `anthropic/claude-sonnet-4.5` keeps that full ID. Changing provider clears model and effort and
+starts a new CLI session, with a “New session” note in the conversation.
+
+New Pi profiles use their own Pi OAuth/environment credentials. Old saved Pi profiles (including
+custom profiles) keep OpenRouter when no provider is saved, and only those legacy profiles running
+OpenRouter receive BotChu's shared Keychain key. Readiness uses
+`pi auth check --provider <provider> --json --no-refresh`; BotChu never reads Pi's auth files.
+On SSH hosts, discovery and auth checks use the host's command (or `pi` on its PATH), credentials
+and configuration, with no Mac key or config path forwarded. A provider without a selected model
+or ready credentials blocks the turn and names what needs attention.

@@ -102,7 +102,7 @@ final class ModelCatalog {
     /// Checks `scope`'s list when it is due (`force`: Refresh models). Asking while a check of it runs
     /// starts nothing; a failure keeps the list there was.
     func refresh(_ scope: ModelCatalogScope, force: Bool = false) async {
-        guard let listModels, scopes().contains(scope), let token = native.begin(scope, force: force) else { return }
+        guard let listModels, (scope.machine.isRemote || scopes().contains(scope)), let token = native.begin(scope, force: force) else { return }
         let result: Result<[ModelOption], ModelListFailure>
         do { result = .success(try await listModels(scope)) }
         catch let failure as ModelListFailure { result = .failure(failure) }
@@ -128,23 +128,34 @@ extension AppModel {
     /// family that doesn't list its models, and for a task on a host, which a list read here says
     /// nothing about.
     func modelCatalogScope(for settings: any RunSettings) -> ModelCatalogScope? {
-        (settings as? BotTask)?.isRemote == true ? nil : modelCatalogScope(for: settings.account)
+        if let task = settings as? BotTask, task.isRemote {
+            guard settings.runtimeAdapter.offersProviders, let host = self.settings.host(task.hostID) else { return nil }
+            return ModelCatalogScope(accountID: settings.accountID, command: settings.runtimeAdapter.command(local: "", host: host.command(for: settings.account), remote: true),
+                kind: settings.account.kind, machine: Machine(destination: host.destination), folder: task.folder ?? "~")
+        }
+        if (settings as? SubagentRun)?.hostID != nil { return nil }
+        return modelCatalogScope(for: settings.account)
     }
 
     func modelCatalogScope(for account: Account) -> ModelCatalogScope? {
         NativeModelList.lists(account.kind)
-            ? ModelCatalogScope(accountID: account.id, command: settings.command(for: account), kind: account.kind) : nil
+            ? ModelCatalogScope(accountID: account.id, command: settings.command(for: account), kind: account.kind,
+                usesLegacyOpenRouterKey: RuntimeAdapters.adapter(for: account.kind).usesLegacyOpenRouterKey(account: account, provider: nil)) : nil
     }
 
     /// The list `settings`' pickers choose from in place of the starters, once read.
     func nativeModels(for settings: any RunSettings) -> [ModelOption]? {
-        modelCatalog.models(for: modelCatalogScope(for: settings))
+        modelCatalog.models(for: modelCatalogScope(for: settings)).map { settings.runtimeAdapter.models(in: $0, provider: settings.provider) }
     }
 
     /// Reads the saved lists and, in the real app or a review copy with sample lists, keeps them fresh.
     func configureModelCatalogs(file: URL, live: Bool) {
         modelCatalog.configure(file: file, scopes: { [weak self] in
             self.map { model in model.settings.accounts.compactMap(model.modelCatalogScope(for:)) } ?? []
-        }, listModels: DevHooks.modelLists ?? (live ? { @Sendable scope in try await NativeModelList.list(scope) } : nil))
+        }, listModels: DevHooks.modelLists ?? (live ? { @Sendable [weak self] scope in
+            let key = scope.usesLegacyOpenRouterKey && !scope.machine.isRemote ? await self?.openRouterKey() : nil
+            return try await RuntimeAdapters.adapter(for: scope.kind).catalog(scope,
+                environment: key.map { ["OPENROUTER_API_KEY": $0] } ?? [:])
+        } : nil))
     }
 }

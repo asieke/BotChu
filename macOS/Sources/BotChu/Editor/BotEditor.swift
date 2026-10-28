@@ -131,16 +131,10 @@ struct BotEditor: View {
                             ProviderMenuLabel(account).tag(account.id)
                         }
                     }
-                    LabeledContent("Model") {
-                        VStack(alignment: .trailing, spacing: 3) {
-                            TextField("Model", text: Binding(get: { bot.model }, set: { bot.selectModel($0) }), prompt: Text(modelPrompt))
-                                .labelsHidden()
-                            // What the ID stands for, with a version only when it is pinned or reported.
-                            Text(modelLabel.title).font(.caption.weight(.medium))
-                            Text(modelLabel.detail).font(.caption).foregroundStyle(.secondary)
-                                .lineLimit(1).truncationMode(.middle).help(modelLabel.detail)
-                        }
-                    }
+                    ModelMenu(settings: bot, disabled: false,
+                              onModel: { bot.selectModel($0, catalog: model.nativeModels(for: bot)) },
+                              onEffort: { bot.reasoningEffort = $0 },
+                              onProvider: model.isRunning(.home(bot.id)) ? nil : { bot.selectProvider($0) }, inForm: true)
                     LabeledContent("Workspace") {
                         HStack {
                             TextField("Workspace", text: $bot.workspace, prompt: Text("~/BotChu/…"))

@@ -31,13 +31,17 @@ public struct Account: Identifiable, Codable, Hashable, Sendable {
     /// The SF Symbol earlier versions showed beside the account. The app now shows its CLI family's
     /// logo (`ProviderLogo`, by `kind`); this is still saved so profiles stay readable by them.
     public let symbol: String
+    /// Missing in old saves: the shared OpenRouter key. New profiles own their login.
+    public var credentialOwnership: CredentialOwnership?
+    public enum CredentialOwnership: String, Codable, Sendable { case runtime, legacyOpenRouter }
 
-    public init(id: String, name: String, kind: AgentKind, defaultCommand: String, symbol: String) {
+    public init(id: String, name: String, kind: AgentKind, defaultCommand: String, symbol: String, credentialOwnership: CredentialOwnership? = .runtime) {
         self.id = id
         self.name = name
         self.kind = kind
         self.defaultCommand = defaultCommand
         self.symbol = symbol
+        self.credentialOwnership = credentialOwnership
     }
 }
 
@@ -53,7 +57,7 @@ public enum Accounts {
         Account(id: "codex-work", name: "Codex Work", kind: .codex, defaultCommand: "~/.local/bin/codex-work", symbol: "chevron.left.forwardslash.chevron.right"),
         Account(id: "google", name: "Google (Antigravity)", kind: .antigravity, defaultCommand: "agy", symbol: "g.circle"),
         Account(id: "muse", name: "Muse", kind: .muse, defaultCommand: "~/.local/bin/muse", symbol: "m.circle"),
-        Account(id: "openrouter", name: "OpenRouter", kind: .pi, defaultCommand: "~/.local/bin/pi", symbol: "arrow.triangle.branch"),
+        Account(id: "openrouter", name: "OpenRouter", kind: .pi, defaultCommand: "~/.local/bin/pi", symbol: "arrow.triangle.branch", credentialOwnership: .legacyOpenRouter),
         // BotChu's own helper, built beside the app; Settings runs the copy there (`Sail.helperCommand`).
         Account(id: "sail", name: "Sail Research", kind: .sail, defaultCommand: Sail.helperName, symbol: "sailboat"),
     ]
@@ -117,6 +121,7 @@ public enum CommandBuilder {
         sessionID: String?,
         reasoningEffort: ReasoningEffort? = nil,
         fast: Bool = false,
+        provider: String? = nil,
         openRouterKey: String? = nil,
         sailKey: String? = nil,
         liveInput: Bool = false,
@@ -172,11 +177,11 @@ public enum CommandBuilder {
         case .pi:
             let id = sessionID ?? newID()
             session = id
-            args = ["-p", "--mode", "json", "--session-id", id, "--provider", "openrouter",
-                    "--model", model ?? defaultOpenRouterModel]
+            args = ["-p", "--mode", "json", "--session-id", id, "--provider", provider ?? "openrouter",
+                    "--model", model ?? ((provider ?? "openrouter") == "openrouter" ? defaultOpenRouterModel : "")]
             if let effort { args += ["--thinking", effort] }
             args.append(prompt)
-            if let openRouterKey, !openRouterKey.isEmpty { env["OPENROUTER_API_KEY"] = openRouterKey }
+            if (provider ?? "openrouter") == "openrouter", let openRouterKey, !openRouterKey.isEmpty { env["OPENROUTER_API_KEY"] = openRouterKey }
         case .sail:
             // `--resume` asks for the session saved before; a new one is made only on the first turn.
             let id = sessionID ?? newID()
@@ -203,7 +208,7 @@ public enum CommandBuilder {
             return trimmed.isEmpty ? nil : GenerationOptions.modelArgument(trimmed, kind: kind, effort: reasoningEffort)
         }
         let effort = reasoningEffort.flatMap {
-            GenerationOptions.efforts(for: kind, model: model ?? "").contains($0) ? $0.rawValue : nil
+            (kind == .pi ? PiRuntimeAdapter.thinkingLevels : GenerationOptions.efforts(for: kind, model: model ?? "")).contains($0) ? $0.rawValue : nil
         }
         return (model, effort)
     }

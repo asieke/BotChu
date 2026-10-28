@@ -5,19 +5,28 @@ public struct UsageRequest: Hashable, Sendable, Codable {
     public var account: Account
     public var command: String
     public var credentialRevision: Int
+    /// Backend and host scope, separate from the CLI account. Missing in old saved readings.
+    public var providerID: String?
+    public var remote: Bool?
 
-    public init(account: Account, command: String, credentialRevision: Int = 0) {
+    public init(account: Account, command: String, credentialRevision: Int = 0, providerID: String? = nil, remote: Bool = false) {
         self.account = account
         self.command = command
         self.credentialRevision = credentialRevision
+        self.providerID = RuntimeAdapters.adapter(for: account.kind).resolvedProvider(providerID)
+        self.remote = remote ? true : nil
     }
 
     /// A profile's request wherever its allowance shows, so Providers, the background checks and a
     /// conversation's Model & Usage share one reading. Only a Pi profile's reading depends on the
     /// OpenRouter key, so saving another key (`openRouterKeyRevision`) starts only its readings afresh.
-    public init(account: Account, command: String, openRouterKeyRevision: Int) {
-        self.init(account: account, command: command, credentialRevision: account.kind == .pi ? openRouterKeyRevision : 0)
+    public init(account: Account, command: String, openRouterKeyRevision: Int, providerID: String? = nil, remote: Bool = false) {
+        self.init(account: account, command: command,
+            credentialRevision: !remote && RuntimeAdapters.adapter(for: account.kind).usesLegacyOpenRouterKey(account: account, provider: providerID) ? openRouterKeyRevision : 0,
+            providerID: providerID, remote: remote)
     }
+
+    public var usesLegacyOpenRouterKey: Bool { remote != true && RuntimeAdapters.adapter(for: account.kind).usesLegacyOpenRouterKey(account: account, provider: providerID) }
 
     public var refreshInterval: TimeInterval { account.kind == .muse ? 3_600 : 300 }
     /// How often the app checks while Providers isn't showing, so it opens on current numbers;
@@ -48,7 +57,9 @@ public enum UsageCheck: Sendable {
 
 public enum ProviderUsageClient {
     public static func read(_ request: UsageRequest, openRouterKey: String? = nil) async throws -> ProviderUsage {
+        guard request.remote != true else { throw UsageFailure("This conversation uses its host’s login. Host allowance is not available here.") }
         if request.account.kind == .pi {
+            guard request.usesLegacyOpenRouterKey else { throw UsageFailure("Pi manages this profile’s provider credentials. Provider allowance is not available here.") }
             guard let key = openRouterKey, !key.isEmpty else {
                 throw UsageFailure("Add an OpenRouter API key in Settings to see its allowance.")
             }

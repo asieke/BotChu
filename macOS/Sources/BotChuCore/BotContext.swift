@@ -426,6 +426,17 @@ public enum BotContext {
             `botchu-subagent list` prints the current roster (`botchu-task list` only the bots that can own a Task). Use a \
             UUID if names or slugs are ambiguous.
 
+            ### Sensitive values: `botchu-secret request`
+            On this Mac, request a key or other sensitive value with
+            `botchu-secret request --label "<what is needed>" --destination "/absolute/path/to/new/file"`.
+            BotChu shows your owner a secure popup with that exact destination and writes their value directly
+            to a new owner-only file (exact text, no added newline). Only status comes back to you. The folder
+            must already exist; existing files, symlinks, .git and .botchu paths are refused. Requests expire
+            after five minutes or when your turn ends. Remote tasks are unsupported. Keep the file outside
+            source control or ignore it first. Never ask for a secret in chat, pass it in a command argument,
+            read or print the saved file, or include it in logs or tool output. Configure the intended program
+            to consume the file directly without echoing it. If cancelled or rejected, do not repeatedly ask.
+
             ### Task: `botchu-task create`
             A Task is an independent, parent-level conversation that the named bot owns, a tab beside its chat in \
             BotChu, in its own worktree of the repository, on its account. It goes on by itself after your turn ends \

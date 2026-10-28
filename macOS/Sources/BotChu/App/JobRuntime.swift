@@ -119,7 +119,7 @@ final class JobRuntime {
 
     /// What a job's runs use: its own account, model and effort, or its agent's, with why.
     func runSettings(of job: Job, agent: Bot) -> (settings: Bot, unavailable: JobRunsOn.Unavailable?) {
-        job.runSettings(agent: agent, accounts: model?.settings.accounts ?? Accounts.all, catalog: model?.modelCatalog.models ?? [])
+        job.runSettings(agent: agent, accounts: model?.settings.accounts ?? Accounts.all)
     }
 
     /// Why a job's runs are on its agent's when it has a choice of its own, as its row and history say.
@@ -128,15 +128,14 @@ final class JobRuntime {
         return unavailable.explanation(agent: bot.name)
     }
 
-    /// OpenRouter's catalog, when a job runs on a model of its own there: what tells a run that its
-    /// model is gone.
+    /// Job pickers use the selected profile's own model catalog, as conversation pickers do.
     private func loadCatalog(for jobs: [Job]) {
         guard runs, let model else { return }
-        let accounts = model.settings.accounts
-        guard jobs.contains(where: { job in
-            job.runsOn.map { runsOn in !runsOn.model.isEmpty && accounts.first { $0.id == runsOn.accountID }?.kind == .pi } ?? false
-        }) else { return }
-        Task { await model.modelCatalog.load() }
+        for job in jobs {
+            guard let choice = job.runsOn, let account = model.settings.accounts.first(where: { $0.id == choice.accountID }),
+                  let scope = model.modelCatalogScope(for: account) else { continue }
+            Task { await model.modelCatalog.refresh(scope) }
+        }
     }
 
     /// A run's transcript: its task's conversation (read once it is in memory), or for a run from
@@ -310,8 +309,7 @@ final class JobRuntime {
             return finish(runID, outcome: .failed, summary: "The agent is gone, so the run didn't start.")
         }
         targets[runID] = target
-        let modelChoice = GenerationOptions.effectiveModel(agent.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
-                                                           sailDefault: model.settings.sailModel)
+        let modelChoice = agent.effectiveModel(openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel)
         engine.amend(runID) {
             $0.taskID = task.id
             $0.accountID = account.id
@@ -325,10 +323,7 @@ final class JobRuntime {
         conversation.run = RunState(startedAt: startedAt)
         model.saveThread(target)
         refresh()
-        let key = account.kind == .pi ? model.openRouterKey() : nil
-        if account.kind == .pi, key?.isEmpty ?? true {
-            return finish(runID, outcome: .failed, summary: "Add your OpenRouter API key in BotChu ▸ Settings first.")
-        }
+        let key = agent.usesLegacyOpenRouterKey(remote: false) ? model.openRouterKey() : nil
         let sailKey = account.kind == .sail ? Keychain.get(Keychain.sailAccount) : nil
         if account.kind == .sail, let problem = SailLaunch.problem(remote: false, key: sailKey) {
             return finish(runID, outcome: .failed, summary: problem)
@@ -338,10 +333,13 @@ final class JobRuntime {
         preparing[runID] = Task { [weak self] in
             let caller: SubagentRuntime.Caller
             do {
+                if let problem = await agent.runtimeAdapter.readiness(command: model.settings.command(for: account), provider: agent.provider,
+                    model: modelChoice, machine: .thisMac, folder: bot.workspace,
+                    environment: key.map { ["OPENROUTER_API_KEY": $0] } ?? [:]) { throw ModelListFailure(problem) }
                 caller = try await model.delegation.prepareCaller(target: target, directory: bot.workspace, machine: .thisMac, hostID: nil)
             } catch {
                 guard let self, !Task.isCancelled, self.preparing.removeValue(forKey: runID) != nil else { return }
-                return self.finish(runID, outcome: .failed, summary: "Couldn't prepare the run's helpers: \(error.localizedDescription)")
+                return self.finish(runID, outcome: .failed, summary: (error as? ModelListFailure)?.message ?? "Couldn't prepare the run's helpers: \(error.localizedDescription)")
             }
             guard let self, !Task.isCancelled, self.preparing[runID] != nil, !self.quitting else {
                 return model.delegation.endCaller(caller.id)

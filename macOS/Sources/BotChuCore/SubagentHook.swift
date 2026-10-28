@@ -5,8 +5,9 @@ import Foundation
 public enum SubagentHookInstaller {
     /// The helper's commands, each a copy of `script`, which acts by the name it is run as:
     /// `botchu-subagent` starts sub-agent runs, `botchu-task` creates Tasks (#111), and
-    /// `botchu-inbox` delivers to the owner's Inbox, and `botchu-message` messages remote queue bots.
-    public static let commands = ["botchu-subagent", "botchu-task", "botchu-inbox", "botchu-message"]
+    /// `botchu-inbox` delivers to the owner's Inbox, `botchu-message` messages remote queue bots,
+    /// and `botchu-secret` asks for direct, private delivery of a sensitive value.
+    public static let commands = ["botchu-subagent", "botchu-task", "botchu-inbox", "botchu-message", "botchu-secret"]
 
     @discardableResult public static func install(binDirectory: URL = SubagentIPC.defaultBinDirectory) throws -> URL {
         try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true,
@@ -27,6 +28,7 @@ import datetime
 import json
 import os
 import pathlib
+import signal
 import sys
 import tempfile
 import time
@@ -581,7 +583,61 @@ def message_main():
         fail("--wait must be between 0 and 600 seconds.")
     return message_send(args)
 
+def secret_main():
+    parser = argparse.ArgumentParser(prog="botchu-secret", description="Request a sensitive value in BotChu's secure popup. Only status is returned; the value is saved directly to a new local file.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    request = commands.add_parser("request")
+    request.add_argument("--label", required=True, help="Describe the value needed; never include a secret")
+    request.add_argument("--destination", required=True, help="Absolute path of a new file in an existing folder on this Mac")
+    args = parser.parse_args()
+    if not args.label.strip() or len(args.label) > 120 or any(ord(c) < 32 or ord(c) == 127 for c in args.label):
+        fail("Provide a label of 1–120 characters without control characters.")
+    if not os.path.isabs(args.destination):
+        fail("The destination must be an absolute path to a new file.")
+    live()
+    request_id = str(uuid.uuid4())
+    invocation = caller_uuid("BOTCHU_INVOCATION_ID", True)
+    payload = {
+        "kind": "secret", "id": request_id, "invocationID": invocation,
+        "callerBotID": caller_uuid("BOTCHU_CALLER_BOT_ID", True),
+        "callerTaskID": caller_uuid("BOTCHU_CALLER_TASK_ID"),
+        "parentSubagentID": caller_uuid("BOTCHU_CALLER_SUBAGENT_ID"),
+        "label": args.label, "destination": args.destination,
+        "createdAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    path = ROOT / "requests" / (request_id + ".json")
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt()
+    signal.signal(signal.SIGTERM, interrupted)
+    completed = False
+    started = time.monotonic()
+    try:
+        atomic_json(path, payload)
+        while time.monotonic() - started < 300:
+            result_path = ROOT / "results" / (request_id + ".result.json")
+            if result_path.exists():
+                result = read_json(result_path)
+                if result.get("kind") != "secret" or canonical(result.get("id")) != request_id:
+                    fail("Invalid sensitive-input receipt.")
+                status = result.get("status")
+                if status not in ("saved", "cancelled", "expired", "rejected"):
+                    fail("Invalid sensitive-input status.")
+                completed = True
+                print("Sensitive input: " + status + ". No value is returned to the agent.", flush=True)
+                return 0 if status == "saved" else 1
+            live()
+            time.sleep(0.2)
+        fail("Sensitive-input request expired; request it again if needed.")
+    finally:
+        if not completed:
+            # A metadata-only cancellation also handles Ctrl-C and a lost heartbeat.
+            cancellation_id = str(uuid.uuid4())
+            atomic_json(ROOT / "requests" / (cancellation_id + ".json"),
+                {"kind": "secretCancel", "id": cancellation_id, "requestID": request_id, "invocationID": invocation})
+
 def main():
+    if os.path.basename(sys.argv[0]) == "botchu-secret":
+        return secret_main()
     if os.path.basename(sys.argv[0]) == "botchu-message":
         return message_main()
     if os.path.basename(sys.argv[0]) == "botchu-task":
@@ -619,7 +675,7 @@ if __name__ == "__main__":
         print(os.path.basename(sys.argv[0]) + ": " + str(error), file=sys.stderr, flush=True)
         sys.exit(1)
     except KeyboardInterrupt:
-        print("botchu-subagent: interrupted; use BotChu's Stop control to stop the delegated work.", file=sys.stderr)
+        print(os.path.basename(sys.argv[0]) + ": interrupted; use BotChu's Stop control to stop the work.", file=sys.stderr)
         sys.exit(130)
 """#
 }

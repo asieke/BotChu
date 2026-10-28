@@ -52,7 +52,6 @@ struct ModelPicker: View {
         }
         .onChange(of: disabled) { _, running in if running { dismiss() } }
         .task {
-            if data.kind == .pi { await catalog.load() }
             if data.kind == .sail { await catalog.loadSail(key: sailKey()) }
             if let scope { await catalog.refresh(scope) }
         }
@@ -134,15 +133,6 @@ struct ModelPicker: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if data.kind == .pi {
-                HStack(spacing: 6) {
-                    if catalog.loading { ProgressView().controlSize(.mini) }
-                    Text(catalog.loading ? "Loading OpenRouter models…" : catalog.unavailable
-                         ? "Catalog unavailable · current and custom models still work"
-                         : "OpenRouter · models with tool support")
-                        .font(.system(size: 10.5)).foregroundStyle(.secondary)
-                }
-            }
             if let scope { nativeStatus(catalog.status(for: scope), scope: scope) }
             HStack {
                 Button {
@@ -186,7 +176,7 @@ struct ModelPicker: View {
 
     private var customForm: some View {
         VStack(alignment: .leading, spacing: 14) {
-            TextField(data.kind == .pi ? "provider/model-name" : "Model ID", text: $customID)
+            TextField("Model ID", text: $customID)
                 .textFieldStyle(.roundedBorder).focused($customFocused).onSubmit(saveCustom)
                 .accessibilityLabel("Custom model ID")
             HStack {

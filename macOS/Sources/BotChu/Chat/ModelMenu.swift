@@ -10,6 +10,7 @@ struct ModelMenu: View {
     let onModel: (String) -> Void
     let onEffort: (ReasoningEffort?) -> Void
     var onFast: ((Bool) -> Void)? = nil
+    var onProvider: ((String) -> Void)? = nil
     var inInspector = false
     /// As rows of a form, such as the job editor's.
     var inForm = false
@@ -28,16 +29,16 @@ struct ModelMenu: View {
     private var data: ModelPickerData {
         ModelPickerData(kind: settings.account.kind, model: settings.model, openRouterDefault: app.settings.openRouterModel,
                         sailDefault: app.settings.sailModel, catalog: app.modelCatalog.models(for: settings.account.kind),
-                        native: app.modelCatalog.models(for: scope), resolved: settings.resolvedModel)
+                        native: app.nativeModels(for: settings), resolved: settings.resolvedModel, provider: settings.resolvedProvider)
     }
     private var efforts: [ReasoningEffort] {
-        GenerationOptions.efforts(for: settings.account.kind, model: data.effectiveID, catalog: app.modelCatalog.models(for: scope))
+        GenerationOptions.efforts(for: settings.account.kind, model: data.effectiveID, catalog: app.nativeModels(for: settings))
     }
 
     /// Whether the Fast switch shows: a Codex model with the Fast tier (#249).
     private var offersFast: Bool {
         onFast != nil && GenerationOptions.offersFast(for: settings.account.kind, model: data.effectiveID,
-                                                      catalog: app.modelCatalog.models(for: scope))
+                                                      catalog: app.nativeModels(for: settings))
     }
     private var fast: Bool { settings.fastMode == true }
 
@@ -45,7 +46,11 @@ struct ModelMenu: View {
         Group {
             if let tableCell {
                 switch tableCell {
-                case .model: modelButton
+                case .model:
+                    HStack(spacing: 4) {
+                        if settings.runtimeAdapter.offersProviders { providerButton }
+                        modelButton
+                    }
                 case .effort:
                     if efforts.isEmpty {
                         Text("—").foregroundStyle(.tertiary).padding(.leading, 6)
@@ -55,6 +60,7 @@ struct ModelMenu: View {
                     }
                 }
             } else if inInspector {
+                if settings.runtimeAdapter.offersProviders { InspectorRow("Provider") { providerButton } }
                 InspectorRow("Model") { modelButton }
                 InspectorRow("Reasoning", last: !offersFast) { effortButton }
                 if offersFast {
@@ -65,10 +71,12 @@ struct ModelMenu: View {
                     }
                 }
             } else if inForm {
+                if settings.runtimeAdapter.offersProviders { LabeledContent("Provider") { providerButton } }
                 LabeledContent("Model") { modelButton }
                 LabeledContent("Reasoning") { effortButton }
             } else {
                 HStack(spacing: 6) {
+                    if settings.runtimeAdapter.offersProviders { providerButton }
                     modelButton
                     effortButton
                     if offersFast { fastButton }
@@ -76,8 +84,8 @@ struct ModelMenu: View {
             }
         }
         .disabled(disabled)
-        .task(id: settings.account.kind) {
-            if settings.account.kind == .pi { await app.modelCatalog.load() }
+        .task(id: scope) {
+            if settings.runtimeAdapter.offersProviders, let scope { await app.modelCatalog.refresh(scope) }
             if DevHooks.dataDir != nil, DevHooks.env["BOTCHU_OPEN"] != nil, tableCell == nil {
                 // Let the review window finish opening/resizing before anchoring its popover.
                 try? await Task.sleep(for: .seconds(2))
@@ -94,6 +102,31 @@ struct ModelMenu: View {
             showsModels = false
             showsEffort = false
         }
+    }
+
+    private var providerButton: some View {
+        Menu {
+            let discovered = settings.runtimeAdapter.providers(in: app.modelCatalog.models(for: scope) ?? [])
+            let providers = Array(Set(discovered + [settings.resolvedProvider].compactMap { $0 })).sorted()
+            ForEach(providers, id: \.self) { provider in
+                Button { onProvider?(provider) } label: {
+                    if provider == settings.resolvedProvider { Label(provider, systemImage: "checkmark") }
+                    else { Text(provider) }
+                }
+            }
+            if discovered.isEmpty { Text("No authenticated providers found") }
+            if let scope {
+                Divider()
+                Button("Refresh providers and models") { Task { await app.modelCatalog.refresh(scope, force: true) } }
+            }
+        } label: {
+            Text(settings.resolvedProvider ?? "Provider").font(.system(size: 12, weight: .medium))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(onProvider == nil)
+        .accessibilityLabel("Provider: \(settings.resolvedProvider ?? "Choose")")
+        .help("Changing provider starts a new session and clears model and effort")
     }
 
     private var modelButton: some View {

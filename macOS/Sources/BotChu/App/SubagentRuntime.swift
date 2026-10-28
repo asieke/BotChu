@@ -12,6 +12,7 @@ import BotChuCore
 /// (`SubagentArchive`); a run's start and end are saved at once.
 @MainActor @Observable
 final class SubagentRuntime {
+    let sensitiveInput = SensitiveInputRuntime()
     var error: String?
     /// Bots with a run under way, as the bot of its root conversation or as the bot it calls.
     /// Reassigned only when that changes, as runs start and end.
@@ -362,6 +363,20 @@ final class SubagentRuntime {
             try? await caller.transport.acknowledge(filename: filename)
             return
         }
+        if SensitiveInputRequest.isRequest(data) {
+            await receiveSensitiveInput(data, id: fileID, filename: filename, from: caller)
+            return
+        }
+        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
+           object["kind"] == "secretCancel" {
+            if object["invocationID"].flatMap(UUID.init(uuidString:)) == caller.id,
+               object["id"].flatMap(UUID.init(uuidString:)) == fileID,
+               let requestID = object["requestID"].flatMap(UUID.init(uuidString:)) {
+                sensitiveInput.cancel(requestID, invocationID: caller.id)
+            }
+            try? await caller.transport.acknowledge(filename: filename)
+            return
+        }
         // A Task for a bot, not a run of this turn's (#111).
         if TaskHandoff.isHandoff(data) {
             await receiveHandoff(data, id: fileID, filename: filename, from: caller)
@@ -548,6 +563,43 @@ final class SubagentRuntime {
         } catch { if isWatching(caller.id) { report("Couldn't answer a message: \(error.localizedDescription)") } }
     }
 
+    // MARK: Sensitive input (#266)
+
+    private func receiveSensitiveInput(_ data: Data, id: UUID, filename: String, from caller: Caller) async {
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let request = try decoder.decode(SensitiveInputRequest.self, from: data)
+            guard request.id == id, contexts[caller.id] != nil, !caller.transport.machine.isRemote,
+                  let model else { throw SensitiveInputError.invalidRequest }
+            try request.validate(caller: SubagentCallerContext(invocationID: caller.id, botID: caller.target.botID,
+                taskID: caller.target.taskID, parentSubagentID: caller.parent, depth: caller.depth,
+                workingDirectory: caller.directory, hostID: caller.hostID))
+            let excludedDirectory = root.path
+            try await Task.detached {
+                guard !SensitiveInputDestination.isWithin(request.destination, directory: excludedDirectory) else {
+                    throw SensitiveInputError.invalidDestination
+                }
+                try SensitiveInputDestination.check(request.destination)
+            }.value
+            let botID = caller.parent.flatMap { run($0) }?.targetBotID ?? caller.target.botID
+            guard let bot = model.bot(botID) else { throw SensitiveInputError.invalidRequest }
+            try await caller.transport.acknowledge(filename: filename)
+            guard contexts[caller.id] != nil else { throw SensitiveInputError.expired }
+            sensitiveInput.enqueue(request, botName: bot.name) { status in
+                Task {
+                    try? await caller.transport.writeResult(id: id,
+                        data: SubagentIPC.encode(SensitiveInputResult(id: id, status: status)))
+                }
+            }
+        } catch {
+            // Never serialize decoder or filesystem errors from sensitive-input handling.
+            try? await caller.transport.writeResult(id: id,
+                data: SubagentIPC.encode(SensitiveInputResult(id: id, status: .rejected)))
+            try? await caller.transport.acknowledge(filename: filename)
+        }
+    }
+
     // MARK: The asking bot's Tasks (#262)
 
     /// Takes a `botchu-task list --mine` request: answers with the open Tasks of the bot whose turn
@@ -669,10 +721,14 @@ final class SubagentRuntime {
                                                  machine: machine, hostID: record.hostID)
             guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
             let account = record.account
-            let key = account.kind == .pi && !machine.isRemote ? Keychain.get(Keychain.openRouterAccount) : nil
-            if account.kind == .pi && !machine.isRemote && (key?.isEmpty ?? true) {
-                throw DelegationFailure("Add your OpenRouter API key in BotChu Settings first.")
-            }
+            let key = record.usesLegacyOpenRouterKey(remote: machine.isRemote) ? model.openRouterKey() : nil
+            let command = record.runtimeAdapter.command(local: model.settings.command(for: account),
+                host: model.settings.host(record.hostID)?.command(for: account), remote: machine.isRemote)
+            let chosenModel = record.effectiveModel(openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel)
+            let readinessProblem = await record.runtimeAdapter.readiness(command: command, provider: record.provider, model: chosenModel,
+                machine: machine, folder: record.workingDirectory, environment: key.map { ["OPENROUTER_API_KEY": $0] } ?? [:])
+            guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
+            if let problem = readinessProblem { throw DelegationFailure(problem) }
             let sailKey = account.kind == .sail && !machine.isRemote ? Keychain.get(Keychain.sailAccount) : nil
             if account.kind == .sail, let problem = SailLaunch.problem(remote: machine.isRemote, key: sailKey) {
                 throw DelegationFailure(problem)
@@ -693,13 +749,10 @@ final class SubagentRuntime {
                 memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, soul: snapshot.soul,
                 instructions: snapshot.instructions, team: snapshot.team, availableBots: roster, skills: snapshot.skills,
                 tools: machine.isRemote ? nil : model.tools.instructions())
-            var invocation = CommandBuilder.invocation(kind: account.kind, prompt: prompt,
-                model: GenerationOptions.effectiveModel(record.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
-                                                        sailDefault: model.settings.sailModel),
-                sessionID: nil, reasoningEffort: record.reasoningEffort, fast: record.fastMode == true, openRouterKey: key, sailKey: sailKey)
+            var invocation = record.invocation(prompt: prompt, model: chosenModel, sessionID: nil, remote: machine.isRemote,
+                openRouterKey: key, sailKey: sailKey)
             invocation.environment.merge(context.environment) { _, new in new }
             invocation.toolProfile = prepared.toolProfile
-            let command = model.settings.host(record.hostID)?.command(for: account) ?? model.settings.command(for: account)
             let runner = machine.isRemote
                 ? AgentRun(command: command, invocation: invocation, on: machine, folder: record.workingDirectory)
                 : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: record.workingDirectory))
@@ -843,6 +896,7 @@ final class SubagentRuntime {
 
     func endCaller(_ id: UUID) {
         guard let caller = contexts.removeValue(forKey: id) else { return }
+        sensitiveInput.cancel(invocationID: id)
         let watcher = watchers.removeValue(forKey: id)
         watcher?.cancel()
         rejections[id] = nil

@@ -468,14 +468,16 @@ public struct JobRunsOn: Codable, Hashable, Sendable {
     /// A CLI profile's details, kept with the choice as a bot keeps its own, so the job still names it
     /// (and its CLI family) once the profile is gone; nil for the accounts BotChu comes with.
     public var accountProfile: Account?
+    public var provider: String?
     /// Empty means the account's default model.
     public var model: String
     /// Nil leaves reasoning effort to the CLI.
     public var reasoningEffort: ReasoningEffort?
 
-    public init(accountID: String, accountProfile: Account? = nil, model: String = "", reasoningEffort: ReasoningEffort? = nil) {
+    public init(accountID: String, accountProfile: Account? = nil, provider: String? = nil, model: String = "", reasoningEffort: ReasoningEffort? = nil) {
         self.accountID = accountID
         self.accountProfile = accountProfile
+        self.provider = provider
         self.model = model
         self.reasoningEffort = reasoningEffort
     }
@@ -483,7 +485,7 @@ public struct JobRunsOn: Codable, Hashable, Sendable {
     /// A conversation's account, model and effort, as a job's choice.
     public init(_ settings: any RunSettings) {
         self.init(accountID: settings.accountID, accountProfile: settings.accountProfile.flatMap { $0.id == settings.accountID ? $0 : nil },
-                  model: settings.model, reasoningEffort: settings.reasoningEffort)
+                  provider: settings.provider, model: settings.model, reasoningEffort: settings.reasoningEffort)
     }
 
     /// Why BotChu can't run the choice, so the job's runs use its agent's.
@@ -508,7 +510,7 @@ public struct JobRunsOn: Codable, Hashable, Sendable {
     public func unavailable(accounts: [Account], catalog: [CatalogModel] = []) -> Unavailable? {
         guard let account = accounts.first(where: { $0.id == accountID }) else { return .account(name: accountProfile?.name ?? accountID) }
         let model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        if account.kind == .pi, !model.isEmpty, !catalog.isEmpty, !catalog.contains(where: { $0.id == model }) { return .model(model) }
+        if account.kind == .pi, (provider ?? "openrouter") == "openrouter", !model.isEmpty, !catalog.isEmpty, !catalog.contains(where: { $0.id == model }) { return .model(model) }
         return nil
     }
 
@@ -517,6 +519,7 @@ public struct JobRunsOn: Codable, Hashable, Sendable {
         var bot = agent
         bot.accountID = accountID
         bot.accountProfile = Accounts.all.contains { $0.id == accountID } ? nil : accounts.first { $0.id == accountID } ?? accountProfile
+        bot.provider = provider
         bot.model = model
         bot.reasoningEffort = reasoningEffort
         return bot
@@ -554,7 +557,7 @@ extension Job {
     /// Chooses the effort its runs use, only one their account and model take.
     public mutating func selectReasoningEffort(_ effort: ReasoningEffort?, agent: Bot, openRouterDefault: String, catalog: [ModelOption]? = nil) {
         var settings = runsOn?.applied(to: agent) ?? agent
-        let model = GenerationOptions.effectiveModel(settings.model, kind: settings.account.kind, openRouterDefault: openRouterDefault)
+        let model = settings.effectiveModel(openRouterDefault: openRouterDefault)
         if let effort, !GenerationOptions.efforts(for: settings.account.kind, model: model, catalog: catalog).contains(effort) { return }
         settings.reasoningEffort = effort
         runsOn = JobRunsOn(settings)
@@ -838,12 +841,9 @@ public enum JobLaunch {
     public static func invocation(for agent: any RunSettings, prompt: String, openRouterDefault: String, openRouterKey: String?,
                                   sailDefault: String = "", sailKey: String? = nil) -> Invocation {
         let account = agent.account
-        return CommandBuilder.invocation(kind: account.kind, prompt: prompt,
-                                         model: GenerationOptions.effectiveModel(agent.model, kind: account.kind, openRouterDefault: openRouterDefault,
-                                                                                 sailDefault: sailDefault),
-                                         sessionID: nil, reasoningEffort: agent.reasoningEffort, fast: agent.fastMode == true,
-                                         openRouterKey: account.kind == .pi ? openRouterKey : nil,
-                                         sailKey: account.kind == .sail ? sailKey : nil, liveInput: false)
+        return agent.invocation(prompt: prompt,
+            model: agent.effectiveModel(openRouterDefault: openRouterDefault, sailDefault: sailDefault),
+            sessionID: nil, openRouterKey: openRouterKey, sailKey: account.kind == .sail ? sailKey : nil)
     }
 
     /// The first line of a run's transcript: the account it started on, and why, when the job's own

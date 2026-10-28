@@ -20,13 +20,16 @@ public struct ModelOption: Identifiable, Equatable, Sendable {
     public var moving = false
     /// Whether it has Codex's Fast tier (#249).
     public var fast = false
+    /// The actual backend provider named by a multi-provider runtime.
+    public var provider: String?
 
-    public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false, fast: Bool = false) {
+    public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false, fast: Bool = false, provider: String? = nil) {
         self.id = id
         self.name = name
         self.efforts = efforts
         self.moving = moving
         self.fast = fast
+        self.provider = provider
     }
 }
 
@@ -48,7 +51,7 @@ public struct ModelLabel: Equatable, Sendable {
 /// Muse profile's own list (`catalog`, #220, #248) replaces its starters once read; they stand in until then.
 public enum GenerationOptions {
     public static func models(for kind: AgentKind, catalog: [ModelOption]?) -> [ModelOption] {
-        if NativeModelList.lists(kind), let catalog, !catalog.isEmpty { return catalog }
+        if NativeModelList.lists(kind), let catalog, (!catalog.isEmpty || kind == .pi) { return catalog }
         return models(for: kind)
     }
 
@@ -86,7 +89,7 @@ public enum GenerationOptions {
                     ModelOption(id: "muse-spark-1.3", name: "Muse Spark 1.3", efforts: listed),
                     ModelOption(id: "muse-spark-1.2", name: "Muse Spark 1.2", efforts: [.minimal, .low, .medium, .high, .xhigh])]
         case .pi:
-            return [ModelOption(id: CommandBuilder.defaultOpenRouterModel, name: "Claude Sonnet 4.5", efforts: [.off, .minimal] + common + [.xhigh, .max])]
+            return []
         case .sail:
             // Sail's models depend on the key: Settings ▸ Sail lists them, and any ID can be typed.
             return []
@@ -99,7 +102,7 @@ public enum GenerationOptions {
         case .claude, .antigravity: return [.low, .medium, .high, .xhigh, .max]
         case .codex: return [.low, .medium, .high, .xhigh, .max, .ultra]
         case .muse: return [.none, .minimal, .low, .medium, .high, .xhigh, .max, .ultra]
-        case .pi: return [.off, .minimal, .low, .medium, .high, .xhigh, .max]
+        case .pi: return []
         case .sail: return [.low, .medium, .high]
         }
     }
@@ -244,9 +247,12 @@ extension RunSettings {
 
     public mutating func selectAccount(_ selected: Account) {
         let oldKind = account.kind
+        let oldProvider = resolvedProvider
+        let oldID = accountID
         self.accountID = selected.id
         self.accountProfile = Accounts.all.contains(where: { $0.id == selected.id }) ? nil : selected
-        if account.kind != oldKind {
+        if oldID != selected.id { provider = nil }
+        if account.kind != oldKind || oldProvider != resolvedProvider {
             model = ""
             reasoningEffort = nil
             fastMode = nil

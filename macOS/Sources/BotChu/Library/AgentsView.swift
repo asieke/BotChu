@@ -281,7 +281,8 @@ struct AgentTableRow: View {
                 dash.frame(width: columns.effort, alignment: .leading)
             } else {
                 ModelMenu(settings: bot, disabled: false, onModel: { model.setModel($0, ofBot: bot.id) },
-                          onEffort: { model.setReasoningEffort($0, ofBot: bot.id) }, tableCell: .model, rowHovered: hovered)
+                          onEffort: { model.setReasoningEffort($0, ofBot: bot.id) },
+                          onProvider: model.isRunning(.home(bot.id)) ? nil : { model.setProvider($0, for: .home(bot.id)) }, tableCell: .model, rowHovered: hovered)
                     .frame(width: columns.model, alignment: .leading)
                 ModelMenu(settings: bot, disabled: false, onModel: { model.setModel($0, ofBot: bot.id) },
                           onEffort: { model.setReasoningEffort($0, ofBot: bot.id) }, tableCell: .effort, rowHovered: hovered,

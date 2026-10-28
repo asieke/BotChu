@@ -5,6 +5,8 @@ import Foundation
 public protocol RunSettings {
     var accountID: String { get set }
     var accountProfile: Account? { get set }
+    /// Nil preserves OpenRouter for all pre-provider Pi saves.
+    var provider: String? { get set }
     /// Empty means the CLI's own default model.
     var model: String { get set }
     /// Nil leaves reasoning effort to the CLI.
@@ -80,6 +82,7 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var accountID: String
     /// Custom profiles travel with the bot so its CLI family survives relaunch and workspace moves.
     public var accountProfile: Account?
+    public var provider: String?
     /// Empty means the CLI's own default model.
     public var model: String
     /// Nil leaves reasoning effort to the CLI. Optional for compatibility with saved bots.
