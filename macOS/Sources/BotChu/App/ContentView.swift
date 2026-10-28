@@ -45,6 +45,10 @@ struct ContentView: View {
             ReportIssueSheet(request: request)
                 .environment(model)
         }
+        .sheet(item: $model.newIssue) { request in
+            NewIssueSheet(request: request)
+                .environment(model)
+        }
         .sheet(item: Binding(get: { model.jobs.editor }, set: { model.jobs.editor = $0 })) { request in
             JobEditor(request: request)
                 .environment(model)

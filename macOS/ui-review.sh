@@ -27,6 +27,8 @@
 #                                          # runs the command here, in $data/far (a real turn)
 #   BOTCHU_TASK="hello-world|Add a line" macOS/ui-review.sh  # start a task (a real turn on Claude Dev)
 #   BOTCHU_OPEN=report macOS/ui-review.sh  # open Report a Bug or Feature
+#   BOTCHU_OPEN=new-issue BOTCHU_FILINGS=sample macOS/ui-review.sh  # Projects with New Issue open (#245), and a
+#                                          # filing in each state in its header (none runs)
 #   BOTCHU_OPEN=providers BOTCHU_USAGE=mixed BOTCHU_PROFILE="A long profile name|claude|claude-long" macOS/ui-review.sh
 #                                          # Providers with a row in each usage state, and an added profile
 #   BOTCHU_WINDOW=1908x960 macOS/ui-review.sh  # at that window size (compact: its minimum width)

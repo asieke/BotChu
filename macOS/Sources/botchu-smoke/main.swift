@@ -11,6 +11,8 @@
 // names a new task the way Quick tasks do (#192), on each account's smallest model unless
 // BOTCHU_SMOKE_MODEL names one: it must reply with a label of three or four words. `--models`
 // lists each Codex or Muse account's models the way its pickers read them (#220, #248), starting no turn.
+// `--issue` writes up a New Issue request the way Projects does (#245), on each account's default
+// model unless BOTCHU_SMOKE_MODEL names one: its reply must be an issue BotChu can file (none is filed).
 //
 // Sail runs its helper from this same binary (`--sail-agent`), on its Flex window, so each turn can
 // wait in Sail's queue for a while; it needs a model, as Settings ▸ Sail gives the app one.
@@ -44,7 +46,8 @@ let reviewOnly = CommandLine.arguments.dropFirst().first == "--review"
 let connectorsOnly = CommandLine.arguments.dropFirst().first == "--connectors"
 let summaryOnly = CommandLine.arguments.dropFirst().first == "--summary"
 let modelsOnly = CommandLine.arguments.dropFirst().first == "--models"
-let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly || connectorsOnly || summaryOnly || modelsOnly ? 2 : 1))
+let issueOnly = CommandLine.arguments.dropFirst().first == "--issue"
+let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly || connectorsOnly || summaryOnly || modelsOnly || issueOnly ? 2 : 1))
 let accounts = requested.isEmpty ? Accounts.all : requested.map { Accounts.account(id: $0) }
 let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-smoke-\(UUID().uuidString)")
 
@@ -265,6 +268,37 @@ Task {
             } catch {
                 let failure = error as? EvaluationRunError
                 print("    FAIL: \(failure?.message ?? error.localizedDescription)\(failure?.usedTool == true ? " (it reported a tool call)" : "")")
+                failures.append(account.id)
+            }
+            continue
+        }
+        if issueOnly {
+            print("== \(account.name) New Issue draft, without tools")
+            guard CommandBuilder.runsToolFree(account.kind) else {
+                print("    skipped: \(RunEvaluator.unavailable(account.kind))")
+                continue
+            }
+            let model = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_MODEL"] ?? ""
+            let fox = Bot(name: "Product Fox", accountID: account.id, model: model, workspace: root.path)
+            let prompt = IssueDraft.prompt(
+                request: "When I'm in the projects view I'd like to hit the letter i and have it create a new issue, defaulting to Product Fox but letting me switch bot and provider; it files the issue in the background.",
+                repository: "asieke/BotChu", description: "A native macOS app for persistent AI bots",
+                openIssues: [IssueDraft.OpenIssue(number: 186, title: "Filter Pull Requests and Issues by the Projects scope")],
+                botName: fox.name, instructions: "Write each issue as a short title, then ## Outcome, ## Acceptance criteria (- [ ] checks) and ## Dependencies.")
+            let started = Date()
+            let job = IssueDraft.job(key: "smoke", bot: fox, account: account, model: model, prompt: prompt)
+            var reply = "", failure: String?
+            do {
+                reply = try await EvaluationCLI.run(job, command: account.defaultCommand, model: job.model, log: nil, what: "issue draft")
+            } catch {
+                failure = (error as? EvaluationRunError)?.message ?? error.localizedDescription
+            }
+            let seconds = Int(Date().timeIntervalSince(started))
+            if let draft = IssueDraft.parse(reply) {
+                print("    OK: “\(draft.title)” (\(draft.body.count) characters) in \(seconds)s")
+                print(draft.body.split(separator: "\n").prefix(12).map { "      " + $0 }.joined(separator: "\n"))
+            } else {
+                print("    FAIL: \(failure ?? "a reply that isn't an issue: " + String(reply.prefix(300))) in \(seconds)s")
                 failures.append(account.id)
             }
             continue
