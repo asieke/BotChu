@@ -111,6 +111,113 @@ extension RenderingTests {
         #expect(fixture.app.delegation.all.isEmpty)
     }
 
+    @Test func localMailboxStatusesFollowLateInstalledActivityWithoutRequests() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let runtime = fixture.app.delegation!
+        let caller = try await runtime.prepareCaller(target: fixture.target, directory: fixture.folder.path,
+                                                     machine: .thisMac, hostID: nil)
+        defer { runtime.endCaller(caller.id) }
+        let directory = URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!)
+        var record = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID,
+            depth: 1, targetBot: fixture.worker, title: "Observed", brief: "Observed",
+            workingDirectory: fixture.folder.path, callerInvocationID: caller.id, phase: .preparing)
+        runtime.records[fixture.target] = [record]
+        let statusURL = directory.appendingPathComponent("status/\(record.id.uuidString.lowercased()).status.json")
+        func status() -> SubagentStatus? {
+            (try? Data(contentsOf: statusURL)).flatMap { try? SubagentIPC.decode(SubagentStatus.self, from: $0) }
+        }
+        try await fixture.wait { status()?.activity == "Preparing…" }
+        // Observation first saw a record without a RunState. Installing it later must be tracked.
+        runtime.states[record.id] = RunState(hasOutput: true, activity: .browsing)
+        try await fixture.wait { status()?.activity == BotActivity.browsing.doing }
+        record.phase = .running
+        runtime.records[fixture.target] = [record]
+        try await fixture.wait { status()?.phase == .running }
+        let written = try Data(contentsOf: statusURL)
+        record.title = "Unrelated title change"
+        runtime.records[fixture.target] = [record]
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(try Data(contentsOf: statusURL) == written, "Unchanged status is not rewritten")
+        runtime.states[record.id] = RunState(hasOutput: true, activity: .coding)
+        try await fixture.wait { status()?.activity == BotActivity.coding.doing }
+        #expect(try await caller.transport.poll().isEmpty)
+        record.phase = .completed
+        runtime.records[fixture.target] = [record]
+        runtime.endCaller(caller.id)
+        let heartbeat = directory.appendingPathComponent("heartbeat.json")
+        try await fixture.wait { (try? String(contentsOf: heartbeat, encoding: .utf8))?.contains("1970") == true }
+        let closed = try Data(contentsOf: heartbeat)
+        try await Task.sleep(for: .seconds(2.2))
+        #expect(try Data(contentsOf: heartbeat) == closed, "No heartbeat reopens a completed caller")
+    }
+
+    @Test func heartbeatContinuesWhileAdmissionWaitsForDurableStorage() async throws {
+        let fixture = try SubagentFixture()
+        let gate = MailboxStorageGate()
+        defer { gate.release(); fixture.cleanUp() }
+        let app = fixture.app
+        let storage = StorageQueue(before: { work in if work.label == "save" { gate.wait() } })
+        app.delegation = SubagentRuntime(model: app, root: app.delegation.root, archive: SubagentArchive(storage: storage))
+        let caller = try await app.delegation.prepareCaller(target: fixture.target, directory: fixture.folder.path,
+                                                           machine: .thisMac, hostID: nil)
+        defer { app.delegation.endCaller(caller.id) }
+        let ipc = SubagentIPC(root: URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!))
+        let request = SubagentRequest(invocationID: caller.id, callerBotID: fixture.parent.id,
+            callerTaskID: fixture.target.taskID, depth: 0, targetAgent: "Worker", brief: "LEAF")
+        try SubagentIPC.encode(request).write(to: ipc.requestURL(request.id), options: .atomic)
+        try await fixture.wait { gate.entered }
+        let heartbeat = ipc.root.appendingPathComponent("heartbeat.json")
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 0)], ofItemAtPath: heartbeat.path)
+        try await Task.sleep(for: .seconds(2.3))
+        let updated = try FileManager.default.attributesOfItem(atPath: heartbeat.path)[.modificationDate] as? Date
+        #expect((updated ?? .distantPast) > Date(timeIntervalSinceNow: -3))
+        #expect(FileManager.default.fileExists(atPath: ipc.requestURL(request.id).path), "No acknowledgment before persistence")
+        #expect(app.delegation.all.isEmpty)
+        gate.release()
+        try await fixture.wait { FileManager.default.fileExists(atPath: ipc.resultURL(request.id).path) }
+        #expect(app.delegation.all.map(\.id) == [request.id])
+    }
+
+    @Test func finishingALocalMailboxDrainsBatchesAfterAnInFlightDeliveryExactlyOnce() async throws {
+        let fixture = try SubagentFixture()
+        let gate = MailboxStorageGate()
+        defer { gate.release(); fixture.cleanUp() }
+        let app = fixture.app
+        let storage = StorageQueue(before: { work in if work.label == "delivery" { gate.wait() } })
+        app.inbox = InboxModel(model: app, root: fixture.store.root, storage: storage)
+        let caller = try await app.delegation.prepareCaller(target: fixture.target, directory: fixture.folder.path,
+                                                           machine: .thisMac, hostID: nil)
+        let ipc = SubagentIPC(root: URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!))
+        var ids: [UUID] = []
+        for index in 0..<40 {
+            let id = UUID()
+            ids.append(id)
+            let data = try JSONSerialization.data(withJSONObject: [
+                "kind": "inbox", "id": id.uuidString, "invocationID": caller.id.uuidString,
+                "callerBotID": fixture.parent.id.uuidString, "callerTaskID": fixture.target.taskID!.uuidString,
+                "delivery": ["title": "Delivery \(index)", "note": "Saved exactly once", "purpose": "completed"]
+            ])
+            try data.write(to: ipc.requestURL(id), options: .atomic)
+        }
+        try await fixture.wait { gate.entered }
+        #expect(app.inbox.all.isEmpty)
+        let finish = Task { await app.delegation.finishCaller(caller.id) }
+        // Give finishCaller time to cancel the watcher while its first receive is still saving.
+        try await Task.sleep(for: .milliseconds(100))
+        gate.release()
+        await finish.value
+        #expect(app.inbox.all.count == 40)
+        #expect(Set(app.inbox.all.map(\.title)).count == 40)
+        #expect(app.delegation.error == nil)
+        #expect(try await caller.transport.poll().isEmpty)
+        for id in ids {
+            let result = try SubagentIPC.decode(InboxResult.self, from: Data(contentsOf: ipc.resultURL(id)))
+            #expect(result.deliveryID != nil && result.errorMessage == nil)
+        }
+        #expect(InboxFolder(home: fixture.home).load().count == 40)
+    }
+
     /// #107: a run's end is saved off the main thread, slowly here, and its handoff goes back only
     /// once its record is on disk; meanwhile the run counts as active for its caller.
     @Test func aHandoffGoesBackOnlyOnceItsRecordIsSaved() async throws {
@@ -728,6 +835,26 @@ private final class ArchiveWrites: @unchecked Sendable {
         written += 1
         lock.unlock()
         try SubagentArchive.writeToDisk(snapshot)
+    }
+}
+
+/// Blocks a storage lane, never the main actor, until the test releases durable admission.
+private final class MailboxStorageGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var blocked = false
+    private var released = false
+    var entered: Bool { condition.lock(); defer { condition.unlock() }; return blocked }
+    func wait() {
+        condition.lock()
+        defer { condition.unlock() }
+        blocked = true
+        while !released { condition.wait() }
+    }
+    func release() {
+        condition.lock()
+        released = true
+        condition.broadcast()
+        condition.unlock()
     }
 }
 
