@@ -78,11 +78,6 @@ struct TaskInspector: View {
                         SessionCard(session: status.session)
                     }
                     InspectorSection("Workspace", trailing: task.isRemote ? "on \(machine)" : nil, preferenceKey: "Worktree") {
-                        if task.folder == nil {
-                            Text("A separate workspace will be prepared when the task starts.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Palette.secondaryText)
-                        }
                         HStack(spacing: 8) {
                             if task.isRemote {
                                 Button {

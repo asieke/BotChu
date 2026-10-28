@@ -70,13 +70,6 @@ private struct RunReviewSummary: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if target.taskID == nil, let bot = model.bot(target.botID) {
-                    Text("Covers all of \(bot.name)'s work: its Home, its tasks and the sub-agents that ran as it.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, 26)
-                }
                 if model.canReviewNow(target) {
                     Button("Review now") { model.reviewNow(target) }
                         .buttonStyle(InspectorButtonStyle())

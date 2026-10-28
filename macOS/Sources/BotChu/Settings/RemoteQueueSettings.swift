@@ -90,8 +90,6 @@ struct RemoteQueueInspector: View {
                 RemoteQueuePresence()
                 Text(model.remoteQueue.summary).foregroundStyle(.secondary)
                 if let problem = model.remoteQueue.problem { Text(problem).foregroundStyle(.red) }
-                Text("Messages wait here until Danny's own runtime posts a reply. His memory and tools stay on his computer.")
-                    .foregroundStyle(.secondary)
                 HStack {
                     Button("Edit…") { model.edit(bot.id) }
                     Button("Connection Settings…") { model.openSettings(.remoteQueue) }

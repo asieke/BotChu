@@ -13,12 +13,8 @@ struct EffortPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Reasoning effort").font(.system(size: 15, weight: .semibold))
-                Text("More thinking can improve harder answers, but takes longer.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(16)
+            Text("Reasoning effort").font(.system(size: 15, weight: .semibold))
+                .padding(16)
             VStack(spacing: 2) {
                 row(nil)
                 ForEach(efforts, id: \.self) { row($0) }
@@ -49,11 +45,8 @@ struct EffortPicker: View {
         } label: {
             HStack(spacing: 12) {
                 EffortGlyph(effort: effort).frame(width: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(effort?.title ?? "Auto").font(.system(size: 13, weight: .medium))
-                    Text(effort?.explanation ?? "Use the account’s default")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                }
+                // The level's name and its bars say it (#232); Auto names what it falls back to.
+                Text(effort?.title ?? "Auto (Account default)").font(.system(size: 13, weight: .medium))
                 Spacer()
                 if effort == selected {
                     Image(systemName: "checkmark").font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.violet)
@@ -98,21 +91,6 @@ struct EffortGlyph: View {
         case .medium: 2
         case .high: 3
         case .xhigh, .max, .ultra: 4
-        }
-    }
-}
-
-private extension ReasoningEffort {
-    var explanation: String {
-        switch self {
-        case .off, .none: "Answer without extra reasoning"
-        case .minimal: "Just a little thinking"
-        case .low: "Quick answers for straightforward tasks"
-        case .medium: "A balance of speed and depth"
-        case .high: "More room for difficult problems"
-        case .xhigh: "Deeper reasoning for demanding work"
-        case .max: "An extended reasoning budget"
-        case .ultra: "The largest reasoning budget"
         }
     }
 }

@@ -278,7 +278,7 @@ private struct MentionList: View {
                         .accessibilityAction { completer.accept(index) }
                 }
                 if popup.total > popup.suggestions.count {
-                    Text("\(popup.total - popup.suggestions.count) more — keep typing to narrow them down")
+                    Text("+\(popup.total - popup.suggestions.count) more")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 8)

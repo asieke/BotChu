@@ -152,9 +152,6 @@ struct ModelPicker: View {
                 }
                 .buttonStyle(.plain)
                 Spacer()
-                Text("↑↓  navigate   ↵  select")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
-                    .accessibilityHidden(true)
             }
         }
         .padding(14)
@@ -186,8 +183,6 @@ struct ModelPicker: View {
 
     private var customForm: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(data.kind == .pi ? "Enter an OpenRouter model ID, including its provider." : "Enter a model ID supported by this account.")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
             TextField(data.kind == .pi ? "provider/model-name" : "Model ID", text: $customID)
                 .textFieldStyle(.roundedBorder).focused($customFocused).onSubmit(saveCustom)
                 .accessibilityLabel("Custom model ID")
