@@ -49,6 +49,10 @@ private struct BotChuCommands: Commands {
             Button(tasksCollapsed ? "Expand Tasks" : "Collapse Tasks") { tasksCollapsed.toggle() }
                 .disabled(model.visibleBotID.map { model.openTasks(of: $0).isEmpty } ?? true)
         }
+        // A page in the browser on this Mac, made from what BotChu has recorded (#233).
+        CommandGroup(after: .toolbar) {
+            Button("Open Analytics Dashboard") { model.openAnalyticsDashboard() }
+        }
         CommandMenu("Bot") {
             // The shown conversation, the selected bot's Home or its open task tab, as the menu
             // was drawn; the actions look again when chosen.

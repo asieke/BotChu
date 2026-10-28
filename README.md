@@ -1130,6 +1130,19 @@ on that pull request's branch to continue in instead). The same command run agai
     only), message and queue counts, the window's size and appearance, and how many bots and turns
     there are. Conversations, instructions, memory, prompts, tool calls, error text, paths and the
     names of bots, tasks, accounts, hosts and repositories never go into the app state.
+  - **Analytics:** **View ▸ Open Analytics Dashboard** reads what BotChu has recorded (conversations'
+    transcripts, tasks, jobs' histories, sub-agent runs and the saved allowance readings) off the main
+    thread, changing nothing, and opens a read-only page of it in the default browser: turns and runs
+    a day by outcome (finished, failed, stopped, in progress), median durations, failure rates and
+    time at work, by bot, provider account and project, for 7, 30 or 90 days, all or a range of days,
+    and for Home turns, task turns, job runs or sub-agent runs; then each profile's latest allowance
+    reading, apart. Days are this Mac's calendar days; a finished turn isn't taken as work that
+    succeeded; durations BotChu can't know are left out rather than counted as zero; tokens and cost
+    are shown as unavailable, as nothing records them; run reviews and remote queue bots are left out.
+    The page is one file, `analytics/dashboard.html` in BotChu's data folder, that only your macOS user
+    can read, holds names and numbers only (no messages, titles, paths or credentials), and loads
+    nothing; nothing serves it, so it has no port. Choosing the command again makes it again. See
+    [Analytics dashboard](docs/analytics.md) for each metric's source, calculation and retention.
 - Does not: run a bot's Home anywhere but this Mac, or tasks anywhere but this Mac and SSH hosts
   (no containers or cloud), run scheduled jobs while BotChu is quit or the Mac asleep, ask for approval of tool calls (every CLI runs with
   its permission prompts bypassed, inside the bot's folder or the task's worktree), or keep any
@@ -1241,7 +1254,10 @@ on that pull request's branch to continue in instead). The same command run agai
     limit, the saved offset and replies owed, and retries). `@` and `#` mentions are in
     `Mentions.swift`: the link a message keeps, where a query starts and ends, matching and ranking,
     what a choice inserts, whether a link still resolves, and what a sent message tells its bot
-    about them.
+    about them. The analytics dashboard (#233) is in `Analytics.swift` (the records read into a
+    snapshot of days, outcomes and durations by bot, account and project, a conversation's turns, and
+    `AnalyticsSummary`) and `AnalyticsDashboard.swift` (the page, its script and writing it for this
+    user only), tested by `AnalyticsTests`; the app's `App/Analytics.swift` is its menu command.
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
     in standard system materials: `App/` (the app, window, model, each conversation's state, observed
     on its own, with whether its history is in memory and what waits for it (`Conversations.swift`), settings, Keychain, dev hooks, making
@@ -1468,6 +1484,7 @@ on that pull request's branch to continue in instead). The same command run agai
   `~/Library/Application Support/BotChu/`, which only lists the bots' workspaces in sidebar order,
   with the section each is in, and `telegram.json` there: where the Telegram gateway's updates are
   up to and the replies it owes (IDs only, no text).
+  The analytics page, `analytics/dashboard.html`, is written there when asked for, readable only by its user.
   Versions before bot folders kept everything in `bots.json` and `threads/` there; the first launch
   moves them into the bots' folders and keeps the old files in `backup-before-bot-folders/`.
   Project metadata stays in each repository’s `PROJECT.md` on GitHub; what Projects read from GitHub

@@ -209,7 +209,7 @@ final class AppModel {
     let openRouterKey: @MainActor () -> String?
     let modelCatalog = ModelCatalog()
 
-    private let store: Store
+    let store: Store
     /// Where conversations, settings, logs, memory, sub-agents' and jobs' files are written, off the
     /// main thread, each target in order (`StorageQueue`, #107).
     let storage: StorageQueue
