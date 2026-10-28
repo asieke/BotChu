@@ -146,9 +146,12 @@ public struct SailResponse: Equatable, Sendable {
     public var incompleteReason: String?
     public var inputTokens: Int?
     public var outputTokens: Int?
+    public var cachedInputTokens: Int?
+    public var reasoningTokens: Int?
 
     public init(id: String, status: SailStatus, model: String? = nil, output: [SailJSON] = [], errorMessage: String? = nil,
-                errorCode: String? = nil, incompleteReason: String? = nil, inputTokens: Int? = nil, outputTokens: Int? = nil) {
+                errorCode: String? = nil, incompleteReason: String? = nil, inputTokens: Int? = nil, outputTokens: Int? = nil,
+                cachedInputTokens: Int? = nil, reasoningTokens: Int? = nil) {
         self.id = id
         self.status = status
         self.model = model
@@ -158,6 +161,8 @@ public struct SailResponse: Equatable, Sendable {
         self.incompleteReason = incompleteReason
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.reasoningTokens = reasoningTokens
     }
 
     public static func parse(_ data: Data) throws -> SailResponse {
@@ -170,7 +175,17 @@ public struct SailResponse: Equatable, Sendable {
                             errorMessage: error?["message"]?.string ?? error?.string,
                             errorCode: error?["code"]?.string ?? error?["type"]?.string,
                             incompleteReason: json["incomplete_details"]?["reason"]?.string,
-                            inputTokens: json["usage"]?["input_tokens"]?.int, outputTokens: json["usage"]?["output_tokens"]?.int)
+                            inputTokens: json["usage"]?["input_tokens"]?.int, outputTokens: json["usage"]?["output_tokens"]?.int,
+                            cachedInputTokens: json["usage"]?["input_tokens_details"]?["cached_tokens"]?.int,
+                            reasoningTokens: json["usage"]?["output_tokens_details"]?["reasoning_tokens"]?.int)
+    }
+
+    /// Output includes reasoning, and input includes cached tokens.
+    var turnUsage: TurnUsage? {
+        func nonnegative(_ count: Int?) -> Int? { count.flatMap { $0 >= 0 ? $0 : nil } }
+        return UsageParsing.turn(ModelUsage(model: model ?? "",
+            uncachedInput: UsageParsing.uncached(nonnegative(inputTokens), nonnegative(cachedInputTokens)), cacheRead: nonnegative(cachedInputTokens),
+            output: nonnegative(outputTokens), reasoning: nonnegative(reasoningTokens)))
     }
 
     /// The text of each output message, in order (a refusal reads as text).

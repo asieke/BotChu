@@ -1864,7 +1864,8 @@ on that pull request's branch to continue in instead). The same command run agai
 - Accounts end to end: `swift run --package-path macOS botchu-smoke [account id …]` runs, for each
   account (all of them when none is named), a new session that opens with the bot's context and
   runs a shell command, then a resumed session that must recall a code word from the first, and
-  prints both threads, each with the model it ran as the chat names it. It spends the accounts' own
+  prints both threads, each with the model it ran as the chat names it and the reported token usage
+  (unknown buckets stay absent; Codex and Antigravity mark their session totals cumulative). It spends the accounts' own
   allowance, so it is not part of `check`; OpenRouter needs `OPENROUTER_API_KEY` in its environment,
   and Sail `SAIL_API_KEY` and `BOTCHU_SMOKE_MODEL=<a Sail model id>` (its helper runs from the smoke
   binary itself, and each turn can wait in Sail's Flex queue). To exercise explicit generation
@@ -2045,6 +2046,10 @@ on that pull request's branch to continue in instead). The same command run agai
   (until the list shows, and until everything is read), a relaunch (until the saved catalog shows),
   a check for changes and a full sync, three times, and writes the table to the file. It asserts
   nothing about time and isn't part of `check`.
+- Usage parsing: `BOTCHU_USAGE_PARSER_BENCHMARK=/tmp/usage-parser.txt swift test --package-path macOS
+  --filter usageParserBenchmark` measures each CLI's complete usage-bearing turn and isolates the
+  added extraction and aggregation from already decoded dictionaries. It asserts no timing threshold
+  and needs no window or provider.
 - Account allowance end to end: `swift run --package-path macOS botchu-smoke --usage [account id …]`
   reads each account's usage through the same client as the inspector. It prints only the normalized
   usage fields, never raw CLI output or credentials. Muse makes its brief usage request; OpenRouter

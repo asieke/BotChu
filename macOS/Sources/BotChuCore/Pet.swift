@@ -32,7 +32,7 @@ public enum BotActivity: String, CaseIterable, Codable, Sendable {
         case let .toolStarted(_, name, input, _): classify(toolName: name, input: input)
         // A CLI waiting on its background tasks after its turn shows what they do (#255).
         case .backgroundTasks(let tasks): tasks.isEmpty ? nil : mostTelling(Set(tasks))
-        case .session, .model, .textEnd, .failed, .finished, .inputTaken, .connectors: nil
+        case .session, .model, .usage, .textEnd, .failed, .finished, .inputTaken, .connectors: nil
         }
     }
 

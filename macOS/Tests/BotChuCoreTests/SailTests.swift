@@ -810,3 +810,37 @@ private typealias S = SailSamples
         }
     }
 }
+
+@Suite struct SailTurnUsageTests {
+    @Test func capturedResponseKeepsOptionalDetailsAndRoundTripsEvent() throws {
+        let response = try SailResponse.parse(Data(SailSamples.capturedUsage.utf8))
+        #expect(response.cachedInputTokens == 0)
+        #expect(response.reasoningTokens == 13)
+        let usage = try #require(response.turnUsage)
+        #expect(usage == TurnUsage(models: [ModelUsage(model: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+            uncachedInput: 38, cacheRead: 0, output: 18, reasoning: 13)]))
+        let event = SailEvent.usage(usage)
+        #expect(SailEvent(line: event.line) == event)
+        var parser = SailParser()
+        #expect(parser.parse(line: event.line) == [.usage(usage)])
+        #expect(SailResponse(id: "empty", status: .completed).turnUsage == nil)
+        #expect(SailResponse(id: "negative", status: .completed, inputTokens: -1, outputTokens: -2, cachedInputTokens: -3, reasoningTokens: -4).turnUsage == nil)
+        #expect(SailResponse(id: "cached", status: .completed, inputTokens: 100, outputTokens: 20,
+                            cachedInputTokens: 80, reasoningTokens: 15).turnUsage?.models.first?.uncachedInput == 20)
+    }
+
+    @Test func multipleResponsesEmitOneTotalIncludingFailure() async throws {
+        for fails in [false, true] {
+            let harness = try SailHarness()
+            defer { harness.remove() }
+            let first = SailSamples.response("r1", "completed", output: "[\(SailSamples.message("I will continue:"))]", extra: SailSamples.usage)
+            let second = SailSamples.response("r2", fails ? "failed" : "completed", output: "[\(SailSamples.message("Done."))]", extra: SailSamples.usage)
+            let fixture = SailFixture([("POST", "/v1/responses", .ok(first)), ("POST", "/v1/responses", .ok(second))])
+            let ok = await harness.run(fixture, .init(sessionID: "s", resume: false, model: SailSamples.model, prompt: "Go"))
+            #expect(ok == !fails)
+            let usages = harness.events.all.compactMap { if case .usage(let usage) = $0 { usage } else { nil } }
+            #expect(usages == [TurnUsage(models: [ModelUsage(model: SailSamples.model, uncachedInput: 2400, output: 68)])])
+            #expect(harness.events.all.dropLast().last == .usage(usages[0]))
+        }
+    }
+}

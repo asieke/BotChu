@@ -272,6 +272,8 @@ public enum AgentEvent: Equatable, Sendable {
     case session(String)
     /// The model the CLI says it ran, by its full ID, where its stream reports one.
     case model(String)
+    /// Token usage, separate from the transcript.
+    case usage(TurnUsage)
     /// More text for the reply being written.
     case textDelta(String)
     /// A whole block of reply text, for CLIs (or blocks) that do not stream.
@@ -303,7 +305,7 @@ public struct ThreadAssembler {
 
     public mutating func apply(_ event: AgentEvent, to messages: inout [ChatMessage]) {
         switch event {
-        case .model, .connectors, .backgroundTasks:
+        case .model, .usage, .connectors, .backgroundTasks:
             break
         case .session, .finished:
             openTextID = nil

@@ -16,6 +16,7 @@ public enum SailEvent: Equatable, Sendable {
     case session(String)
     /// The model Sail says ran the response.
     case model(String)
+    case usage(TurnUsage)
     /// The row in the chat that follows one submission (`row` is its idempotency key).
     case flex(row: String, detail: String, state: FlexState)
     case text(String)
@@ -28,6 +29,9 @@ public enum SailEvent: Equatable, Sendable {
         switch self {
         case .session(let id): return ["type": "session", "id": .string(id)]
         case .model(let id): return ["type": "model", "id": .string(id)]
+        case .usage(let usage):
+            let data = (try? JSONEncoder().encode(usage)) ?? Data()
+            return ["type": "usage", "usage": (try? SailJSON.parse(data)) ?? .object([:])]
         case let .flex(row, detail, state): return ["type": "flex", "row": .string(row), "detail": .string(detail), "state": .string(state.rawValue)]
         case .text(let text): return ["type": "text", "text": .string(text)]
         case let .toolStarted(id, name, arguments): return ["type": "tool_start", "id": .string(id), "name": .string(name), "args": arguments]
@@ -48,6 +52,9 @@ public enum SailEvent: Equatable, Sendable {
         switch type {
         case "session": guard let id = json["id"]?.string else { return nil }; self = .session(id)
         case "model": guard let id = json["id"]?.string else { return nil }; self = .model(id)
+        case "usage":
+            guard let value = json["usage"], let usage = try? JSONDecoder().decode(TurnUsage.self, from: Data(value.text.utf8)) else { return nil }
+            self = .usage(usage)
         case "flex":
             guard let row = json["row"]?.string, let state = json["state"]?.string.flatMap(FlexState.init(rawValue:)) else { return nil }
             self = .flex(row: row, detail: json["detail"]?.string ?? "", state: state)
@@ -215,6 +222,9 @@ public struct SailAgent: Sendable {
     }
 
     func perform(_ turn: Turn, emit: @escaping @Sendable (SailEvent) -> Void) async throws {
+        var usage = TurnUsageAccumulator()
+        // Emit once, including work consumed before a later response or tool failed.
+        defer { if let value = usage.value { emit(.usage(value)) } }
         guard !client.key.isEmpty else {
             throw SailFailure(.key, "There's no Sail API key. Add yours in BotChu ▸ Settings ▸ Sail.")
         }
@@ -231,7 +241,7 @@ public struct SailAgent: Sendable {
             session = SailSession(id: turn.sessionID, updatedAt: now())
         }
 
-        if let pending = session.pending { try await pickUp(pending, in: &session, emit: emit) }
+        if let pending = session.pending { try await pickUp(pending, in: &session, usage: &usage, emit: emit) }
         closeUnansweredCalls(in: &session)
         session.items.append(SailRequest.userMessage(turn.prompt, images: turn.images))
         try save(&session)
@@ -241,6 +251,7 @@ public struct SailAgent: Sendable {
         var nudges = 0
         for _ in 0..<maxRequests {
             let response = try await submitAndWait(model: model, effort: turn.effort, session: &session, emit: emit)
+            if let reported = response.turnUsage { usage.add(reported) }
             if let ran = response.model, ran != reportedModel {
                 reportedModel = ran
                 emit(.model(ran))
@@ -373,7 +384,7 @@ public struct SailAgent: Sendable {
     /// Picks up a submission an earlier run left: its response is waited for and kept, but the tools
     /// it calls aren't run, as the turn that asked for them was stopped or ended. The model hears
     /// so, and calls them again if they're still needed.
-    func pickUp(_ pending: SailPending, in session: inout SailSession, emit: @escaping @Sendable (SailEvent) -> Void) async throws {
+    func pickUp(_ pending: SailPending, in session: inout SailSession, usage: inout TurnUsageAccumulator, emit: @escaping @Sendable (SailEvent) -> Void) async throws {
         let row = pending.idempotencyKey
         let what = pending.responseID.map { "response \($0)" } ?? "the earlier submission"
         emit(.flex(row: row, detail: "Picking up \(what), submitted \(Self.clock(pending.submittedAt)), on Sail Flex", state: .waiting))
@@ -389,6 +400,7 @@ public struct SailAgent: Sendable {
             }
             return
         }
+        if let reported = response.turnUsage { usage.add(reported) }
         switch response.status {
         case .completed:
             let calls = try record(response, in: &session, includeCalls: true, emit: emit)

@@ -153,7 +153,8 @@ import Testing
             #"{"stream":{"kind":"exec.usage","id":"u"},"record_type":"status","payload_type":"run.usage","payload":{"kind":"run_usage","models":[{"model":"muse-wonder-full-1.0","input_tokens":29569,"cached_tokens":0,"output_tokens":14,"reasoning_tokens":4,"calls":1}],"calls":1,"completed_calls":1}}"#,
             #"{"stream":{"kind":"exec.usage","id":"u"},"record_type":"status","payload_type":"run.usage","payload":{"kind":"run_usage","models":[],"calls":0,"completed_calls":0}}"#,
         ])
-        #expect(events == [.session("s"), .model("muse-wonder-full-1.0")])
+        #expect(events == [.session("s"), .model("muse-wonder-full-1.0"),
+            .usage(TurnUsage(models: [ModelUsage(model: "muse-wonder-full-1.0", uncachedInput: 29569, cacheRead: 0, output: 14, reasoning: 4)]))])
     }
 
     @Test func reportedModelsLeaveTheThreadAndActivityAlone() {
