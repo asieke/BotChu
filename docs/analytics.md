@@ -176,3 +176,29 @@ page's own script in JavaScriptCore against `AnalyticsSummary`.
 
 `BOTCHU_ANALYTICS_SAMPLE=/tmp/analytics.html swift test --package-path macOS --filter theSampleCoversEveryCase`
 writes a page of two months of sample data to look at in a browser.
+
+## OpenRouter billed cost
+
+For local Pi turns through OpenRouter, BotChu can replace the reported estimate with OpenRouter's
+billed cost. At least 60 seconds after the turn ends, a utility worker queries the
+[generation metadata endpoint](https://openrouter.ai/docs/api/api-reference/generations/get-generation),
+at most once a second across the app. It pauses for activity on the bot or the bot that owns a
+sub-agent's ledger, and scans for missed turns only while the app is idle. Nothing is queried or
+scanned on the turn's recording path.
+
+An actual cost is the sum of `data.total_cost` for **every** recorded generation ID. Only OpenRouter's
+`gen-…` identities are queryable; Pi sometimes reports an upstream identity such as `msg_bdrk_…`.
+An absent, unsupported or sanitized ID keeps the whole turn estimated, even if other IDs returned
+costs. Partial success never becomes a whole-turn bill. Once all IDs succeed, a numeric `amend`
+record is appended to the owning bot's usage ledger through its storage queue. The next dashboard
+read uses that amendment; reopening the dashboard refreshes the page.
+
+The worker retries missing generations (404), rate limits (429), offline failures and invalid
+responses later, for up to 24 hours after the turn ended. A 401 suspends that account until its
+profile or permitted key changes, or the app relaunches. Failed lookups leave the estimate intact.
+
+Reconciliation reuses only the account's existing permitted OpenRouter key. The ledger must record
+that the turn ran locally with that key ownership; remote turns and unknown historical ownership
+are excluded before any credential lookup. Profiles whose login belongs to Pi are left estimated
+when BotChu has no permitted key for them. No credential files are read. Keys, response bodies and
+transport error text are never logged, written to the usage ledger, or included in the dashboard.
