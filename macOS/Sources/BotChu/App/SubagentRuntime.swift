@@ -1240,6 +1240,11 @@ final class SubagentLive {
         let safe = min(snapshot.messages.count, messages.count) - PagedTranscript.residentLimit
         let keep = max(0, safe)
         guard keep > 0, messages.prefix(keep).elementsEqual(snapshot.messages.prefix(keep)) else { return }
+        if var page = browsing {
+            let committed = Dictionary(messages.prefix(keep).map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            page.messages = page.messages.map { committed[$0.id] ?? $0 }
+            browsing = page
+        }
         for (offset, message) in messages.prefix(keep).enumerated() where message.toolState == .running {
             pending[message.id] = .init(position: historyStart + offset, message: message)
         }

@@ -49,6 +49,7 @@ extension RenderingTests {
         try SubagentArchive.writeToDisk(first)
         live.saved(first)
         live.pinDisplay()
+        live.update { $0[0].text += " updated before its checkpoint" }
         let selected = live.displayMessages
         live.update { $0 += (0..<1_000).map { ChatMessage(role: .assistant, text: "More \($0)") } }
         let next = SubagentArchive.Snapshot(record: run, messages: live.messages, home: home,
