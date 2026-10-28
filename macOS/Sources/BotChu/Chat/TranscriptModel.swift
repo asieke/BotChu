@@ -233,6 +233,7 @@ final class TranscriptModel {
     /// items, a part grown long slides again, dropping items far above the window.
     func follow(_ event: ChatPin.Event) {
         var event = event
+        if case .scrolled = event { viewport.readerMoved() }
         if hasLaterPage, case .scrolled(let delta, let below) = event {
             // AppKit can clamp a drag at the end (or settle it during layout) before reporting
             // the live scroll, leaving a zero delta. That scroll still asks for the next page.

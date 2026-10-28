@@ -89,6 +89,7 @@ private struct Layout {
     mutating func jump(to y: Double) {
         top = y
         viewport.scrolled(top: y, height: height)
+        viewport.readerMoved()
         settle()
     }
 
@@ -120,7 +121,9 @@ private struct Layout {
 
     mutating func scroll(by delta: Double) {
         top = min(max(-40, top + delta), max(0, viewport.plan.total - height))
-        if viewport.scrolled(top: top, height: height) { settle() }
+        let replan = viewport.scrolled(top: top, height: height)
+        viewport.readerMoved()
+        if replan { settle() }
     }
 
     /// Where a row is on the screen, if it is laid out.
@@ -150,6 +153,20 @@ private struct Layout {
         layout.epoch += 1
         layout.settle()
         #expect(layout.onScreen(row).map { abs($0 - before) < 0.5 } == true)
+        // Native rows can measure on separate frames. Reports after the first correction must
+        // not move the anchor back into the header that is still growing above this message.
+        for growth in [20.0, 10.0] {
+            let head = try #require(layout.viewport.plan.rows.first { $0.id.item != reply.id })
+            _ = layout.viewport.measured(head.id, signature: head.signature, height: head.height + growth)
+            let top = try #require(layout.viewport.correction)
+            layout.viewport.corrected(to: top)
+            _ = layout.viewport.scrolled(top: top, height: layout.height)
+            let message = try #require(layout.viewport.plan.rows.first { $0.id == row })
+            #expect(abs(message.top - top - before) < 0.5)
+        }
+        layout.jump(to: 0)
+        #expect(layout.viewport.anchorRow?.row.item == next.first?.id,
+                "A later reader scroll must choose its own anchor again")
     }
 
     @Test(arguments: [false, true]) func aCallKeepsItsPositionWhenPagingChangesItsGroupID(raw: Bool) throws {

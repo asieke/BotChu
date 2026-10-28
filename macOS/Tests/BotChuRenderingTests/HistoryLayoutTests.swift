@@ -36,7 +36,9 @@ extension RenderingTests {
         let limit = TranscriptViewport.rowLimit
         let scroll = try #require(Self.chatScrollView(in: host))
         func scrollTo(_ y: CGFloat, frames: Int = 4) async throws {
-            Self.dragScroller(scroll, to: y)
+            // Already at the top, Show Earlier needs no synthetic scroll. A fake zero-delta
+            // scroll on a collapsed page would request its next page instead of clicking it.
+            if y != 0 || scroll.contentView.bounds.minY > 0.5 { Self.dragScroller(scroll, to: y) }
             try await settle(window, frames: frames)
             for _ in 0..<250 where conversation.isPaging { try await settle(window) }
             try #require(!conversation.isPaging)
@@ -74,7 +76,7 @@ extension RenderingTests {
             revealed.formUnion(items()[model.start(of: items())...].map(\.id))
             #expect(model.realized <= limit)
             let now = anchor.flatMap { BrowsingFixture.position(model, $0.row) }
-            #expect(picture(of: scroll, in: window) == seen,
+            try #require(picture(of: scroll, in: window) == seen,
                     "page \(page) from \(start) of \(items().count): reader's row at \(anchor.map { "\($0.at)" } ?? "-"), now \(now.map { "\($0)" } ?? "gone"); clip \(scroll.contentView.bounds.minY); before: \(state); after: \(model.viewport.summary)")
             if page >= 9 && revealed.count >= 400 { break }
         }
@@ -105,7 +107,7 @@ extension RenderingTests {
         await app.storage.settle()
         try await settle(window, frames: 12)
         #expect(model.peakRealized <= limit)
-        #expect(picture(of: scroll, in: window) == held)
+        try #require(picture(of: scroll, in: window) == held)
         #expect(conversation.displayMessages == selected, "The selected page's full text survives live-tail eviction")
         #expect(conversation.messages.count <= PagedTranscript.residentLimit)
 
@@ -198,7 +200,9 @@ extension RenderingTests {
         let limit = TranscriptViewport.rowLimit
         let scroll = try #require(Self.chatScrollView(in: host))
         func scrollTo(_ y: CGFloat, frames: Int = 4) async throws {
-            Self.dragScroller(scroll, to: y)
+            // Already at the top, Show Earlier needs no synthetic scroll. A fake zero-delta
+            // scroll on a collapsed page would request its next page instead of clicking it.
+            if y != 0 || scroll.contentView.bounds.minY > 0.5 { Self.dragScroller(scroll, to: y) }
             try await settle(window, frames: frames)
             for _ in 0..<250 where conversation.isPaging { try await settle(window) }
             try #require(!conversation.isPaging)

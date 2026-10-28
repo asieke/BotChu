@@ -146,6 +146,9 @@ public struct TranscriptViewport: Sendable {
     private var generation = 0
     public private(set) var plan = Plan()
     private var planned: [RowID: Int] = [:]
+    /// A growing partial group's unchanged following row remains the anchor through layout
+    /// reports, until the reader actually scrolls again.
+    private var preservesRelocatedAnchor = false
     /// The scrollable items' ids and tops (with the bottom of the last), as planned.
     private var ids: [UUID] = []
     private var tops: [Double] = []
@@ -222,6 +225,7 @@ public struct TranscriptViewport: Sendable {
                 // The partial group's header gains earlier calls/chips. Keep the unchanged
                 // message below it where the reader saw it, letting that header grow upward.
                 self.anchor = Anchor(row: following.id, offset: visibleTop - following.top)
+                preservesRelocatedAnchor = true
                 return
             }
             let part: Int
@@ -387,6 +391,16 @@ public struct TranscriptViewport: Sendable {
 
     // MARK: The scroll view
 
+    /// An actual reader scroll ends a layout-only anchor hold; layout reports alone do not.
+    public mutating func readerMoved() {
+        guard preservesRelocatedAnchor else { return }
+        preservesRelocatedAnchor = false
+        if let visibleTop {
+            anchor = self.anchor(at: visibleTop)
+            atEnd = !pinned && isAtEnd(top: visibleTop, height: viewport ?? Self.defaultViewport)
+        }
+    }
+
     /// The scroll view's visible part, in the rows' coordinates. True when the rows laid out no
     /// longer cover enough of what is near it, or its height changed, so the chat should plan again.
     public mutating func scrolled(top: Double, height: Double) -> Bool {
@@ -397,7 +411,7 @@ public struct TranscriptViewport: Sendable {
             // Content moved under the reader: their place is the anchor, not where it went.
             guard abs(correction - top) <= 0.5 else { return resized }
             self.correction = nil
-        } else {
+        } else if !preservesRelocatedAnchor {
             anchor = anchor(at: top)
             atEnd = !pinned && isAtEnd(top: top, height: height)
         }
@@ -418,6 +432,7 @@ public struct TranscriptViewport: Sendable {
         self.correction = nil
         visibleTop = top
         if abs(correction - top) > 0.5 {
+            preservesRelocatedAnchor = false
             anchor = anchor(at: top)
             atEnd = !pinned && isAtEnd(top: top, height: viewport ?? Self.defaultViewport)
         }
