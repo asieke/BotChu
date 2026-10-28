@@ -176,6 +176,13 @@ final class AppModel {
     @ObservationIgnored var lastSummaryRun: Task<Void, Never>?
     /// Runs a summary; nil runs it on this Mac (`EvaluationCLI`). Tests set it.
     @ObservationIgnored var summaryRunner: RunEvaluator.Runner?
+    /// Tasks' titles being made again from their conversations, the task Rename… asks a title for
+    /// and what is typed for it, and why a title couldn't be made again (#236, `TaskSummaries.swift`).
+    var titleRequests = TaskTitleRequests()
+    @ObservationIgnored var titleRuns: [UUID: Task<Void, Never>] = [:]
+    var renamingTask: ChatTarget?
+    var renamingText = ""
+    var titleNotice: TaskTitleNotice?
     var editor: EditorRequest?
     var taskSheet: TaskSheetRequest?
     /// The repository selected in Projects, shown in its sidebar; nil hides the sidebar.
@@ -2016,6 +2023,7 @@ final class AppModel {
         for run in petRuns.values { run.stop() }
         for task in petTasks.values { task.cancel() }
         for run in summaryRuns.values { run.cancel() }
+        for run in titleRuns.values { run.cancel() }
         // Sidebar changes that couldn't be saved get one more try.
         if indexFailure != nil { saveIndex() }
         unsavedAtQuit = storage.wait(timeout: quitTimeout)

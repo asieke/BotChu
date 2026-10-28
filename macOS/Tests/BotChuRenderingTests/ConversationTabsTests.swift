@@ -437,8 +437,9 @@ extension RenderingTests {
         #expect(model.destination == .agents && model.tab(of: bot.id) == home)
     }
 
-    /// A task's tab keeps the task's menu: its issue, branch, folder and Terminal, New Session and
-    /// Close Task; Home's has New Session. Menus need no clicks (`menu(for:)`).
+    /// A task's tab keeps the task's menu: its issue, branch, folder and Terminal, Rename… and
+    /// Regenerate Title (#236), New Session and Close Task; Home's has New Session. Menus need no
+    /// clicks (`menu(for:)`).
     @Test func conversationTabsKeepTheTaskMenu() async throws {
         _ = NSApplication.shared
         let fixture = try TabsFixture()
@@ -454,7 +455,7 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(300))
         let task = try tabMenu(at: NSPoint(x: 120, y: 124), in: host)
         #expect(task.items.map(\.title) == ["Open Issue #41", "Copy Branch Name", "Show Task Folder in Finder", "Open Task in Terminal", "",
-                                            "New Session", "Close Task"])
+                                            "Rename…", "Regenerate Title", "", "New Session", "Close Task"])
         // Its worktree isn't made yet.
         #expect(task.items.filter { !$0.isEnabled && !$0.isSeparatorItem }.map(\.title) == ["Show Task Folder in Finder", "Open Task in Terminal"])
         let home = try tabMenu(at: NSPoint(x: 120, y: 33), in: host)
@@ -537,6 +538,97 @@ extension RenderingTests {
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(home.loadTasks().first { $0.id == targets[0].taskID }?.summary == "Typo fix in README")
+    }
+
+    /// #236: Rename… and Regenerate Title. Made again, a title comes from the task's brief and its
+    /// own latest messages, on the Quick tasks profile and model only, once at a time; one that
+    /// doesn't come keeps the old title and says why. A rename wins over a title still being made,
+    /// and a late one never reaches a closed task. The chat, its draft and the tab shown stay as they
+    /// are, and the title is in its task.json for the next launch.
+    @Test func aTasksTitleIsRenamedOrMadeAgainFromItsOwnConversation() async throws {
+        let fixture = try TabsFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot
+        let targets = fixture.tasks.map { ChatTarget.task($0.id, of: bot.id) }
+        let ids = fixture.tasks.map(\.id)
+        let jobs = SummaryJobs()
+        model.summaryRunner = { job in
+            jobs.add(job)
+            return "“Status filter chips.”"
+        }
+        model.conversation(targets[0]).replace([ChatMessage(role: .user, text: fixture.tasks[0].opening),
+                                                ChatMessage(role: .assistant, text: "The filter now uses status chips.")])
+        model.conversation(targets[1]).replace([ChatMessage(role: .user, text: "Words only the second task has")])
+        model.show(targets[0])
+        model.drafts[targets[0]] = "Half a thought"
+
+        // Off: it says where to choose a profile, and asks no other account.
+        model.regenerateTitle(targets[0])
+        #expect(model.titleNotice?.kind == .notConfigured && model.titleNotice?.action == "Open Quick Tasks Settings")
+        #expect(model.titleRuns.isEmpty && jobs.all.isEmpty && model.task(targets[0])?.summary == nil)
+        model.titleNotice = nil
+
+        model.settings.quickTaskAccountID = "claude-dev"
+        model.settings.quickTaskModel = "haiku"
+        model.regenerateTitle(targets[0])
+        model.regenerateTitle(targets[0])
+        #expect(model.isRegeneratingTitle(targets[0]) && model.titleRuns.count == 1, "A second click asks nothing more")
+        await model.titleRuns[ids[0]]?.value
+        #expect(jobs.all.map(\.account.id) == ["claude-dev"] && jobs.all.first?.model == "haiku")
+        let prompt = try #require(jobs.all.first?.prompt)
+        #expect(prompt.contains("Bot: The filter now uses status chips.") && prompt.contains("Fix the typo"))
+        #expect(!prompt.contains("Words only the second task has"), "No other task's conversation")
+        #expect(model.task(targets[0])?.summary == "Status filter chips")
+        #expect(model.conversationTab(of: targets[0])?.label == "Status filter chips")
+        #expect(!model.isRegeneratingTitle(targets[0]) && model.titleRuns.isEmpty && model.titleNotice == nil)
+        // Its issue, branch, conversation and draft, and the tab shown, are as they were.
+        #expect(model.task(targets[0])?.work?.title == "Fix the typo" && model.task(targets[0])?.branch == "feat/41-task")
+        #expect(model.conversationTab(of: targets[0])?.title == "repo #41")
+        #expect(model.thread(targets[0]).count == 2 && model.drafts[targets[0]] == "Half a thought" && model.tab(of: bot.id) == targets[0])
+
+        // A reply that isn't a title keeps the old one, and says why.
+        model.summaryRunner = { job in
+            jobs.add(job)
+            return "Sure! Here is a title for this task: Filter chips"
+        }
+        model.regenerateTitle(targets[0])
+        await model.titleRuns[ids[0]]?.value
+        #expect(model.task(targets[0])?.summary == "Status filter chips")
+        #expect(model.titleNotice?.kind == .failed("Its reply wasn’t a title of three or four words"))
+        #expect(model.titleNotice?.action == "Try Again" && model.titleNotice?.label == "Status filter chips")
+
+        // Renamed while a title is being made: the rename wins, and Cancel's empty name changes nothing.
+        model.summaryRunner = { job in
+            jobs.add(job)
+            try await Task.sleep(nanoseconds: 300_000_000)
+            return "Late title from before"
+        }
+        model.regenerateTitle(targets[0])
+        let late = try #require(model.titleRuns[ids[0]])
+        model.askToRename(targets[0])
+        #expect(model.renamingTask == targets[0] && model.renamingText == "Status filter chips")
+        #expect(!model.renameTask(targets[0], to: "  \n "))
+        #expect(model.renameTask(targets[0], to: "  Chips for the status filter, then sorting "))
+        #expect(model.titleNotice == nil && !model.isRegeneratingTitle(targets[0]))
+        await late.value
+        #expect(model.task(targets[0])?.summary == "Chips for the status filter, then sorting")
+        #expect(model.titleNotice == nil)
+
+        // Closed while one is being made: the late title doesn't reach it, nor open it again.
+        model.regenerateTitle(targets[1])
+        let closing = try #require(model.titleRuns[ids[1]])
+        model.closeTask(targets[1])
+        await closing.value
+        #expect(model.task(targets[1])?.summary == nil && model.task(targets[1])?.isArchived == true)
+        #expect(model.titleNotice == nil)
+
+        // The next launch shows the name it was given.
+        await model.storage.settle()
+        let again = fixture.relaunch()
+        defer { again.stopAll() }
+        #expect(again.task(targets[0])?.summary == "Chips for the status filter, then sorting")
+        #expect(again.conversationTab(of: targets[0])?.label == "Chips for the status filter, then sorting")
+        #expect(again.task(targets[1])?.summary == nil)
     }
 
     /// Home's status sidebar lists only closed tasks, to open again: none while none is closed.
