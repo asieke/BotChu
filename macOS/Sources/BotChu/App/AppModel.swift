@@ -200,6 +200,12 @@ final class AppModel {
     @ObservationIgnored var issueFiler = DevHooks.issueFiler
     @ObservationIgnored var windowCapture = DevHooks.windowCapture
     var openingReport = false
+    /// New Issue (#245): the sheet, the issues being written up and filed in the background, what
+    /// writes them (nil: the CLI on this Mac; tests set it) and what files them (gh, or a stand-in).
+    var newIssue: NewIssueRequest?
+    var issueFilings: [IssueFiling] = []
+    @ObservationIgnored var issueRunner: RunEvaluator.Runner?
+    @ObservationIgnored var issueCreate: IssueDraft.Create = DevHooks.issueCreate
     let settings: AppSettings
     /// Every profile's allowance, saved between launches (`usage.json`).
     let usage: UsageCache

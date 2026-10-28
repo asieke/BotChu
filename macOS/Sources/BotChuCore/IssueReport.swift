@@ -73,16 +73,16 @@ public enum IssueReport {
     /// count, never the image's own name.
     public static func imageFile(_ n: Int) -> String { "image-\(n).png" }
 
-    /// `gh issue create` in BotChu's repository, with the body on standard input and each image
-    /// attached from the folder gh runs in (`--attach`, in gh 2.99 and later). The title is one
-    /// `--title=…` word, so a title that starts with `-` is never read as an option.
-    public static func arguments(title: String, images: Int = 0) -> [String] {
+    /// `gh issue create` in BotChu's repository (or another, for New Issue, #245), with the body on
+    /// standard input and each image attached from the folder gh runs in (`--attach`, in gh 2.99 and
+    /// later). The title is one `--title=…` word, so a title that starts with `-` is never read as an option.
+    public static func arguments(title: String, images: Int = 0, repository: String = repository) -> [String] {
         ["gh", "issue", "create", "--repo", repository, "--title=" + title, "--body-file", "-"]
             + stride(from: 1, through: images, by: 1).map { "--attach=./\(imageFile($0))#Image \($0)" }
     }
 
     /// The new issue's address in what `gh issue create` printed, rebuilt from its number.
-    public static func issueURL(in output: String) -> URL? {
+    public static func issueURL(in output: String, repository: String = repository) -> URL? {
         let pattern = #"https?://github\.com/"# + NSRegularExpression.escapedPattern(for: repository) + #"/issues/([0-9]+)"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
               let match = regex.matches(in: output, range: NSRange(output.startIndex..., in: output)).last,
@@ -97,8 +97,8 @@ public enum IssueReport {
     /// (the last lines it printed), or how to get a gh that runs, or one that attaches images. When
     /// an image doesn't upload, gh makes the issue with those that did, exits with an error and
     /// still prints the issue's address: that is filed, with what gh said.
-    static func outcome(of result: Shell.Result, images: Int = 0) -> IssueFiler.Outcome {
-        let url = issueURL(in: result.output)
+    static func outcome(of result: Shell.Result, images: Int = 0, repository: String = repository) -> IssueFiler.Outcome {
+        let url = issueURL(in: result.output, repository: repository)
         if result.ok { return .filed(url) }
         if result.status == 127 {
             return .failed("BotChu couldn't run gh, the GitHub CLI. Install it and sign in with gh auth login in Terminal, then try again.")
@@ -196,22 +196,30 @@ public struct IssueFiler: Sendable {
     /// gh attaches images from a private folder it runs in, which goes once it is done.
     public init(gh: String = "gh") {
         file = { title, body, images in
-            let arguments = [gh] + IssueReport.arguments(title: title, images: images.count).dropFirst()
-            guard !images.isEmpty else {
-                return IssueReport.outcome(of: await Shell.run(arguments, in: NSHomeDirectory(), input: Data(body.utf8)))
-            }
-            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-report-" + UUID().uuidString)
-            defer { try? FileManager.default.removeItem(at: folder) }
-            do {
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-                for (i, image) in images.enumerated() {
-                    try image.write(to: folder.appendingPathComponent(IssueReport.imageFile(i + 1)))
-                }
-            } catch {
-                return .failed("BotChu couldn't get the images ready for gh: \(error.localizedDescription)")
-            }
-            return IssueReport.outcome(of: await Shell.run(arguments, in: folder.path, input: Data(body.utf8)), images: images.count)
+            await Self.create(gh: gh, repository: IssueReport.repository, title: title, body: body, images: images)
         }
+    }
+
+    /// Creates an issue in `repository` with `gh` as the login shell finds it (or the program at a
+    /// path in its place), attaching the images from a private folder it runs in, which goes once
+    /// it is done.
+    public static func create(gh: String, repository: String, title: String, body: String, images: [Data]) async -> Outcome {
+        let arguments = [gh] + IssueReport.arguments(title: title, images: images.count, repository: repository).dropFirst()
+        guard !images.isEmpty else {
+            return IssueReport.outcome(of: await Shell.run(arguments, in: NSHomeDirectory(), input: Data(body.utf8)), repository: repository)
+        }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-report-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            for (i, image) in images.enumerated() {
+                try image.write(to: folder.appendingPathComponent(IssueReport.imageFile(i + 1)))
+            }
+        } catch {
+            return .failed("BotChu couldn't get the images ready for gh: \(error.localizedDescription)")
+        }
+        return IssueReport.outcome(of: await Shell.run(arguments, in: folder.path, input: Data(body.utf8)), images: images.count,
+                                   repository: repository)
     }
 
     public init(_ file: @escaping File) {

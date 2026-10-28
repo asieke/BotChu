@@ -52,6 +52,22 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     `PROJECT.md`); the choice is remembered. A repository whose `PROJECT.md` isn't read yet appears
     once it is known to be active. The type filter (all projects, code or non-code) is remembered too;
     a repository without a readable `PROJECT.md` has no type, so it shows only under all projects.
+  - **New Issue:** I in Projects (never while text is typed or over a sheet), or **New Issue** in
+    its header, files an issue with a bot (#245). The sheet has the repository (the one selected,
+    if any), the bot that writes it up (Product Fox, found by its name, else the first bot on this
+    Mac) and the provider it writes on (the bot's own, when its CLI runs without tools, else the
+    Quick tasks profile, else the first that does), and what the issue is about, in words and
+    pasted images. **File Issue** (⌘↩) closes it at once: the bot makes one quick pass as a run
+    review does, in a fresh session with no tools (its own model on its own profile, the Quick
+    tasks model on that profile, else the CLI's default), from its `INSTRUCTIONS.md`, `TEAM.md`, the
+    repository's description and its open issues, and replies with a title and a description that
+    BotChu files with `gh issue create` in that repository, with the images and a line saying who
+    wrote it. It is no task: Projects' header shows it while it is written, then its number for a
+    moment; the issue goes to the Inbox as the bot's (**completed**, with its link), and the
+    projects are synced so it shows in their lists. One that isn't filed (a reply that isn't an
+    issue, a run that fails or takes over three minutes, gh's refusal) stays in the header with why,
+    **Try Again** (as it was asked for) and Dismiss. Its run is logged in the bot's turn log as an
+    "issue draft".
     **Pull Requests** and **Issues** list the open ones across the repositories (up to 30 most
     recently updated per repository, with a footer when there are more: "Showing 30 most recent of
     120" and **Open on GitHub ↗**, a link for each repository cut short), with checks, review state,
@@ -1337,7 +1353,8 @@ on that pull request's branch to continue in instead). The same command run agai
     review's own CLI run, whose tool-free command lines are in `Accounts.swift`
     (`CommandBuilder.toolFreeInvocation`).
     Reports filed from the app (their title, description, app state, the size their window's
-    screenshot is taken at, and `gh issue create`) are in `IssueReport.swift`. The Telegram gateway is in `Telegram.swift` (the Bot API client: long
+    screenshot is taken at, and `gh issue create`) are in `IssueReport.swift`; New Issue's prompt,
+    reply, defaults and filing (#245) in `IssueDraft.swift`. The Telegram gateway is in `Telegram.swift` (the Bot API client: long
     polling, sending, and errors that never hold the token) and `TelegramGateway.swift` (which chats
     may reach which bot, message IDs that recognize a repeated update, replies cut to Telegram's
     limit, the saved offset and replies owed, and retries). `@` and `#` mentions are in
@@ -1832,6 +1849,10 @@ on that pull request's branch to continue in instead). The same command run agai
   then again from a short conversation as Regenerate Title asks (#236), on its family's smallest
   model (or `BOTCHU_SMOKE_MODEL`), and passes when both replies are labels of three or four words. It spends a little of each account's allowance; run it after changing how
   summaries are asked for.
+- New Issue without tools: `swift run --package-path macOS botchu-smoke --issue [account id …]` has
+  each account write up a sample request as Product Fox would (#245), on its default model (or
+  `BOTCHU_SMOKE_MODEL`), prints the issue and passes when the reply is one BotChu can file. Nothing
+  is filed. Run it after changing New Issue's prompt or how its reply is read.
 - Telegram end to end: the gateway's tests use stand-ins for Telegram, so a real exchange is
   checked by hand, with your own Telegram bot: see
   [Checking it end to end](docs/telegram.md#checking-it-end-to-end).

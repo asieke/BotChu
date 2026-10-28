@@ -63,6 +63,8 @@ import BotChuCore
 ///   run, then real clips on OpenRouter, which cost OpenRouter credit).
 /// - `BOTCHU_REPORT_GH`: with `BOTCHU_DATA_DIR`, the program BotChu runs as `gh` to file reports (Report
 ///   a Bug or Feature). A throwaway run without one files nothing, so a review never creates a real issue.
+/// - `BOTCHU_OPEN=new-issue`: open Projects and New Issue (#245), for `BOTCHU_PROJECT` when given;
+///   `BOTCHU_FILINGS=sample`, with `BOTCHU_DATA_DIR`: show a filing in each state in Projects' header.
 /// - `BOTCHU_OPEN=report`: open Report a Bug or Feature; `BOTCHU_REPORT`, with `BOTCHU_DATA_DIR`: open it
 ///   with this report and file it, with the stand-in `gh`.
 /// - `BOTCHU_JOBS=sample`: with `BOTCHU_DATA_DIR`, give the bots sample scheduled jobs with a history
@@ -117,6 +119,18 @@ enum DevHooks {
         guard dataDir != nil else { return IssueFiler() }
         if let gh = env["BOTCHU_REPORT_GH"], !gh.isEmpty { return IssueFiler(gh: gh) }
         return IssueFiler { _, _, _ in
+            .failed("This copy of BotChu runs on throwaway data and files no issues; macOS/ui-review.sh gives it a stand-in gh.")
+        }
+    }
+
+    /// What files New Issue's issues (#245): gh, or in a throwaway run the stand-in `gh` it was given
+    /// (`BOTCHU_REPORT_GH`), or nothing.
+    static var issueCreate: IssueDraft.Create {
+        guard dataDir != nil else { return { repo, title, body, images in await IssueFiler.create(gh: "gh", repository: repo, title: title, body: body, images: images) } }
+        if let gh = env["BOTCHU_REPORT_GH"], !gh.isEmpty {
+            return { repo, title, body, images in await IssueFiler.create(gh: gh, repository: repo, title: title, body: body, images: images) }
+        }
+        return { _, _, _, _ in
             .failed("This copy of BotChu runs on throwaway data and files no issues; macOS/ui-review.sh gives it a stand-in gh.")
         }
     }
@@ -334,6 +348,7 @@ enum DevHooks {
             }
         }
         if dataDir != nil, env["BOTCHU_JOBS"] == "sample" { sampleJobs(model: model) }
+        if dataDir != nil, env["BOTCHU_FILINGS"] == "sample", let bot = model.issueWriters.first { sampleFilings(model: model, bot: bot) }
         switch env["BOTCHU_OPEN"] {
         case "inbox", "projects", "agents", "providers", "skills", "jobs":
             model.destination = env["BOTCHU_OPEN"].flatMap(LibraryDestination.init(rawValue:))
@@ -343,6 +358,10 @@ enum DevHooks {
                 model.selectProject(repo, tab: env["BOTCHU_PROJECT_TAB"].flatMap(ProjectSelection.Tab.init(rawValue:)) ?? .overview,
                                     item: env["BOTCHU_PROJECT_ITEM"].flatMap(Int.init))
             }
+        case "new-issue":
+            model.destination = .projects
+            if let repo = env["BOTCHU_PROJECT"] { model.selectProject(repo) }
+            model.startNewIssue()
         case "editor": model.newBot()
         case "job-editor", "job-model", "job-effort": model.jobs.newJob(for: model.selection)
         case "job-edit":
@@ -417,6 +436,18 @@ enum DevHooks {
                 await request.submit(with: model.issueFiler)
             }
         }
+    }
+
+    /// New Issue's filings in Projects' header, one in each state (`BOTCHU_FILINGS=sample`); none runs.
+    static func sampleFilings(model: AppModel, bot: Bot) {
+        func filing(_ state: IssueFiling.State) -> IssueFiling {
+            var filing = IssueFiling(repo: "asieke/BotChu", botID: bot.id, botName: bot.name, accountID: bot.accountID, model: "",
+                                     request: "Press I in Projects to file an issue", images: [])
+            filing.state = state
+            return filing
+        }
+        model.issueFilings = [filing(.writing), filing(.filed(URL(string: "https://github.com/asieke/BotChu/issues/246"), title: "Press I in Projects to file a new issue with a bot")),
+                              filing(.failed("gh couldn't create the issue:\nHTTP 401: Bad credentials (https://api.github.com/graphql)"))]
     }
 
     /// Types `text` into the message box that has focus (`BOTCHU_TYPE`).

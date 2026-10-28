@@ -61,7 +61,11 @@ struct ProjectsView: View {
                 }
                 // Never disabled: asked for during a sync, it runs once that one ends.
                 Button { Task { await model.refreshProjects() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                Button { model.startNewIssue() } label: { Label("New Issue", systemImage: "plus") }
+                    .disabled(!model.canStartNewIssue)
+                    .help("New Issue (I)")
             }
+            IssueFilingsStrip()
             // One row when it fits; in a narrow window, the search goes on a row of its own, and in a
             // narrower one the filters too.
             HeaderControls { scopePicker; search.frame(minWidth: 160); HStack { filters } }
@@ -98,6 +102,8 @@ struct ProjectsView: View {
         }
         .modifier(IssueDeletionPrompt())
         .modifier(IssueClosurePrompt())
+        // I opens New Issue (#245), never while text is typed or over a sheet.
+        .background { BareKey("i") { model.startNewIssue() } }
     }
 
     private var scopePicker: some View {
