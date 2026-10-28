@@ -57,7 +57,8 @@ extension MailboxPollTests {
         let probe = MailboxProbe()
         let consumer = mailbox.consume(watcher, probe: probe)
         defer { consumer.cancel(); watcher.cancel() }
-        try await waitForMailbox { await probe.scans == 1 }
+        // The real recovery timer may tick again before this task observes the initial scan.
+        try await waitForMailbox { await probe.scans >= 1 }
         try mailbox.publish("missed.json")
         try await waitForMailbox { await probe.names == ["missed.json"] }
         #expect(LocalMailboxWatcher.recoveryInterval < 5)
@@ -66,6 +67,39 @@ extension MailboxPollTests {
         await consumer.value
         #expect(watcher.watchedDirectoryCount == 0)
         var hints = watcher.changes.makeAsyncIterator()
+        // finish() preserves a hint buffered while the consumer was winding down. The
+        // coalescing buffer permits at most one; the following read must terminate.
+        if await hints.next() != nil {
+            #expect(await hints.next() == nil)
+        }
+    }
+
+    @Test func cancellationPreservesOnlyOneBufferedHintAndStopsFurtherActivity() async throws {
+        let mailbox = try await WatchedMailbox()
+        defer { mailbox.cleanUp() }
+        let watcher = LocalMailboxWatcher(directory: mailbox.requests, recoveryInterval: nil)
+        defer { watcher.cancel() }
+        #expect(watcher.watchedDirectoryCount == 2)
+        var hints = watcher.changes.makeAsyncIterator()
+        #expect(await hints.next() != nil) // Consume the initial scan hint.
+
+        // No iterator is waiting: force multiple hints to coalesce before cancellation,
+        // using the queue-synchronized count to await recovery without a timing sleep.
+        watcher.recover()
+        watcher.recover()
+        #expect(watcher.watchedDirectoryCount == 2)
+        watcher.cancel()
+        #expect(watcher.watchedDirectoryCount == 0)
+        #expect(await hints.next() != nil)
+        #expect(await hints.next() == nil)
+
+        // Neither an explicit recovery tick nor a native directory change may restart
+        // a cancelled watcher or enqueue another hint after its buffer is drained.
+        let notifications = watcher.notificationCount
+        try mailbox.publish("after-cancel.json")
+        watcher.recover()
+        #expect(watcher.watchedDirectoryCount == 0)
+        #expect(watcher.notificationCount == notifications)
         #expect(await hints.next() == nil)
     }
 
