@@ -1,18 +1,16 @@
 import SwiftUI
 
+/// A library page's title and count, with its actions. No subtitle (#232): the page's name, its
+/// controls and what it lists say what it is.
 struct LibraryHeading<Actions: View>: View {
     let title: String
-    let subtitle: String
     var count: Int?
     @ViewBuilder var actions: () -> Actions
     var body: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 10) {
-                    Text(title).font(.largeTitle.weight(.bold))
-                    if let count { Text("\(count)").font(.callout.weight(.medium)).foregroundStyle(.secondary).padding(.horizontal, 9).padding(.vertical, 3).background(.quaternary, in: Capsule()) }
-                }
-                Text(subtitle).font(.callout).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Text(title).font(.largeTitle.weight(.bold))
+                if let count { Text("\(count)").font(.callout.weight(.medium)).foregroundStyle(.secondary).padding(.horizontal, 9).padding(.vertical, 3).background(.quaternary, in: Capsule()) }
             }
             Spacer()
             actions()

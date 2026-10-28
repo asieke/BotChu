@@ -124,6 +124,18 @@ public enum PetVideo {
         Double(clips.reduce(0) { $0 + $1.seconds }) * model.dollarsPerSecond
     }
 
+    /// The estimate shown before a pet is made, from the model chosen in Settings, such as “about $0.56”.
+    public static func costLabel(_ model: Model) -> String {
+        String(format: "about $%.2f", estimatedCost(model))
+    }
+
+    /// Whether a new bot's pet is made as it is created (#232): only when the owner turned on New
+    /// Bot's pet toggle, which is off until then, and the bot has an appearance to draw from, since a
+    /// pet costs OpenRouter credit.
+    public static func makesPetOnCreate(optedIn: Bool, appearance: String?) -> Bool {
+        optedIn && !(appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// The body of `POST /api/v1/videos` for one clip; `image` is the still as a data URI.
     public static func requestBody(model: Model, clip: Clip, image: String) throws -> Data {
         let frame = { (type: String) -> [String: Any] in

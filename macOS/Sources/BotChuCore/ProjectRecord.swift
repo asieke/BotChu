@@ -59,6 +59,138 @@ public struct ProjectMetadata: Equatable, Sendable {
     }
 }
 
+/// PROJECT.md's `deploy`, as Edit Metadata shows it (#232): each target as a kind (this Mac, an SSH
+/// host, Vercel or a registry) with its folder or name, so nobody has to remember
+/// `local:<machine>:<path>`. A target BotChu doesn't recognize stays as written, as Custom, and a
+/// form whose targets weren't changed gives back the value exactly as it was read.
+public struct DeployForm: Equatable, Sendable {
+    public enum Kind: String, CaseIterable, Identifiable, Sendable {
+        case thisMac, host, vercel, registry, custom
+        public var id: String { rawValue }
+        public var label: String {
+            switch self {
+            case .thisMac: "This Mac"
+            case .host: "SSH Host"
+            case .vercel: "Vercel"
+            case .registry: "Registry"
+            case .custom: "Custom"
+            }
+        }
+    }
+
+    public struct Target: Equatable, Identifiable, Sendable {
+        public let id: UUID
+        public var kind: Kind
+        /// A local target's machine, as `deploy` names it.
+        public var machine: String
+        /// A local target's folder on its machine.
+        public var path: String
+        /// The Vercel project, the registry's package, or a custom target as written.
+        public var name: String
+
+        public init(id: UUID = UUID(), kind: Kind, machine: String = "", path: String = "", name: String = "") {
+            self.id = id; self.kind = kind; self.machine = machine; self.path = path; self.name = name
+        }
+
+        /// The target as `deploy` writes it.
+        public var value: String {
+            let trim = { (text: String) in text.trimmingCharacters(in: .whitespaces) }
+            switch kind {
+            case .thisMac, .host: return "local:\(trim(machine)):\(trim(path))"
+            case .vercel: return "vercel:\(trim(name))"
+            case .registry: return "registry:\(trim(name))"
+            case .custom: return trim(name)
+            }
+        }
+    }
+
+    public var targets: [Target]
+    /// This Mac's name as `deploy` calls it, when known, and the hosts' (Settings ▸ Hosts).
+    public let thisMac: String?
+    public let hosts: [String]
+    /// The value as read, and its targets then: an unchanged form gives it back as it was.
+    private let original: String
+    private let read: [Target]
+
+    public init(deploy: String, thisMac: String?, hosts: [String] = []) {
+        self.thisMac = thisMac.flatMap { $0.isEmpty ? nil : $0 }
+        self.hosts = hosts.filter { !$0.isEmpty }
+        original = deploy
+        let value = deploy.trimmingCharacters(in: .whitespaces)
+        if value.isEmpty || value == "none" {
+            targets = []
+        } else {
+            let thisMac = self.thisMac
+            targets = value.split(separator: ",").compactMap { part in
+                let text = part.trimmingCharacters(in: .whitespaces)
+                guard !text.isEmpty else { return nil }
+                guard let target = DeployTarget.parse(text).first else { return Target(kind: .custom, name: text) }
+                switch target.kind {
+                case .local:
+                    let mine = thisMac.map { target.name.caseInsensitiveCompare($0) == .orderedSame } ?? false
+                    return Target(kind: mine ? .thisMac : .host, machine: target.name, path: target.path ?? "")
+                case .vercel: return Target(kind: .vercel, name: target.name)
+                case .registry: return Target(kind: .registry, name: target.name)
+                case .none, .unrecognized: return Target(kind: .custom, name: text)
+                }
+            }
+        }
+        read = targets
+    }
+
+    /// The value for PROJECT.md: as read while nothing changed, else each target, or `none`.
+    public var value: String {
+        if targets == read { return original }
+        let values = targets.map(\.value).filter { !$0.isEmpty }
+        return values.isEmpty ? "none" : values.joined(separator: ", ")
+    }
+
+    /// The first target's kind, nil for none, as the form's first picker shows it. None removes every
+    /// target; another kind changes the first, or adds it.
+    public var first: Kind? {
+        get { targets.first?.kind }
+        set {
+            guard let kind = newValue else { targets = []; return }
+            if let id = targets.first?.id { change(id, to: kind) } else { targets = [target(kind)] }
+        }
+    }
+
+    /// Changes a target's kind, keeping the folder of a local one and the name of a Vercel or
+    /// registry one; to Custom, it starts from the target as written.
+    public mutating func change(_ id: Target.ID, to kind: Kind) {
+        guard let i = targets.firstIndex(where: { $0.id == id }), targets[i].kind != kind else { return }
+        let old = targets[i]
+        var new = target(kind, id: old.id)
+        switch kind {
+        case .thisMac, .host:
+            new.path = old.path
+        case .vercel, .registry:
+            if old.kind == .vercel || old.kind == .registry { new.name = old.name }
+        case .custom:
+            new.name = old.value
+        }
+        targets[i] = new
+    }
+
+    /// Adds a target: on this Mac when none is, else on Vercel.
+    public mutating func add() {
+        targets.append(target(targets.contains { $0.kind == .thisMac } ? .vercel : .thisMac))
+    }
+
+    public mutating func remove(_ id: Target.ID) {
+        targets.removeAll { $0.id == id }
+    }
+
+    /// A new target of a kind: this Mac's or the first host's machine for a local one.
+    private func target(_ kind: Kind, id: UUID = UUID()) -> Target {
+        switch kind {
+        case .thisMac: Target(id: id, kind: kind, machine: thisMac ?? "")
+        case .host: Target(id: id, kind: kind, machine: hosts.first ?? "")
+        default: Target(id: id, kind: kind)
+        }
+    }
+}
+
 public struct ProjectRecord: Equatable, Codable, Sendable {
     public var text: String
     /// GitHub's blob SHA, nil when PROJECT.md does not exist yet.

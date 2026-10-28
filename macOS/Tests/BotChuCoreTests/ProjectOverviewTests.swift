@@ -132,6 +132,13 @@ import Testing
         #expect(work(.active, .all).truncated.map(\.name) == ["App"])
         #expect(work(.paused, .all).truncated.isEmpty)
         #expect(work(.all, .all, repo: "octocat/Notes").truncated.isEmpty)
+        // The footer's count and link in its place (#232): 2 read of App's 40, the rest on GitHub.
+        let cut = work(.active, .all)
+        #expect(cut.shownOfOpen?.shown == 2 && cut.shownOfOpen?.open == 40)
+        #expect(cut.githubURL(of: cut.truncated[0]).absoluteString == "https://github.com/octocat/App/issues")
+        #expect(work(.active, .all, pulls: true).shownOfOpen == nil)
+        #expect(work(.active, .all, pulls: true).githubURL(of: cut.truncated[0]).absoluteString == "https://github.com/octocat/App/pulls")
+        #expect(work(.active, .all, query: "crash").shownOfOpen?.shown == 2, "Counts what was read, whatever the search shows")
 
         // The picker lists the repositories in scope with work; choosing one narrows the scope further.
         #expect(work(.active, .all).repos == ["octocat/App", "octocat/Notes"])

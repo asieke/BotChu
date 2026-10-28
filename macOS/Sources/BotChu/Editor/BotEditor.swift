@@ -10,16 +10,19 @@ struct BotEditor: View {
     @State private var autoWorkspace = ""
     @State private var confirmDelete = false
     @State private var confirmPet = false
-    /// Asked on Create, when the new bot has an appearance.
-    @State private var confirmCreatePet = false
+    /// New Bot's Generate animated pet, off until the owner turns it on (#232).
+    @State private var makesPet = false
     /// An existing bot's INSTRUCTIONS.md, edited here and saved with the bot. A new bot's
     /// instructions go in `bot.instructions` until it has a folder, which they then move into.
     @State private var instructions: BotDocumentDraft?
     @State private var instructionsError: String?
     private let isNew: Bool
+    /// The bot as the sheet opened, so leaving for Settings never drops edits made since.
+    private let original: Bot
 
     init(request: EditorRequest) {
         _bot = State(initialValue: request.bot)
+        original = request.bot
         isNew = request.isNew
         if !request.isNew && !request.bot.isRemoteQueue {
             do {
@@ -62,13 +65,16 @@ struct BotEditor: View {
                         .disabled(!isNew && instructions == nil)
                         .accessibilityLabel("Edit \(BotDocument.instructions.rawValue)")
                 } header: {
-                    Text("Instructions")
+                    HStack {
+                        Text("Instructions")
+                        Spacer()
+                        Text(BotDocument.instructions.rawValue)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                 } footer: {
                     if let instructionsError {
                         Text(instructionsError).font(.caption).foregroundStyle(.red)
-                    } else {
-                        Text("The bot's role and job, in Markdown, kept in \(BotDocument.instructions.rawValue) in its folder. Given at the start of every session, with its SOUL.md, MEMORY.md and the shared TEAM.md.")
-                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 }
@@ -82,30 +88,31 @@ struct BotEditor: View {
                             .scrollContentBackground(.hidden)
                             .overlay(alignment: .topLeading) {
                                 if (bot.appearance ?? "").isEmpty {
-                                    Text("Describe how this bot looks: a small brass robot with a lantern head…")
+                                    Text("Describe your pet character (e.g. a small brass robot with a lantern head)…")
                                         .foregroundStyle(.tertiary)
                                         .padding(.leading, 5)
                                         .allowsHitTesting(false)
                                 }
                             }
+                            .accessibilityLabel("Pet description")
                     }
-                    if !isNew {
+                    if isNew {
+                        // Off until turned on: a pet costs OpenRouter credit, at the estimate for the
+                        // model chosen in Settings ▸ Pets.
+                        Toggle("Generate animated pet on create (\(petCost))", isOn: $makesPet)
+                            .disabled(!hasAppearance)
+                            .help(petExplanation)
+                    } else {
                         HStack {
                             Button(model.pets[bot.id] == nil ? "Make Pet…" : "Remake Pet…") { confirmPet = true }
-                                .disabled((bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                          || model.petJobs[bot.id]?.isActive == true)
+                                .disabled(!hasAppearance || model.petJobs[bot.id]?.isActive == true)
                                 .help("Codex draws a still per state, then OpenRouter turns each into a short looping clip")
                             Spacer()
                         }
                         PetJobStatus(botID: bot.id)
                     }
                 } header: {
-                    Text("Appearance")
-                } footer: {
-                    Text(isNew
-                         ? "With an appearance, you can make the bot's pet when you create it: an animated character that stands in for the emoji and acts out what the bot is doing."
-                         : "The pet stands in for the emoji and acts out what the bot is doing. A remake with the same appearance keeps its look.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Text("Animated Pet")
                 }
                 if !bot.isRemoteQueue {
                 Section {
@@ -136,14 +143,24 @@ struct BotEditor: View {
                 } footer: {
                     if let problem = workspaceProblem {
                         Text(problem).font(.caption).foregroundStyle(.red)
-                    } else {
-                        Text("BotChu keeps the bot's history and logs in .botchu/ inside this folder.")
-                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 } else {
                     Section {
-                        Text("Messages wait in BotChu for this bot's own runtime to collect them. Set its connection in Settings ▸ Remote queue.")
+                        // Where its connection is set, as a status and the way there (#232).
+                        LabeledContent("Connection") {
+                            HStack {
+                                Text(model.settings.remoteQueueEnabled ? "Configured" : "Not configured")
+                                    .foregroundStyle(.secondary)
+                                // Settings is behind the sheet, which closes to show it: only with nothing to lose.
+                                Button("Open Remote Queue Settings…") {
+                                    dismiss()
+                                    model.openSettings(.remoteQueue)
+                                }
+                                .disabled(isNew || bot != original)
+                                .help(isNew ? "Create the bot first" : bot != original ? "Save or cancel your changes first" : "")
+                            }
+                        }
                         if let problem = workspaceProblem { Text(problem).foregroundStyle(.red) }
                     }
                 }
@@ -175,12 +192,6 @@ struct BotEditor: View {
                 model.setAppearance(bot.appearance ?? "", for: bot.id)
                 model.makePet(bot.id)
             }
-        } message: {
-            Text(petExplanation)
-        }
-        .confirmationDialog("Make a pet for \(bot.name) too?", isPresented: $confirmCreatePet) {
-            Button("Create and Make Pet (\(petCost))") { finish(makingPet: true) }
-            Button("Create Without a Pet") { finish(makingPet: false) }
         } message: {
             Text(petExplanation)
         }
@@ -237,12 +248,10 @@ struct BotEditor: View {
         }
     }
 
+    private var hasAppearance: Bool { !(bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
     private func save() {
-        if isNew, !(bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            confirmCreatePet = true
-            return
-        }
-        finish(makingPet: false)
+        finish(makingPet: isNew && PetVideo.makesPetOnCreate(optedIn: makesPet, appearance: bot.appearance))
     }
 
     private func finish(makingPet: Bool) {
@@ -266,7 +275,7 @@ struct BotEditor: View {
         dismiss()
     }
 
-    private var petCost: String { String(format: "about $%.2f", PetVideo.estimatedCost(model.petModel)) }
+    private var petCost: String { PetVideo.costLabel(model.petModel) }
 
     private var petExplanation: String {
         String(format: "%@ draws %d stills of it from its appearance, on your ChatGPT allowance (keeping its pet's look when the appearance hasn't changed). Then OpenRouter turns them into %d short looping clips on %@, for %@ of your OpenRouter credit. It takes about 10 minutes, in the background.",

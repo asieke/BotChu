@@ -19,6 +19,8 @@ final class IssueReportRequest: Identifiable {
     let id = UUID()
     let snapshot: IssueSnapshot
     var text = ""
+    /// The Title field (#232); left empty, the issue is titled from the report's first line.
+    var typedTitle = ""
     let images: DraftImages
     /// Why the report has no screenshot of its window, when BotChu couldn't take one.
     let screenshotProblem: String?
@@ -45,8 +47,13 @@ final class IssueReportRequest: Identifiable {
     /// Whether the window's screenshot is still among the images, to go with the report.
     var hasScreenshot: Bool { images.images.contains { $0.id == screenshotID } }
 
-    var title: String { IssueReport.title(from: text) }
+    /// The issue's title: as typed, else from the report's first line.
+    var title: String { IssueReport.title(typed: typedTitle, report: text) }
     var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// Who can see what the report sends, as the sheet's header says it.
+    var visibility: String {
+        IssueReport.visibility(screenshot: hasScreenshot, images: images.images.count - (hasScreenshot ? 1 : 0))
+    }
 
     var canSubmit: Bool {
         guard case .filed = state else { return state != .filing && !isEmpty }
@@ -56,7 +63,7 @@ final class IssueReportRequest: Identifiable {
     func submit(with filer: IssueFiler) async {
         guard canSubmit else { return }
         state = .filing
-        switch await filer.file(text, images: images.images.map(\.png), snapshot: snapshot) {
+        switch await filer.file(text, title: typedTitle, images: images.images.map(\.png), snapshot: snapshot) {
         case .filed(let url, let problem): state = .filed(url, problem: problem)
         case .failed(let problem): state = .failed(problem)
         }

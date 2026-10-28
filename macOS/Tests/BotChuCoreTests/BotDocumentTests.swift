@@ -56,6 +56,36 @@ import Testing
         #expect(try String(contentsOf: url, encoding: .utf8) == "Agent's newer notes")
     }
 
+    /// Save & Start New Session (#232): the restart comes only after the file is saved, never when
+    /// the save fails, and only for the selected, idle conversation on this Mac that has a session.
+    @Test func saveAndStartNewSessionSavesFirstAndOnlyForTheSelectedIdleConversation() throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bot = Bot(name: "Scout", workspace: root.path)
+        let url = BotDocument.instructions.url(for: bot)
+        try "Original".write(to: url, atomically: true, encoding: .utf8)
+        var draft = try BotDocumentDraft(bot: bot, document: .instructions)
+        draft.text = "New role"
+        var restarted: [String] = []
+        try draft.save { restarted.append((try? String(contentsOf: url, encoding: .utf8)) ?? "") }
+        #expect(restarted == ["New role"], "The new session starts after the file holds the edit")
+
+        draft.text = "Another role"
+        try "Changed on disk".write(to: url, atomically: true, encoding: .utf8)
+        #expect(throws: (any Error).self) { try draft.save { restarted.append("again") } }
+        #expect(restarted == ["New role"], "A save that fails starts no session")
+        #expect(try String(contentsOf: url, encoding: .utf8) == "Changed on disk")
+
+        #expect(DocumentSessionRestart(selected: true, local: true, hasSession: true, running: false) == .ready)
+        #expect(DocumentSessionRestart(selected: true, local: true, hasSession: true, running: true) == .waiting)
+        #expect(DocumentSessionRestart(selected: true, local: true, hasSession: false, running: false) == .unavailable,
+                "Its next turn starts a new session anyway")
+        #expect(DocumentSessionRestart(selected: false, local: true, hasSession: true, running: false) == .unavailable,
+                "Never another bot's, or a conversation not shown")
+        #expect(DocumentSessionRestart(selected: true, local: false, hasSession: true, running: false) == .unavailable,
+                "Never a remote queue bot's or a task's on a host")
+    }
+
     @Test func unreadableMarkdownIsAnErrorRatherThanAnEmptyDraft() throws {
         let root = try folder()
         defer { try? FileManager.default.removeItem(at: root) }

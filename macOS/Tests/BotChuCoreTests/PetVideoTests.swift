@@ -35,6 +35,17 @@ import Testing
         #expect(PetVideo.model(id: "nope") == PetVideo.defaultModel)
     }
 
+    /// New Bot's pet toggle (#232): it says the chosen model's own estimate, and only a bot with an
+    /// appearance whose owner turned it on gets a pet as it is created.
+    @Test func aNewBotsPetIsOptInAtTheLiveEstimate() {
+        #expect(PetVideo.costLabel(PetVideo.defaultModel) == "about $0.56")
+        #expect(PetVideo.costLabel(PetVideo.model(id: "kwaivgi/kling-v3.0-std")) == "about $4.03")
+        #expect(PetVideo.makesPetOnCreate(optedIn: true, appearance: "A small brass robot"))
+        #expect(!PetVideo.makesPetOnCreate(optedIn: false, appearance: "A small brass robot"), "Never without asking")
+        #expect(!PetVideo.makesPetOnCreate(optedIn: true, appearance: nil))
+        #expect(!PetVideo.makesPetOnCreate(optedIn: true, appearance: " \n "))
+    }
+
     @Test func requestPinsTheStillAsFirstAndLastFrame() throws {
         let clip = PetVideo.clips.first { $0.id == "coding" }!
         let data = try PetVideo.requestBody(model: PetVideo.defaultModel, clip: clip, image: "data:image/jpeg;base64,AAAA")

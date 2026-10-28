@@ -130,6 +130,34 @@ import Testing
             == .run(occurrence: at("2026-10-24T13:00:00Z"), trigger: .scheduled, coalesced: 0))
     }
 
+    /// The editor's one missed-runs picker (#232): each choice says what happens, sets the policy
+    /// and window the planner reads, and Skip keeps the window for when it runs them again.
+    @Test func missedRunsAreOneChoiceThatSaysWhatHappens() {
+        var edited = job(handled: "2026-10-23T14:00:00Z", window: 6 * 3600)
+        #expect(MissedRunChoice(edited) == .runLatest(within: 6 * 3600))
+        #expect(MissedRunChoice(edited).label == "Run latest missed run if within 6 hours")
+        #expect(MissedRunChoice.choices(including: 6 * 3600).map(\.label) == [
+            "Run latest missed run if within 1 hour", "Run latest missed run if within 6 hours",
+            "Run latest missed run if within 1 day", "Run latest missed run if within 7 days", "Skip missed runs",
+        ])
+        MissedRunChoice.skip.apply(to: &edited)
+        #expect(edited.missedRuns == .skip && edited.catchUpWindow == 6 * 3600)
+        #expect(MissedRunChoice(edited) == .skip)
+        let skipped = JobPlanner.decide(edited, now: at("2026-10-24T15:00:00Z"))
+        guard case .skip = skipped else { Issue.record("\(skipped)"); return }
+        MissedRunChoice.runLatest(within: 3600).apply(to: &edited)
+        #expect(edited.missedRuns == .runOnce && edited.catchUpWindow == 3600)
+        // A window saved elsewhere stays a choice, in order, as words.
+        let custom = MissedRunChoice.choices(including: 3 * 3600)
+        #expect(custom.count == 6 && custom[1] == .runLatest(within: 3 * 3600))
+        #expect(custom[1].label == "Run latest missed run if within 3 hours")
+        #expect(MissedRunChoice.runLatest(within: 90 * 60).label == "Run latest missed run if within 1 h 30 min")
+        #expect(MissedRunChoice.choices(including: JobLimits.defaultCatchUpWindow).count == 5)
+        // A window without limit, saved elsewhere, stays a choice that says so.
+        #expect(MissedRunChoice.choices(including: .infinity).dropLast().last == .runLatest(within: .infinity))
+        #expect(MissedRunChoice.runLatest(within: .infinity).label == "Run latest missed run, however late")
+    }
+
     @Test func pausedJobsAndClockChanges() {
         var paused = job(handled: "2026-10-23T14:00:00Z")
         paused.enabled = false

@@ -49,6 +49,13 @@ private func tempDir(_ name: String) -> URL {
         #expect(host.command(for: Accounts.account(id: "claude-dev")) == "claude")
         #expect(host.command(for: Accounts.account(id: "codex-dev")) == nil)
         #expect(host.command(for: Accounts.account(id: "muse")) == nil)
+        // Beside its machine name, how PROJECT.md's deploy calls a project there (#232).
+        #expect(SSHHost(nickname: "Omarchy", destination: "asieke@omarchy-1.tail.ts.net").deployExample == "local:omarchy-1:~/apps/…")
+        var edited = SSHHost(nickname: "Omarchy", destination: "omarchy", machine: "omarchy-1", reposFolder: "/root/workspace")
+        #expect(edited.deployExample == "local:omarchy-1:/root/workspace/…")
+        edited.machine = "  "
+        edited.reposFolder = "~/code/"
+        #expect(edited.deployExample == "local:omarchy:~/code/…")
     }
 
     @Test func whereARepositoryLives() {

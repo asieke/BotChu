@@ -65,6 +65,16 @@ public struct SSHHost: Codable, Hashable, Identifiable, Sendable {
         return nil
     }
 
+    /// What PROJECT.md's `deploy` calls a project in its repositories folder there, shown beside the
+    /// host's machine name (#232): `local:<machine>:<folder>/…`, with the machine it is saved with
+    /// (its SSH host's short name until one is set).
+    public var deployExample: String {
+        let typed = machine.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = typed.isEmpty ? Self.machineName(destination: destination.trimmingCharacters(in: .whitespacesAndNewlines)) : typed
+        let folder = Self.trimmedFolder(reposFolder)
+        return "local:\(name.isEmpty ? "<machine>" : name):\(folder.isEmpty ? "~/apps" : folder)/…"
+    }
+
     /// The machine name a host starts with: its SSH host's short name, without the user or the
     /// domain (`root@srv1902831.example.net` is `srv1902831`).
     public static func machineName(destination: String) -> String {

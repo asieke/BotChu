@@ -27,7 +27,7 @@ struct ProvidersView: View {
         let board = model.usageBoard
         let requests = model.usageRequests
         VStack(alignment: .leading, spacing: 0) {
-            LibraryHeading(title: "Providers", subtitle: "Your CLI profiles and their available allowance.", count: model.settings.accounts.count) {
+            LibraryHeading(title: "Providers", count: model.settings.accounts.count) {
                 ProvidersFreshness(requests: requests, refreshing: refreshing)
                 // Never disabled: each profile keeps its own limit, so Muse is asked at most every five minutes.
                 Button { refresh(requests) } label: { Label("Refresh", systemImage: "arrow.clockwise") }
@@ -315,6 +315,7 @@ private struct ProviderProblemButton: View {
 /// What went wrong with a profile's reading, and Try Again, which waits for the profile's own limit.
 private struct ProviderProblemDetails: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
     let account: Account
     let status: ProviderRow.Status
     let changeCommand: () -> Void
@@ -337,7 +338,6 @@ private struct ProviderProblemDetails: View {
                         if let reading = state?.reading {
                             Text("Showing the reading from \(reading.readAt.formatted(date: .abbreviated, time: .shortened)).")
                         }
-                        Text(note)
                     }
                 }
                 .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -353,6 +353,12 @@ private struct ProviderProblemDetails: View {
                     .modifier(Prominent(status != .missingCommand))
                     if status == .missingCommand {
                         Button("Change Command…", action: changeCommand).buttonStyle(.borderedProminent)
+                    } else if account.kind == .pi {
+                        // Pi's usage is the shared OpenRouter key's, set in Settings (#232).
+                        Button("Open Settings") {
+                            dismiss()
+                            model.openSettings(.openRouter)
+                        }
                     }
                 }
                 .controlSize(.small)
@@ -371,14 +377,6 @@ private struct ProviderProblemDetails: View {
         case .missingCommand: "Command not found"
         case .stale: "Stale reading"
         default: "Usage unavailable"
-        }
-    }
-
-    private var note: String {
-        switch account.kind {
-        case .muse: "Muse is checked with a brief request, at most hourly automatically and every five minutes with Try Again."
-        case .pi: "Pi profiles share the OpenRouter key in Settings."
-        default: "Usage is read with the profile’s own CLI and sign-in, every 15 minutes in the background."
         }
     }
 }
@@ -741,6 +739,8 @@ struct AddProviderSheet: View {
     @State private var command = ""
     @State private var testing = false
     @State private var found: Bool?
+    /// Whether the OpenRouter key is in the Keychain, read when Pi is chosen.
+    @State private var openRouterKeySaved = false
     private var valid: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !command.contains(where: \.isNewline)
@@ -754,8 +754,25 @@ struct AddProviderSheet: View {
                 TextField("Command", text: $command, prompt: Text("~/.local/bin/claude-research"))
                     .font(.system(.body, design: .monospaced))
                     .onChange(of: command) { found = nil }
-                Text("Use an installed CLI or profile wrapper with its own login. BotChu uses this family’s streaming, session, and usage support. Sign in through the CLI in Terminal first.").font(.caption).foregroundStyle(.secondary)
-                if kind == .pi { Text("Pi profiles use OpenRouter and the shared key in Settings.").font(.caption).foregroundStyle(.secondary) }
+                // A Pi profile runs on the shared OpenRouter key: whether it is saved, or the way to it (#232).
+                if kind == .pi {
+                    LabeledContent("OpenRouter key") {
+                        if openRouterKeySaved {
+                            Label("Saved", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                        } else {
+                            HStack {
+                                Label("Not saved", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Palette.warning)
+                                // Settings is behind the sheet, which closes to show it: only with nothing typed to lose.
+                                Button("Add Key in Settings…") {
+                                    dismiss()
+                                    model.openSettings(.openRouter)
+                                }
+                                .disabled(!name.isEmpty || !command.isEmpty)
+                                .help(name.isEmpty && command.isEmpty ? "" : "Add the profile or cancel first")
+                            }
+                        }
+                    }
+                }
                 HStack {
                     Button(testing ? "Testing…" : "Test Command") {
                         testing = true
@@ -778,6 +795,9 @@ struct AddProviderSheet: View {
                 Button("Add Profile") { save() }.buttonStyle(.borderedProminent).disabled(!valid || testing)
             }.padding(20)
         }.frame(width: 540, height: 410).background(Color(nsColor: .windowBackgroundColor))
+        .task(id: kind) {
+            if kind == .pi { openRouterKeySaved = !(model.openRouterKey() ?? "").isEmpty }
+        }
     }
     private func save() {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
