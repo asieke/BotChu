@@ -259,12 +259,55 @@ def task_wait(request_id, wait):
         live()
         time.sleep(0.25)
 
+def task_list(as_json):
+    live()
+    request_id = str(uuid.uuid4())
+    atomic_json(ROOT / "requests" / (request_id + ".json"), {
+        "kind": "taskList",
+        "id": request_id,
+        "invocationID": caller_uuid("BOTCHU_INVOCATION_ID", True),
+        "callerBotID": caller_uuid("BOTCHU_CALLER_BOT_ID", True),
+        "callerTaskID": caller_uuid("BOTCHU_CALLER_TASK_ID"),
+        "parentSubagentID": caller_uuid("BOTCHU_CALLER_SUBAGENT_ID"),
+        "createdAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
+    started = time.monotonic()
+    timeout = seconds("BOTCHU_WAIT_TIMEOUT_SECONDS", 30, 86400)
+    path = ROOT / "results" / (request_id + ".result.json")
+    while not path.exists():
+        if time.monotonic() - started > timeout:
+            fail("BotChu hasn't answered yet; run botchu-task list --mine again.")
+        live()
+        time.sleep(0.1)
+    result = read_json(path)
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    if result.get("kind") != "taskList" or canonical(result.get("id")) != request_id:
+        fail("Mismatched Tasks list: " + request_id)
+    if result.get("errorMessage"):
+        fail("No Tasks list: " + str(result["errorMessage"]))
+    if as_json:
+        # IDs as the text prints them: lowercase.
+        tasks = [dict(task, id=canonical(task.get("id"))) for task in result.get("tasks") or []]
+        print(json.dumps({"bot": {"id": canonical(result.get("botID")), "name": result.get("botName")}, "tasks": tasks},
+                         ensure_ascii=False, indent=2), flush=True)
+    else:
+        print(str(result.get("text", "")), flush=True)
+    return 0
+
 def task_main():
     parser = argparse.ArgumentParser(prog="botchu-task", description="Create Tasks for BotChu bots: independent, parent-level "
         "conversations under the bot in BotChu's sidebar, which go on after this turn ends. For child work that "
         "returns a handoff to this turn, use botchu-subagent instead.")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("list", help="List the bots that can own Tasks, with UUIDs for ambiguous names")
+    lister = commands.add_parser("list", help="List the bots that can own Tasks, with UUIDs for ambiguous names; "
+        "with --mine, your own open Tasks")
+    lister.add_argument("--mine", action="store_true", help="List your bot's open Tasks as BotChu's sidebar shows them, in its "
+        "order: title, summary, state (Idle, Thinking…, Running a tool…), elapsed time or time since last activity, issue or "
+        "pull request, branch and Task ID")
+    lister.add_argument("--json", action="store_true", help="With --mine, print the same fields as JSON")
     create = commands.add_parser("create", help="Create and start a Task under a bot")
     create.add_argument("--agent", required=True, help="The bot that gets the Task: its name, slug or UUID")
     create.add_argument("--repo", required=True, help="The repository, owner/name")
@@ -281,6 +324,10 @@ def task_main():
     status.add_argument("id")
     args = parser.parse_args()
     if args.command == "list":
+        if args.mine:
+            return task_list(args.json)
+        if args.json:
+            fail("--json prints your own Tasks: use it with --mine.")
         return roster(tasks=True)
     if args.command == "status":
         request_id = canonical(args.id)

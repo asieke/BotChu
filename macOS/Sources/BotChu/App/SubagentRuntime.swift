@@ -284,6 +284,11 @@ final class SubagentRuntime {
             await receiveMessage(data, id: fileID, filename: filename, from: caller)
             return
         }
+        // The asking bot's own open Tasks, as its Tasks column shows them (#262).
+        if TaskListRequest.isRequest(data) {
+            await receiveTaskList(data, id: fileID, filename: filename, from: caller)
+            return
+        }
         if let rejected = rejections[caller.id]?[fileID] {
             do {
                 try await caller.transport.writeResult(id: fileID, data: SubagentIPC.encode(rejected))
@@ -445,6 +450,33 @@ final class SubagentRuntime {
             try await caller.transport.writeResult(id: id, data: SubagentIPC.encode(result))
             try await caller.transport.acknowledge(filename: filename)
         } catch { if isWatching(caller.id) { report("Couldn't answer a message: \(error.localizedDescription)") } }
+    }
+
+    // MARK: The asking bot's Tasks (#262)
+
+    /// Takes a `botchu-task list --mine` request: answers with the open Tasks of the bot whose turn
+    /// asks (a sub-agent run's own bot), as its Tasks column lists them now. It changes nothing, so
+    /// asking again just answers again.
+    private func receiveTaskList(_ data: Data, id: UUID, filename: String, from caller: Caller) async {
+        var result: TaskListResult
+        do {
+            guard let model else { throw InboxRequest.Problem("BotChu is shutting down") }
+            let request = try TaskListRequest.parse(data)
+            guard request.id == id else { throw InboxRequest.Problem("the request's ID doesn't match its file") }
+            try request.validate(SubagentCallerContext(invocationID: caller.id, botID: caller.target.botID, taskID: caller.target.taskID,
+                                                       parentSubagentID: caller.parent, depth: caller.depth,
+                                                       workingDirectory: caller.directory, hostID: caller.hostID))
+            guard contexts[caller.id] != nil else { throw InboxRequest.Problem("the asking turn has ended") }
+            let botID = caller.parent.flatMap { run($0) }?.targetBotID ?? caller.target.botID
+            guard let bot = model.bot(botID) else { throw InboxRequest.Problem("the asking bot is no longer in BotChu") }
+            result = TaskListResult(id: id, botID: bot.id, botName: bot.name, tasks: model.taskList(of: bot.id))
+        } catch {
+            result = TaskListResult(id: id, errorMessage: (error as? InboxRequest.Problem)?.message ?? error.localizedDescription)
+        }
+        do {
+            try await caller.transport.writeResult(id: id, data: SubagentIPC.encode(result))
+            try await caller.transport.acknowledge(filename: filename)
+        } catch { if isWatching(caller.id) { report("Couldn't answer a Tasks list request: \(error.localizedDescription)") } }
     }
 
     private static func mimeType(of name: String) -> String? {

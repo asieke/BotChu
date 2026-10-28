@@ -113,6 +113,15 @@ public enum TabState: Equatable, Sendable {
         }
     }
 
+    /// When the running turn started, else when it was last active, finished or failed: what `time` counts from.
+    public var since: Date? {
+        switch self {
+        case .preparing: nil
+        case .starting(let since), .working(_, let since): since
+        case .idle(let at), .news(_, let at), .failed(let at), .stopped(let at), .needsInput(_, let at): at
+        }
+    }
+
     /// The time as VoiceOver reads it: "4 minutes 12 seconds", "2 minutes ago".
     public func spokenTime(at now: Date) -> String? {
         func unit(_ n: Int, _ name: String) -> String { "\(n) \(name)\(n == 1 ? "" : "s")" }
