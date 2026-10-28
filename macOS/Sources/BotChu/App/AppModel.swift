@@ -227,6 +227,7 @@ final class AppModel {
     /// Skills & Tools' tool policy, where tools are and their checks (#246), in `tools.json`.
     let tools: ToolsBoard
     @ObservationIgnored private var usageWatch: Task<Void, Never>?
+    @ObservationIgnored private var openRouterBilling: OpenRouterBilling?
     /// Usage views inject this lookup in tests so they never read the owner's Keychain.
     let openRouterKey: @MainActor () -> String?
     /// The Sail key as Settings ▸ Sail shows it; tests replace it, so they never read the Keychain.
@@ -399,6 +400,7 @@ final class AppModel {
         evaluator.load(bots: bots.filter { !$0.isRemoteQueue }.map { ($0.id, $0.workspace) })
         evaluationRecords = evaluator.records
         reviewStates = evaluator.states
+        if store == nil && DevHooks.dataDir == nil { openRouterBilling = OpenRouterBilling(model: self) }
         // Follow-ups left queued when BotChu quit go out on their own, unless Stop or a failure
         // paused them, once their own conversation is recovered (`recovered`), after the window is up.
     }
@@ -2221,6 +2223,7 @@ final class AppModel {
     /// writes still under way; what isn't written by then is listed in `unsavedAtQuit` and the
     /// system log, and its files stay as they were (with any messages the CLI took in their queue).
     func stopAll() {
+        openRouterBilling?.stop()
         remoteQueue?.stop()
         terminating = true
         // What waits for a conversation's history or its recovery is done now, so quitting loses
