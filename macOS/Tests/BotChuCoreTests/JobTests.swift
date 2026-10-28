@@ -153,6 +153,9 @@ import Testing
         #expect(custom[1].label == "Run latest missed run if within 3 hours")
         #expect(MissedRunChoice.runLatest(within: 90 * 60).label == "Run latest missed run if within 1 h 30 min")
         #expect(MissedRunChoice.choices(including: JobLimits.defaultCatchUpWindow).count == 5)
+        // A window without limit, saved elsewhere, stays a choice that says so.
+        #expect(MissedRunChoice.choices(including: .infinity).dropLast().last == .runLatest(within: .infinity))
+        #expect(MissedRunChoice.runLatest(within: .infinity).label == "Run latest missed run, however late")
     }
 
     @Test func pausedJobsAndClockChanges() {

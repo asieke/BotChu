@@ -259,13 +259,14 @@ public enum MissedRunChoice: Hashable, Sendable {
     /// Each offered window, with `window` among them when it is another (a job saved elsewhere),
     /// shortest first, then Skip.
     public static func choices(including window: TimeInterval) -> [MissedRunChoice] {
-        let all = windows.contains(window) || !window.isFinite || window <= 0 ? windows : (windows + [window]).sorted()
+        let all = windows.contains(window) || window.isNaN ? windows : (windows + [window]).sorted()
         return all.map { .runLatest(within: $0) } + [.skip]
     }
 
     public var label: String {
         switch self {
-        case .runLatest(let window): "Run latest missed run if within \(Self.words(window))"
+        case .runLatest(let window) where window.isFinite && window > 0: "Run latest missed run if within \(Self.words(window))"
+        case .runLatest: "Run latest missed run, however late"
         case .skip: "Skip missed runs"
         }
     }
