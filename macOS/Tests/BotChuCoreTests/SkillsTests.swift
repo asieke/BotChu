@@ -284,3 +284,170 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: Skills.folder(of: bot).path))
     }
 }
+
+extension SkillsTests {
+    @Test func sessionCatalogDoesNotWalkResourceTrees() throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("---\nname: browse\ndescription: Browse\n---", skill: "browse", in: root,
+                  files: ["helpers/run.sh", "references/deep/a.md"])
+        let files = ResourceCountingFileManager()
+        let catalog = Skills.discover(in: root, scope: .shared, countResources: false, fileManager: files)
+        #expect(catalog.count == 1 && files.walks == 0)
+        let gallery = Skills.discover(in: root, scope: .shared, fileManager: files)
+        #expect(gallery.first?.resourceCount == 2 && files.walks == 1)
+    }
+
+    @Test func concurrentSessionsReuseOneSnapshotAndKeepBotsSeparate() async throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bot = Bot(name: "One", workspace: root.appendingPathComponent("one").path)
+        let input = SessionPreparation.Input(bot: bot, sharedMemoryPath: root.appendingPathComponent("MEMORY.md").path)
+        let storage = StorageQueue(before: { work in
+            if work.label == "session-preparation" { #expect(!Thread.isMainThread) }
+        })
+        let preparation = SessionPreparation(storage: storage)
+        async let first = preparation.prepare(input)
+        async let second = preparation.prepare(input)
+        let (a, b) = try await (first, second)
+        #expect(a.revision == b.revision)
+        #expect(preparation.statistics.prepared == 1 && preparation.statistics.reused == 1)
+        var resumed = bot
+        resumed.sessionID = "new-session"
+        resumed.model = "another-model"
+        let c = try await preparation.prepare(.init(bot: resumed, sharedMemoryPath: input.sharedMemoryPath))
+        #expect(c.revision == a.revision)
+        let other = Bot(name: "Two", workspace: root.appendingPathComponent("two").path)
+        let d = try await preparation.prepare(.init(bot: other, sharedMemoryPath: input.sharedMemoryPath))
+        #expect(d.revision != a.revision && d.memory.contains("Two") && !d.memory.contains("One"))
+    }
+
+    @Test func sessionSnapshotSeesAtomicEditsLinkedSkillsAndEnabledSkills() async throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var bot = Bot(name: "One", workspace: root.appendingPathComponent("one").path)
+        let shared = root.appendingPathComponent("MEMORY.md").path
+        let preparation = SessionPreparation(storage: StorageQueue())
+        func prepare() async throws -> SessionPreparation.Snapshot {
+            try await preparation.prepare(.init(bot: bot, sharedMemoryPath: shared))
+        }
+        var previous = try await prepare()
+        for name in ["INSTRUCTIONS.md", "MEMORY.md", "SOUL.md"] {
+            let file = URL(fileURLWithPath: bot.workspace).appendingPathComponent(name)
+            let date = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            try "UPDATED-\(name)".write(to: file, atomically: true, encoding: .utf8)
+            // Atomic replacement must invalidate even if an editor preserves the old mtime.
+            if let date { try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path) }
+            let next = try await prepare()
+            #expect(next.revision != previous.revision)
+            previous = next
+        }
+        try "TEAM-UPDATED".write(to: root.appendingPathComponent("TEAM.md"), atomically: true, encoding: .utf8)
+        try "SHARED-UPDATED".write(toFile: shared, atomically: true, encoding: .utf8)
+        let skills = root.appendingPathComponent("skills")
+        try write("---\nname: tea\ndescription: Old tea\n---", skill: "tea", in: skills)
+        var next = try await prepare()
+        #expect(next.instructions == "UPDATED-INSTRUCTIONS.md" && next.memory == "UPDATED-MEMORY.md")
+        #expect(next.soul == "UPDATED-SOUL.md" && next.team == "TEAM-UPDATED" && next.sharedMemory == "SHARED-UPDATED")
+        #expect(next.skills.map(\.description) == ["Old tea"])
+        try write("---\nname: tea\ndescription: Fresh tea\n---", skill: "tea", in: skills)
+        next = try await prepare()
+        #expect(next.skills.map(\.description) == ["Fresh tea"])
+        bot.setSharedSkill("tea", enabled: false)
+        next = try await prepare()
+        #expect(next.skills.isEmpty)
+        let own = Skills.folder(of: bot)
+        try FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: own.appendingPathComponent("tea"), withDestinationURL: skills.appendingPathComponent("tea"))
+        next = try await prepare()
+        #expect(next.skills.map(\.scope) == [.bot])
+        try write("---\nname: tea\ndescription: Linked edit\n---", skill: "tea", in: skills)
+        next = try await prepare()
+        #expect(next.skills.map(\.description) == ["Linked edit"])
+        #expect(Workspace.read(bot.workspace + "/AGENTS.md").contains("Linked edit"))
+    }
+
+    @Test func retiredAndCancelledPreparationCannotReturnAUsableSnapshot() async throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bot = Bot(name: "One", workspace: root.appendingPathComponent("one").path)
+        let input = SessionPreparation.Input(bot: bot, sharedMemoryPath: root.appendingPathComponent("MEMORY.md").path)
+        let gate = PreparationGate()
+        let storage = StorageQueue(before: { work in if work.label == "session-preparation" { gate.wait() } })
+        let preparation = SessionPreparation(storage: storage)
+        let pending = Task { try await preparation.prepare(input) }
+        await gate.entered()
+        pending.cancel()
+        preparation.retire(bot.id)
+        gate.release()
+        do { _ = try await pending.value; Issue.record("Retired preparation returned") } catch {}
+        #expect(!FileManager.default.fileExists(atPath: bot.workspace))
+        do { _ = try await preparation.prepare(input); Issue.record("Deleted bot prepared again") } catch {}
+    }
+
+    @Test func preparationFailureIsVisibleAndCanBeRetried() async throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bot = Bot(name: "One", workspace: root.appendingPathComponent("one").path)
+        let input = SessionPreparation.Input(bot: bot, sharedMemoryPath: root.appendingPathComponent("MEMORY.md").path)
+        let preparation = SessionPreparation(storage: StorageQueue())
+        _ = try await preparation.prepare(input)
+        let agents = bot.workspace + "/AGENTS.md"
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: agents)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: agents) }
+        try "New instructions".write(toFile: bot.workspace + "/INSTRUCTIONS.md", atomically: true, encoding: .utf8)
+        do { _ = try await preparation.prepare(input); Issue.record("Failed owned-file write was hidden") } catch {}
+        try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: agents)
+        let retried = try await preparation.prepare(input)
+        #expect(retried.instructions == "New instructions" && Workspace.read(agents).contains("New instructions"))
+    }
+}
+
+private final class ResourceCountingFileManager: FileManager, @unchecked Sendable {
+    var walks = 0
+    override func subpaths(atPath path: String) -> [String]? {
+        walks += 1
+        return super.subpaths(atPath: path)
+    }
+}
+
+private final class PreparationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var started = false
+    private let semaphore = DispatchSemaphore(value: 0)
+    func wait() {
+        lock.withLock { started = true }
+        _ = semaphore.wait(timeout: .now() + 10)
+    }
+    func entered() async {
+        while !lock.withLock({ started }) { try? await Task.sleep(for: .milliseconds(5)) }
+    }
+    func release() { semaphore.signal() }
+}
+
+extension SkillsTests {
+    @Test func newerPreparationSupersedesQueuedOldIdentityBeforeWriting() async throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var bot = Bot(name: "Old", workspace: root.appendingPathComponent("one").path)
+        let shared = root.appendingPathComponent("MEMORY.md").path
+        let gate = PreparationGate()
+        let storage = StorageQueue(before: { work in if work.label == "session-preparation" { gate.wait() } })
+        let preparation = SessionPreparation(storage: storage)
+        let oldInput = SessionPreparation.Input(bot: bot, sharedMemoryPath: shared)
+        let old = Task { try await preparation.prepare(oldInput) }
+        await gate.entered()
+        bot.name = "New"
+        let newInput = SessionPreparation.Input(bot: bot, sharedMemoryPath: shared)
+        let new = Task { try await preparation.prepare(newInput) }
+        while preparation.statistics.requested < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        gate.release()
+        gate.release()
+        do { _ = try await old.value; Issue.record("An obsolete request published a snapshot") }
+        catch { #expect(error as? StorageQueue.Failure == .superseded) }
+        let latest = try await new.value
+        #expect(latest.memory.contains("New"))
+        #expect(Workspace.read(bot.workspace + "/AGENTS.md").contains("You are New"))
+        #expect(preparation.statistics.prepared == 1)
+    }
+}

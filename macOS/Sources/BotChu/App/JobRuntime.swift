@@ -333,12 +333,6 @@ final class JobRuntime {
         if account.kind == .sail, let problem = SailLaunch.problem(remote: false, key: sailKey) {
             return finish(runID, outcome: .failed, summary: problem)
         }
-        let preamble = JobLaunch.preamble(
-            bot: bot, job: job, run: launch.run, startedAt: startedAt, memory: Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.memoryFile)),
-            sharedMemory: Workspace.read(model.settings.sharedMemoryPath), soul: Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.soulFile)),
-            instructions: Workspace.read(BotDocument.instructions.url(for: bot).path), team: Workspace.read(model.settings.teamPath),
-            skills: model.activeSkills(of: bot), availableBots: model.delegation.roster, tools: model.tools.instructions(), locale: .current)
-        let prompt = BotContext.prompt(for: job.prompt, preamble: preamble)
         // Its helpers and mailbox first, as a turn's in its task, so `botchu-inbox send` and the
         // others work in it (#170); its CLI starts once they are ready.
         preparing[runID] = Task { [weak self] in
@@ -349,20 +343,31 @@ final class JobRuntime {
                 guard let self, !Task.isCancelled, self.preparing.removeValue(forKey: runID) != nil else { return }
                 return self.finish(runID, outcome: .failed, summary: "Couldn't prepare the run's helpers: \(error.localizedDescription)")
             }
-            guard let self, !Task.isCancelled, self.preparing.removeValue(forKey: runID) != nil, !self.quitting else {
+            guard let self, !Task.isCancelled, self.preparing[runID] != nil, !self.quitting else {
                 return model.delegation.endCaller(caller.id)
             }
-            var invocation = JobLaunch.invocation(for: agent, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key,
-                                                  sailDefault: model.settings.sailModel, sailKey: sailKey)
-            invocation.environment.merge(caller.environment) { _, new in new }
-            // Blocks the tools that are off, as a turn on This Mac does (#246).
             do {
-                invocation.toolProfile = try await model.tools.turnProfile(for: account.kind)
+                let prepared = try await model.prepareSessionForLaunch(of: bot.id, kind: account.kind, remote: false,
+                    current: { self.preparing[runID] != nil && !self.quitting })
+                let snapshot = prepared.context
+                guard !Task.isCancelled, self.preparing.removeValue(forKey: runID) != nil, !self.quitting,
+                      let currentBot = model.bot(bot.id) else { return model.delegation.endCaller(caller.id) }
+                let preamble = JobLaunch.preamble(
+                    bot: currentBot, job: job, run: launch.run, startedAt: startedAt,
+                    memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, soul: snapshot.soul,
+                    instructions: snapshot.instructions, team: snapshot.team, skills: snapshot.skills,
+                    availableBots: model.delegation.roster, tools: model.tools.instructions(), locale: .current)
+                let prompt = BotContext.prompt(for: job.prompt, preamble: preamble)
+                var invocation = JobLaunch.invocation(for: agent, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key,
+                                                      sailDefault: model.settings.sailModel, sailKey: sailKey)
+                invocation.environment.merge(caller.environment) { _, new in new }
+                invocation.toolProfile = prepared.toolProfile
+                self.run(launch, prompt: prompt, invocation: invocation, caller: caller, account: account, agent: agent, target: target)
             } catch {
                 model.delegation.endCaller(caller.id)
-                return self.finish(runID, outcome: .failed, summary: error.localizedDescription)
+                guard !Task.isCancelled, self.preparing.removeValue(forKey: runID) != nil else { return }
+                self.finish(runID, outcome: .failed, summary: "Couldn't prepare the run: \(error.localizedDescription)")
             }
-            self.run(launch, prompt: prompt, invocation: invocation, caller: caller, account: account, agent: agent, target: target)
         }
     }
 

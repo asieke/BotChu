@@ -21,11 +21,6 @@ extension AppModel {
             }
     }
 
-    /// The skills a session of `bot` is told about.
-    func activeSkills(of bot: Bot) -> [Skill] {
-        bot.isRemoteQueue ? [] : Skills.active(for: bot, sharedFolder: sharedSkillsFolder)
-    }
-
     func setSharedSkill(_ slug: String, enabled: Bool, for botID: UUID) {
         guard let i = bots.firstIndex(where: { $0.id == botID }), bots[i].usesSharedSkill(slug) != enabled else { return }
         bots[i].setSharedSkill(slug, enabled: enabled)

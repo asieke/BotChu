@@ -1155,13 +1155,14 @@ on that pull request's branch to continue in instead). The same command run agai
     parent window's width and height, its file's name with whose it is beside it (the bot's, or
     Every bot), a few words over an empty file, and Save (⌘S), Cancel (Escape), and Reload. Saving
     preserves exact Markdown and refuses to overwrite a file changed on disk since it was opened.
-    Saved changes apply at the next new session; **New Session** applies them to an existing
-    conversation. For one of the bot's own files (#232), while its Home or a task of it on this Mac
+    Saved changes apply at the next turn, including a resumed conversation. Context and skill
+    catalogs are prepared off the UI thread and reused while their inputs are unchanged; external
+    saves are checked too. **New Session** still starts the conversation over with its recent history. For one of the bot's own files (#232), while its Home or a task of it on this Mac
     is the conversation shown and has a CLI session, the editor also has **Save & Start New
     Session**: it saves, and only once the file is saved starts that one conversation over in a new
     session, as New Session does; it waits, disabled, while a turn or sub-agent runs there, and never
     touches the bot's other conversations, other bots, or a task on a host. The files every bot
-    shares, and skills, only save, for the next new sessions. The
+    shares, and skills, only save, for the next turns. The
     window is never narrower than the sidebar, chat and status
     need, so it widens when they do.
   - **Account usage:** the selected account's allowance used and reset times, shared by all bots
@@ -1377,7 +1378,8 @@ on that pull request's branch to continue in instead). The same command run agai
     rows the chat lays out, their heights kept by what they showed and how, and the reader's row and
     offset into it (`TranscriptViewport.swift`), when the chat keeps its reader at the newest content
     (`ChatPin.swift`), the identity, instructions,
-    team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
+    team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`),
+    their reusable background preparation (`SessionPreparation.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries,
     with each window's model group and length, and what Providers makes of a reading: its windows by
     group, each reset as the time left and when, the credits and resets, what a row's second line
@@ -1955,6 +1957,11 @@ on that pull request's branch to continue in instead). The same command run agai
   rapid deltas (with the worker's counts and the main thread's time for each), and measures what
   ten 128 KB replies keep, then release under memory pressure. It needs no window, asserts nothing
   about time and isn't part of `check`.
+- Session preparation: `BOTCHU_PREPARATION_BENCHMARK=<file> swift test --package-path macOS
+  --filter sessionPreparationBenchmark` compares the previous synchronous launch preparation with
+  cold and reused background snapshots: 24 skills, 2,400 resource files, and five 20 KB context
+  files. It records preparation time and a queued MainActor input/Stop callback's delay (not drawing
+  time). Runtime tests also measure a draft edit and Stop while preparation is held on its worker.
 - Saving: `BOTCHU_PERSISTENCE_BENCHMARK=<file> swift test --configuration release --package-path macOS
   --filter persistenceBenchmark` times, for 1,500- and 5,000-message conversations and 12 MB of tool
   output, what a save costs the main thread (now, and as it was when it wrote there), how long it takes

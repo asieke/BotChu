@@ -5,6 +5,64 @@ import BotChuCore
 @testable import BotChu
 
 extension RenderingTests {
+    @Test func jobsReuseFreshSessionPreparationAndStopBeforeStartingCLI() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-job-preparation-\(UUID())")
+        let domain = "BotChu.JobPreparation.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: domain) }
+        let store = Store(root: root.appendingPathComponent("index"))
+        let bot = Bot(name: "Job", accountID: "codex-dev", workspace: root.appendingPathComponent("bot").path)
+        try BotHome(workspace: bot.workspace).save(bot)
+        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        let settings = AppSettings(defaults: defaults)
+        settings.botsRoot = root.appendingPathComponent("bots").path
+        let script = root.appendingPathComponent("cli.py")
+        try #"""
+            import json, pathlib, sys
+            pathlib.Path(__file__).with_suffix('.prompt').write_text(sys.argv[-1])
+            print(json.dumps({"type":"thread.started", "thread_id":"job-prepared"}), flush=True)
+            print(json.dumps({"type":"item.completed", "item":{"type":"agent_message", "text":"Fresh job prepared"}}), flush=True)
+            print(json.dumps({"type":"turn.completed"}), flush=True)
+            """#.write(to: script, atomically: true, encoding: .utf8)
+        settings.commands["codex-dev"] = "/usr/bin/python3 \(Shell.quote(script.path))"
+        let gate = SessionPreparationTestGate()
+        let storage = StorageQueue(before: { work in if work.label == "session-preparation" { gate.wait() } })
+        let app = AppModel(store: store, settings: settings,
+            usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests") }, storage: storage)
+        defer { gate.release(); app.stopAll() }
+        app.jobs.newJob(for: bot.id)
+        var job = try #require(app.jobs.editor?.job)
+        job.enabled = false
+        job.prompt = "Check preparation"
+        try app.jobs.save(job)
+        app.jobs.runNow(job.id)
+        for _ in 0..<500 where !gate.started { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(gate.started)
+        let stopped = try #require(app.jobs.job(job.id)?.runs.last)
+        app.jobs.stop(run: stopped.id)
+        gate.release()
+        await storage.settle()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(app.jobs.job(job.id)?.runs.last?.outcome == .stopped)
+        #expect(!FileManager.default.fileExists(atPath: script.deletingPathExtension().appendingPathExtension("prompt").path))
+
+        // A later job can reuse preparation; a disk edit before its next run invalidates it.
+        for instruction in ["FIRST-JOB-INSTRUCTION", "SECOND-JOB-INSTRUCTION", "SECOND-JOB-INSTRUCTION"] {
+            if instruction != "SECOND-JOB-INSTRUCTION" || !Workspace.read(bot.workspace + "/INSTRUCTIONS.md").contains(instruction) {
+                try instruction.write(toFile: bot.workspace + "/INSTRUCTIONS.md", atomically: true, encoding: .utf8)
+            }
+            app.jobs.runNow(job.id)
+            let id = try #require(app.jobs.job(job.id)?.runs.last?.id)
+            for _ in 0..<500 where app.jobs.job(job.id)?.runs.last?.outcome.isActive == true {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(app.jobs.job(job.id)?.runs.last?.id == id && app.jobs.job(job.id)?.runs.last?.outcome == .succeeded)
+            let prompt = try String(contentsOf: script.deletingPathExtension().appendingPathExtension("prompt"), encoding: .utf8)
+            #expect(prompt.contains(instruction))
+        }
+        #expect(app.sessionPreparation.statistics.reused > 0)
+    }
+
     /// A job's run as a task of its agent (#146), as the app runs it: Run Now starts a stand-in
     /// Codex in the agent's workspace, and the run is a new task beside the agent's chat, in its
     /// Tasks column with the job's menu, whose conversation is the run, saved as the task's own and
