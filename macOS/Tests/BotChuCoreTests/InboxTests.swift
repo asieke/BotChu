@@ -331,6 +331,94 @@ private final class InboxFixture {
         #expect(state.needsInput(home) && !state.needsInput(review) && !state.needsInput(fyi))
     }
 
+    @Test func inboxStatusPreservesCountsQuestionsAndTieOrderingThroughEveryTransition() throws {
+        let bot = UUID(), task = UUID(), time = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = Delivery(id: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!, botID: bot,
+                             title: "First", purpose: .needsInput, sentAt: time)
+        let tied = Delivery(id: UUID(uuidString: "00000000-0000-4000-8000-000000000002")!, botID: bot,
+                            title: "Tied", question: .init(text: "Which?"), sentAt: time)
+        let review = Delivery(botID: bot, taskID: task, title: "Review", question: .init(text: "Which?"), purpose: .review)
+        var deliveries = [first, tied, review]
+        var state = InboxState()
+        func check() {
+            let status = InboxStatus(deliveries: deliveries, state: state)
+            #expect(status.awaitingInput.mapValues { $0.map(\.id) } == state.awaitingInput(deliveries))
+            #expect(status.unreadCount == state.unreadCount(deliveries))
+            #expect(status.unfinishedCount == state.unfinishedCount(deliveries))
+            for pending in status.awaitingInput.values.flatMap({ $0 }) {
+                #expect(pending.updatedAt == deliveries.first { $0.id == pending.id }?.updatedAt)
+            }
+        }
+        check()
+        #expect(InboxStatus(deliveries: deliveries, state: state).awaitingInput[first.origin]?.map(\.id) == [tied.id, first.id])
+        state[first.id].read = true
+        check()
+        state.answer(tied.id, at: time)
+        check()
+        state[tied.id].done = false // An answered delivery stays answered when reopened.
+        check()
+        #expect(InboxStatus(deliveries: deliveries, state: state).awaitingInput[first.origin]?.map(\.id) == [first.id])
+        state[first.id].done = true
+        check()
+        #expect(InboxStatus(deliveries: deliveries, state: state).awaitingInput.isEmpty)
+        state[first.id].done = false
+        check()
+        var renewed = tied
+        renewed.note = "New options"
+        renewed.updatedAt = time.addingTimeInterval(1)
+        let resent = Delivery.resent(renewed, replacing: tied)
+        deliveries[1] = resent.delivery
+        state.received(tied.id, renewed: resent.renewed, shown: false)
+        check()
+        #expect(InboxStatus(deliveries: deliveries, state: state).awaitingInput[first.origin]?.map(\.id) == [tied.id, first.id])
+        state = try Store.decoder.decode(InboxState.self, from: Store.encoder.encode(state))
+        check() // Relaunch uses the saved read/Done/answer state.
+        deliveries.removeAll { $0.botID == bot }
+        state.keep(only: [])
+        check()
+        #expect(InboxStatus(deliveries: deliveries, state: state) == InboxStatus())
+    }
+
+    /// Same controlled 20-bot / 80-task / 2,000-delivery workload as the sidebar fixture. Timing
+    /// is opt-in and has no load-sensitive assertion; the runtime tests count real derivations.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["BOTCHU_INBOX_BENCHMARK"] != nil))
+    func inboxStatusBenchmark() throws {
+        let bots = (0..<20).map { _ in UUID() }
+        let origins = bots.flatMap { bot in
+            [Delivery.Origin(botID: bot, taskID: nil)] + (0..<4).map { _ in Delivery.Origin(botID: bot, taskID: UUID()) }
+        }
+        let deliveries = origins.flatMap { origin in
+            (0..<20).map { n in Delivery(botID: origin.botID, taskID: origin.taskID, title: "Item \(n)",
+                purpose: n.isMultiple(of: 2) ? .needsInput : .review, sentAt: Date(timeIntervalSince1970: Double(n))) }
+        }
+        let state = InboxState(), cached = InboxStatus(deliveries: deliveries, state: InboxState())
+        var baseline: [Double] = [], after: [Double] = [], mutation: [Double] = [], checksum = 0
+        for _ in 0..<30 {
+            var start = Date()
+            for origin in origins { checksum += state.awaitingInput(deliveries)[origin]?.count ?? 0 }
+            checksum += state.unreadCount(deliveries) + state.unfinishedCount(deliveries)
+            baseline.append(Date().timeIntervalSince(start) * 1_000)
+            start = Date()
+            for origin in origins { checksum += cached.awaitingInput[origin]?.count ?? 0 }
+            checksum += cached.unreadCount + cached.unfinishedCount
+            after.append(Date().timeIntervalSince(start) * 1_000)
+            start = Date()
+            let rebuilt = InboxStatus(deliveries: deliveries, state: state)
+            mutation.append(Date().timeIntervalSince(start) * 1_000)
+            #expect(rebuilt == cached)
+        }
+        #expect(checksum == 300_000)
+        func summary(_ values: [Double]) -> String {
+            let sorted = values.sorted()
+            return String(format: "median %.3f ms, p95 %.3f ms", sorted[15], sorted[28])
+        }
+        let report = "20 bots, 80 tasks, 2000 deliveries; 30 full status-read passes\nBefore: \(summary(baseline))\nCached: \(summary(after))\nRebuild after a mutation: \(summary(mutation))\n"
+        print(report)
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_INBOX_BENCHMARK"], path.hasPrefix("/") {
+            try report.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+    }
+
     @Test func linksAreReadAsGitHubWritesThem() {
         #expect(Delivery.Link.parse("asieke/BotChu#118", isPullRequest: false) == Delivery.Link(repo: "asieke/BotChu", number: 118, isPullRequest: false))
         #expect(Delivery.Link.parse("https://github.com/asieke/BotChu/pull/153/files", isPullRequest: false)
