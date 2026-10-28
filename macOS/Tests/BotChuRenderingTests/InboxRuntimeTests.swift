@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 import BotChuCore
 @testable import BotChu
@@ -6,6 +7,73 @@ import BotChuCore
 /// A bot delivers to the owner's Inbox with `botchu-inbox send`, and the owner's reply goes back
 /// into the conversation that sent it.
 extension RenderingTests {
+    @Test func inboxStatusRegroupsOncePerMutationAndNeverForRepeatedReads() async throws {
+        let fixture = try InboxStatusFixture()
+        defer { fixture.cleanUp() }
+        let restored = Flag()
+        withObservationTracking {
+            _ = fixture.app.inbox.awaitingInput(fixture.targets[1])
+        } onChange: { restored.set() }
+        try await fixture.ready()
+        let app = fixture.app, inbox = app.inbox!
+        #expect(restored.value, "A conversation observed before load sees its restored questions")
+        #expect(fixture.bots.count == 20 && fixture.targets.count == 100 && inbox.deliveries.count == 2_000)
+        #expect(inbox.statusDerivations == 1, "Launch restore derives the whole Inbox once")
+        expectInboxStatusMatchesSource(inbox)
+        for _ in 0..<10 {
+            for target in fixture.targets {
+                _ = inbox.awaitingInput(target)
+                _ = app.tabState(of: target)
+            }
+            _ = inbox.unreadCount
+            _ = inbox.unfinishedCount
+        }
+        #expect(inbox.statusDerivations == 1, "1,000 status reads must not regroup")
+
+        app.destination = .projects
+        let target = fixture.targets[1], other = fixture.targets[6]
+        let ownChanged = Flag(), otherChanged = Flag()
+        withObservationTracking { _ = app.tabState(of: target) } onChange: { ownChanged.set() }
+        withObservationTracking { _ = app.tabState(of: other) } onChange: { otherChanged.set() }
+        var delivery = Delivery(botID: target.botID, taskID: target.taskID, title: "New question", purpose: .needsInput)
+        var before = inbox.statusDerivations
+        try await inbox.post(delivery)
+        #expect(inbox.statusDerivations == before + 1)
+        #expect(ownChanged.value && !otherChanged.value, "Only the receiving conversation observes a changed question")
+        expectInboxStatusMatchesSource(inbox)
+
+        before = inbox.statusDerivations
+        inbox.setDone(delivery.id, true)
+        #expect(inbox.statusDerivations == before + 1)
+        inbox.setDone(delivery.id, true)
+        #expect(inbox.statusDerivations == before + 1, "No mutation for an unchanged Done value")
+        expectInboxStatusMatchesSource(inbox)
+        before = inbox.statusDerivations
+        inbox.setDone(delivery.id, false)
+        #expect(inbox.statusDerivations == before + 1)
+        expectInboxStatusMatchesSource(inbox)
+
+        before = inbox.statusDerivations
+        inbox.markRead(delivery.id, false)
+        #expect(inbox.statusDerivations == before + 1)
+        expectInboxStatusMatchesSource(inbox)
+        before = inbox.statusDerivations
+        inbox.conversationShown(target)
+        #expect(inbox.statusDerivations == before + 1, "Reading many deliveries is one mutation")
+        expectInboxStatusMatchesSource(inbox)
+
+        before = inbox.statusDerivations
+        delivery.note = "Changed options"
+        try await inbox.post(delivery)
+        #expect(inbox.statusDerivations == before + 1)
+        expectInboxStatusMatchesSource(inbox)
+        before = inbox.statusDerivations
+        inbox.forget(bot: target.botID)
+        #expect(inbox.statusDerivations == before + 1, "Deleting a bot's deliveries is one mutation")
+        #expect(inbox.awaitingInput(target).isEmpty && inbox.awaitingInputDates(target).isEmpty)
+        expectInboxStatusMatchesSource(inbox)
+    }
+
     @Test func aDeliveryArrivesWithItsCopiesAndACardAfterTheReply() async throws {
         let fixture = try InboxFixture()
         defer { fixture.cleanUp() }
@@ -59,6 +127,7 @@ extension RenderingTests {
         app.inbox.isShowing = true
         app.inbox.selected = delivery.id
 
+        let beforeAnswer = app.inbox.statusDerivations
         #expect(app.inbox.reply("Answer first", to: delivery.id))
         // While the queue takes it, nothing else goes.
         #expect(app.inbox.sending.contains(delivery.id))
@@ -66,6 +135,8 @@ extension RenderingTests {
         try await fixture.wait { !app.inbox.sending.contains(delivery.id) }
         #expect(app.inbox.isDone(delivery.id) && app.inbox.state.isAnswered(delivery) && !app.inbox.isUnread(delivery.id))
         #expect(app.inbox.failed[delivery.id] == nil && app.inbox.awaitingInput(home).isEmpty)
+        #expect(app.inbox.statusDerivations == beforeAnswer + 1, "An accepted answer derives once")
+        expectInboxStatusMatchesSource(app.inbox)
         // Its conversation opened.
         #expect(app.destination == nil && app.isShown(home))
 
@@ -87,6 +158,7 @@ extension RenderingTests {
         try await fixture.wait { relaunched.inbox.isLoaded && relaunched.inbox.delivery(delivery.id) != nil }
         #expect(relaunched.inbox.isDone(delivery.id) && relaunched.inbox.state.isAnswered(delivery))
         #expect(!relaunched.inbox.state.needsAnswer(delivery))
+        expectInboxStatusMatchesSource(relaunched.inbox)
     }
 
     @Test func anAnswerToATaskGoesToTheTaskAndOpensItAgainWhenClosed() async throws {
@@ -192,12 +264,14 @@ extension RenderingTests {
         #expect(app.thread(home).last { $0.role == .assistant }?.text.contains("Updated to your owner's Inbox: Report") == true)
         #expect(app.inbox.all.count == 1 && app.inbox.delivery(delivery.id)?.updatedAt == delivery.updatedAt)
         #expect(app.inbox.isDone(delivery.id) && !app.inbox.isUnread(delivery.id) && app.inbox.awaitingInput(home).isEmpty)
+        expectInboxStatusMatchesSource(app.inbox)
 
         app.send("UPDATE \(id) Third version: the options changed", to: home)
         try await fixture.wait { !app.isRunning(home) }
         let renewed = try #require(app.inbox.delivery(delivery.id))
         #expect(app.inbox.all.count == 1 && renewed.note == "Third version: the options changed" && renewed.sentAt == delivery.sentAt)
         #expect(!app.inbox.isDone(delivery.id) && app.inbox.isUnread(delivery.id) && app.inbox.awaitingInput(home) == [delivery.id])
+        expectInboxStatusMatchesSource(app.inbox)
         #expect(app.thread(home).filter { $0.delivery == delivery.id }.count == 1, "One card")
 
         // Only a delivery this conversation sent can be updated.
@@ -322,4 +396,17 @@ extension RenderingTests {
     emit({"type":"item.completed", "item":{"type":"agent_message", "text":answer}})
     emit({"type":"turn.completed"})
     """#
+}
+
+/// Compare cached runtime reads with the uncached rules after a transition.
+@MainActor func expectInboxStatusMatchesSource(_ inbox: InboxModel) {
+    let deliveries = Array(inbox.deliveries.values)
+    #expect(inbox.unreadCount == inbox.state.unreadCount(deliveries))
+    #expect(inbox.unfinishedCount == inbox.state.unfinishedCount(deliveries))
+    let expected = inbox.state.awaitingInput(deliveries)
+    for origin in Set(deliveries.map(\.origin)) {
+        let target = ChatTarget(botID: origin.botID, taskID: origin.taskID)
+        #expect(inbox.awaitingInput(target) == expected[origin, default: []])
+        #expect(inbox.awaitingInputDates(target) == expected[origin, default: []].compactMap { inbox.delivery($0)?.updatedAt })
+    }
 }

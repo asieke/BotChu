@@ -44,7 +44,7 @@ extension AppModel {
     /// owner while a Needs input delivery it sent isn't answered or Done (#218).
     func tabState(of target: ChatTarget) -> TabState {
         guard let status = status(of: target) else { return .idle(since: nil) }
-        let asked = inbox.map { inbox in inbox.awaitingInput(target).compactMap { inbox.delivery($0)?.updatedAt } } ?? []
+        let asked = inbox?.awaitingInputDates(target) ?? []
         return TabState(status: status, unread: unread.contains(target), pullRequest: task(target)?.pullRequest, awaitingInput: asked)
     }
 
@@ -67,6 +67,7 @@ extension AppModel {
 
     /// The bot's row in the bot list: a dot for each conversation that isn't idle, and what it does.
     func botRowSummary(of bot: Bot) -> BotRowSummary {
+        SidebarStatusDiagnostics.didDeriveSummary?(bot.id)
         var result = BotRowSummary(account: bot.account.name, home: tabState(of: .home(bot.id)),
                       tasks: openTasks(of: bot.id).map { ($0, tabState(of: .task($0.id, of: bot.id))) })
         if bot.isRemoteQueue { result.subtitle = "\(remoteQueue.presence) · \(remoteQueue.pending) waiting" }
@@ -79,4 +80,10 @@ extension AppModel {
         guard tabs.indices.contains(index) else { return }
         show(tabs[index])
     }
+}
+
+/// Optional counters for the controlled sidebar fixture. Unset during normal use.
+@MainActor enum SidebarStatusDiagnostics {
+    static var didDeriveSummary: ((UUID) -> Void)?
+    static var didEvaluateRow: ((UUID) -> Void)?
 }

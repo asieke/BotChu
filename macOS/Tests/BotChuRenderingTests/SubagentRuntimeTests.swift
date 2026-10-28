@@ -111,6 +111,212 @@ extension RenderingTests {
         #expect(fixture.app.delegation.all.isEmpty)
     }
 
+    @Test func localMailboxStatusesFollowLateInstalledActivityWithoutRequests() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let runtime = fixture.app.delegation!
+        let caller = try await runtime.prepareCaller(target: fixture.target, directory: fixture.folder.path,
+                                                     machine: .thisMac, hostID: nil)
+        defer { runtime.endCaller(caller.id) }
+        let directory = URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!)
+        var record = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID,
+            depth: 1, targetBot: fixture.worker, title: "Observed", brief: "Observed",
+            workingDirectory: fixture.folder.path, callerInvocationID: caller.id, phase: .preparing)
+        runtime.records[fixture.target] = [record]
+        let statusURL = directory.appendingPathComponent("status/\(record.id.uuidString.lowercased()).status.json")
+        func status() -> SubagentStatus? {
+            (try? Data(contentsOf: statusURL)).flatMap { try? SubagentIPC.decode(SubagentStatus.self, from: $0) }
+        }
+        try await fixture.wait { status()?.activity == "Preparing…" }
+        // Observation first saw a record without a RunState. Installing it later must be tracked.
+        runtime.states[record.id] = RunState(hasOutput: true, activity: .browsing)
+        try await fixture.wait { status()?.activity == BotActivity.browsing.doing }
+        record.phase = .running
+        runtime.records[fixture.target] = [record]
+        try await fixture.wait { status()?.phase == .running }
+        let written = try Data(contentsOf: statusURL)
+        record.title = "Unrelated title change"
+        runtime.records[fixture.target] = [record]
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(try Data(contentsOf: statusURL) == written, "Unchanged status is not rewritten")
+        runtime.states[record.id] = RunState(hasOutput: true, activity: .coding)
+        try await fixture.wait { status()?.activity == BotActivity.coding.doing }
+        #expect(try await caller.transport.poll().isEmpty)
+        record.phase = .completed
+        runtime.records[fixture.target] = [record]
+        runtime.endCaller(caller.id)
+        let heartbeat = directory.appendingPathComponent("heartbeat.json")
+        try await fixture.wait { (try? String(contentsOf: heartbeat, encoding: .utf8))?.contains("1970") == true }
+        let closed = try Data(contentsOf: heartbeat)
+        try await Task.sleep(for: .seconds(2.2))
+        #expect(try Data(contentsOf: heartbeat) == closed, "No heartbeat reopens a completed caller")
+    }
+
+    @Test func heartbeatContinuesWhileAdmissionWaitsForDurableStorage() async throws {
+        let fixture = try SubagentFixture()
+        let gate = MailboxStorageGate()
+        defer { gate.release(); fixture.cleanUp() }
+        let app = fixture.app
+        let storage = StorageQueue(before: { work in if work.label == "save" { gate.wait() } })
+        app.delegation = SubagentRuntime(model: app, root: app.delegation.root, archive: SubagentArchive(storage: storage))
+        let caller = try await app.delegation.prepareCaller(target: fixture.target, directory: fixture.folder.path,
+                                                           machine: .thisMac, hostID: nil)
+        defer { app.delegation.endCaller(caller.id) }
+        let ipc = SubagentIPC(root: URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!))
+        let request = SubagentRequest(invocationID: caller.id, callerBotID: fixture.parent.id,
+            callerTaskID: fixture.target.taskID, depth: 0, targetAgent: "Worker", brief: "LEAF")
+        try SubagentIPC.encode(request).write(to: ipc.requestURL(request.id), options: .atomic)
+        try await fixture.wait { gate.entered }
+        let heartbeat = ipc.root.appendingPathComponent("heartbeat.json")
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 0)], ofItemAtPath: heartbeat.path)
+        try await Task.sleep(for: .seconds(2.3))
+        let updated = try FileManager.default.attributesOfItem(atPath: heartbeat.path)[.modificationDate] as? Date
+        #expect((updated ?? .distantPast) > Date(timeIntervalSinceNow: -3))
+        #expect(FileManager.default.fileExists(atPath: ipc.requestURL(request.id).path), "No acknowledgment before persistence")
+        #expect(app.delegation.all.isEmpty)
+        gate.release()
+        try await fixture.wait { FileManager.default.fileExists(atPath: ipc.resultURL(request.id).path) }
+        #expect(app.delegation.all.map(\.id) == [request.id])
+    }
+
+    @Test func finishingALocalMailboxDrainsBatchesAfterAnInFlightDeliveryExactlyOnce() async throws {
+        let fixture = try SubagentFixture()
+        let gate = MailboxStorageGate()
+        defer { gate.release(); fixture.cleanUp() }
+        let app = fixture.app
+        let storage = StorageQueue(before: { work in if work.label == "delivery" { gate.wait() } })
+        app.inbox = InboxModel(model: app, root: fixture.store.root, storage: storage)
+        let caller = try await app.delegation.prepareCaller(target: fixture.target, directory: fixture.folder.path,
+                                                           machine: .thisMac, hostID: nil)
+        let ipc = SubagentIPC(root: URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!))
+        var ids: [UUID] = []
+        for index in 0..<40 {
+            let id = UUID()
+            ids.append(id)
+            let data = try JSONSerialization.data(withJSONObject: [
+                "kind": "inbox", "id": id.uuidString, "invocationID": caller.id.uuidString,
+                "callerBotID": fixture.parent.id.uuidString, "callerTaskID": fixture.target.taskID!.uuidString,
+                "delivery": ["title": "Delivery \(index)", "note": "Saved exactly once", "purpose": "completed"]
+            ])
+            try data.write(to: ipc.requestURL(id), options: .atomic)
+        }
+        try await fixture.wait { gate.entered }
+        #expect(app.inbox.all.isEmpty)
+        let finish = Task { await app.delegation.finishCaller(caller.id) }
+        // Give finishCaller time to cancel the watcher while its first receive is still saving.
+        try await Task.sleep(for: .milliseconds(100))
+        gate.release()
+        await finish.value
+        #expect(app.inbox.all.count == 40)
+        #expect(Set(app.inbox.all.map(\.title)).count == 40)
+        #expect(app.delegation.error == nil)
+        #expect(try await caller.transport.poll().isEmpty)
+        for id in ids {
+            let result = try SubagentIPC.decode(InboxResult.self, from: Data(contentsOf: ipc.resultURL(id)))
+            #expect(result.deliveryID != nil && result.errorMessage == nil)
+        }
+        #expect(InboxFolder(home: fixture.home).load().count == 40)
+    }
+
+    @Test func stoppingDuringSessionPreparationPreventsHomeTaskAndChildLaunches() async throws {
+        let gate = SessionPreparationTestGate()
+        let storage = StorageQueue(before: { work in if work.label == "session-preparation" { gate.wait() } })
+        let fixture = try SubagentFixture(storage: storage)
+        defer { gate.release(); fixture.cleanUp() }
+        let app = fixture.app
+        // Home and task share the bot's preparation lane; Stop stays immediate while it waits.
+        for target in [ChatTarget.home(fixture.parent.id), fixture.target] {
+            _ = await app.loadedThread(target)
+            app.drafts[target] = "LEAF"
+            app.send("LEAF", to: target)
+        }
+        try await fixture.wait { gate.started }
+        let typedAt = Date()
+        app.drafts[fixture.target] = "Typing still works"
+        let typed = Date().timeIntervalSince(typedAt)
+        let stoppedAt = Date()
+        app.stop(.home(fixture.parent.id))
+        app.stop(fixture.target)
+        let stopped = Date().timeIntervalSince(stoppedAt)
+        #expect(app.drafts[fixture.target] == "Typing still works")
+        #expect(!app.isRunning(fixture.target) && !app.isRunning(.home(fixture.parent.id)))
+        gate.release()
+        await storage.settle()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(app.bot(fixture.parent.id)?.sessionID == nil && app.task(fixture.target)?.sessionID == nil)
+        #expect(!app.thread(fixture.target).contains { $0.role == .assistant })
+        print("session preparation: draft edit \(typed * 1_000) ms; Stop \(stopped * 1_000) ms while file work waits")
+
+        // A child has its own identity and the same cancellation boundary.
+        gate.reset()
+        let caller = try await app.delegation.prepareCaller(target: fixture.target, directory: fixture.folder.path, machine: .thisMac, hostID: nil)
+        defer { app.delegation.endCaller(caller.id) }
+        let ipc = SubagentIPC(root: URL(fileURLWithPath: caller.environment["BOTCHU_IPC_DIR"]!))
+        let request = SubagentRequest(invocationID: caller.id, callerBotID: fixture.parent.id, callerTaskID: fixture.target.taskID,
+                                     depth: 0, targetAgent: "Worker", brief: "LEAF")
+        try SubagentIPC.encode(request).write(to: ipc.requestURL(request.id), options: .atomic)
+        try await fixture.wait { gate.started }
+        app.delegation.stop(request.id)
+        gate.release()
+        try await fixture.wait { app.delegation.run(request.id)?.phase == .stopped }
+        await storage.settle()
+        #expect(app.delegation.run(request.id)?.sessionID == nil)
+        #expect(app.delegation.run(request.id)?.phase == .stopped)
+    }
+
+    @Test func toolPolicyChangedDuringPreparationAppliesToTheLaunch() async throws {
+        let gate = SessionPreparationTestGate()
+        let storage = StorageQueue(before: { work in if work.label == "session-preparation" { gate.wait() } })
+        let fixture = try SubagentFixture(storage: storage)
+        defer { gate.release(); fixture.cleanUp() }
+        let app = fixture.app
+        let command = fixture.root.appendingPathComponent("gh")
+        try "#!/bin/sh\necho UNBLOCKED\n".write(to: command, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: command.path)
+        // Match the real locator: the temporary directory can contain /var -> /private/var.
+        let location = ToolLocation(path: command.path, realPath: try #require(ToolLocator.realPath(command.path)))
+        app.tools.locate = { _ in (catalog: ["gh": [location]], declared: [:]) }
+        _ = await app.loadedThread(fixture.target)
+        app.drafts[fixture.target] = "POLICY_CHECK"
+        app.send("POLICY_CHECK", to: fixture.target)
+        try await fixture.wait { gate.started }
+        app.tools.change { $0.enforcedSince = Date() }
+        gate.release()
+        try await fixture.wait { !app.isRunning(fixture.target) && app.task(fixture.target)?.sessionID != nil }
+        #expect(app.thread(fixture.target).last(where: { $0.role == .assistant })?.text == "TOOL-BLOCKED")
+    }
+
+    @Test func resumedTurnsRefreshContextAndPreparationFailureDoesNotStartCLI() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app
+        let target = fixture.target
+        _ = await app.loadedThread(target)
+        app.drafts[target] = "LEAF"
+        app.send("LEAF", to: target)
+        try await fixture.wait { !app.isRunning(target) && app.task(target)?.sessionID != nil }
+        let first = app.sessionPreparation.statistics.prepared
+        // The stand-in captures every prompt next to the CLI, including resumed turns.
+        let instructions = fixture.parent.workspace + "/INSTRUCTIONS.md"
+        try "REFRESHED-SESSION-INSTRUCTIONS".write(toFile: instructions, atomically: true, encoding: .utf8)
+        app.drafts[target] = "LEAF"
+        app.send("LEAF", to: target)
+        try await fixture.wait { !app.isRunning(target) && app.thread(target).filter { $0.role == .assistant }.count == 2 }
+        #expect(app.sessionPreparation.statistics.prepared > first)
+        let prompts = try String(contentsOf: fixture.root.appendingPathComponent("session-prompts.txt"), encoding: .utf8)
+        #expect(prompts.contains("REFRESHED-SESSION-INSTRUCTIONS"))
+
+        let agents = fixture.parent.workspace + "/AGENTS.md"
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: agents)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: agents) }
+        try "ANOTHER-EDIT".write(toFile: instructions, atomically: true, encoding: .utf8)
+        app.drafts[target] = "LEAF"
+        app.send("LEAF", to: target)
+        try await fixture.wait { !app.isRunning(target) && app.thread(target).last?.role == .error }
+        #expect(app.thread(target).last?.text.contains("Couldn't prepare the turn") == true)
+        #expect(app.thread(target).filter { $0.role == .assistant }.count == 2)
+    }
+
     /// #107: a run's end is saved off the main thread, slowly here, and its handoff goes back only
     /// once its record is on disk; meanwhile the run counts as active for its caller.
     @Test func aHandoffGoesBackOnlyOnceItsRecordIsSaved() async throws {
@@ -731,6 +937,26 @@ private final class ArchiveWrites: @unchecked Sendable {
     }
 }
 
+/// Blocks a storage lane, never the main actor, until the test releases durable admission.
+private final class MailboxStorageGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var blocked = false
+    private var released = false
+    var entered: Bool { condition.lock(); defer { condition.unlock() }; return blocked }
+    func wait() {
+        condition.lock()
+        defer { condition.unlock() }
+        blocked = true
+        while !released { condition.wait() }
+    }
+    func release() {
+        condition.lock()
+        released = true
+        condition.broadcast()
+        condition.unlock()
+    }
+}
+
 @MainActor private final class SubagentFixture {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-subagent-runtime-\(UUID().uuidString)")
     let domain = "local.BotChu.SubagentTests.\(UUID().uuidString)"
@@ -745,7 +971,7 @@ private final class ArchiveWrites: @unchecked Sendable {
     let host: SSHHost?
     let originalSSH: String
 
-    init(remote: Bool = false) throws {
+    init(remote: Bool = false, storage: StorageQueue = .shared) throws {
         originalSSH = Machine.ssh
         store = Store(root: root.appendingPathComponent("index"))
         settings = AppSettings(defaults: UserDefaults(suiteName: domain)!)
@@ -805,7 +1031,7 @@ private final class ArchiveWrites: @unchecked Sendable {
         try home.save(task)
         target = .task(task.id, of: parent.id)
         try store.saveIndex([Store.Entry(id: parent.id, workspace: parent.workspace), Store.Entry(id: worker.id, workspace: worker.workspace)])
-        app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests") })
+        app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests") }, storage: storage)
     }
 
     func wait(seconds: Int = 20, _ condition: () -> Bool) async throws {
@@ -831,13 +1057,21 @@ private final class ArchiveWrites: @unchecked Sendable {
         return result.stdout + result.stderr
     depth = int(os.environ["BOTCHU_CALLER_DEPTH"])
     prompt = sys.argv[-1]
+    with open(os.path.join(os.path.dirname(__file__), "session-prompts.txt"), "a") as output:
+        output.write(prompt + "\n")
     emit({"type":"thread.started", "thread_id":"fixture-session"})
     if depth:
         assert "WORKER-SOUL" in prompt
         brief = re.search(r"<handoff_brief>\s*(.*?)\s*</handoff_brief>", prompt, re.S).group(1)
     else:
         brief = prompt.splitlines()[-1]
-    if brief == "REMOTE_WORKSPACES":
+    if brief == "POLICY_CHECK":
+        try:
+            result = subprocess.run([os.path.join(os.path.dirname(__file__), "gh")], capture_output=True)
+            answer = "TOOL-BLOCKED" if result.returncode else "UNBLOCKED"
+        except OSError:
+            answer = "TOOL-BLOCKED"
+    elif brief == "REMOTE_WORKSPACES":
         shared = helper("call", "--agent", "Worker", "--workspace", "shared", "--brief", "LOCATION")
         own = helper("call", "--agent", "Worker", "--workspace", "bot_home", "--brief", "LOCATION")
         answer = shared + "\n" + own
@@ -941,4 +1175,35 @@ private final class ReviewedKeys: @unchecked Sendable {
     private var list: [String] = []
     func add(_ key: String) { lock.withLock { list.append(key) } }
     var keys: [String] { lock.withLock { list } }
+}
+
+/// Holds only a storage worker, never MainActor. Shared by the session-preparation runtime tests.
+final class SessionPreparationTestGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var entered = false
+    private var released = false
+    var started: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return entered
+    }
+    func wait() {
+        condition.lock()
+        entered = true
+        let deadline = Date().addingTimeInterval(20)
+        while !released && condition.wait(until: deadline) {}
+        condition.unlock()
+    }
+    func release() {
+        condition.lock()
+        released = true
+        condition.broadcast()
+        condition.unlock()
+    }
+    func reset() {
+        condition.lock()
+        entered = false
+        released = false
+        condition.unlock()
+    }
 }

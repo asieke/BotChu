@@ -24,10 +24,12 @@ final class SubagentRuntime {
     @ObservationIgnored fileprivate var lives: [UUID: SubagentLive] = [:]
     /// Each run's root conversation, so finding a run doesn't search every conversation's.
     @ObservationIgnored private var locations: [UUID: ChatTarget] = [:]
-    @ObservationIgnored private var contexts: [UUID: Caller] = [:]
+    /// Status observation includes caller lifetime, releasing its one-shot registrations even
+    /// when a turn ends without ever delegating (and therefore without changing any run).
+    private var contexts: [UUID: Caller] = [:]
     @ObservationIgnored private var runners: [UUID: AgentRun] = [:]
     @ObservationIgnored private var preparations: [UUID: Task<Void, Never>] = [:]
-    @ObservationIgnored private var watchers: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var watchers: [UUID: MailboxTasks] = [:]
     @ObservationIgnored private var deliveries: [UUID: SubagentTransport] = [:]
     @ObservationIgnored private var deliveryTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var rejections: [UUID: [UUID: SubagentResult]] = [:]
@@ -51,11 +53,29 @@ final class SubagentRuntime {
     nonisolated static let finishedThreadBytes = 16 << 20
     @ObservationIgnored private var budget = HistoryBudget<UUID>(limit: SubagentRuntime.finishedThreadBytes)
 
-    /// How often a caller's mailbox is looked at, on this Mac and on a host.
-    nonisolated static let localPoll: Duration = .milliseconds(250)
+    /// Hosts retain their existing polling cadence; local mailboxes use directory hints.
     nonisolated static let remotePoll: Duration = .milliseconds(750)
     /// How often its heartbeat is refreshed: well within `SubagentLimits.heartbeatTimeout`.
     nonisolated static let heartbeatInterval: TimeInterval = 2
+
+    private struct MailboxTasks {
+        var requests: Task<Void, Never>
+        var heartbeat: Task<Void, Never>?
+        var status: Task<Void, Never>?
+        var updates: AsyncStream<[SubagentStatus]>.Continuation?
+
+        func cancel() {
+            requests.cancel()
+            heartbeat?.cancel()
+            status?.cancel()
+            updates?.finish()
+        }
+
+        func settleWrites() async {
+            await heartbeat?.value
+            await status?.value
+        }
+    }
 
     struct Caller {
         var id: UUID
@@ -81,6 +101,10 @@ final class SubagentRuntime {
             try refreshRoster()
         } catch { self.error = "Couldn't prepare sub-agents: \(error.localizedDescription)" }
         restore()
+    }
+
+    deinit {
+        for watcher in watchers.values { watcher.cancel() }
     }
 
     /// Each conversation's runs, oldest first: `records[target]`, read and written like the
@@ -213,16 +237,79 @@ final class SubagentRuntime {
         }
     }
 
-    /// Watches a caller's mailbox off the main actor: its files, or the SSH commands that reach
-    /// them on a host, are read and written there, and only the requests it holds come here. The
-    /// heartbeat is refreshed every `heartbeatInterval` (with the poll, on a host), and a run's
-    /// status file is written only when its phase or activity changes.
+    /// Local request scans, heartbeats and status delivery have independent lifetimes, so a
+    /// quiet mailbox (or slow admission) cannot hold up liveness or activity updates.
     private func startWatcher(_ caller: Caller) {
+        guard !caller.transport.machine.isRemote else { startRemoteWatcher(caller); return }
+        let id = caller.id, transport = caller.transport
+        let requests = Task.detached(priority: .utility) { [weak self] in
+            guard let watcher = transport.watchRequests() else { return }
+            defer { watcher.cancel() }
+            for await _ in watcher.changes {
+                guard !Task.isCancelled else { break }
+                do {
+                    try await transport.drainRequests { [weak self] envelopes in
+                        guard let self, !Task.isCancelled else { return false }
+                        return await self.take(envelopes, from: id) != nil
+                    }
+                } catch {
+                    guard let self, !Task.isCancelled, await self.isWatching(id) else { break }
+                    await self.report("Sub-agent connection: \(error.localizedDescription)")
+                }
+            }
+        }
+        let heartbeat = Task.detached(priority: .utility) { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await transport.heartbeat()
+                } catch {
+                    guard let self, !Task.isCancelled, await self.isWatching(id) else { break }
+                    await self.report("Sub-agent connection: \(error.localizedDescription)")
+                }
+                do { try await Task.sleep(for: .seconds(Self.heartbeatInterval)) } catch { break }
+            }
+        }
+        let updates = AsyncStream<[SubagentStatus]>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let status = Task.detached(priority: .utility) { [weak self] in
+            var written: [UUID: SubagentStatus] = [:]
+            for await statuses in updates.stream {
+                guard !Task.isCancelled else { break }
+                do {
+                    for status in statuses {
+                        if let last = written[status.id], last.phase == status.phase, last.activity == status.activity { continue }
+                        try await transport.writeStatus(id: status.id, data: SubagentIPC.encode(status))
+                        written[status.id] = status
+                    }
+                } catch {
+                    guard let self, !Task.isCancelled, await self.isWatching(id) else { break }
+                    await self.report("Sub-agent connection: \(error.localizedDescription)")
+                    // Retain retries after a transient write failure, even if activity is quiet.
+                    do { try await Task.sleep(for: .seconds(Self.heartbeatInterval)) } catch { break }
+                    if let current = await self.statuses(for: id) { updates.continuation.yield(current) }
+                }
+            }
+        }
+        watchers[id] = MailboxTasks(requests: requests, heartbeat: heartbeat, status: status, updates: updates.continuation)
+        observeStatuses(id, updates: updates.continuation)
+    }
+
+    private func observeStatuses(_ id: UUID, updates: AsyncStream<[SubagentStatus]>.Continuation) {
+        guard contexts[id] != nil else { updates.finish(); return }
+        let current = withObservationTracking {
+            statuses(for: id) ?? []
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeStatuses(id, updates: updates) }
+        }
+        updates.yield(current)
+    }
+
+    /// SSH retains its independent connection, poll cadence and combined heartbeat round trip.
+    private func startRemoteWatcher(_ caller: Caller) {
         let id = caller.id
         let transport = caller.transport
-        let pause = transport.machine.isRemote ? Self.remotePoll : Self.localPoll
+        let pause = Self.remotePoll
         let heartbeatInterval = Self.heartbeatInterval
-        watchers[id] = Task.detached(priority: .utility) { [weak self] in
+        let task = Task.detached(priority: .utility) { [weak self] in
             var lastHeartbeat: Date?
             var written: [UUID: SubagentStatus] = [:]
             while !Task.isCancelled {
@@ -243,17 +330,23 @@ final class SubagentRuntime {
                 do { try await Task.sleep(for: pause) } catch { break }
             }
         }
+        watchers[id] = MailboxTasks(requests: task)
     }
 
     /// Takes a caller's requests, then returns its runs' statuses; nil once the caller has ended.
     private func take(_ envelopes: [SubagentEnvelope], from id: UUID) async -> [SubagentStatus]? {
         guard let caller = contexts[id] else { return nil }
         for envelope in envelopes {
+            if !caller.transport.machine.isRemote, Task.isCancelled { break }
             await receive(envelope.data, filename: envelope.filename, from: caller)
         }
-        guard contexts[id] != nil else { return nil }
+        return statuses(for: id)
+    }
+
+    private func statuses(for id: UUID) -> [SubagentStatus]? {
+        guard let caller = contexts[id] else { return nil }
         return root(caller.target).runs.filter { $0.callerInvocationID == id && $0.phase.isActive }.map { record in
-            SubagentStatus(id: record.id, phase: record.phase, activity: lives[record.id]?.state?.activity.doing ?? "Preparing…")
+            SubagentStatus(id: record.id, phase: record.phase, activity: live(record.id).state?.activity.doing ?? "Preparing…")
         }
     }
 
@@ -402,7 +495,7 @@ final class SubagentRuntime {
         do {
             try await caller.transport.writeResult(id: id, data: SubagentIPC.encode(result))
             try await caller.transport.acknowledge(filename: filename)
-        } catch { if isWatching(caller.id) { report("Couldn't answer a delivery: \(error.localizedDescription)") } }
+        } catch { if !Task.isCancelled, isWatching(caller.id) { report("Couldn't answer a delivery: \(error.localizedDescription)") } }
     }
 
     // MARK: Messages to remote bots
@@ -581,20 +674,28 @@ final class SubagentRuntime {
             if account.kind == .sail, let problem = SailLaunch.problem(remote: machine.isRemote, key: sailKey) {
                 throw DelegationFailure(problem)
             }
-            let prompt = BotContext.subagentPreamble(bot: targetBot, run: record,
+            record.phase = .running
+            record.startedAt = Date()
+            try await archive.save(snapshot(record, messages: live(id).messages))
+            // Stopped while its start was being saved: its end is saved instead.
+            guard run(id)?.phase.isActive == true, !finalizing.contains(id), !Task.isCancelled else { endCaller(context.id); return }
+            // Tool policy is always live, never part of the reusable identity snapshot.
+            let prepared = try await model.prepareSessionForLaunch(of: targetBot.id, kind: account.kind, remote: machine.isRemote,
+                current: { self.run(id)?.phase.isActive == true && !self.finalizing.contains(id) })
+            let snapshot = prepared.context
+            guard run(id)?.phase.isActive == true, !Task.isCancelled,
+                  let currentBot = model.bot(targetBot.id) else { endCaller(context.id); return }
+            let prompt = BotContext.subagentPreamble(bot: currentBot, run: record,
                 callerDescription: caller.parent.flatMap { run($0)?.targetBotName } ?? model.bot(target.botID)?.name ?? "Bot",
-                memory: Workspace.read(targetBot.workspace + "/MEMORY.md"), sharedMemory: Workspace.read(model.settings.sharedMemoryPath),
-                soul: Workspace.read(targetBot.workspace + "/SOUL.md"),
-                instructions: Workspace.read(BotDocument.instructions.url(for: targetBot).path),
-                team: Workspace.read(model.settings.teamPath), availableBots: roster, skills: model.activeSkills(of: targetBot),
+                memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, soul: snapshot.soul,
+                instructions: snapshot.instructions, team: snapshot.team, availableBots: roster, skills: snapshot.skills,
                 tools: machine.isRemote ? nil : model.tools.instructions())
             var invocation = CommandBuilder.invocation(kind: account.kind, prompt: prompt,
                 model: GenerationOptions.effectiveModel(record.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
                                                         sailDefault: model.settings.sailModel),
                 sessionID: nil, reasoningEffort: record.reasoningEffort, fast: record.fastMode == true, openRouterKey: key, sailKey: sailKey)
             invocation.environment.merge(context.environment) { _, new in new }
-            // Blocks the tools that are off, as its caller's turn does on This Mac (#246).
-            invocation.toolProfile = machine.isRemote ? nil : try await model.tools.turnProfile(for: account.kind)
+            invocation.toolProfile = prepared.toolProfile
             let command = model.settings.host(record.hostID)?.command(for: account) ?? model.settings.command(for: account)
             let runner = machine.isRemote
                 ? AgentRun(command: command, invocation: invocation, on: machine, folder: record.workingDirectory)
@@ -668,11 +769,6 @@ final class SubagentRuntime {
                     ? "\(account.name) ended without a successful handoff (exit \(status)). \(AppModel.lastLines(stderr))" : nil)
                 self.finish(id, phase: persistenceFailure != nil ? .failed : runner.stopped ? .stopped : reason == nil ? .completed : .failed, error: reason)
             }
-            record.phase = .running
-            record.startedAt = Date()
-            try await archive.save(snapshot(record, messages: live(id).messages))
-            // Stopped while its start was being saved: its end is saved instead.
-            guard run(id)?.phase.isActive == true, !finalizing.contains(id), !Task.isCancelled else { endCaller(context.id); return }
             replace(record)
             runners[id] = runner
             live(id).state = RunState()
@@ -714,10 +810,18 @@ final class SubagentRuntime {
     /// taken, and those being taken finish first. A job's run ends this way (#170).
     func finishCaller(_ id: UUID) async {
         guard let caller = contexts[id] else { return }
-        watchers.removeValue(forKey: id)?.cancel()
-        for envelope in (try? await caller.transport.poll()) ?? [] where InboxRequest.isDelivery(envelope.data) {
-            guard contexts[id] != nil, let fileID = UUID(uuidString: String(envelope.filename.dropLast(5))) else { continue }
-            await receiveDelivery(envelope.data, id: fileID, filename: envelope.filename, from: caller)
+        let requests = watchers[id]?.requests
+        requests?.cancel()
+        // A cancelled receive may already be saving a delivery. Let it finish, then drain under
+        // this uncancelled task so its durable result is acknowledged too. Liveness keeps running.
+        if !caller.transport.machine.isRemote { await requests?.value }
+        if caller.transport.machine.isRemote {
+            _ = await takeFinalDeliveries((try? await caller.transport.poll()) ?? [], from: caller)
+        } else {
+            _ = try? await caller.transport.drainRequests { [weak self] envelopes in
+                guard let self else { return false }
+                return await self.takeFinalDeliveries(envelopes, from: caller)
+            }
         }
         for _ in 0..<400 where contexts[id] != nil && !(receiving[id]?.isEmpty ?? true) {
             try? await Task.sleep(for: .milliseconds(25))
@@ -725,13 +829,27 @@ final class SubagentRuntime {
         endCaller(id)
     }
 
+    private func takeFinalDeliveries(_ envelopes: [SubagentEnvelope], from caller: Caller) async -> Bool {
+        let id = caller.id
+        for envelope in envelopes where InboxRequest.isDelivery(envelope.data) {
+            guard contexts[id] != nil, let fileID = UUID(uuidString: String(envelope.filename.dropLast(5))) else { continue }
+            await receiveDelivery(envelope.data, id: fileID, filename: envelope.filename, from: caller)
+        }
+        return contexts[id] != nil
+    }
+
     func endCaller(_ id: UUID) {
         guard let caller = contexts.removeValue(forKey: id) else { return }
-        watchers.removeValue(forKey: id)?.cancel()
+        let watcher = watchers.removeValue(forKey: id)
+        watcher?.cancel()
         rejections[id] = nil
         receiving[id] = nil
         for record in root(caller.target).runs where record.callerInvocationID == id && record.phase.isActive { stop(record.id) }
-        Task { try? await caller.transport.close() }
+        Task {
+            // An in-flight local heartbeat must finish before writing the terminal heartbeat.
+            await watcher?.settleWrites()
+            try? await caller.transport.close()
+        }
     }
 
     /// BotChu is quitting: what each run printed last goes into its transcript, and every
