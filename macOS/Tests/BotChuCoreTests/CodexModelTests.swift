@@ -88,9 +88,9 @@ import Testing
         #expect(models[1].name == "run-b" && models[1].efforts == GenerationOptions.efforts(for: .codex, model: "run-b"))
         #expect(models[2].efforts.isEmpty)
 
-        #expect(throws: CodexModelFailure.unrecognized) { try CodexModelList.parse([page(#"{"items":[]}"#)]) }
-        #expect(throws: CodexModelFailure.unrecognized) { try CodexModelList.parse([page(#"{"data":[{"model":"x","hidden":true}]}"#)]) }
-        #expect(throws: CodexModelFailure.unrecognized) { try CodexModelList.parse([]) }
+        #expect(throws: ModelListFailure.unrecognized("Codex")) { try CodexModelList.parse([page(#"{"items":[]}"#)]) }
+        #expect(throws: ModelListFailure.unrecognized("Codex")) { try CodexModelList.parse([page(#"{"data":[{"model":"x","hidden":true}]}"#)]) }
+        #expect(throws: ModelListFailure.unrecognized("Codex")) { try CodexModelList.parse([]) }
     }
 
     @Test func aProfilesListReplacesItsStartersAndKeepsSavedChoices() throws {
@@ -139,9 +139,9 @@ import Testing
     }
 
     @Test func listsAreKeptPerProfileAndCommand() {
-        let work = ModelCatalogScope(accountID: "codex-work", command: "~/.local/bin/codex-work")
-        let dev = ModelCatalogScope(accountID: "codex-dev", command: "~/.local/bin/codex-dev")
-        let changed = ModelCatalogScope(accountID: "codex-work", command: "codex --profile other")
+        let work = ModelCatalogScope(accountID: "codex-work", command: "~/.local/bin/codex-work", kind: .codex)
+        let dev = ModelCatalogScope(accountID: "codex-dev", command: "~/.local/bin/codex-dev", kind: .codex)
+        let changed = ModelCatalogScope(accountID: "codex-work", command: "codex --profile other", kind: .codex)
         var book = NativeCatalogBook()
         let now = Date(timeIntervalSince1970: 1_000_000)
         let token = book.begin(work, now: now)!
@@ -157,7 +157,7 @@ import Testing
     }
 
     @Test func checksAreDueDailyCoalesceAndBackOffAfterFailures() {
-        let scope = ModelCatalogScope(accountID: "codex-work", command: "codex-work")
+        let scope = ModelCatalogScope(accountID: "codex-work", command: "codex-work", kind: .codex)
         var book = NativeCatalogBook()
         var now = Date(timeIntervalSince1970: 1_000_000)
         let first = book.begin(scope, now: now)!
@@ -174,7 +174,7 @@ import Testing
         let fresh = book.begin(scope, now: now)
         #expect(fresh == nil)
         let forced = book.begin(scope, now: now, force: true)!
-        book.finish(scope, token: forced, .failure(CodexModelFailure("timed out")), now: now)
+        book.finish(scope, token: forced, .failure(ModelListFailure("timed out")), now: now)
         // A failure keeps the last list and says so.
         #expect(book.models(for: scope) == listed)
         #expect(book.status(for: scope).failure == "timed out")
@@ -185,7 +185,7 @@ import Testing
         #expect(!book.isDue(scope, now: now))
         #expect(book.isDue(scope, now: now + 60))
         let retry = book.begin(scope, now: now + 60)!
-        book.finish(scope, token: retry, .failure(CodexModelFailure("again")), now: now + 60)
+        book.finish(scope, token: retry, .failure(ModelListFailure("again")), now: now + 60)
         #expect(!book.isDue(scope, now: now + 60 + 119) && book.isDue(scope, now: now + 60 + 120))
         #expect(NativeCatalogBook.retryDelay(after: 30) == 3_600)
         #expect(NativeCatalogBook.retryDelay(after: 0) == 0)
@@ -198,7 +198,7 @@ import Testing
     }
 
     @Test func anAnswerForAProfileGoneOrRecheckedIsDropped() {
-        let scope = ModelCatalogScope(accountID: "codex-work", command: "codex-work")
+        let scope = ModelCatalogScope(accountID: "codex-work", command: "codex-work", kind: .codex)
         var book = NativeCatalogBook()
         let token = book.begin(scope)!
         // The profile left Settings (or its command changed) while its check ran.
@@ -216,7 +216,7 @@ import Testing
     }
 
     @Test func savedListsRoundTripWithoutCommandsAndSurviveOddFiles() throws {
-        let scope = ModelCatalogScope(accountID: "codex-work", command: "/Users/me/.local/bin/codex-work")
+        let scope = ModelCatalogScope(accountID: "codex-work", command: "/Users/me/.local/bin/codex-work", kind: .codex)
         let checkedAt = Date(timeIntervalSince1970: 1_800_000_000)
         let catalog = NativeCatalog(models: [ModelOption(id: "gpt-6.1-terra", name: "GPT-6.1 Terra", efforts: [.low, .ultra])], checkedAt: checkedAt)
         let data = try #require(NativeCatalogFile.encode([scope.key: catalog]))
@@ -259,9 +259,10 @@ import Testing
     }
 }
 
-/// `CodexModelList` against a stand-in `app-server` that logs what it was asked.
-@Suite struct CodexModelListTests {
-    private func withServer(_ answers: String, _ body: (_ command: String, _ log: URL) async throws -> Void) async throws {
+/// A stand-in JSON-RPC host for a CLI's model list that logs its arguments and what it was asked,
+/// answering each method (`model/list#<cursor>` for a page) from `answers`; `"hang"` never answers.
+enum StandInModelServer {
+    static func run(_ answers: String, _ body: (_ command: String, _ log: URL) async throws -> Void) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-models-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -288,9 +289,18 @@ import Testing
         try await body("/usr/bin/python3 -I \(script.path) \"$(cat \(answersFile.path))\" \(log.path)", log)
     }
 
-    private func methods(_ log: URL) -> [String] {
+    static func methods(_ log: URL) -> [String] {
         ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(whereSeparator: \.isNewline).map(String.init)
     }
+}
+
+/// `CodexModelList` against a stand-in `app-server`.
+@Suite struct CodexModelListTests {
+    private func withServer(_ answers: String, _ body: (_ command: String, _ log: URL) async throws -> Void) async throws {
+        try await StandInModelServer.run(answers, body)
+    }
+
+    private func methods(_ log: URL) -> [String] { StandInModelServer.methods(log) }
 
     @Test func readsEveryPageThroughTheProfilesCommandAndNothingElse() async throws {
         try await withServer(#"""
@@ -316,7 +326,7 @@ import Testing
         {"initialize": {"result": {}}, "model/list": {"result": {"data": [{"model": "a"}], "nextCursor": "p"}},
          "model/list#p": {"result": {"data": [{"model": "b"}], "nextCursor": "p"}}}
         """#) { command, log in
-            await #expect(throws: CodexModelFailure("Codex listed more models than BotChu reads.")) {
+            await #expect(throws: ModelListFailure("Codex listed more models than BotChu reads.")) {
                 _ = try await CodexModelList.list(command: command, timeout: 10)
             }
             #expect(methods(log).filter { $0.hasPrefix("model/list") }.count == CodexModelList.pageLimit)
@@ -329,19 +339,19 @@ import Testing
             do {
                 _ = try await CodexModelList.list(command: command, timeout: 10)
                 Issue.record("Expected a failure")
-            } catch let failure as CodexModelFailure {
-                #expect(failure == .failed && !failure.message.contains("private"))
+            } catch let failure as ModelListFailure {
+                #expect(failure == .failed("Codex") && !failure.message.contains("private"))
             }
         }
     }
 
     @Test func anOlderCodexAndOneThatNeverAnswersFailPlainly() async throws {
         try await withServer(#"{"initialize": {"result": {}}}"#) { command, _ in
-            await #expect(throws: CodexModelFailure.unsupported) { _ = try await CodexModelList.list(command: command, timeout: 10) }
+            await #expect(throws: ModelListFailure.unsupported("Codex")) { _ = try await CodexModelList.list(command: command, timeout: 10) }
         }
         try await withServer(#"{"initialize": {"result": {}}, "model/list": "hang"}"#) { command, _ in
             let started = Date()
-            await #expect(throws: CodexModelFailure("Codex didn’t list its models within 2 seconds.")) {
+            await #expect(throws: ModelListFailure("Codex didn’t list its models within 2 seconds.")) {
                 _ = try await CodexModelList.list(command: command, timeout: 2)
             }
             #expect(Date().timeIntervalSince(started) < 8)

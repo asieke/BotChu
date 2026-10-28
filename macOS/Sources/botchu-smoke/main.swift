@@ -10,7 +10,7 @@
 // turn's Claude Code report is printed with the turn too. `--summary`
 // names a new task the way Quick tasks do (#192), on each account's smallest model unless
 // BOTCHU_SMOKE_MODEL names one: it must reply with a label of three or four words. `--models`
-// lists each Codex account's models the way its pickers read them (#220), starting no turn.
+// lists each Codex or Muse account's models the way its pickers read them (#220, #248), starting no turn.
 //
 // Sail runs its helper from this same binary (`--sail-agent`), on its Flex window, so each turn can
 // wait in Sail's queue for a while; it needs a model, as Settings ▸ Sail gives the app one.
@@ -205,18 +205,19 @@ Task {
         }
         if modelsOnly {
             print("== \(account.name) models")
-            guard account.kind == .codex else {
+            guard NativeModelList.lists(account.kind) else {
                 print("    skipped: no model list for \(account.kind.displayName)")
                 continue
             }
             let started = Date()
             do {
-                for model in try await CodexModelList.list(command: account.defaultCommand) {
+                let scope = ModelCatalogScope(accountID: account.id, command: account.defaultCommand, kind: account.kind)
+                for model in try await NativeModelList.list(scope) {
                     print("    \(model.id) · \(model.name) · \(model.efforts.map(\.rawValue).joined(separator: " "))")
                 }
                 print("    OK in \(Int(Date().timeIntervalSince(started)))s")
             } catch {
-                print("    FAIL: \((error as? CodexModelFailure)?.message ?? "Model list failed")")
+                print("    FAIL: \((error as? ModelListFailure)?.message ?? "Model list failed")")
                 failures.append(account.id)
             }
             continue
