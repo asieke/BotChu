@@ -17,6 +17,12 @@ final class InboxModel {
     private(set) var state = InboxState()
     /// Only unfinished and recently Done deliveries feed the ordinary list; all remain searchable.
     private(set) var listIndex = InboxList.Index()
+    private(set) var unreadCount = 0
+    private(set) var unfinishedCount = 0
+    @ObservationIgnored private var status = InboxStatus()
+    @ObservationIgnored private var conversationStatuses: [ChatTarget: InboxConversationStatus] = [:]
+    /// Counts whole-Inbox derivations, for the controlled status benchmark (#271).
+    @ObservationIgnored private(set) var statusDerivations = 0
     /// Whether the deliveries have been read from the bots' folders.
     private(set) var isLoaded = false
     /// The delivery chosen in the Inbox's list, kept while other pages show.
@@ -50,15 +56,39 @@ final class InboxModel {
 
     /// Newest first.
     var all: [Delivery] { deliveries.values.sorted { ($0.updatedAt, $0.id.uuidString) > ($1.updatedAt, $1.id.uuidString) } }
-    var unreadCount: Int { state.unreadCount(Array(deliveries.values)) }
-    var unfinishedCount: Int { state.unfinishedCount(Array(deliveries.values)) }
     func delivery(_ id: UUID) -> Delivery? { deliveries[id] }
     func target(of delivery: Delivery) -> ChatTarget { ChatTarget(botID: delivery.botID, taskID: delivery.taskID) }
     func isUnread(_ id: UUID) -> Bool { deliveries[id].map(state.isUnread) ?? false }
     func isDone(_ id: UUID) -> Bool { state[id].done }
     /// The conversation's unresolved Needs input deliveries, newest first: it waits on the owner.
     func awaitingInput(_ target: ChatTarget) -> [UUID] {
-        state.awaitingInput(Array(deliveries.values))[Delivery.Origin(botID: target.botID, taskID: target.taskID)] ?? []
+        conversationStatus(target).pending.map(\.id)
+    }
+
+    /// A tab reads only its own questions, never the full delivery dictionary.
+    func awaitingInputDates(_ target: ChatTarget) -> [Date] {
+        conversationStatus(target).pending.map(\.updatedAt)
+    }
+
+    private func conversationStatus(_ target: ChatTarget) -> InboxConversationStatus {
+        if let existing = conversationStatuses[target] { return existing }
+        let made = InboxConversationStatus()
+        made.pending = status.awaitingInput[Delivery.Origin(botID: target.botID, taskID: target.taskID)] ?? []
+        conversationStatuses[target] = made
+        return made
+    }
+
+    /// Once after a complete mutation, even when it changes several state entries or deliveries.
+    /// Publish only changed values, so an unrelated question doesn't invalidate another bot's row.
+    private func refreshStatus() {
+        status = InboxStatus(deliveries: Array(deliveries.values), state: state)
+        statusDerivations += 1
+        if unreadCount != status.unreadCount { unreadCount = status.unreadCount }
+        if unfinishedCount != status.unfinishedCount { unfinishedCount = status.unfinishedCount }
+        for (target, conversation) in conversationStatuses {
+            let pending = status.awaitingInput[Delivery.Origin(botID: target.botID, taskID: target.taskID)] ?? []
+            if conversation.pending != pending { conversation.pending = pending }
+        }
     }
 
     /// Reads every bot's deliveries off the main thread.
@@ -77,6 +107,7 @@ final class InboxModel {
         // What arrived meanwhile is newer than what was read.
         deliveries = found.merging(deliveries) { _, new in new }
         listIndex = InboxList.Index(deliveries.values, state: state, now: .now)
+        refreshStatus()
         isLoaded = true
         model?.notifier?.inboxLoaded()
     }
@@ -142,6 +173,7 @@ final class InboxModel {
         // Arriving in the conversation the owner is looking at, it is read there.
         state.received(delivery.id, renewed: renewed, shown: model.isShown(target))
         listIndex.update(delivery, state: state, now: .now)
+        refreshStatus()
         if renewed { saveState() }
         if isNew {
             model.notifier?.arrived(delivery)
@@ -174,6 +206,7 @@ final class InboxModel {
     func markRead(_ id: UUID, _ read: Bool = true) {
         guard let delivery = deliveries[id], state[id].read != read else { return }
         state[id].read = read
+        refreshStatus()
         if read { model?.unread.remove(target(of: delivery)) }
         saveState()
     }
@@ -182,6 +215,7 @@ final class InboxModel {
         guard let delivery = deliveries[id], state[id].done != done else { return }
         state.setDone(id, done, at: .now)
         listIndex.update(delivery, state: state, now: .now)
+        refreshStatus()
         saveState()
     }
 
@@ -195,6 +229,7 @@ final class InboxModel {
         let ids = deliveries.values.filter { $0.botID == target.botID && $0.taskID == target.taskID && !state[$0.id].read }.map(\.id)
         guard !ids.isEmpty else { return }
         for id in ids { state[id].read = true }
+        refreshStatus()
         saveState()
     }
 
@@ -227,6 +262,7 @@ final class InboxModel {
         let reading = isReading(id)
         state.answer(id, at: Delivery.stamp())
         listIndex.update(delivery, state: state, now: .now)
+        refreshStatus()
         saveState()
         if drafts[id] == text { drafts[id] = nil }
         model?.unread.remove(target(of: delivery))
@@ -247,6 +283,7 @@ final class InboxModel {
         if let selected, gone.contains(selected) { self.selected = nil }
         if !gone.isEmpty {
             listIndex = InboxList.Index(deliveries.values, state: state, now: .now)
+            refreshStatus()
             saveState()
         }
     }
@@ -258,4 +295,11 @@ final class InboxModel {
             return 0
         })
     }
+}
+
+/// Stable observation boundary for one conversation's unresolved deliveries. Kept even while
+/// empty, so a view already observing it sees the next question arrive.
+@MainActor @Observable
+private final class InboxConversationStatus {
+    var pending: [InboxStatus.Pending] = []
 }
