@@ -434,7 +434,10 @@ public enum BotContext {
             Instead of (or with) `--brief`: `--issue <n>`, `--pr <n>` to continue a pull request, or `--review <n>` \
             (`--comment` to post the review); optional `--title` and `--machine`. It prints the Task's bot and ID and \
             whether the Task was created and its first turn started. Running the same command again returns the same \
-            Task, never a second one; `botchu-task status <request id>` checks a request made in this turn. A Task \
+            Task, never a second one; `botchu-task status <request id>` checks a request made in this turn. \
+            `botchu-task list --mine` lists your own open Tasks as BotChu's sidebar shows them, in its order: title, \
+            summary, state (`Idle`, `Thinking…`, `Running a tool…`), elapsed time or time since last activity, issue \
+            or pull request, branch and Task ID (`--json` for the same fields). A Task \
             can then run sub-agent runs of its own: for example, hand a batch of issues to one bot as one Task, \
             whose turn spawns a sub-agent run per issue.\(specialists)
 

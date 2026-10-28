@@ -50,6 +50,8 @@ import Testing
         }
         #expect(!ending.hung)
         #expect(ending.lingered)
+        // A CLI that only didn't exit (#145) left nothing unfinished.
+        #expect(!ending.endedBackgroundTasks)
         #expect(!ending.stopped)
         #expect(ending.events.last == .finished)
         #expect(ending.events.contains(.textDelta("ok\n")))
@@ -101,6 +103,50 @@ import Testing
         #expect(ending.events == [.finished, .text("more"), .finished])
     }
 
+    /// #255: Claude Code ends its turn with a test run going in the background, waits for it, then
+    /// carries on in a new turn of its own. Waiting longer than `lingerLimit` isn't lingering.
+    static let waitsForItsBackgroundTask = #"""
+    import json, sys, time
+    def say(**line): print(json.dumps(line), flush=True)
+    say(type="system", subtype="background_tasks_changed", tasks=[{"task_id": "b1"}])
+    say(type="assistant", message={"id": "m1", "content": [{"type": "text", "text": "started"}]})
+    say(type="result", subtype="success", is_error=False, result="started")
+    time.sleep(float(sys.argv[1]))
+    say(type="system", subtype="background_tasks_changed", tasks=[])
+    say(type="system", subtype="init", session_id="s")
+    say(type="assistant", message={"id": "m2", "content": [{"type": "text", "text": "finished"}]})
+    say(type="result", subtype="success", is_error=False, result="finished")
+    """#
+
+    @Test func aCLIWaitingForItsBackgroundTasksIsLeftToCarryOn() async {
+        let ending = await Self.run(Self.waitsForItsBackgroundTask, arguments: ["1.5"], kind: .claude) {
+            $0.lingerLimit = 0.5
+            $0.killDelay = 0.5
+        }
+        #expect(!ending.lingered)
+        #expect(ending.status == 0)
+        #expect(ending.events == [
+            .backgroundTasks([.working]), .text("started"), .finished, .backgroundTasks([.working]),
+            .backgroundTasks([]), .session("s"), .text("finished"), .finished,
+        ])
+    }
+
+    /// Background tasks that never end don't keep it running forever: it is ended `backgroundLimit`
+    /// after its turn.
+    @Test func aCLIWaitingTooLongForItsBackgroundTasksIsEnded() async {
+        let ending = await Self.run(Self.waitsForItsBackgroundTask, arguments: ["600"], kind: .claude) {
+            $0.lingerLimit = 0.5
+            $0.backgroundLimit = 1
+            $0.killDelay = 0.5
+        }
+        #expect(!ending.hung)
+        #expect(ending.lingered)
+        // Its background tasks ended unfinished: the heartbeat checks on them (#261).
+        #expect(ending.endedBackgroundTasks)
+        #expect(ending.events.last == .backgroundTasks([.working]))
+        #expect(ending.stderr.hasSuffix("BotChu ended it: it was still running 1 s after it said its turn had ended, waiting for its background tasks."))
+    }
+
     @Test func stopEndsACLIThatIgnoresInterruptAndTerminate() async {
         let ending = await Self.run(Self.stuck, kind: .antigravity) {
             $0.killDelay = 0.5
@@ -120,6 +166,7 @@ import Testing
         var status: Int32 = 0
         var stderr = ""
         var lingered = false
+        var endedBackgroundTasks = false
         var stopped = false
         /// It was still running after the test's limit (then killed by the test).
         var hung = false
@@ -148,6 +195,7 @@ import Testing
                     ending.status = status
                     ending.stderr = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
                     ending.lingered = run?.lingered == true
+                    ending.endedBackgroundTasks = run?.endedBackgroundTasks == true
                     ending.stopped = run?.stopped == true
                     done.resume(returning: ending)
                 }

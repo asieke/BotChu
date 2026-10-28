@@ -29,15 +29,24 @@ public final class AgentRun: @unchecked Sendable {
     public var lingerLimit: TimeInterval = AgentRun.defaultLingerLimit
     /// `lingerLimit` for the runs made from now on; tests shorten it.
     nonisolated(unsafe) public static var defaultLingerLimit: TimeInterval = 30
+    /// How long a CLI may go on running after its turn while its background tasks run: it waits
+    /// for them, then carries on with their results (#255: Claude Code waiting on a full test run
+    /// was ended 30 s after its reply, test run and all).
+    public var backgroundLimit: TimeInterval = 2 * 60 * 60
     /// How long after SIGTERM a CLI still running is killed, with its process group.
     public var killDelay: TimeInterval = 5
     /// Whether BotChu ended the CLI because it was still running `lingerLimit` after its turn
     /// ended. It wasn't stopped: its turn ended as it said, though its exit status is a signal's.
     public private(set) var lingered = false
-    /// Whether the CLI said its turn ended (`.finished`) and hasn't carried on since, and which
-    /// wait for its exit is the current one; guarded by `lock`.
+    /// Whether it lingered while its background tasks still ran, so they ended unfinished with it.
+    public private(set) var endedBackgroundTasks = false
+    /// Whether the CLI said its turn ended (`.finished`) and hasn't carried on since, how many
+    /// background tasks it has running, which wait for its exit is the current one and how long
+    /// that wait is; guarded by `lock`.
     private var turnEnded = false
+    private var backgroundTasks = 0
     private var exitWatch = 0
+    private var exitWait: TimeInterval = 0
     /// The shortest time between two deliveries to the main queue.
     public var deliveryInterval: TimeInterval = 0.04
     /// Parses stdout off the main thread, when set (`deliverEvents`); guarded by `parseLock`.
@@ -205,7 +214,8 @@ public final class AgentRun: @unchecked Sendable {
             var tail = String(decoding: errorTail, as: UTF8.self)
             if lingered {
                 tail += (tail.isEmpty || tail.hasSuffix("\n") ? "" : "\n")
-                    + "BotChu ended it: it was still running \(String(format: "%g", lingerLimit)) s after it said its turn had ended."
+                    + "BotChu ended it: it was still running \(String(format: "%g", exitWait)) s after it said its turn had ended"
+                    + (backgroundTasks > 0 ? ", waiting for its background tasks." : ".")
             }
             lock.unlock()
             onExit(process.terminationStatus, tail)
@@ -301,30 +311,40 @@ public final class AgentRun: @unchecked Sendable {
     }
 
     /// Notes whether these events end the CLI's turn or carry it on, and starts waiting for its
-    /// exit once its turn has ended and it has nothing more to read. Under `lock`.
+    /// exit once its turn has ended and it has nothing more to read; that wait starts again when
+    /// its background tasks start or all finish. A session event starts a new turn, as Claude
+    /// Code's does once its background tasks have finished. Under `lock`.
     private func noteTurn(_ events: [AgentEvent]) {
         let wasEnded = turnEnded
+        let wasWaiting = backgroundTasks > 0
         for event in events {
             switch event {
             case .finished: turnEnded = true
-            case .text, .textDelta, .toolStarted, .toolFinished, .inputTaken: turnEnded = false
+            case .text, .textDelta, .toolStarted, .toolFinished, .inputTaken, .session: turnEnded = false
+            case .backgroundTasks(let tasks): backgroundTasks = tasks.count
             default: break
             }
         }
-        if turnEnded, !wasEnded, stdin == nil { watchForExit() }
+        if turnEnded, stdin == nil, !wasEnded || wasWaiting != (backgroundTasks > 0) { watchForExit() }
     }
 
-    /// Ends the CLI `lingerLimit` from now if it is still running then, its turn still over and
-    /// not stopped; a newer wait replaces this one. Under `lock`.
+    /// Ends the CLI `lingerLimit` from now (`backgroundLimit` while its background tasks run) if it
+    /// is still running then, its turn still over and not stopped; a newer wait replaces this one.
+    /// Under `lock`.
     private func watchForExit() {
         exitWatch += 1
         let watch = exitWatch
-        DispatchQueue.main.asyncAfter(deadline: .now() + lingerLimit) { [weak self] in
+        let wait = backgroundTasks > 0 ? backgroundLimit : lingerLimit
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
             guard let self else { return }
             self.lock.lock()
             let lingering = watch == self.exitWatch && self.turnEnded && self.stdin == nil && !self.stopped
                 && self.process.isRunning
-            if lingering { self.lingered = true }
+            if lingering {
+                self.lingered = true
+                self.endedBackgroundTasks = self.backgroundTasks > 0
+                self.exitWait = wait
+            }
             let pid = self.remotePID
             self.lock.unlock()
             guard lingering else { return }

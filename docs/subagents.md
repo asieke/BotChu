@@ -23,6 +23,7 @@ botchu-task create --agent '10x Engineer Bot' --repo asieke/BotChu --title 'Spee
   --brief 'Fix #106–#110: spawn one sub-agent run per issue, then merge them one at a time.'
 botchu-task create --agent 'QA Bot' --repo asieke/BotChu --review 121 --comment
 botchu-task status <request id>
+botchu-task list --mine [--json]
 ```
 
 `create` takes `--brief`, `--issue`, `--pr` (to continue a pull request) or `--review` (with
@@ -43,6 +44,15 @@ conversation, in the same turn, a later one or after a relaunch, returns the sam
 recognizes it by the conversation, the bot and what it asks for. A request seen again in the same
 turn gets the same answer. The Task doesn't count against sub-agent limits and never waits for
 the asking turn; it counts as one of the turn's sixty-four delegations.
+
+`list --mine` (#262) prints the asking bot's open Tasks as its Tasks column in BotChu shows them,
+in its order, with the column's count: each row's title, summary and state (`Idle`, `Thinking…`,
+`Running a tool…`, `Finished · PR #12`, `Needs input`), the running turn's elapsed time or the time
+since its last activity, its issue or pull request, branch, host and Task ID; `--json` prints the
+same fields. BotChu answers from its live run state, so a Task closed in the sidebar isn't listed
+and nothing is read from `task.json`, process tables or transcripts. "Mine" is the bot whose turn
+asks: its Home, one of its Tasks, or a sub-agent run, whose own bot it is rather than its caller's.
+Without `--mine`, `list` lists the bots that can own Tasks, as before.
 
 A batch goes to one bot as one Task, whose own turn runs a sub-agent run per item: the asking
 turn can end while they work, and stopping the Task stops its runs.
@@ -100,7 +110,8 @@ running processes, terminates them 3 seconds later and kills them, with what the
 seconds after that, and waits for their exit before completing the child. A child whose CLI is
 still running 30 seconds after it said its turn ended is terminated, then killed 5 seconds later,
 and completes with its handoff and a note saying so (#145: Antigravity printed a handoff, then
-never exited and ignored Stop's signals, so the run stayed running until BotChu restarted). A
+never exited and ignored Stop's signals, so the run stayed running until BotChu restarted); one
+whose background tasks still run gets up to 2 hours for them (#255). A
 parent handoff waits for its descendants to finish stopping. Active records found on restart
 become stopped.
 
@@ -132,6 +143,8 @@ phase or activity changes) and `results/<id>.result.json`. A Task request is a r
 `inbox/<request id>/` in the mailbox, BotChu reads them from there (over SSH from a host, each at
 most 20 MB) into the sending bot's `.botchu/inbox/<delivery id>/`, removes them, and writes a result
 that says whether it was delivered or updated, or why not.
+A Tasks list (`botchu-task list --mine`) is a request with `"kind": "taskList"`; its result holds
+the rows and the text the helper prints, and the helper removes it once read.
 The app namespace survives relaunch. Isolated tests and development runs use their own data root.
 
 SSH mailbox polling uses an independent connection through the existing ControlMaster, so a

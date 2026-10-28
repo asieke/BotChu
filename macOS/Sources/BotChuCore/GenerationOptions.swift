@@ -44,11 +44,11 @@ public struct ModelLabel: Equatable, Sendable {
 }
 
 /// Starter choices verified against the installed CLIs. Custom ids remain available because
-/// catalogs and account access change independently of BotChu. No login files are read. A Codex
-/// profile's own list (`catalog`, #220) replaces its starters once read; they stand in until then.
+/// catalogs and account access change independently of BotChu. No login files are read. A Codex or
+/// Muse profile's own list (`catalog`, #220, #248) replaces its starters once read; they stand in until then.
 public enum GenerationOptions {
     public static func models(for kind: AgentKind, catalog: [ModelOption]?) -> [ModelOption] {
-        if kind == .codex, let catalog, !catalog.isEmpty { return catalog }
+        if NativeModelList.lists(kind), let catalog, !catalog.isEmpty { return catalog }
         return models(for: kind)
     }
 
@@ -79,7 +79,12 @@ public enum GenerationOptions {
                     ModelOption(id: "claude-sonnet-5-5-medium", name: "Claude Sonnet 5.5", efforts: common),
                     ModelOption(id: "gpt-oss-120b-medium", name: "GPT-OSS 120B", efforts: [.medium])]
         case .muse:
-            return [ModelOption(id: "muse-spark-1.3", name: "Muse Spark 1.3", efforts: [.none, .minimal] + extended + [.ultra])]
+            // As `model/list` gave them on 2026-10-28 (#248), newest first.
+            let listed: [ReasoningEffort] = [.minimal] + extended
+            return [ModelOption(id: "muse-wonder-1.0", name: "Muse Wonder 1.0", efforts: listed),
+                    ModelOption(id: "muse-wonder-full-1.0", name: "Muse Wonder Full 1.0", efforts: listed),
+                    ModelOption(id: "muse-spark-1.3", name: "Muse Spark 1.3", efforts: listed),
+                    ModelOption(id: "muse-spark-1.2", name: "Muse Spark 1.2", efforts: [.minimal, .low, .medium, .high, .xhigh])]
         case .pi:
             return [ModelOption(id: CommandBuilder.defaultOpenRouterModel, name: "Claude Sonnet 4.5", efforts: [.off, .minimal] + common + [.xhigh, .max])]
         case .sail:

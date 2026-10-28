@@ -58,6 +58,13 @@ extension AppModel {
         return .home(account: bot.isRemoteQueue ? "Remote queue · \(remoteQueue.presence)" : bot.account.name, state: tabState(of: target))
     }
 
+    /// The bot's open tasks as its Tasks column lists them, for `botchu-task list --mine` (#262).
+    func taskList(of botID: UUID, at now: Date = Date()) -> [TaskListEntry] {
+        openTasks(of: botID).compactMap { task in
+            conversationTab(of: .task(task.id, of: botID)).map { TaskListEntry(task: task, tab: $0, at: now) }
+        }
+    }
+
     /// The bot's row in the bot list: a dot for each conversation that isn't idle, and what it does.
     func botRowSummary(of bot: Bot) -> BotRowSummary {
         var result = BotRowSummary(account: bot.account.name, home: tabState(of: .home(bot.id)),
