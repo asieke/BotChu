@@ -11,6 +11,8 @@ final class NewIssueRequest: Identifiable {
     var botID: UUID?
     var accountID: String?
     var text = ""
+    /// The agents and projects chosen in `text` from `@` and `#` completion.
+    var references: [MessageReference] = []
     let images = DraftImages()
 
     init(repo: String?, botID: UUID?, accountID: String?) {
@@ -37,8 +39,9 @@ struct IssueFiling: Identifiable, Equatable {
     let botName: String
     let accountID: String
     let model: String
-    /// What was asked for, with its images, to try again.
+    /// What was asked for, with its mentions and images, to try again.
     let request: String
+    var references: [MessageReference] = []
     let images: [Data]
     var state = State.writing
 }
@@ -85,9 +88,10 @@ extension AppModel {
     func fileNewIssue(_ request: NewIssueRequest) {
         guard newIssueProblem(request) == nil, let repo = request.repo, let bot = request.botID.flatMap(bot),
               let account = request.accountID.flatMap({ id in settings.accounts.first { $0.id == id } }) else { return }
+        let (text, references) = MessageReference.trimming(request.text, references: request.references)
         let filing = IssueFiling(repo: repo, botID: bot.id, botName: bot.name, accountID: account.id,
                                  model: IssueDraft.model(for: bot, account: account, quick: settings.quickTasks),
-                                 request: request.text, images: request.images.images.map(\.png))
+                                 request: text, references: references, images: request.images.images.map(\.png))
         newIssue = nil
         issueFilings.append(filing)
         run(filing)
@@ -114,7 +118,8 @@ extension AppModel {
         let open = (openItems ?? []).filter { !$0.isPullRequest && $0.repo.caseInsensitiveCompare(filing.repo) == .orderedSame }
             .map { IssueDraft.OpenIssue(number: $0.number, title: $0.title) }
         let instructions = BotContext.instructions(of: bot, file: Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.instructionsFile)))
-        let prompt = IssueDraft.prompt(request: filing.request, repository: filing.repo, description: description, openIssues: open,
+        let prompt = IssueDraft.prompt(request: filing.request, references: referenceContext(filing.references, for: bot.id),
+                                       repository: filing.repo, description: description, openIssues: open,
                                        images: filing.images.count, botName: bot.name, instructions: instructions,
                                        team: Workspace.read(settings.teamPath))
         let job = IssueDraft.job(key: filing.id.uuidString, bot: bot, account: account, model: filing.model, prompt: prompt)

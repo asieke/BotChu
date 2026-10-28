@@ -8,6 +8,7 @@ struct NewIssueSheet: View {
     @Environment(AppModel.self) private var model
     @Bindable var request: NewIssueRequest
     @State private var editing = true
+    @State private var listOpen = false
 
     private var repos: [String] {
         let names = (model.repositories ?? []).map(\.nameWithOwner)
@@ -35,14 +36,16 @@ struct NewIssueSheet: View {
                     }
                 }
                 DraftEditor(text: $request.text, focused: $editing, images: request.images,
-                            placeholder: "What should the issue say?", minHeight: 150, maxHeight: 260, identifier: "new-issue-input")
+                            placeholder: "What should the issue say?", minHeight: 190, maxHeight: 260, identifier: "new-issue-input",
+                            mentions: model.mentionSources(for: request.botID, favoring: request.repo), references: $request.references,
+                            listOpen: $listOpen)
             }
             .formStyle(.grouped)
             Divider()
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { model.newIssue = nil }
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(listOpen ? nil : .cancelAction)
                 Button("File Issue") { model.fileNewIssue(request) }
                     .keyboardShortcut(.return, modifiers: .command)
                     .buttonStyle(.borderedProminent)
@@ -51,6 +54,7 @@ struct NewIssueSheet: View {
             }
             .padding(16)
         }
+        .mentionPopups()
         .frame(width: 520)
         .task { await model.loadRepositories() }
     }

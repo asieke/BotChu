@@ -427,4 +427,12 @@ extension ComposerTextView {
         let x = layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container).minX
         return max(0, convert(NSPoint(x: x + textContainerOrigin.x, y: 0), to: scroll).x)
     }
+
+    /// Where the line of the character at `location` ends, from the editor's top, as it shows.
+    func mentionLineBottom(at location: Int) -> CGFloat {
+        guard let layout = layoutManager, let scroll = enclosingScrollView, let storage = textStorage, location < storage.length else { return 0 }
+        let line = layout.lineFragmentRect(forGlyphAt: layout.glyphIndexForCharacter(at: location), effectiveRange: nil)
+        let y = convert(NSPoint(x: 0, y: line.maxY + textContainerOrigin.y), to: scroll).y
+        return min(max(0, scroll.isFlipped ? y : scroll.bounds.height - y), scroll.bounds.height)
+    }
 }

@@ -29,6 +29,16 @@ struct MentionSources {
     var loadProjects: @MainActor () -> Void
     /// Shows Agents, where agents are made.
     var openAgents: @MainActor () -> Void
+
+    /// The mentions of `references` that point at nothing now, one per agent or project.
+    @MainActor func unresolved(_ references: [MessageReference]) -> [(reference: MessageReference, status: ReferenceStatus)] {
+        var seen = Set<String>()
+        return references.compactMap { reference in
+            guard seen.insert(reference.statusKey).inserted else { return nil }
+            let status = status(reference)
+            return status.isResolved ? nil : (reference, status)
+        }
+    }
 }
 
 enum MentionSuggestion: Identifiable, Equatable {
@@ -81,6 +91,8 @@ final class MentionCompleter {
         var selected: Int?
         /// Where the trigger's left edge is, from the editor's left.
         var anchor: CGFloat
+        /// Where the trigger's line ends, from the editor's top.
+        var line: CGFloat = 0
         /// The editor's width.
         var width: CGFloat
         /// For projects, the saved catalog's state.
@@ -194,7 +206,8 @@ final class MentionCompleter {
         let opened = popup == nil || popup?.query.range.location != query.range.location || popup?.query.kind != query.kind
         let selected = id.flatMap { id in suggestions.firstIndex { $0.id == id } } ?? (suggestions.isEmpty ? nil : 0)
         let next = Popup(query: query, suggestions: suggestions, total: matches.count, selected: selected,
-                         anchor: editor.mentionX(at: query.range.location), width: editor.bounds.width,
+                         anchor: editor.mentionX(at: query.range.location), line: editor.mentionLineBottom(at: query.range.location),
+                         width: editor.bounds.width,
                          catalog: query.kind == .project ? sources.catalog() : nil, hasAgents: !directory.agents.isEmpty)
         if popup != next { popup = next }
         guard announces, opened || popup?.total != matches.count else { return }
@@ -249,6 +262,57 @@ struct MentionPopupView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .offset(x: max(0, min(inset + popup.anchor - 10, box - width)), y: -8)
+        }
+    }
+}
+
+/// Where a sheet's text is, for the list its `@` and `#` open: a Form clips what its rows overlay,
+/// so the sheet draws the list over all of itself (`mentionPopups()`).
+struct MentionPopupAnchor {
+    let completer: MentionCompleter
+    let editor: Anchor<CGRect>
+}
+
+struct MentionPopupAnchorKey: PreferenceKey {
+    static var defaultValue: MentionPopupAnchor? { nil }
+    static func reduce(value: inout MentionPopupAnchor?, nextValue: () -> MentionPopupAnchor?) { value = value ?? nextValue() }
+}
+
+extension View {
+    /// Draws the `@` and `#` list of the `DraftEditor` in the view over all of it, where nothing
+    /// clips it: just above the text as the message box's is, or when it doesn't fit there, just
+    /// below the line being typed, kept inside the view.
+    func mentionPopups() -> some View {
+        overlayPreferenceValue(MentionPopupAnchorKey.self) { anchor in
+            if let anchor {
+                GeometryReader { proxy in
+                    SheetMentionPopup(completer: anchor.completer, editor: proxy[anchor.editor], bottom: proxy.size.height)
+                }
+            }
+        }
+    }
+}
+
+private struct SheetMentionPopup: View {
+    let completer: MentionCompleter
+    let editor: CGRect
+    let bottom: CGFloat
+    @State private var height: CGFloat = 0
+
+    var body: some View {
+        if let popup = completer.popup {
+            let width = min(320, popup.width)
+            let above = editor.minY - 8 >= height
+            Color.clear
+                .frame(width: 0, height: 0)
+                .overlay(alignment: above ? .bottomLeading : .topLeading) {
+                    MentionList(popup: popup, completer: completer)
+                        .frame(width: width)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+                }
+                .offset(x: editor.minX + max(0, min(popup.anchor - 10, popup.width - width)),
+                        y: above ? editor.minY - 8 : max(0, min(editor.minY + popup.line + 4, bottom - height - 4)))
         }
     }
 }
@@ -411,6 +475,16 @@ struct MentionProblems: View {
     let projects: Bool
     let refresh: () -> Void
     let unlink: () -> Void
+
+    /// For a draft's `unresolved` mentions: Unlink takes them out of its `references`.
+    init(_ unresolved: [(reference: MessageReference, status: ReferenceStatus)], sources: MentionSources,
+         references: Binding<[MessageReference]>) {
+        let keys = Set(unresolved.map(\.reference.statusKey))
+        problems = unresolved.compactMap { $0.status.problem($0.reference) }
+        projects = unresolved.contains { $0.reference.kind == .project }
+        refresh = { sources.loadProjects() }
+        unlink = { references.wrappedValue.removeAll { keys.contains($0.statusKey) } }
+    }
 
     var body: some View {
         HStack(spacing: 6) {

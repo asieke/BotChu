@@ -99,13 +99,21 @@ extension RenderingTests {
         #expect(delivery.title == "Filed #246: Press I to file an issue")
         #expect(delivery.links == [Delivery.Link(repo: "asieke/BotChu", number: 246, isPullRequest: false)])
 
-        // A reply that isn't an issue files nothing, and stays until dismissed.
+        // A reply that isn't an issue files nothing, and stays until dismissed. Its request's mentions
+        // (#268) tell the writer what they are, and `@` offers every bot but the writer.
         model.startNewIssue()
         let next = try #require(model.newIssue)
-        next.text = "Another one"
+        #expect(model.mentionSources(for: next.botID, favoring: next.repo).agents().map(\.name) == ["Scout"])
+        next.text = "  Another one, like @Scout's in #asieke/BotChu"
+        next.references = [MessageReference.agent(BotRosterEntry(bot: scout), at: 20),
+                           MessageReference.project(ProjectCatalogEntry(name: "BotChu", repo: "asieke/BotChu"), login: nil, at: 32)]
         model.fileNewIssue(next)
         try await waitForFiling { model.issueFilings.contains { $0.state == .failed("Product Fox's reply wasn't an issue BotChu could file") } }
         #expect(await calls.created.count == 2)
+        let mentioned = try #require(await calls.prompts.last)
+        #expect(mentioned.contains("<message_references>"))
+        #expect(mentioned.contains("is the BotChu agent Scout") && mentioned.contains("is the GitHub repository asieke/BotChu"))
+        #expect(mentioned.contains("<request>\nAnother one, like @Scout's in #asieke/BotChu\n</request>"))
         let failed = try #require(model.issueFilings.first { if case .failed = $0.state { true } else { false } })
         model.dismissFiling(failed.id)
         #expect(!model.issueFilings.contains { $0.id == failed.id })

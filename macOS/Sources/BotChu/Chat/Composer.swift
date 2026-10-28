@@ -51,16 +51,8 @@ struct Composer<Controls: View>: View {
                     }
                 }
             }
-            let unresolved = unresolvedMentions
-            if let mentions, !unresolved.isEmpty {
-                MentionProblems(problems: unresolved.compactMap { $0.status.problem($0.reference) },
-                                projects: unresolved.contains { $0.reference.kind == .project },
-                                refresh: { mentions.loadProjects() },
-                                unlink: {
-                                    let keys = Set(unresolved.map(\.reference.statusKey))
-                                    references.wrappedValue.removeAll { keys.contains($0.statusKey) }
-                                })
-            }
+            let unresolved = mentions?.unresolved(references.wrappedValue) ?? []
+            if let mentions, !unresolved.isEmpty { MentionProblems(unresolved, sources: mentions, references: references) }
             ZStack(alignment: .topLeading) {
                 if draft.isEmpty {
                     Text(placeholder).foregroundStyle(.tertiary).padding(.top, 4).padding(.leading, 4)
@@ -96,17 +88,6 @@ struct Composer<Controls: View>: View {
         }
     }
 
-    /// The draft's mentions that point at nothing now, one per agent or project.
-    private var unresolvedMentions: [(reference: MessageReference, status: ReferenceStatus)] {
-        guard let mentions, !references.wrappedValue.isEmpty else { return [] }
-        var seen = Set<String>()
-        return references.wrappedValue.compactMap { reference in
-            guard seen.insert(reference.statusKey).inserted else { return nil }
-            let status = mentions.status(reference)
-            return status.isResolved ? nil : (reference, status)
-        }
-    }
-
     private func button(_ symbol: String, label: String, enabled: Bool = true, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
@@ -123,7 +104,8 @@ struct Composer<Controls: View>: View {
 }
 
 /// A sheet's writing area that takes images as the composer does: pasted, dropped, or chosen with
-/// +, shown after the text, where they go. Return starts a new line.
+/// +, shown after the text, where they go. Return starts a new line, except to insert a suggestion
+/// of `@` and `#` completion, which it offers as the composer does when given `mentions` (#268).
 struct DraftEditor: View {
     @Binding var text: String
     var focused: Binding<Bool>
@@ -133,17 +115,34 @@ struct DraftEditor: View {
     var minHeight: CGFloat = 90
     var maxHeight: CGFloat = 220
     var identifier = "draft-input"
+    /// Where `@` and `#` complete from; nil leaves completion off. The sheet shows the list over
+    /// itself (`mentionPopups()`).
+    var mentions: MentionSources?
+    /// The agents and projects chosen in the text from `@` and `#` completion.
+    var references: Binding<[MessageReference]> = .constant([])
+    /// Whether the completion list is open: the sheet's Cancel leaves Escape to it meanwhile, as
+    /// SwiftUI offers a button's shortcut before the text sees the key.
+    var listOpen: Binding<Bool> = .constant(false)
     @State private var dropTargeted = false
+    @State private var completer = MentionCompleter()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            let unresolved = mentions?.unresolved(references.wrappedValue) ?? []
+            if let mentions, !unresolved.isEmpty { MentionProblems(unresolved, sources: mentions, references: references) }
             ZStack(alignment: .topLeading) {
                 if text.isEmpty {
                     Text(placeholder).foregroundStyle(.tertiary).padding(.top, 4).padding(.leading, 4)
                         .allowsHitTesting(false).accessibilityHidden(true)
                 }
                 ComposerEditor(text: $text, focused: focused, placeholder: placeholder, send: nil, pasteImages: images.paste,
-                               editable: editable, minHeight: minHeight, maxHeight: maxHeight, identifier: identifier)
+                               editable: editable, minHeight: minHeight, maxHeight: maxHeight, identifier: identifier,
+                               mentions: mentions == nil ? nil : completer, mentionSources: mentions, references: references,
+                               unresolvedMentions: Set(unresolved.map(\.reference.statusKey)))
+                    .anchorPreference(key: MentionPopupAnchorKey.self, value: .bounds) { [completer] in
+                        mentions == nil ? nil : MentionPopupAnchor(completer: completer, editor: $0)
+                    }
+                    .onChange(of: completer.isOpen) { listOpen.wrappedValue = $1 }
             }
             if !images.images.isEmpty {
                 AttachmentStrip {

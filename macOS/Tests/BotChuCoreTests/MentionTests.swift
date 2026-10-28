@@ -174,6 +174,19 @@ struct MentionTests {
         #expect(MessageReference.joining(("Ask @QA Duck", [reference.moved(by: -2)]), ("", [])).text == "Ask @QA Duck")
     }
 
+    /// #268: a New Task brief's mentions, trimmed as the sheet starts the task, stand in its first message.
+    @Test func briefReferencesSurviveTrimmingIntoTheTasksOpening() {
+        let agent = MessageReference.agent(duck, at: 7)
+        let project = MessageReference.project(botchu, login: "asieke", at: 26)
+        let brief = "\n  Ask @QA Duck to review #asieke/BotChu  \n"
+        #expect((brief as NSString).substring(with: project.range) == "#asieke/BotChu")
+        let trimmed = MessageReference.trimming(brief, references: [agent, project])
+        let task = BotTask(for: Bot(name: "Scout", workspace: "/tmp/scout"), repo: "asieke/BotChu", checkout: "/tmp/BotChu",
+                           work: nil, brief: trimmed.text)
+        #expect(task.opening == "Ask @QA Duck to review #asieke/BotChu")
+        #expect(MessageReference.standing(trimmed.references, in: task.opening) == [agent.moved(by: -3), project.moved(by: -3)])
+    }
+
     @Test func statusNeverRebindsAReference() {
         let agent = MessageReference.agent(duck)
         #expect(ReferenceStatus.of(agent, agentIDs: [duck.id], repos: nil, login: nil) == .resolved)

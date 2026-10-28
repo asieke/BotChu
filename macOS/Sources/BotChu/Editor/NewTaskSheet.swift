@@ -35,6 +35,9 @@ struct NewTaskSheet: View {
     /// A pull request to continue, as GitHub has it, with the head branch its task works on.
     @State private var head: PullHead?
     @State private var brief = ""
+    /// The agents and projects chosen in the brief from `@` and `#` completion.
+    @State private var references: [MessageReference] = []
+    @State private var listOpen = false
     @State private var editing = true
     @State private var images = DraftImages()
 
@@ -79,7 +82,8 @@ struct NewTaskSheet: View {
                     }
                     DraftEditor(text: $brief, focused: $editing, images: images,
                                 placeholder: work == nil ? "What should \(botName) do?" : "Anything to add? (optional)",
-                                maxHeight: 200, identifier: "task-brief")
+                                maxHeight: 200, identifier: "task-brief",
+                                mentions: model.mentionSources(for: botID, favoring: repo), references: $references, listOpen: $listOpen)
                 } header: {
                     Text("Task")
                 } footer: {
@@ -94,7 +98,7 @@ struct NewTaskSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(listOpen ? nil : .cancelAction)
                 Button("Start Task") { start() }
                     .keyboardShortcut(.return, modifiers: .command)
                     .buttonStyle(.borderedProminent)
@@ -103,6 +107,7 @@ struct NewTaskSheet: View {
             }
             .padding(16)
         }
+        .mentionPopups()
         .frame(width: 560, height: 720)
         // A pull request's branch another task owns turns the task away before it is made (#215).
         .task(id: headKey) {
@@ -295,11 +300,12 @@ struct NewTaskSheet: View {
             images.problem = "Couldn't keep the images in \(bot.name)'s folder: \(error.localizedDescription)"
             return
         }
+        let (brief, references) = MessageReference.trimming(brief, references: references)
         let task = BotTask(for: bot, repo: repo, checkout: location.path, work: currentHead?.work ?? work,
-                           brief: brief.trimmingCharacters(in: .whitespacesAndNewlines), branch: currentHead?.branch ?? "",
+                           brief: brief, branch: currentHead?.branch ?? "",
                            host: model.settings.host(location.hostID), review: purpose.review)
         lastRepo = repo
-        model.startTask(task, for: botID, show: true, images: attachments)
+        model.startTask(task, for: botID, show: true, images: attachments, references: references)
         dismiss()
     }
 }
