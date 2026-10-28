@@ -337,7 +337,7 @@ final class JobRuntime {
             bot: bot, job: job, run: launch.run, startedAt: startedAt, memory: Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.memoryFile)),
             sharedMemory: Workspace.read(model.settings.sharedMemoryPath), soul: Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.soulFile)),
             instructions: Workspace.read(BotDocument.instructions.url(for: bot).path), team: Workspace.read(model.settings.teamPath),
-            skills: model.activeSkills(of: bot), availableBots: model.delegation.roster, locale: .current)
+            skills: model.activeSkills(of: bot), availableBots: model.delegation.roster, tools: model.tools.instructions(), locale: .current)
         let prompt = BotContext.prompt(for: job.prompt, preamble: preamble)
         // Its helpers and mailbox first, as a turn's in its task, so `botchu-inbox send` and the
         // others work in it (#170); its CLI starts once they are ready.
@@ -355,6 +355,13 @@ final class JobRuntime {
             var invocation = JobLaunch.invocation(for: agent, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key,
                                                   sailDefault: model.settings.sailModel, sailKey: sailKey)
             invocation.environment.merge(caller.environment) { _, new in new }
+            // Blocks the tools that are off, as a turn on This Mac does (#246).
+            do {
+                invocation.toolProfile = try await model.tools.turnProfile(for: account.kind)
+            } catch {
+                model.delegation.endCaller(caller.id)
+                return self.finish(runID, outcome: .failed, summary: error.localizedDescription)
+            }
             self.run(launch, prompt: prompt, invocation: invocation, caller: caller, account: account, agent: agent, target: target)
         }
     }

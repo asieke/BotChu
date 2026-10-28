@@ -42,6 +42,12 @@
 #                                          # opens a new job's editor or the first job's history instead,
 #                                          # job-model or job-effort a new job's picker, and job-edit with
 #                                          # BOTCHU_JOB="Check the deploy" that job's editor
+#   BOTCHU_TOOLS=sample BOTCHU_OPEN=tools BOTCHU_TOOL=catalog:gh macOS/ui-review.sh  # Skills & Tools on Tools,
+#                                          # with sample approvals, two SSH destinations on made-up hosts
+#                                          # and a skill of Scout's that declares tools; gh selected
+#                                          # (BOTCHU_OPEN=add-tools: Add Tools; BOTCHU_OPEN=skills
+#                                          # BOTCHU_SKILL=deploy-check: that skill). Tools are found
+#                                          # and versions checked on this Mac; nothing is blocked.
 #   BOTCHU_REPORT="It crashed" macOS/ui-review.sh  # and file this report, with a stand-in gh that
 #                                          # keeps it in $data/reports (BOTCHU_REPORT_FAIL=1: it fails),
 #                                          # with the window's screenshot (BOTCHU_SCREENSHOT_FAIL=1: none)
@@ -214,6 +220,31 @@ json.dump(thread, open(thread_path, "w"))
 json.dump(state, open(os.path.join(data, "inbox.json"), "w"))
 PY
 fi
+# A sample tool policy (BOTCHU_TOOLS=sample): gh approved, aws approved and off, a manual path, and
+# two SSH destinations on made-up hosts, not enforced, so a turn from it blocks nothing; and a skill
+# of Scout's that declares tools.
+# BOTCHU_TOOLS=enforced: the same, enforced (the review copy runs no turn, so nothing is blocked).
+if [ "${BOTCHU_TOOLS:-}" = sample ] || [ "${BOTCHU_TOOLS:-}" = enforced ]; then
+  cat > "$data/tools.json" <<'JSON'
+{"tools":[{"id":"catalog:gh","name":"gh","enabled":true,"approvedAt":"2026-10-28T12:00:00Z"},
+ {"id":"catalog:aws","name":"aws","enabled":false,"approvedAt":"2026-10-28T12:00:00Z"},
+ {"id":"path:/usr/bin/jq","name":"jq","enabled":true,"approvedAt":"2026-10-28T12:00:00Z"}],
+ "ignored":["catalog:ngrok"],
+ "destinations":[{"id":"5B1E7C9A-0000-4000-8000-0000000000C1","alias":"sshclaw","user":"claw","host":"claw.example.net","note":"Build box","included":true},
+  {"id":"5B1E7C9A-0000-4000-8000-0000000000C2","alias":"sshwork","identityFile":"~/.ssh/id_work","included":false}]}
+JSON
+  if [ "$BOTCHU_TOOLS" = enforced ]; then
+    python3 - "$data/tools.json" <<'PY2'
+import json, sys
+policy = json.load(open(sys.argv[1]))
+policy["enforcedSince"] = "2026-10-28T12:00:00Z"
+json.dump(policy, open(sys.argv[1], "w"))
+PY2
+  fi
+  mkdir -p "$data/bots/scout/skills/deploy-check"
+  printf -- '---\nname: deploy-check\ndescription: Check a pull request deploys before merging it.\ncli-tools: [gh, vercel, aws, jq, pandoc]\n---\n\n# Deploy check\n' \
+    > "$data/bots/scout/skills/deploy-check/SKILL.md"
+fi
 # Generation controls can be reviewed on any account, without sending a message or changing live settings.
 python3 - "$data/bots.json" <<'PY'
 import json, os, sys
@@ -297,6 +328,8 @@ fi
 [ -n "${BOTCHU_JOB:-}" ] && args+=(--env "BOTCHU_JOB=$BOTCHU_JOB")
 [ -n "${BOTCHU_INBOX_ITEM:-}" ] && args+=(--env "BOTCHU_INBOX_ITEM=$BOTCHU_INBOX_ITEM")
 [ -n "${BOTCHU_SETTINGS:-}" ] && args+=(--env "BOTCHU_SETTINGS=$BOTCHU_SETTINGS")
+[ -n "${BOTCHU_TOOL:-}" ] && args+=(--env "BOTCHU_TOOL=$BOTCHU_TOOL")
+[ -n "${BOTCHU_SKILL:-}" ] && args+=(--env "BOTCHU_SKILL=$BOTCHU_SKILL")
 [ $# -gt 0 ] && args+=(--env "BOTCHU_SEND=$1")
 # Without restoring windows: after any copy of BotChu crashed, macOS would otherwise stop at a
 # dialog asking whether to reopen them.

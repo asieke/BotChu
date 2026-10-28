@@ -9,7 +9,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
 
 ## Scope
 - Does:
-  - **Workspace:** the left sidebar has **Inbox**, **Projects**, **Agents**, **Providers**, **Skills** and **Jobs**, followed by
+  - **Workspace:** the left sidebar has **Inbox**, **Projects**, **Agents**, **Providers**, **Skills & Tools** and **Jobs**, followed by
     the bots, one row each, in sections (below); a bot's Home and tasks are the tabs beside its chat
     (**Tasks**). A bot's row says on its second line what it is doing ("Needs input on #113", "Working on #113", "2 tasks
     running", its Home's activity, "4 tasks", or its account), with a small dot at the row's end,
@@ -1069,14 +1069,55 @@ on that pull request's branch to continue in instead). The same command run agai
     an SSH host can't open the files on this Mac, so it gets the active skills' `SKILL.md` in full
     instead, up to 16,000 characters together (the rest by name and description); their helper files
     stay on this Mac. Memory capture tells bots that multi-step workflows go in a skill of their
-    own, not in `MEMORY.md`; they change shared skills only when you ask. **Skills** in the sidebar lists them as cards (shared, or a bot's own, with a
-    search and a filter), with the number of files beside each `SKILL.md`; **New Skill** makes one,
-    shared or for one bot (its **File** row shows `skills/<name>/SKILL.md`), from a template and opens it in the Markdown editor, as do a card's
-    **Edit…** and double-click; a shared skill's **Bots** menu turns it on or off for each bot (kept in
-    `bot.json` as `disabledSkills`; every shared skill is on until turned off), and its menu shows it
-    in Finder or puts its folder in the Trash. **Shared Folder** opens the bots folder's `skills/`.
+    own, not in `MEMORY.md`; they change shared skills only when you ask. **Skills & Tools** in the sidebar has two
+    tabs of tables, as Providers is laid out (#246). **Skills** lists one row a skill: its name over its description, which
+    bots have it, the tools it declares and its number of files (which goes first in a narrow window), with a search;
+    selecting a row opens its sidebar with the description, a shared skill's switch for each bot, its declared tools and its
+    folder. **New Skill** makes one, shared or for one bot (its **File** row shows `skills/<name>/SKILL.md`), from a template
+    and opens it in the Markdown editor, as do a row's **Edit…** and double-click; a shared skill's **Bots** menu and
+    switches turn it on or off for each bot (kept in `bot.json` as `disabledSkills`; every shared skill is on until turned
+    off), and its menu shows it in Finder or puts its folder in the Trash. **Shared Folder** opens the bots folder's
+    `skills/`. A skill declares the command-line tools it needs in its frontmatter, `cli-tools: [gh, jq]` (or a `- gh`
+    list); only that links a skill to a tool, never a mention in its text. Its sidebar adds or removes one (rewriting just
+    that line), and each declared tool's chip says how it stands, **Enabled**, **Off**, **Not approved** or **Not
+    installed**, and opens it in Tools, or Add Tools when it isn't approved. A skill never approves a tool.
     BotChu creates no skill on its own; an example, `aside-web-browsing`, is in
     [docs/skills](docs/skills/aside-web-browsing/SKILL.md), to copy into that folder.
+  - **Tools** (Skills & Tools' second tab, #246): the command-line tools you approve for agents on This Mac, one global
+    list for every bot, in `tools.json` beside `index.json`. Its table groups **Command line** (approved tools: name,
+    status, the skills that declare each, and an **On** switch), **SSH destinations**, and **BotChu**'s own helpers
+    (`botchu-subagent`, `-task`, `-inbox`, `-message`, always on); selecting a row opens its sidebar. **Add Tools…** (with
+    how many wait) lists candidates, none of them approved until you tick them and press **Approve**: tools of a curated
+    catalog of service and infrastructure CLIs (`gh`, `glab`, `aws`, `gcloud`, `az`, `vercel`, `netlify`, `fly`,
+    `heroku`, `wrangler`, `supabase`, `firebase`, `railway`, `doctl`, `stripe`, `op`, `docker`, `kubectl`, `helm`,
+    `terraform`, `ngrok`, `aside`) found in the login shell's `PATH` and the usual install folders, and commands skills
+    declare that are installed. BotChu looks for these names only, without running them; it never imports `PATH` or
+    scans the Mac. **Ignore** keeps a candidate apart (under **Ignored**, with **Restore**); **Choose Executable…** adds
+    any other executable you pick, which BotChu never runs; shells, git and SSH can't be added, as nothing restricts them.
+    An approved catalog tool is checked with its own version command (and `gh` with `gh auth status --json hosts`, for
+    the signed-in account and the scopes its token reports, "Not reported" when it doesn't), five seconds at most, with a
+    small environment that turns off update checks; only the parsed values are kept, in `tool-checks.json`, never what
+    it printed or any token. A failed check keeps the reading before it, shown as stale. The heading's ↻ looks again
+    and checks every approved tool.
+    **Enforce** in the heading (off on every install until you turn it on, after a confirmation that names what it
+    blocks) makes the switches count: from the next turn on This Mac, Home, task, job and sub-agent turns run their
+    shell under a `sandbox-exec` profile that denies running or reading every installed catalog tool that isn't
+    approved and on, and every chosen executable that is off: by name, path, any link to it, through an interpreter,
+    and as a copy or hard link made during the turn; a Homebrew keg's or npm package's other files too, never a
+    language runtime's or a version manager's shared shims. The agent's command fails with "operation not
+    permitted", and its session is told which tools it has and that the catalog's others are blocked. It isn't a
+    sandbox otherwise: commands outside the catalog, copies made elsewhere before the turn or downloaded, a service's
+    API reached another way, connectors, and turns on SSH hosts are untouched, and a turn keeps the profile it
+    started with. Turning a tool off can break a script that calls it; the skills that declare it show it **Off**.
+    Muse runs its shell in its own macOS sandbox, which macOS won't nest, so while Enforce is on a Muse turn on This Mac
+    stops with that reason instead of running with every shell command failing. Without Enforce, the switches only
+    choose what sessions are told. A `tools.json` that can't be read stops turns on This Mac, with the reason on the
+    page, until it is fixed or a change saves a new one.
+    **SSH destinations** are guidance only: an alias (`sshclaw`, `sshwork`), and the user, host, identity file path
+    (never read) and note you fill in. A destination switched on is described to local sessions in a
+    `<ssh_destinations>` list; switched off, it is left out. Nothing restricts SSH: `ssh`, `scp`, `sftp`, `rsync`,
+    forwarding, Tailscale, git and deploy scripts run the same whatever is listed or switched, and BotChu never
+    changes your SSH config, keys or aliases. A resumed session is told again only when what it was told changed.
   - **Status sidebar:** on the right of the chat (View ▸ Show Status, ⌥⌘I). It opens at its widest,
     380 points; drag its edge to narrow it, down to 280. A card at the top shows
     a large character (its pet, playing, or its emoji) on the left, beside the bot name and current
@@ -1106,7 +1147,7 @@ on that pull request's branch to continue in instead). The same command run agai
     Conversation: the bot's **INSTRUCTIONS.md**, **SOUL.md** and **MEMORY.md**, and **TEAM.md**, the
     playbook every bot shares (the same file as in Settings). **Skills** below them lists the bot's own skills and the
     shared ones, each with a switch that turns it on or off for this bot, and **Manage Skills**
-    opens the Skills gallery. Each card and skill opens an in-app Markdown editor at half the
+    opens Skills & Tools. Each card and skill opens an in-app Markdown editor at half the
     parent window's width and height, its file's name with whose it is beside it (the bot's, or
     Every bot), a few words over an empty file, and Save (⌘S), Cancel (Escape), and Reload. Saving
     preserves exact Markdown and refuses to overwrite a file changed on disk since it was opened.
@@ -1318,7 +1359,9 @@ on that pull request's branch to continue in instead). The same command run agai
     conversation's CLI last reported running (`Models.swift`), the
     sections the sidebar and Agents group bots into, where a new bot goes, where a dragged one lands
     and what a search of them finds (`BotSections.swift`), skills: finding them, reading their frontmatter, which a bot uses,
-    and making one (`Skills.swift`), one stream parser per
+    and making one (`Skills.swift`), the tool catalog, policy and SSH destinations, where tools are, skills' declared
+    tools and what sessions are told (`Tools.swift`), the profile that blocks tools in a turn (`ToolSandbox.swift`) and
+    tools' bounded version and sign-in checks (`ToolProbe.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
     (`ToolActivity.swift`, reading shell command lines with `ShellCommand.swift`), the chat's activity
@@ -1427,10 +1470,11 @@ on that pull request's branch to continue in instead). The same command run agai
     pets and the OpenRouter video client, and where tasks work: your GitHub repositories and their
     computers, `TaskPlaces.swift`, Tasks handed to other bots, `TaskHandoffs.swift`, what a report says about the app, `IssueReports.swift`, and the
     screenshot of its window, through ScreenCaptureKit, `WindowCapture.swift`, the
-    skills the app lists and edits, `SkillLibrary.swift`, the Telegram gateway in the app,
+    skills the app lists and edits, `SkillLibrary.swift`, the tool policy, where tools are and their checks, and the
+    profile and text a turn starts with, `ToolsBoard.swift`, the Telegram gateway in the app,
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished turns and runs to the daily run reviews, `Evaluations.swift`),
-    `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, selecting a reply's text across its blocks, `ReplySelection.swift`, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
+    `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills & Tools with Add Tools, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, selecting a reply's text across its blocks, `ReplySelection.swift`, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
     status sidebar, a bot's and a task's, with a bot's jobs and its run reviews), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (the
     in-window Settings page with its rail and pages, with the hosts, Telegram and run reviews), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
@@ -1511,7 +1555,11 @@ on that pull request's branch to continue in instead). The same command run agai
     checking only one missing or as old as its interval, and Refresh's limits; Providers' model
     groups, time left and reset times, credits and free resets with their expiry, a row's status by
     exception, and the widths of its columns and meters; skills: their frontmatter, finding and making them, which a
-    bot uses, and the catalog, or (on a host) the files in full, that sessions get; the Telegram
+    bot uses, and the catalog, or (on a host) the files in full, that sessions get; tools (`ToolsTests`): an install
+    without a policy blocking nothing, approvals and ignores only by hand, candidates, declarations, dependencies,
+    the generated profile, real `sandbox-exec` runs where a blocked tool fails by name, path, link, interpreter and copy
+    while ssh, scp, sftp, rsync, git and the SSH config still run, Muse turns stopping only while tools are blocked, SSH
+    destinations as guidance, and checks that keep stale readings and parse `gh`'s real JSON; the Telegram
     gateway against a stand-in Bot API: round trips, refused and revoked chats, each chat's own bot,
     busy conversations, repeated updates, cancelled batches, relaunches, forwarded input,
     pending-work limits, shared rate-limit waits, reconnecting, failed sends and checkpoints, and
@@ -1581,7 +1629,8 @@ on that pull request's branch to continue in instead). The same command run agai
     sidebar's menus and its detail (confirmed first, through a stand-in `gh`, and refused), custom profile persistence, the Providers table's
     columns and its 56- and 74-point rows in every state, from wide to its narrowest, sorting by
     Weekly, the selected profile's sidebar, a problem's popover, and removing an added profile from
-    its row's menu after confirming, provider logos in both
+    its row's menu after confirming, Skills & Tools' two tables in both appearances, wide and narrow, with their
+    sidebars and the links between a skill's declared tools and a tool's skills, provider logos in both
     appearances and in account menus, the report
     sheet, with a stand-in screenshot (taken of its window before the sheet opens, removed, not
     taken again on a retry, new for the next report, and a report without one when it can't be
@@ -1768,6 +1817,8 @@ on that pull request's branch to continue in instead). The same command run agai
   settings, prefix the command with `BOTCHU_SMOKE_EFFORT=low` and optionally
   `BOTCHU_SMOKE_MODEL=<model id>`; both settings apply to the new and resumed turns.
   `BOTCHU_SMOKE_FAST=1` runs both Codex turns on the Fast tier.
+  `BOTCHU_SMOKE_BLOCK=gh` (catalog tools, comma-separated) runs both turns under the profile a turn gets with those
+  tools off (#246); the first also runs each of them, which must fail, and `ssh -V`, which must run.
   To test image delivery, set `BOTCHU_SMOKE_IMAGE=/absolute/path/to/fixture.png` and optionally
   `BOTCHU_SMOKE_IMAGE_EXPECT=<word visible in the image>`; both turns attach the fixture and must
   read that word as well as recall the session's code word.
@@ -1782,7 +1833,10 @@ on that pull request's branch to continue in instead). The same command run agai
   Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository;
   `BOTCHU_SETTINGS=<page>` picks Settings' page: `general`, `accounts`, `github`, `hosts`,
   `run-reviews`, `pets`, `openrouter`, `sail`, `telegram` or `remote-queue`).
-  `BOTCHU_OPEN=projects`, `agents`, `providers`, `skills` or `jobs` opens that workspace screen;
+  `BOTCHU_OPEN=projects`, `agents`, `providers`, `skills` or `jobs` opens that workspace screen
+  (`BOTCHU_SKILL=<name>` selects a skill); `tools` opens Skills & Tools on Tools and `add-tools` with Add Tools open
+  (`BOTCHU_TOOL=catalog:gh`, `ssh:<alias>` or `botchu` selects a row; `BOTCHU_TOOLS=sample` with `macOS/ui-review.sh`
+  seeds sample approvals, two destinations on made-up hosts and a skill that declares tools);
   with `projects`, `BOTCHU_PROJECT=<owner/name>` shows that repository's sidebar, and
   `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
   tab and an issue or pull request there, read with your `gh` login.

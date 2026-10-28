@@ -78,6 +78,10 @@ public struct Invocation: Equatable, Sendable {
     /// with stdin closed and the prompt among its arguments.
     public var input: [String]?
 
+    /// The `sandbox-exec` profile a turn on This Mac runs under, which blocks the tools that are
+    /// off (`ToolSandbox`); nil runs it as before. Runs on a host ignore it.
+    public var toolProfile: String?
+
     public init(arguments: [String], environment: [String: String] = [:], sessionID: String? = nil, input: [String]? = nil, standardInput: Data? = nil) {
         self.arguments = arguments
         self.environment = environment

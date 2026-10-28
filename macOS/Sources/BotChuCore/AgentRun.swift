@@ -88,8 +88,11 @@ public final class AgentRun: @unchecked Sendable {
         input = invocation.standardInput
         remote = nil
         initialInput = invocation.input ?? []
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-l", "-c", Self.delegationShellPrefix(invocation.environment) + CommandBuilder.shellScript(command: command), "botchu"] + invocation.arguments
+        // Under the tool policy's profile, when it blocks any tool (#246).
+        let launch = ToolSandbox.launch("/bin/zsh", ["-l", "-c", Self.delegationShellPrefix(invocation.environment) + CommandBuilder.shellScript(command: command),
+                                                     "botchu"] + invocation.arguments, profile: invocation.toolProfile)
+        process.executableURL = URL(fileURLWithPath: launch.executable)
+        process.arguments = launch.arguments
         process.currentDirectoryURL = directory
         var env = Self.childEnvironment(ProcessInfo.processInfo.environment)
         env["NO_COLOR"] = "1"

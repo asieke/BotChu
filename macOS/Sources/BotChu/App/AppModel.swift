@@ -81,9 +81,11 @@ struct ChatTarget: Hashable {
     static func task(_ taskID: UUID, of botID: UUID) -> ChatTarget { ChatTarget(botID: botID, taskID: taskID) }
 }
 
+enum SkillsTab: String { case skills, tools }
+
 enum LibraryDestination: String, CaseIterable {
     case inbox, projects, agents, providers, skills, jobs, settings
-    var title: String { rawValue.capitalized }
+    var title: String { self == .skills ? "Skills & Tools" : rawValue.capitalized }
     var symbol: String {
         switch self {
         case .inbox: "tray"
@@ -187,6 +189,13 @@ final class AppModel {
     var projectSelection: ProjectSelection?
     /// The profile selected in Providers, by account id, shown in its sidebar; nil hides the sidebar.
     var providerSelection: String?
+    /// Skills & Tools' tab (#246), and what each tab has selected, shown in its sidebar: a skill by
+    /// its id, a tool by its row's id (`ToolRow`).
+    var skillsTab = SkillsTab.skills
+    var skillSelection: String?
+    var toolSelection: String?
+    /// Add Tools is open.
+    var addingTools = false
     /// The folder (and host) Providers checks the selected profile's connectors in, as a
     /// conversation's Manage or its menu chose; nil is the profile's default (`connectorWorkspace(for:)`).
     var providerConnectorWorkspace: ConnectorWorkspace?
@@ -215,6 +224,8 @@ final class AppModel {
     /// The connectors each conversation's CLI reported or a check found (#183), its checks saved
     /// between launches (`connectors.json`, #212).
     let connectorBoard: ConnectorBoard
+    /// Skills & Tools' tool policy, where tools are and their checks (#246), in `tools.json`.
+    let tools: ToolsBoard
     @ObservationIgnored private var usageWatch: Task<Void, Never>?
     /// Usage views inject this lookup in tests so they never read the owner's Keychain.
     let openRouterKey: @MainActor () -> String?
@@ -241,6 +252,9 @@ final class AppModel {
     /// only here.
     private(set) var indexFailure: SaveFailure?
     @ObservationIgnored private var delegationSessions: [ChatTarget: Set<String>] = [:]
+    /// What each session was told about tools and SSH destinations (#246), "" for nothing, so a
+    /// resumed one hears again only when that changed.
+    @ObservationIgnored private var toolSessions: [ChatTarget: [String: String]] = [:]
     @ObservationIgnored private var runs: [ChatTarget: AgentRun] = [:]
     /// The heartbeat each conversation waits to send (`Heartbeats.swift`), dropped by any message to it.
     @ObservationIgnored var pendingHeartbeats: [ChatTarget: PendingHeartbeat] = [:]
@@ -321,6 +335,7 @@ final class AppModel {
                                          file: self.store.root.appendingPathComponent("usage.json"))
         self.openRouterKey = openRouterKey
         connectorBoard = ConnectorBoard(file: self.store.root.appendingPathComponent("connectors.json"))
+        tools = ToolsBoard(folder: self.store.root)
         self.store.migrateIfNeeded()
         let loaded = self.store.loadBots()
         bots = loaded.bots
@@ -1713,7 +1728,26 @@ final class AppModel {
                 waiting[target] = nil
                 let needsDelegationContext = resume.map { !(delegationSessions[target] ?? []).contains($0) } ?? true
                 let delegationInstructions = needsDelegationContext ? BotContext.subagentsSection(availableBots: delegation.roster) : nil
-                let contextSections = [preamble, delegationInstructions].compactMap { $0 }
+                // The tools on This Mac, and the profile that blocks those that are off (#246); a
+                // host's turns have neither.
+                let toolProfile: String?
+                do {
+                    toolProfile = machine.isRemote ? nil : try await tools.turnProfile(for: account.kind)
+                } catch {
+                    delegation.endCaller(context.id)
+                    runStates[target] = nil
+                    pauseQueue(target)
+                    append(ChatMessage(role: .error, text: error.localizedDescription), to: target)
+                    saveThread(target)
+                    reportTaskStart(target, failure: error.localizedDescription)
+                    return
+                }
+                let toolText = machine.isRemote ? "" : tools.instructions() ?? ""
+                let toldBefore = resume.flatMap { toolSessions[target]?[$0] }
+                let toolInstructions: String? = toldBefore == nil || toldBefore == toolText
+                    ? (toldBefore == nil && !toolText.isEmpty ? toolText : nil)
+                    : (toolText.isEmpty ? ToolsBoard.cleared : toolText)
+                let contextSections = [preamble, delegationInstructions, toolInstructions].compactMap { $0 }
                 let prompt = BotContext.prompt(for: text, preamble: contextSections.isEmpty ? nil : contextSections.joined(separator: "\n\n"), updates: updates)
                 let model = GenerationOptions.effectiveModel(current.model, kind: account.kind, openRouterDefault: settings.openRouterModel,
                                                              sailDefault: settings.sailModel)
@@ -1730,6 +1764,7 @@ final class AppModel {
                     openRouterKey: account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil,
                     sailKey: sailKey,
                     liveInput: liveInput)
+                invocation.toolProfile = toolProfile
 
                 do {
                     invocation = try ImageDelivery.attaching(imageURLs, to: invocation, kind: account.kind, prompt: prompt)
@@ -1847,6 +1882,7 @@ final class AppModel {
                     for session in sessions {
                         self.recordSession(session, accountID: accountID, for: target)
                         self.delegationSessions[target, default: []].insert(session)
+                        self.toolSessions[target, default: [:]][session] = toolText
                     }
                     if let reported { self.recordReportedModel(reported, requested: current.model, accountID: accountID, for: target) }
                     if let connectors {
@@ -1943,7 +1979,10 @@ final class AppModel {
                                         arguments: invocation.arguments, prompt: prompt, resuming: resume, what: what,
                                         directory: task == nil ? nil : machine.isRemote ? "\(place): \(directory)" : directory), in: home)
                     try run.start()
-                    if let resume { delegationSessions[target, default: []].insert(resume) }
+                    if let resume {
+                        delegationSessions[target, default: []].insert(resume)
+                        toolSessions[target, default: [:]][resume] = toolText
+                    }
                     runs[target] = run
                     if liveInput { inputs[target] = (account.kind, InputLedger()) }
                     reactions[target] = nil
