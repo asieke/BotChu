@@ -222,8 +222,35 @@ public enum AnalyticsDashboard {
 
       /* The same numbers as AnalyticsSummary in BotChuCore: skipped job times aren't runs, and an
          unknown duration is left out of the median and the total, never counted as zero. */
-      function summarize(records, from, through, kinds, include) {
+      function summarize(records, from, through, kinds, include, tasks) {
         var summary = { runs: 0, outcomes: {}, skipped: 0, ended: 0, failureRate: null, timed: 0, medianSeconds: null, totalSeconds: 0 };
+        var selected = records.filter(function (r) { return r.day >= from && r.day <= through && kinds[r.kind] && (!include || include(r)) && r.outcome !== "skipped"; });
+        function sum(values) {
+          var known = values.filter(function (v) { return typeof v === "number" && isFinite(v) && v >= 0; });
+          if (!known.length) { return null; }
+          var total = known.reduce(function (a, b) { return a + b; }, 0);
+          return isFinite(total) ? total : null;
+        }
+        function costs(rows) { return sum(rows.map(function (r) { return r.cost; })); }
+        summary.tokens = {};
+        ["uncachedInput", "cacheRead", "cacheWrite", "cacheWrite1h", "output", "reasoning"].forEach(function (key) {
+          summary.tokens[key] = sum(selected.map(function (r) { return (r.tokens || {})[key]; }));
+        });
+        var allInput = sum([summary.tokens.uncachedInput, summary.tokens.cacheRead, summary.tokens.cacheWrite]);
+        summary.cacheHitRate = typeof summary.tokens.cacheRead === "number" && allInput > 0 ? summary.tokens.cacheRead / allInput : null;
+        summary.actualCost = costs(selected.filter(function (r) { return r.costProvenance === "actual"; }));
+        summary.estimatedCost = costs(selected.filter(function (r) { return r.costProvenance === "estimated"; }));
+        summary.cost = sum([summary.actualCost, summary.estimatedCost]);
+        summary.unpriced = selected.filter(function (r) { return r.costProvenance === "unpriced"; }).length;
+        summary.unavailable = selected.filter(function (r) { return !r.costProvenance || r.costProvenance === "unavailable"; }).length;
+        summary.costProvenance = summary.estimatedCost !== null ? "estimated" : summary.actualCost !== null ? "actual" : summary.unpriced ? "unpriced" : "unavailable";
+        summary.wastedCost = costs(selected.filter(function (r) { return ["failed", "stopped", "interrupted"].indexOf(r.outcome) >= 0; }));
+        var represented = {}, finished = {};
+        selected.forEach(function (r) { if ((r.kind === "task" || r.kind === "subagent") && r.taskID) { represented[r.taskID] = true; } });
+        (tasks || []).forEach(function (t) { if (t.id && t.latest === "finished" && represented[t.id]) { finished[t.id] = true; } });
+        summary.finishedTasks = Object.keys(finished).length;
+        var taskSpend = costs(selected.filter(function (r) { return finished[r.taskID] && (r.kind === "task" || r.kind === "subagent"); }));
+        summary.costPerFinishedTask = summary.finishedTasks && taskSpend !== null ? taskSpend / summary.finishedTasks : null;
         var durations = [];
         records.forEach(function (record) {
           if (record.day < from || record.day > through || !kinds[record.kind] || (include && !include(record))) { return; }
@@ -323,7 +350,7 @@ public enum AnalyticsDashboard {
         fail("Its data couldn't be read.");
         return;
       }
-      if (!data || data.version !== 1 || !Array.isArray(data.records)) {
+      if (!data || data.version !== 2 || !Array.isArray(data.records)) {
         fail("It was made by another version of BotChu.");
         return;
       }

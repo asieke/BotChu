@@ -4,8 +4,8 @@
 runs, how they ended and how long they took, by bot, provider account and project, with each
 profile's latest allowance beside them (#233). BotChu reads the records it already keeps, off the main
 thread and without changing them, writes one page into its own data folder, and opens it in the
-default browser. Nothing serves it. A separate passive usage ledger captures new executions for
-later token/cost reporting; this dashboard's ledger integration is separate.
+default browser. Nothing serves it. The passive usage ledger supplies captured account/model attribution, tokens and spend for new
+executions. Older work still counts, with unavailable usage.
 
 The code is `macOS/Sources/BotChuCore/Analytics.swift` (reading the records into a snapshot, and
 `AnalyticsSummary`), `AnalyticsDashboard.swift` (the page and writing it) and the app's
@@ -25,7 +25,7 @@ kept. Totals for a period can't be higher than what the sources read by the dash
 | Sub-agent runs | `subagents/<id>/run.json` and `tasks/<id>/subagents/<id>/run.json` | phase, created, started, finished, the bot it ran as, account, the task it was delegated from | until Clear Run removes it; one a relaunch interrupted becomes stopped |
 | Allowance | `usage.json` beside `index.json` | each profile's latest reading: windows, share used, reset, when read, whether its check failed | the latest reading only; one unchecked for a week is dropped |
 | Run reviews | `evaluations/<id>.json` | only counted, as excluded | the newest 50 a bot |
-| Usage ledger | `usage/<yyyy-MM>.jsonl` | immutable turn/run account, CLI family and backend, model provenance, outcome and reported usage; dashboard integration is separate | until the bot is deleted; Clear Run, task/job history pruning and account switches do not remove it |
+| Usage ledger | `usage/<yyyy-MM>.jsonl` | immutable turn/run account, CLI family and backend, model provenance, reported usage and actual-cost amendments | until the bot is deleted; Clear Run, task/job history pruning and account switches do not remove it |
 
 ### Usage ledger format
 
@@ -134,6 +134,11 @@ on macOS).
 | Tasks started | tasks made in range |
 | Per day | the same, for each day; the duration chart leaves a gap for a day without a known duration |
 | By bot, account, project | the same, for the records attributed to each, busiest first |
+| Spend | known actual amendments plus estimated spend; any estimated component makes the total estimated; unpriced and unavailable record counts remain separate |
+| Tokens | sums of reported uncached input, cache read, cache write and output; reasoning is a subset of output and one-hour cache writes a subset of cache writes |
+| Cache hit rate | cache read ÷ (uncached input + cache read + cache write); unavailable without reported cache reads or positive input |
+| Per finished task | selected spend on finished tasks' turns and sub-agent runs ÷ finished tasks represented by those records; a task is finished when its latest retained turn finished |
+| Wasted spend | known spend on failed, stopped and interrupted records |
 
 ### Missing data, retries, stopped and in-progress work
 
@@ -153,24 +158,60 @@ on macOS).
 
 - **Bot:** the conversation's bot; the job's agent; the bot a sub-agent run ran as, by the name it
   had when it was delegated if that bot is gone.
-- **Provider account:** job and sub-agent runs on the account they recorded as they started. Home and
-  task turns on the account their conversation uses **now**: transcripts don't record each turn's
-  account, so a conversation switched between accounts counts all its turns for the current one. Runs
-  from before job runs recorded an account show as "Account not recorded". An account BotChu no longer
-  offers keeps the name its record saved.
+- **Provider account and model:** a matched ledger entry supplies the account, CLI family, backend,
+  model and its reported/requested provenance captured for that invocation. Transcript prompt UUIDs
+  match before timestamps; jobs and sub-agent runs match by run UUID, including root-owned sub-agent
+  ledgers whose executing bot differs. Legacy entries without prompt identity can match a unique
+  start within the ledger's one-second timestamp precision. Ambiguous matches stay unavailable.
+  Before the ledger, Home/task turns retain conversation-current account attribution and have no
+  model or usage; job/sub-agent runs retain their recorded account. An account BotChu no longer
+  offers keeps its saved name. These historical limitations do not change turn counts or durations.
+- **Grouped prompts:** all acknowledged Claude transcript segments get the captured account/model,
+  but only the invocation's owning prompt gets its aggregate usage and cost. Other covered segments
+  remain unavailable, not measured zero. The transcript still determines their time and outcome.
 - **Project:** a task's repository (`owner/name`, matched whatever its case); a sub-agent run's by the
   task that delegated it. Home turns and job runs have none.
 
 ### Tokens, cost and allowance
 
-BotChu now captures reported token counts and costs in its usage ledger, but this dashboard does
-not yet read them, so both are **Unavailable**
-(`AnalyticsMeasure.unrecorded`), never shown as 0. A measure says whether it is `actual` (reported by
-a provider), `estimated` (shown with ≈ and "Estimated") or `unavailable`; none is estimated today, and
-pet-making's cost estimates stay in the bot's log. Provider allowance is shown apart: each profile's
-latest reading (share used per window, its reset, when it was read, and whether it is current, stale or
-missing), as the provider reported it. It is not a history and isn't split by bot, so nothing is
-derived from it.
+Snapshot version 2 reads the ledger without changing it and prices usage while building the snapshot
+off the main thread. Each record has nullable token buckets, per-model usage, nullable cost and
+`costProvenance`: `actual`, `estimated`, `unpriced` or `unavailable`. Missing counts never become
+measured zero. Token totals sum known buckets; reasoning/output and one-hour/all cache writes are
+not double-counted. Aggregates with partial coverage are known subtotals, not a claim that unknown
+work was free. `unpriced` counts measured usage for which no price exists; `unavailable` counts work
+with no separately measured usage. A selection containing only either has no numeric spend.
+
+Pricing order is whole-invocation actual amendment, bundled model rates, CLI-reported cost estimate,
+then unpriced. A valid zero amendment or CLI estimate is retained. A mixed actual/estimated total
+is estimated. Pi's captured backend selects its price source: an unknown backend never silently uses
+OpenRouter's table. The snapshot includes `priceSnapshotDate`, sorted `unpricedModelIDs` and the
+static `prices` catalog (source/model, display name, per-million rates and context tiers), so the
+next dashboard can make offline comparisons using exactly those rates. No price fetch occurs.
+For one-hour cache writes without a dedicated rate, the price engine uses twice the input rate;
+a missing rate for any other used bucket makes that estimate unavailable.
+
+Any usage marked `cumulative` is differenced by account, CLI family, backend and canonical UUID
+session identity, across the complete retained ledger before joining transcripts. Equal timestamps
+preserve ledger order. The first reading of a new session counts in full; the first resumed reading
+only establishes a baseline. A missing/invalid session ID cannot be differenced. Decreasing or
+negative counters make the invocation unavailable and establish a new baseline. Anonymous model
+buckets are differenced before applying the invocation's requested-model fallback, so changing
+models does not charge the full session again. A bucket without a prior reading remains unknown;
+known deltas can still be shown, but `canReprice` is false and list-price estimates are prohibited for
+that partial delta. Actual amendments or a valid differenced reported cost can still supply cost.
+
+`AnalyticsSummary` and the page's `summarize` accept the same task list and selected records.
+Finished-task averages use the current retained task outcome, include selected task turns and
+sub-agent records, and exclude unrelated jobs/Home work. A sub-agent-only filter still represents
+its parent task. The denominator counts represented finished tasks even when some spend is missing;
+the average, like spend, is only the known subtotal. With no known spend it stays unavailable.
+Opaque task UUIDs, start instants and issue/PR numbers support these joins and later task links;
+no session or prompt UUID is exported.
+
+Provider allowance remains separate: each profile's latest reading (share used per window, reset,
+read time, and current/stale/missing state), as reported. It is not a history or split by bot, so no
+spend or tokens are derived from it.
 
 ### Left out
 
@@ -192,7 +233,7 @@ derived from it.
   `<script type="application/json">` block with every `<`, `>` and `&` escaped, and the script puts names
   into the page with `textContent`, never as markup.
 - **Names and numbers only.** The snapshot holds bot, account and repository names, days, outcomes,
-  durations and counts. It never holds message text, briefs, prompts, replies, tool calls or output,
+  durations, token buckets, cost provenance, model IDs, offline prices and opaque task IDs. It never holds message text, briefs, prompts, replies, tool calls or output,
   error messages, task or job titles, file paths, commands, session IDs or credentials (tested with
   planted values in every such field).
 

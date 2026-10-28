@@ -11,12 +11,24 @@ public struct PricedCost: Equatable, Sendable {
 public enum ModelPricing {
     public static var snapshotDate: String { ModelPrices.snapshotDate }
 
+    /// The same offline rates and context thresholds used by `price`, for dashboard comparisons.
+    public static var catalog: [AnalyticsModelPrice] {
+        ModelPrices.entries.keys.sorted().compactMap { key in
+            guard let entry = ModelPrices.entries[key], let slash = key.firstIndex(of: "/") else { return nil }
+            let source = String(key[..<slash]), model = String(key[key.index(after: slash)...])
+            let kind: AgentKind = source == "openrouter" ? .pi : source == "sail" ? .sail : source == "anthropic" ? .claude : source == "google" ? .antigravity : .codex
+            return AnalyticsModelPrice(source: source, model: model,
+                                       displayName: ModelPickerData(kind: kind, model: model, openRouterDefault: "").title,
+                                       rates: .init(entry.rates), tiers: entry.tiers.map { .init(aboveInput: $0.aboveInput, rates: .init($0.rates)) })
+        }
+    }
+
     /// Prices one request, using its total input to select a context tier for all its tokens.
     /// Unknown models or a used bucket without a published rate remain unpriced. Missing counts
     /// contribute nothing; completely absent usage is not a measured zero. Reasoning is already
     /// included in output, and one-hour writes are already included in total cache writes.
-    public static func price(_ usage: ModelUsage, provider: AgentKind) -> PricedCost? {
-        guard let (model, entry) = resolve(usage.model, provider: provider) else { return nil }
+    public static func price(_ usage: ModelUsage, provider: AgentKind, backend: String? = nil) -> PricedCost? {
+        guard let (model, entry) = resolve(usage.model, provider: provider, backend: backend) else { return nil }
         return price(usage, provider: provider, model: model, entry: entry)
     }
 
@@ -48,10 +60,15 @@ public enum ModelPricing {
                           snapshotDate: ModelPrices.snapshotDate)
     }
 
-    private static func resolve(_ raw: String, provider: AgentKind) -> (String, ModelPrice)? {
+    private static func resolve(_ raw: String, provider: AgentKind, backend: String?) -> (String, ModelPrice)? {
         let sources: [String]
         switch provider {
-        case .pi: sources = ["openrouter"]
+        case .pi:
+            switch backend {
+            case nil, "openrouter": sources = ["openrouter"]
+            case "anthropic", "openai", "google": sources = [backend!]
+            default: return nil
+            }
         case .sail: sources = ["sail"]
         case .claude, .codex, .antigravity, .muse: sources = ["anthropic", "openai", "google"]
         }
@@ -116,4 +133,28 @@ struct ModelPrice: Sendable {
         self.rates = rates
         self.tiers = tiers
     }
+}
+
+/// A JSON-safe pricebook entry. All rates are USD per million; missing cache rates stay unknown.
+public struct AnalyticsModelPrice: Codable, Equatable, Sendable {
+    public struct Rates: Codable, Equatable, Sendable {
+        public var input: Double
+        public var output: Double
+        public var cacheRead: Double?
+        public var cacheWrite: Double?
+        public var cacheWrite1h: Double?
+        init(_ rates: ModelPriceRates) {
+            input = rates.input; output = rates.output; cacheRead = rates.cacheRead
+            cacheWrite = rates.cacheWrite; cacheWrite1h = rates.cacheWrite1h
+        }
+    }
+    public struct Tier: Codable, Equatable, Sendable {
+        public var aboveInput: Int
+        public var rates: Rates
+    }
+    public var source: String
+    public var model: String
+    public var displayName: String
+    public var rates: Rates
+    public var tiers: [Tier]
 }
