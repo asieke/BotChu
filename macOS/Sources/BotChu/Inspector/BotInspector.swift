@@ -217,7 +217,7 @@ struct RunsOnCard: View {
                 .help(model.isRunning(target) ? "Account can change when this turn ends"
                       : "Choose the account for this conversation; its next message starts a session there")
             }
-            InspectorRow("Agent", value: settings.account.kind.displayName)
+            InspectorRow("Runtime", value: settings.account.kind.displayName)
             ModelMenu(settings: settings, disabled: model.isRunning(target),
                       onModel: { model.setModel($0, for: target) },
                       onEffort: { model.setReasoningEffort($0, for: target) },
@@ -254,7 +254,7 @@ struct SessionCard: View {
     private var summary: String {
         switch session {
         case .continuing: "Continues session"
-        case .startsNew(accountChanged: true): "New session (account changed)"
+        case .startsNew(accountChanged: true): "New session (run settings changed)"
         case .startsNew(accountChanged: false): "Starts a new session"
         }
     }

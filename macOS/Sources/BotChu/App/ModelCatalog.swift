@@ -124,22 +124,36 @@ final class ModelCatalog {
 }
 
 extension AppModel {
-    /// The profile on this Mac whose own list a conversation's or job's pickers show; nil for a
-    /// family that doesn't list its models, and for a task on a host, which a list read here says
-    /// nothing about.
+    func preparePiModels(for settings: any RunSettings) async {
+        guard settings.runtimeAdapter.offersProviders, settings.reasoningEffort != nil,
+              let scope = modelCatalogScope(for: settings) else { return }
+        await modelCatalog.refresh(scope)
+    }
+
+    func catalogModels(for settings: any RunSettings) -> [CatalogModel] {
+        settings.runtimeAdapter.offersProviders ? [] : modelCatalog.models(for: settings.account.kind)
+    }
+
+    /// The selected profile's own list. Remote Pi catalogs run on their host; a local profile's
+    /// command, configuration and credentials never describe the remote model catalog.
     func modelCatalogScope(for settings: any RunSettings) -> ModelCatalogScope? {
         if let task = settings as? BotTask, task.isRemote {
             guard settings.runtimeAdapter.offersProviders, let host = self.settings.host(task.hostID) else { return nil }
             return ModelCatalogScope(accountID: settings.accountID, command: settings.runtimeAdapter.command(local: "", host: host.command(for: settings.account), remote: true),
                 kind: settings.account.kind, machine: Machine(destination: host.destination), folder: task.folder ?? "~")
         }
-        if (settings as? SubagentRun)?.hostID != nil { return nil }
+        if let run = settings as? SubagentRun, let hostID = run.hostID {
+            guard settings.runtimeAdapter.offersProviders, let host = self.settings.host(hostID) else { return nil }
+            return ModelCatalogScope(accountID: settings.accountID,
+                command: settings.runtimeAdapter.command(local: "", host: host.command(for: settings.account), remote: true),
+                kind: settings.account.kind, machine: Machine(destination: host.destination), folder: run.workingDirectory)
+        }
         return modelCatalogScope(for: settings.account)
     }
 
     func modelCatalogScope(for account: Account) -> ModelCatalogScope? {
         NativeModelList.lists(account.kind)
-            ? ModelCatalogScope(accountID: account.id, command: settings.command(for: account), kind: account.kind,
+            ? ModelCatalogScope(accountID: account.id, command: settings.command(for: account), kind: account.kind, configurationDirectory: account.configurationDirectory,
                 usesLegacyOpenRouterKey: RuntimeAdapters.adapter(for: account.kind).usesLegacyOpenRouterKey(account: account, provider: nil)) : nil
     }
 

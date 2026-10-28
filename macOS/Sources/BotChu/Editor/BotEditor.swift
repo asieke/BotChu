@@ -131,6 +131,7 @@ struct BotEditor: View {
                             ProviderMenuLabel(account).tag(account.id)
                         }
                     }
+                    LabeledContent("Runtime", value: bot.account.kind.displayName)
                     ModelMenu(settings: bot, disabled: false,
                               onModel: { bot.selectModel($0, catalog: model.nativeModels(for: bot)) },
                               onEffort: { bot.reasoningEffort = $0 },
@@ -225,19 +226,6 @@ struct BotEditor: View {
             return model.bots.contains { $0.isRemoteQueue && $0.id != bot.id } ? "Only one remote queue bot is supported." : nil
         }
         return model.workspaceProblem(bot.workspace, for: bot.id)
-    }
-
-    private var modelLabel: ModelPickerData {
-        ModelPickerData(kind: bot.account.kind, model: bot.model, openRouterDefault: model.settings.openRouterModel,
-                        sailDefault: model.settings.sailModel, catalog: model.modelCatalog.models(for: bot.account.kind),
-                        native: model.nativeModels(for: bot), resolved: bot.resolvedModel)
-    }
-
-    private var modelPrompt: String {
-        if bot.account.kind == .sail {
-            return model.settings.sailModel.isEmpty ? "No default model" : "\(model.settings.sailModel) (Sail id)"
-        }
-        return bot.account.kind == .pi ? "\(model.settings.openRouterModel) (OpenRouter id)" : "CLI default"
     }
 
     private func chooseFolder() {
