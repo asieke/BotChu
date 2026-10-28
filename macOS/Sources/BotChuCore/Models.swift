@@ -9,6 +9,8 @@ public protocol RunSettings {
     var model: String { get set }
     /// Nil leaves reasoning effort to the CLI.
     var reasoningEffort: ReasoningEffort? { get set }
+    /// Codex's Fast tier (#249): faster turns that use more of the allowance. Nil is off.
+    var fastMode: Bool? { get set }
     /// The CLI session the conversation continues, and the account it belongs to.
     var sessionID: String? { get set }
     var sessionAccountID: String? { get set }
@@ -51,6 +53,21 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     /// App-owned history storage for a remote bot; never a CLI workspace.
     public var remoteStorage: String?
     public var persistencePath: String { isRemoteQueue ? (remoteStorage ?? workspace) : workspace }
+    /// An agent owns tasks and scheduled jobs; a specialist is only called as a sub-agent
+    /// (`botchu-subagent`), with its own Home, memory and account all the same (#250). Saves from
+    /// before roles decode as an agent (`KeyedDecodingContainer.decode(_:forKey:)` below).
+    public var role: Role = .agent
+    public enum Role: String, Codable, Sendable, CaseIterable { case agent, specialist }
+    /// A remote queue bot is neither: it is messaged, never delegated to.
+    public var isSpecialist: Bool { role == .specialist && !isRemoteQueue }
+    /// Whether tasks, dispatches and scheduled jobs can be the bot's own.
+    public var canOwnTasks: Bool { !isRemoteQueue && !isSpecialist }
+    /// Why the bot can't own a task or a job's run, in the words a refused request hears; nil when it can.
+    public var taskOwnershipProblem: String? {
+        if isRemoteQueue { return "Remote queue bots do not run local tasks." }
+        if isSpecialist { return "“\(name)” is a specialist and cannot own tasks; call it with botchu-subagent instead." }
+        return nil
+    }
     public var id: UUID
     public var name: String
     public var emoji: String
@@ -67,6 +84,8 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var model: String
     /// Nil leaves reasoning effort to the CLI. Optional for compatibility with saved bots.
     public var reasoningEffort: ReasoningEffort?
+    /// Codex's Fast tier; nil is off, as in bots saved before it (#249).
+    public var fastMode: Bool?
     /// Absolute path of the bot's workspace folder.
     public var workspace: String
     /// How the bot looks, in the owner's words: what its pet is drawn from. Optional for
@@ -84,8 +103,10 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public init(
         id: UUID = UUID(), name: String, emoji: String = "🤖", title: String = "", instructions: String = "",
         accountID: String = Accounts.defaultID, model: String = "", reasoningEffort: ReasoningEffort? = nil, workspace: String,
-        appearance: String? = nil, sessionID: String? = nil, sessionAccountID: String? = nil, createdAt: Date = Date()
+        appearance: String? = nil, sessionID: String? = nil, sessionAccountID: String? = nil, createdAt: Date = Date(),
+        role: Role = .agent
     ) {
+        self.role = role
         self.id = id
         self.name = name
         self.emoji = emoji
@@ -114,6 +135,14 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
         }
         while out.hasSuffix("-") { out.removeLast() }
         return out.isEmpty ? "bot" : out
+    }
+}
+
+extension KeyedDecodingContainer {
+    /// A bot.json from before roles has no `role`: it is an agent. The synthesized decoding of `Bot`
+    /// picks this overload over the generic one.
+    public func decode(_ type: Bot.Role.Type, forKey key: Key) throws -> Bot.Role {
+        try decodeIfPresent(type, forKey: key) ?? .agent
     }
 }
 
@@ -253,6 +282,10 @@ public enum AgentEvent: Equatable, Sendable {
     case inputTaken
     /// The connectors the CLI reported at the start of its turn (Claude Code's `system/init`).
     case connectors([Connector])
+    /// What each of the CLI's background tasks still running does, whenever that changes; empty
+    /// once none is (Claude Code's `system/background_tasks_changed`). Its turn can end while they
+    /// run: the CLI then waits for them and carries on with their results in a new turn (#255).
+    case backgroundTasks([BotActivity])
 }
 
 /// Applies a run's events to a thread. Kept free of UI so it can be tested.
@@ -264,7 +297,7 @@ public struct ThreadAssembler {
 
     public mutating func apply(_ event: AgentEvent, to messages: inout [ChatMessage]) {
         switch event {
-        case .model, .connectors:
+        case .model, .connectors, .backgroundTasks:
             break
         case .session, .finished:
             openTextID = nil

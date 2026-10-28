@@ -484,9 +484,21 @@ final class AppModel {
 
     // MARK: Bots
 
-    func newBot() {
-        let bot = Bot(name: "", workspace: "")
+    /// Opens New Bot, as an agent or a specialist (#250).
+    func newBot(role: Bot.Role = .agent) {
+        let bot = Bot(name: "", workspace: "", role: role)
         editor = EditorRequest(bot: bot, isNew: true)
+    }
+
+    /// The bots that can own tasks and scheduled jobs (#250): what every agent picker for a task or a
+    /// job lists, in sidebar order. Specialists and the remote queue bot are left out.
+    var taskOwners: [Bot] { bots.filter(\.canOwnTasks) }
+
+    /// The jobs that saving the bot as a specialist would pause (#250), for the confirmation before
+    /// it; none when it is one already, or a remote queue bot.
+    func jobsPausedBySpecialistSwitch(of botID: UUID) -> [Job] {
+        guard let bot = bot(botID), bot.canOwnTasks else { return [] }
+        return jobs?.pausedBySpecialistSwitch(of: botID) ?? []
     }
 
     func edit(_ id: UUID) {
@@ -591,11 +603,15 @@ final class AppModel {
             }
         }
         let moved = bot.workspace != bots[i].workspace
+        let roleChanged = bot.isSpecialist != bots[i].isSpecialist
         // The editor doesn't change what a turn reported while it was open.
         bot.reportedModel = bots[i].reportedModel
         bots[i] = bot
         save(bot)
+        // Its AGENTS.md says whether it runs tasks, so it is written again with the role.
         prepareWorkspace(bot)
+        // A specialist's jobs pause, and an agent's that paused for it resume; its open tasks go on (#250).
+        if roleChanged { jobs?.roleChanged(bot.id, toSpecialist: bot.isSpecialist) }
         if moved {
             reloadPet(bot.id)
             // Its jobs' runs work in its workspace, wherever it is now (#146).
@@ -621,11 +637,49 @@ final class AppModel {
         change(target) { $0.reasoningEffort = effort }
     }
 
+    /// Turns Codex's Fast tier on or off for this conversation's next turns (#249).
+    func setFastMode(_ on: Bool, for target: ChatTarget) {
+        guard !isRunning(target), let current = runSettings(of: target) else { return }
+        if on, !GenerationOptions.offersFast(for: current.account.kind, model: current.model, catalog: nativeModels(for: current)) { return }
+        change(target) { $0.fastMode = on ? true : nil }
+    }
+
     /// Changes this Home or task conversation's account; its next message starts a session there.
     func setAccount(_ accountID: String, for target: ChatTarget) {
         guard !isRunning(target) else { return }
         let account = settings.account(accountID)
         change(target) { $0.selectAccount(account) }
+    }
+
+    /// A bot's own account, model and effort, changed in place from the Agents table (#250) and saved,
+    /// as Edit Bot changes them: also while a turn runs, which goes on as it started, so the change
+    /// applies from its next turn. A new account of another kind resets the model and effort, a model
+    /// drops an effort it doesn't take, and an effort the model doesn't take is ignored (`RunSettings`).
+    func setAccount(_ accountID: String, ofBot botID: UUID) {
+        let account = settings.account(accountID)
+        editRunSettings(of: botID) { $0.selectAccount(account) }
+    }
+
+    func setModel(_ selected: String, ofBot botID: UUID) {
+        guard let bot = bot(botID) else { return }
+        let catalog = nativeModels(for: bot)
+        editRunSettings(of: botID) { $0.selectModel(selected, catalog: catalog) }
+    }
+
+    func setReasoningEffort(_ effort: ReasoningEffort?, ofBot botID: UUID) {
+        guard let bot = bot(botID) else { return }
+        let effective = GenerationOptions.effectiveModel(bot.model, kind: bot.account.kind, openRouterDefault: settings.openRouterModel)
+        if let effort, !GenerationOptions.efforts(for: bot.account.kind, model: effective, catalog: nativeModels(for: bot)).contains(effort) { return }
+        editRunSettings(of: botID) { $0.reasoningEffort = effort }
+    }
+
+    private func editRunSettings(of botID: UUID, _ edit: (inout Bot) -> Void) {
+        guard let i = bots.firstIndex(where: { $0.id == botID }), !bots[i].isRemoteQueue else { return }
+        var bot = bots[i]
+        edit(&bot)
+        guard bot != bots[i] else { return }
+        bots[i] = bot
+        saveSettings(bot)
     }
 
     func delete(_ id: UUID) {
@@ -699,7 +753,7 @@ final class AppModel {
     // MARK: Tasks
 
     func newTask(for botID: UUID, repo: String? = nil, work: BotTask.Work? = nil, purpose: NewTaskSheet.Purpose = .work, brief: String = "") {
-        guard let bot = bot(botID), !bot.isRemoteQueue else { return }
+        guard let bot = bot(botID), bot.canOwnTasks else { return }
         taskSheet = TaskSheetRequest(botID: botID, repo: repo, work: work, purpose: work?.isPullRequest == true ? purpose : .work, brief: brief)
     }
 
@@ -708,7 +762,7 @@ final class AppModel {
     /// `saved` hears whether its record was saved, with the error when it wasn't.
     func startTask(_ task: BotTask, for botID: UUID, show: Bool, images: [ImageAttachment] = [],
                    saved: (@MainActor @Sendable (Error?) -> Void)? = nil) {
-        guard let bot = bot(botID), !bot.isRemoteQueue else {
+        guard let bot = bot(botID), bot.canOwnTasks else {
             saved?(CocoaError(.fileNoSuchFile))
             return
         }
@@ -727,7 +781,7 @@ final class AppModel {
     /// failure), and nothing is sent. The job's earlier runs' tasks close, so the job keeps one open
     /// task beside the chat, unless the owner took one over or it is busy or shown.
     func startJobTask(_ task: BotTask, for botID: UUID) -> ChatTarget? {
-        guard let bot = bot(botID), !bot.isRemoteQueue, task.jobRun != nil else { return nil }
+        guard let bot = bot(botID), bot.canOwnTasks, task.jobRun != nil else { return nil }
         let target = ChatTarget.task(task.id, of: botID)
         tasks[botID, default: []].append(task)
         conversation(target).start()
@@ -905,9 +959,9 @@ final class AppModel {
         }
     }
 
-    /// The bot a request hands its task to, by name, slug or ID.
+    /// The bot a request hands its task to, by name, slug or ID: never a specialist (#250).
     func resolveTaskBot(_ name: String) throws -> Bot {
-        do { return try SubagentResolver.resolve(name, bots: bots.filter { !$0.isRemoteQueue }, list: "botchu-task list") }
+        do { return try SubagentResolver.resolveTaskOwner(name, bots: bots) }
         catch { throw TaskRequest.Problem(message: error.localizedDescription) }
     }
 
@@ -916,7 +970,7 @@ final class AppModel {
     /// pull request's head branch too, looked up first, so no tab is made for it: #215). Checked
     /// after its last wait, so a caller that starts it without waiting again can't race another.
     func plannedTask(_ wanted: TaskRequest, for bot: Bot, checkouts: [RepoCheckout], origin: BotTask.Origin) async throws -> BotTask {
-        guard !bot.isRemoteQueue else { throw TaskRequest.Problem(message: "Remote queue bots do not run local tasks.") }
+        if let problem = bot.taskOwnershipProblem { throw TaskRequest.Problem(message: problem) }
         let found = try repository(named: wanted.repo, checkouts: checkouts).get()
         var location: RepoLocation
         if let checkout = found.checkout {
@@ -1669,6 +1723,7 @@ final class AppModel {
                     model: model,
                     sessionID: resume,
                     reasoningEffort: current.reasoningEffort,
+                    fast: current.fastMode == true,
                     openRouterKey: account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil,
                     sailKey: sailKey,
                     liveInput: liveInput)

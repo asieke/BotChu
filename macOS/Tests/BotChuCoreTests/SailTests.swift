@@ -308,6 +308,57 @@ private typealias S = SailSamples
         #expect(thread.first { $0.toolName == "bash" }?.toolOutput == "a\nb")
     }
 
+    @Test func aReplyAnnouncingItsNextStepWithoutTheCallIsAskedToGoOn() async throws {
+        let harness = try SailHarness()
+        defer { harness.remove() }
+        // As DeepSeek-V4.1-Flash ended turns on 2026-10-28: a short reply naming the next step, and no call.
+        let fixture = SailFixture([
+            ("POST", "/v1/responses", .ok(S.response("resp_1", "completed", output: "[\(S.call("call_1", "bash", #"{"command":"true"}"#))]"))),
+            ("POST", "/v1/responses", .ok(S.response("resp_2", "completed", output: "[\(S.message("Core is green. Now the two rendering tests that failed, one at a time:"))]"))),
+            ("POST", "/v1/responses", .ok(S.response("resp_3", "completed", output: "[\(S.call("call_2", "bash", #"{"command":"true"}"#))]"))),
+            ("POST", "/v1/responses", .ok(S.response("resp_4", "completed", output: "[\(S.message("Both pass now."))]"))),
+        ])
+        #expect(await harness.run(fixture, SailAgent.Turn(sessionID: "s-go-on", resume: false, model: S.model, prompt: "Fix the tests")))
+        #expect(fixture.remaining == 0)
+        let third = try #require(fixture.bodies.dropFirst(2).first?["input"]?.array)
+        #expect(third.last == SailRequest.userMessage(SailInstructions.keepGoing))
+        #expect(harness.thread.filter { $0.role == .assistant }.map(\.text)
+                == ["Core is green. Now the two rendering tests that failed, one at a time:", "Both pass now."])
+        #expect(harness.events.all.last == .finished)
+    }
+
+    @Test func aModelThatKeepsAnnouncingIsTakenAtItsWordAfterTwoNudges() async throws {
+        let harness = try SailHarness()
+        defer { harness.remove() }
+        let fixture = SailFixture((1...3).map { n in
+            ("POST", "/v1/responses", .ok(S.response("resp_\(n)", "completed", output: "[\(S.message("Let me check the logs:"))]")))
+        })
+        #expect(await harness.run(fixture, SailAgent.Turn(sessionID: "s-nudged", resume: false, model: S.model, prompt: "Why?")))
+        #expect(fixture.remaining == 0)
+        let session = try #require(try harness.store.load("s-nudged"))
+        #expect(session.items.filter { $0 == SailRequest.userMessage(SailInstructions.keepGoing) }.count == 2)
+        #expect(session.items.last == ["role": "assistant", "content": "Let me check the logs:"])
+    }
+
+    @Test(arguments: [
+        // Turn endings Sail's DeepSeek-V4.1-Flash gave on 2026-10-28, each mid-task.
+        ("Now updating the README, which currently states the opposite. Let me find every claim:", true),
+        ("All 863 Core tests pass. Waiting for the release and window-test phases:", true),
+        ("Core is green. Now the two rendering tests that failed, one at a time:", true),
+        ("Main is clean, all work is in the worktree. Continuing with the README now.", true),
+        ("Running the suite again...", true),
+        ("The fix is in. Let me run the tests.", true),
+        ("", true),
+        // Answers.
+        ("Opened PR #41; it isn't merged.", false),
+        ("Done. Let me know if you want the README changed too.", false),
+        ("What would you like to do — benchmark it, or merge the PR?", false),
+        ("Three things are left:\n\n- the README\n- the tests\n- the PR", false),
+    ])
+    func repliesThatStopShortAreToldFromAnswers(reply: String, stopsShort: Bool) {
+        #expect(SailInstructions.announcesNextStep(reply) == stopsShort)
+    }
+
     @Test func aResumedTurnSendsTheWholeConversationAgainWithoutPreviousResponseID() async throws {
         let harness = try SailHarness()
         defer { harness.remove() }

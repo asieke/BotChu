@@ -147,15 +147,27 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     after the metadata PR merges and a sync reads the default branch again. BotChu needs write
     access for this flow; forks can be used through GitHub. The editor creates no commits directly
     on the default branch and never merges metadata PRs.
-  - **Agents:** a gallery of the existing bots, grouped under the sidebar's sections, in its order,
-    with Conversations first while any bot is in none, showing their
-    personality summary, provider, activity and task count, with **Open Chat**, **Edit…** and
-    **New Agent**. Sections are edited here with the sidebar's own menus: a card's folder button, or
-    a right click on it, moves its bot to a section, back to Conversations, or into a **New
-    Section…** it names; a heading's ⋯ button, or a right click on it, renames, moves or removes its
-    section. A change in either place shows in both and is saved in `index.json`. Search finds
-    bots by name, title or provider, within their sections, and a section, Conversations among
-    them, by its name, with all its bots. A bot’s own conversation continues to work without a
+  - **Agents:** a table of the agents for each of the sidebar's sections, in its order, with
+    Conversations first while any agent is in none, then the **Specialists** table with **New
+    Specialist** (#250); **New Agent** is at the top, whose count is the agents'. The tables share
+    their columns, whose labels sit on each heading's line: the bot (its pet, name and title), its
+    status (Idle, or a violet dot with Working or Thinking…), its account, model and reasoning
+    effort, an agent's open tasks and jobs (**Tasks · Jobs**; a specialist's is blank), then **Open
+    Chat** and a ⋯ menu; a double click also opens its chat. Account, model and effort change in
+    place, as in Edit Bot and also while a turn runs (from its next turn): they read as plain
+    values, with their chevrons shown while the row is hovered; the account is a menu, and model
+    and effort open the chat's own pickers. A new account of another kind resets the model and
+    effort; an effort shows Auto when none is chosen, and a dash when the model takes none. The
+    remote queue bot shows "Remote queue" and dashes. Narrower than 980 points, Tasks · Jobs goes
+    and the status moves into the name's cell (a dot after the name, and what it is doing for its
+    title while it works); under 780 the account shows only its mark, and under 680 the effort only
+    its glyph. Sections are edited here with the sidebar's own menus: a row's ⋯ menu, or a right
+    click on it, moves an agent to a section, back to Conversations, or into a **New Section…** it
+    names; a heading's ⋯ button, or a right click on it, renames, moves or removes its section. A
+    specialist's menu has no **New Task…**, **New Job…**, **Show Jobs** or **Move to Section**. A
+    change in either place shows in both and is saved in `index.json`. Search finds bots by name,
+    title or provider, within their sections, and a section, Conversations and Specialists among
+    them, by its name, with all its bots; tables with nothing found are left out. A bot’s own conversation continues to work without a
     project.
   - **Providers:** one table of CLI profiles, a row each, with their allowance windows in columns:
     the logo and name, with the CLI family below it, or what is wrong; the model groups the
@@ -263,7 +275,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     conversation (Sail keeps no `previous_response_id` state), polls `GET /responses/{id}` (2 s at
     first, then up to every 30 s, honouring `Retry-After`), runs the function tools the model calls
     in the bot's folder — `read`, `write`, `edit` and `bash`, as Pi's, whose environment never has
-    the key — and submits again until the model answers without one. Every request is on Flex; a
+    the key — and submits again until the model answers without one. A reply without a call that
+    stops short (empty, or ending by announcing its next step, such as `…one at a time:`) is asked
+    to go on, up to twice in a row, so a model that narrates instead of calling doesn't end the turn
+    mid-task (#251); its system prompt says the same. Every request is on Flex; a
     model or request Sail won't take on Flex fails the turn saying so, with the choices (another
     model in Settings ▸ Sail or the model menu, or another account): BotChu never moves work to a
     faster, pricier window for queue delay. A submission is retried with the same idempotency key
@@ -325,7 +340,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     A turn can be stopped: its CLI is interrupted, terminated 3 seconds later and killed, with
     what it started, 5 seconds after that. A CLI still running 30 seconds after it said its turn
     ended (Antigravity once printed its result and never exited, #145) is terminated, then killed
-    5 seconds later; the turn stands as it said, with a note in its conversation. The
+    5 seconds later; the turn stands as it said, with a note in its conversation. One whose
+    background tasks still run (Claude Code waiting on a test run it started, #255) is left to wait
+    for them, up to 2 hours, and its conversation stays running, showing what they do, until it
+    carries on with their results. The
     thread and the CLI's session id are saved, so the next message (also after a relaunch) resumes
     the same CLI session; quitting mid-turn saves what the turn printed so far. A CLI's output is
     parsed off the main thread and reaches the window a few times a second, and each conversation
@@ -515,6 +533,28 @@ on that pull request's branch to continue in instead). The same command run agai
     rather than a second. "New subagent @bot" (or "delegate this to @bot as a sub-agent") is a
     **sub-agent run** (above): child work of the turn, in its Sub-agents inspector, with no tab of
     its own. A batch goes to one bot as one Task, whose turn spawns a sub-agent run per issue.
+  - **Agents and specialists (#250):** a local bot is an **agent**, which owns tasks and scheduled
+    jobs, or a **specialist**, which is only called as a sub-agent (`botchu-subagent`) and keeps its own
+    Home, instructions, personality, memory, skills, pet and account. Its role is kept in its
+    `bot.json` and in `index.json` (a bot saved before roles is an agent), and can be changed at any
+    time without losing anything. A specialist's `AGENTS.md` has no Tasks section, the bots' roster
+    marks it sub-agent only, `botchu-task list` leaves it out, and `botchu-task create --agent`, a
+    dispatch file (its own, or one naming it as `agent`) and a job's run refuse it: "“<name>” is a
+    specialist and cannot own tasks; call it with botchu-subagent instead." Making an agent a
+    specialist pauses each of its jobs that is on, saying why, and none of its jobs runs, scheduled or
+    with Run Now; making it an agent again resumes only those, so a job paused for another reason
+    stays paused. Its open tasks are left to finish. In the app: the sidebar lists the specialists
+    last, in a **Specialists** section that starts collapsed (and opens when one is shown), whose
+    heading carries their dots while it is collapsed; a specialist's row has no **New Task…** or
+    **Move to Section** and can't be dragged into a section, and the heading has no menu and takes
+    no drops. A specialist keeps its section, which it is back in as an agent. New Bot and Edit Bot
+    have a segmented **Role** (Agent | Specialist), after Kind or first, for local bots; saving an
+    agent with jobs on as a specialist asks first ("Make <name> a Specialist?": "Its N scheduled
+    jobs pause until it's an Agent again."). Every place that picks a task's or a job's agent, or
+    offers a task (Start Task with, Continue with, Fix with, Review with, New Task in the menu bar,
+    the chat and the tasks' column, New Job), lists or offers agents only; a specialist's job
+    shows its owner in the job editor, and Jobs' agent filter keeps a specialist while it owns
+    (paused) jobs. Its status sidebar lists those jobs, without **New Job…**.
   - **Deliveries:** a bot hands the owner something on purpose with `botchu-inbox send` (the same
     helper under a third name, found from the conversation's environment as the others are): its
     `--purpose` (`needs-input`, a decision, access or information the bot can't go on without, with
@@ -589,8 +629,8 @@ on that pull request's branch to continue in instead). The same command run agai
     double-click): its runs, newest first, each with the time it was for and the time it started,
     how late that was, how long it took, what it ran on and its transcript, live while it runs (its
     task's conversation, below, with **Open Task**).
-    Opening Jobs or a history never runs anything. An agent's card in **Agents** counts its jobs
-    (opening Jobs filtered to it) and its menu has **New Job…**; its status sidebar's **Activity**
+    Opening Jobs or a history never runs anything. An agent's row in **Agents** counts its jobs
+    and its menu has **New Job…** and **Show Jobs** (Jobs filtered to it); its status sidebar's **Activity**
     lists them under its tasks, with **New Job…** and **All Jobs**. The editor sets the agent (chosen
     already from an agent's own places, and fixed once the job exists), the account, model and
     reasoning effort its runs use (**Same as** the agent, as they are when each run starts, until
@@ -769,6 +809,17 @@ on that pull request's branch to continue in instead). The same command run agai
     including custom CLI profiles; the next message starts a session on that account. Other tasks
     keep their accounts. Switching CLI families resets model and effort choices. For known
     Antigravity models, effort also selects the matching model-ID suffix.
+  - **Fast (Codex):** a lightning bolt beside the effort button, and a **Fast** switch under
+    Reasoning in the **Runs on** card, turn Codex's Fast tier on or off for the shown Home or task
+    conversation (#249): quicker replies that use more of the allowance. The bolt is filled and
+    tinted while it is on. It shows for a Codex model whose profile's list gives it the Fast tier
+    (`model/list`'s `serviceTiers`), for the starters, which all have it, and for the default and
+    custom IDs, which Codex judges itself. Every Codex turn says which tier to use,
+    `-c service_tier="fast"` or `"default"` (standard), so the profile's own `service_tier` (Codex's
+    `/fast`) never decides it; a bot saved before #249 has it off. A task and a sub-agent start with
+    their bot's choice, and a scheduled job's runs use their agent's. Choosing a model without the
+    tier, or another CLI family, turns it off, and it waits until the conversation's turn ends, as
+    the other controls do.
   - **The bot's folder is the bot:** BotChu keeps each bot's settings (`bot.json`), its whole
     conversation (`thread.jsonl`, one message per line, with its index beside it,
     `thread.index.json`: see **Loading**), its tasks (`tasks/<id>/`: `task.json` with
@@ -1412,7 +1463,8 @@ on that pull request's branch to continue in instead). The same command run agai
     chosen model's estimate; reports: their titles (typed, or from the first line), who sees them, app state, the size of their window's screenshot, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, a CLI's end (#145: one still
     running after it said its turn ended is ended with its turn standing, one that takes input only
-    once its input is closed, one that carries on is left alone, and Stop kills one that ignores
+    once its input is closed, one that carries on is left alone, one waiting for its background
+    tasks is left until they end or 2 hours pass (#255), and Stop kills one that ignores
     SIGINT and SIGTERM, with a process it started), thread summaries, the Markdown cache
     within its budget (ten 128 KB replies written in revisions, then memory pressure), replies being
     written parsed off the main thread (100 rapid deltas coalesced, the worker's limit shared, a slow
@@ -1694,6 +1746,7 @@ on that pull request's branch to continue in instead). The same command run agai
   binary itself, and each turn can wait in Sail's Flex queue). To exercise explicit generation
   settings, prefix the command with `BOTCHU_SMOKE_EFFORT=low` and optionally
   `BOTCHU_SMOKE_MODEL=<model id>`; both settings apply to the new and resumed turns.
+  `BOTCHU_SMOKE_FAST=1` runs both Codex turns on the Fast tier.
   To test image delivery, set `BOTCHU_SMOKE_IMAGE=/absolute/path/to/fixture.png` and optionally
   `BOTCHU_SMOKE_IMAGE_EXPECT=<word visible in the image>`; both turns attach the fixture and must
   read that word as well as recall the session's code word.
@@ -1758,7 +1811,8 @@ on that pull request's branch to continue in instead). The same command run agai
   are ignored outside throwaway data runs. `BOTCHU_PROFILE="<name>|<family>|<command>"` (several
   separated by `;`, `family` one of `claude`, `codex`, `antigravity`, `muse`, `pi`) adds CLI
   profiles to the run, such as one with a long name or a command that isn't installed.
-  `BOTCHU_ACCOUNT`, `BOTCHU_MODEL` and `BOTCHU_EFFORT` set the first demo bot's generation choices;
+  `BOTCHU_ACCOUNT`, `BOTCHU_MODEL` and `BOTCHU_EFFORT` set the first demo bot's generation choices,
+  and `BOTCHU_FAST=1` turns its Fast on;
   `BOTCHU_DEFAULT_MODEL` supplies an isolated OpenRouter default. `BOTCHU_OPEN=model` or `effort`
   opens the composer's picker, and `inspector-model` or `inspector-effort` opens the sidebar's.
   `BOTCHU_INSPECTOR=activity`, `subagents`, `model`, `session` or `memory` selects a status sidebar tab;

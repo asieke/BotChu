@@ -159,9 +159,15 @@ private final class HandoffFixture {
             #expect(refused.code != 0)
         }
         #expect(fixture.ipc.pendingRequests().isEmpty)
-        try fixture.ipc.writeRoster([BotRosterEntry(bot: Bot(name: "Worker", workspace: "/tmp/worker"))])
+        try fixture.ipc.writeRoster([BotRosterEntry(bot: Bot(name: "Worker", workspace: "/tmp/worker")),
+                                     BotRosterEntry(bot: Bot(name: "Lawyer", workspace: "/tmp/lawyer", role: .specialist))])
         let roster = try fixture.run("botchu-task", ["list"])
         #expect(roster.code == 0 && roster.output.contains("worker — Worker"))
+        // A specialist can't own a Task (#250): botchu-task leaves it out, botchu-subagent marks it.
+        #expect(!roster.output.contains("Lawyer"))
+        let subagents = try fixture.run("botchu-subagent", ["list"]).output.split(separator: "\n")
+        #expect(subagents.contains { $0.contains("worker — Worker") && !$0.contains("specialist") })
+        #expect(subagents.contains { $0.contains("lawyer — Lawyer") && $0.hasSuffix("[specialist: sub-agent only]") })
     }
 
     @Test func handoffsAreReadCheckedAndRecognizedWhenAskedAgain() throws {

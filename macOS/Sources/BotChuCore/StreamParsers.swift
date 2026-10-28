@@ -63,8 +63,18 @@ public struct ClaudeParser: StreamParser {
     private var textBlocks: Set<Int> = []
     private var toolNames: [String: String] = [:]
     private var reportedModel: String?
+    /// What each tool call made to run in the background does, until its task starts; then what
+    /// each task does. The background tasks running, in the order Claude Code lists them.
+    private var backgroundCalls: [String: BotActivity] = [:]
+    private var taskActivities: [String: BotActivity] = [:]
+    private var backgroundTasks: [String] = []
 
     public init() {}
+
+    /// What the background tasks running do; one whose call isn't known yet is `working`.
+    private var runningInBackground: AgentEvent {
+        .backgroundTasks(backgroundTasks.map { taskActivities[$0] ?? .working })
+    }
 
     public mutating func parse(line: String) -> [AgentEvent] {
         guard let obj = decode(line), let type = obj["type"] as? String else { return [] }
@@ -73,8 +83,22 @@ public struct ClaudeParser: StreamParser {
         switch type {
         case "system":
             // The init also says which connectors the session has, as they stood when it started.
-            if obj["subtype"] as? String == "init", let id = obj["session_id"] as? String {
-                return [.session(id)] + (ConnectorParser.claudeInit(obj).map { [.connectors($0)] } ?? [])
+            switch obj["subtype"] as? String {
+            case "init":
+                if let id = obj["session_id"] as? String {
+                    return [.session(id)] + (ConnectorParser.claudeInit(obj).map { [.connectors($0)] } ?? [])
+                }
+            case "background_tasks_changed":
+                backgroundTasks = (obj["tasks"] as? [JSON] ?? []).compactMap { $0["task_id"] as? String }
+                taskActivities = taskActivities.filter { backgroundTasks.contains($0.key) }
+                return [runningInBackground]
+            case "task_started":
+                // It comes just after the change that lists its task.
+                guard let task = obj["task_id"] as? String, let call = obj["tool_use_id"] as? String,
+                      let activity = backgroundCalls.removeValue(forKey: call) else { return [] }
+                taskActivities[task] = activity
+                if backgroundTasks.contains(task) { return [runningInBackground] }
+            default: break
             }
         case "stream_event":
             guard let event = obj["event"] as? JSON, let eventType = event["type"] as? String else { return [] }
@@ -114,7 +138,11 @@ public struct ClaudeParser: StreamParser {
                     let id = block["id"] as? String ?? UUID().uuidString
                     let name = block["name"] as? String ?? "Tool"
                     toolNames[id] = name
-                    events.append(.toolStarted(id: id, name: name, input: summarizeToolInput(block["input"]),
+                    let input = summarizeToolInput(block["input"])
+                    if (block["input"] as? JSON)?["run_in_background"] as? Bool == true {
+                        backgroundCalls[id] = BotActivity.classify(toolName: name, input: input)
+                    }
+                    events.append(.toolStarted(id: id, name: name, input: input,
                                                arguments: ToolArguments.digest(block["input"])))
                 default: break
                 }
@@ -134,7 +162,8 @@ public struct ClaudeParser: StreamParser {
                 let reason = (obj["result"] as? String) ?? (obj["errors"] as? [String])?.joined(separator: "\n")
                 return [.failed(reason?.isEmpty == false ? reason! : "Claude Code stopped with \(obj["subtype"] as? String ?? "an error").")]
             }
-            return [.finished]
+            // Its turn ended with background tasks running: it waits for them, doing what they do.
+            return backgroundTasks.isEmpty ? [.finished] : [.finished, runningInBackground]
         default: break
         }
         return []

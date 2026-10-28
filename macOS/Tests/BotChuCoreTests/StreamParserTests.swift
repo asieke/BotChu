@@ -110,6 +110,28 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         #expect(events.contains { if case .toolFinished(_, _, _, true, _) = $0 { true } else { false } })
         guard case .failed = events.last else { Issue.record("Expected a failed result, got \(String(describing: events.last))"); return }
     }
+
+    /// #255: a turn that ends with a test run going in the background says so after its end, so
+    /// BotChu keeps the CLI waiting for it, doing what it does; the new turn that follows its end
+    /// starts with a session event.
+    @Test func aTurnEndingWithBackgroundTasksSaysWhatTheyDo() {
+        let events = run(.claude, ClaudeInputSamples.backgroundTask)
+        let shape = events.compactMap { event -> String? in
+            switch event {
+            case .session: "session"
+            case .toolStarted: "tool"
+            case .toolFinished: "result"
+            case .text(let text): "text:\(text)"
+            case .finished: "finished"
+            case .backgroundTasks(let tasks): "background:\(tasks.map(\.rawValue))"
+            default: nil
+            }
+        }
+        #expect(shape == [
+            "session", "tool", #"background:["working"]"#, #"background:["testing"]"#, "result", "text:started",
+            "finished", #"background:["testing"]"#, "background:[]", "session", "text:finished", "finished",
+        ])
+    }
 }
 
 @Suite struct CodexParserTests {

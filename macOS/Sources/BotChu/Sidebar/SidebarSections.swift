@@ -10,6 +10,15 @@ extension AppModel {
     /// The bots as the sidebar groups them.
     var botSections: BotSections { BotSections(order: bots.map(\.id), membership: sections) }
 
+    /// The owner's sections as the sidebar and Agents show them: the agents only (#250). A
+    /// specialist keeps its section, which it is back in when it is an agent again.
+    var agentSections: BotSections {
+        BotSections(order: bots.filter { !$0.isSpecialist }.map(\.id), membership: sections)
+    }
+
+    /// The specialists, in sidebar order, listed together after the sections (#250).
+    var specialists: [Bot] { bots.filter(\.isSpecialist) }
+
     /// Puts a bot in the section `name` names, last among its bots (a new name starts a section), or
     /// in none with nil.
     func moveBot(_ id: UUID, toSection name: String?) {
@@ -22,6 +31,7 @@ extension AppModel {
     /// none with nil, just before its bot `next`, or last in it with nil (#231). A drop that changes
     /// nothing saves nothing.
     func dropBot(_ id: UUID, inSection name: String?, before next: UUID?) {
+        guard bot(id)?.isSpecialist != true else { return }
         let before = botSections
         var layout = before
         layout.move(id, to: name, before: next)
@@ -48,10 +58,20 @@ extension AppModel {
         arrange(layout)
     }
 
-    /// Moves a section up (offset -1) or down (+1) among the sections.
+    /// Moves a section up (offset -1) or down (+1) among the sections shown, past any that only
+    /// specialists are in (#250).
     func moveSection(_ name: String, by offset: Int) {
         var layout = botSections
-        layout.moveSection(name, by: offset)
+        let specialists = Set(specialists.map(\.id))
+        func shown(_ layout: BotSections) -> Int? {
+            BotSections(order: layout.order.filter { !specialists.contains($0) }, membership: layout.membership).names.firstIndex(of: name)
+        }
+        let start = shown(layout)
+        repeat {
+            let before = layout
+            layout.moveSection(name, by: offset)
+            if layout == before { break }
+        } while start != nil && shown(layout) == start
         arrange(layout)
     }
 
@@ -207,7 +227,7 @@ struct MoveToSectionItems: View {
     var body: some View {
         // Toggles, not an inline picker, which would add separators of its own around them.
         Toggle(BotSections.unsectioned, isOn: isIn(nil))
-        ForEach(model.botSections.names, id: \.self) { name in
+        ForEach(model.agentSections.names, id: \.self) { name in
             Toggle(name, isOn: isIn(name))
         }
         Divider()
@@ -239,7 +259,7 @@ struct SectionMenuItems: View {
     let rename: (String) -> Void
 
     var body: some View {
-        let names = model.botSections.names
+        let names = model.agentSections.names
         let index = names.firstIndex(of: name) ?? 0
         Button("Rename Section…") { rename(name) }
         Button("Move Section Up") { model.moveSection(name, by: -1) }

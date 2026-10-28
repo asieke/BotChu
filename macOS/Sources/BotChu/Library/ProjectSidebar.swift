@@ -172,7 +172,7 @@ struct ProjectOverviewTab: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 // With no agent to start a task, the action makes one (#232).
-                if model.bots.contains(where: { !$0.isRemoteQueue }) {
+                if !model.taskOwners.isEmpty {
                     BotMenu(title: "Start Task with", systemImage: "plus") { model.newTask(for: $0, repo: repo.id) }
                         .buttonStyle(InspectorButtonStyle(prominent: true, fill: true))
                         .help("Choose an agent, then what it works on, in New Task")
@@ -799,7 +799,8 @@ private struct ReviewStateTag: View {
     }
 }
 
-/// A menu of the bots, by emoji and name, that does something with the one chosen.
+/// A menu of the agents that can own a task (`taskOwners`), by emoji and name, that does something
+/// with the one chosen.
 struct BotMenu: View {
     @Environment(AppModel.self) private var model
     let title: String
@@ -808,18 +809,18 @@ struct BotMenu: View {
 
     var body: some View {
         Menu {
-            ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id) } }
+            ForEach(model.taskOwners) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id) } }
         } label: {
             MenuLabel(title: title, systemImage: systemImage)
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .disabled(!model.bots.contains { !$0.isRemoteQueue })
+        .disabled(model.taskOwners.isEmpty)
     }
 }
 
-/// A menu of the bots, twice: to review in the conversation only, or also to post the review on
-/// GitHub (`true`).
+/// A menu of the agents that can own a task, twice: to review in the conversation only, or also to
+/// post the review on GitHub (`true`).
 struct ReviewMenu: View {
     @Environment(AppModel.self) private var model
     let title: String
@@ -828,17 +829,17 @@ struct ReviewMenu: View {
     var body: some View {
         Menu {
             Section("Review with") {
-                ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id, false) } }
+                ForEach(model.taskOwners) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id, false) } }
             }
             Section("Review and comment with") {
-                ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id, true) } }
+                ForEach(model.taskOwners) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id, true) } }
             }
         } label: {
             MenuLabel(title: title, systemImage: "eye")
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .disabled(!model.bots.contains { !$0.isRemoteQueue })
+        .disabled(model.taskOwners.isEmpty)
     }
 }
 

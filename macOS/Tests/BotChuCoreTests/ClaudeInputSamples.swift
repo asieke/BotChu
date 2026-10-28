@@ -31,4 +31,26 @@ enum ClaudeInputSamples {
         #"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]},"parent_tool_use_id":null,"session_id":"6e1f0a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b","uuid":"4db3d347-f7dc-407e-8c5e-3dbc356faa91","timestamp":"2026-10-27T16:08:02.638Z"}"#,
         #"{"duration_api_ms":1307,"stop_reason":"tool_use","session_id":"6e1f0a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b","total_cost_usd":0.00167045,"permission_denials":[],"terminal_reason":"aborted_tools","fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required","safety_stops":0,"is_error":true,"num_turns":3,"subtype":"error_during_execution","errors":["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"],"type":"result","duration_ms":12331,"uuid":"d2504843-6207-473b-99ba-420952f7fd43","queued_turn_count":0,"result_index":0}"#,
     ]
+
+    /// #255, Claude Code 2.1.312 from `claude-dev` on 2026-10-28, its stdin closed after its first
+    /// result as BotChu closes it: a Bash call run in the background, a reply, and the result. The
+    /// CLI goes on running; once the task ends (here 11 s later, failing) it starts a new turn of its
+    /// own and replies again, then exits. Partial-message stream events, rate-limit and status lines,
+    /// the init's tool list, and usage and request fields are left out; the session id is made up.
+    static let backgroundTask = [
+        #"{"type":"system","subtype":"init","cwd":"/tmp/probe","session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47","model":"claude-haiku-5-5"}"#,
+        #"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Use the Bash tool with run_in_background set to true to run exactly: sleep 12 && pytest --version. Then reply only 'started'. When you are notified that it finished, reply only 'finished'."}]},"session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47","parent_tool_use_id":null,"isReplay":true}"#,
+        #"{"type":"assistant","message":{"model":"claude-haiku-5-5","id":"msg_011CgUtyMtoTRNEuU9aWS5pa","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_01MPfwVxFtApiefihWymBev9","name":"Bash","input":{"command":"sleep 12 && pytest --version","description":"Wait 12 seconds then print pytest version","run_in_background":true},"caller":{"type":"direct"}}]},"parent_tool_use_id":null,"session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47"}"#,
+        #"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"b3wskja51","run_id":"0mvsaftdq-c04c9409","task_type":"local_bash","description":"Wait 12 seconds then print pytest version"}],"session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47"}"#,
+        #"{"type":"system","subtype":"task_started","task_id":"b3wskja51","run_id":"0mvsaftdq-c04c9409","tool_use_id":"toolu_01MPfwVxFtApiefihWymBev9","description":"Wait 12 seconds then print pytest version","is_backgrounded":true,"task_type":"local_bash","session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47"}"#,
+        #"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01MPfwVxFtApiefihWymBev9","type":"tool_result","content":"Command running in background with ID: b3wskja51. Output is being written to: /tmp/claude/-tmp-probe/7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47/tasks/b3wskja51.output. You will be notified when it completes. To check interim output, use Read on that file path.","is_error":false}]},"parent_tool_use_id":null,"session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47"}"#,
+        #"{"type":"assistant","message":{"model":"claude-haiku-5-5","id":"msg_011CgUtyUvxnfMqWcegN2zgw","type":"message","role":"assistant","content":[{"type":"text","text":"started"}]},"parent_tool_use_id":null,"session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47"}"#,
+        #"{"type":"result","subtype":"success","is_error":false,"result":"started","stop_reason":"end_turn","session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47","num_turns":2}"#,
+        #"{"type":"system","subtype":"task_updated","task_id":"b3wskja51","run_id":"0mvsaftdq-c04c9409","patch":{"status":"failed","end_time":1793202461547},"session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47"}"#,
+        #"{"type":"system","subtype":"task_notification","task_id":"b3wskja51","run_id":"0mvsaftdq-c04c9409","tool_use_id":"toolu_01MPfwVxFtApiefihWymBev9","status":"failed","output_file":"/tmp/claude/-tmp-probe/7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47/tasks/b3wskja51.output","summary":"Background command \"Wait 12 seconds then print pytest version\" failed with exit code 127","session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47"}"#,
+        #"{"type":"system","subtype":"background_tasks_changed","tasks":[],"session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47"}"#,
+        #"{"type":"system","subtype":"init","cwd":"/tmp/probe","session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47","model":"claude-haiku-5-5"}"#,
+        #"{"type":"assistant","message":{"model":"claude-haiku-5-5","id":"msg_011CgUtzNWHj2XjxbgMHD279","type":"message","role":"assistant","content":[{"type":"text","text":"finished"}]},"parent_tool_use_id":null,"session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47"}"#,
+        #"{"type":"result","subtype":"success","is_error":false,"result":"finished","stop_reason":"end_turn","session_id":"7c1d9e2a-4b3f-4a6e-8d5c-2f0e1a9b3c47","num_turns":1}"#,
+    ]
 }

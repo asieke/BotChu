@@ -104,13 +104,15 @@ public enum CommandBuilder {
     /// The arguments for one turn. `sessionID` is the session to resume, or nil to start one;
     /// `newID` makes the ids of sessions BotChu names itself (Claude, Muse, Pi, Sail) testable.
     /// `liveInput` gives a CLI that takes input mid-turn its prompt on stdin, which stays open.
-    /// `openRouterKey` and `sailKey` reach only Pi and Sail, through their environment.
+    /// `openRouterKey` and `sailKey` reach only Pi and Sail, through their environment. `fast` is
+    /// Codex's Fast tier (#249).
     public static func invocation(
         kind: AgentKind,
         prompt: String,
         model: String?,
         sessionID: String?,
         reasoningEffort: ReasoningEffort? = nil,
+        fast: Bool = false,
         openRouterKey: String? = nil,
         sailKey: String? = nil,
         liveInput: Bool = false,
@@ -145,6 +147,9 @@ public enum CommandBuilder {
             args += ["--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"]
             if let model { args += ["-m", model] }
             if let effort { args += ["-c", "model_reasoning_effort=\"\(effort)\""] }
+            // Always one or the other, so the profile's own `service_tier` (`/fast` in Codex) never
+            // decides what the conversation's Fast switch shows: `default` is Codex's standard tier.
+            args += ["-c", "service_tier=\"\(fast ? "fast" : "default")\""]
             args.append(prompt)
         case .antigravity:
             args = ["-p", prompt, "--output-format", "stream-json", "--dangerously-skip-permissions"]

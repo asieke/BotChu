@@ -7,6 +7,7 @@ struct SidebarView: View {
     @State private var pendingDelete: Bot?
     @State private var naming = SectionNaming()
     @AppStorage(CollapsedSections.storageKey) private var collapsed = CollapsedSections()
+    @AppStorage("sidebar.specialistsExpanded") private var specialistsExpanded = false
 
     var body: some View {
         List(selection: Binding<SidebarDestination?>(
@@ -25,15 +26,13 @@ struct SidebarView: View {
                         .tag(SidebarDestination.library(destination))
                 }
             }
-            // The bots in no section, under Conversations, then each section the owner made. One row
-            // per bot: its Home and tasks are the tabs beside the chat (#128).
-            ForEach(model.botSections.groups) { group in
+            // The agents in no section, under Conversations, then each section the owner made. One
+            // row per bot: its Home and tasks are the tabs beside the chat (#128).
+            let specialists = model.specialists
+            ForEach(model.agentSections.groups.filter { !$0.botIDs.isEmpty || specialists.isEmpty }) { group in
                 Section(isExpanded: isExpanded(group)) {
                     ForEach(group.botIDs.compactMap(model.bot)) { bot in
-                        BotRow(bot: bot, status: model.status(of: bot), summary: model.botRowSummary(of: bot),
-                               selected: model.visibleBotID == bot.id)
-                            .tag(SidebarDestination.bot(bot.id))
-                            .accessibilityIdentifier("sidebar-bot-\(bot.id)")
+                        row(bot)
                             .contextMenu {
                                 Button("Edit…") { model.edit(bot.id) }
                                 if !bot.isRemoteQueue {
@@ -62,11 +61,41 @@ struct SidebarView: View {
                         }
                 }
             }
+            // The specialists, last and collapsed until opened (#250): only called as sub-agents, so
+            // they start no tasks, aren't moved into sections, and take no drops.
+            if !specialists.isEmpty {
+                Section(isExpanded: $specialistsExpanded) {
+                    ForEach(specialists) { bot in
+                        row(bot)
+                            .contextMenu {
+                                Button("Edit…") { model.edit(bot.id) }
+                                Button("New Session") { model.newSession(.home(bot.id)) }
+                                    .disabled(model.isRunning(.home(bot.id)))
+                                Button("Show Workspace in Finder") { model.revealWorkspace(bot.id) }
+                                Divider()
+                                Button("Delete…", role: .destructive) { pendingDelete = bot }
+                            }
+                    }
+                } header: {
+                    HStack {
+                        Text("Specialists")
+                        Spacer(minLength: 0)
+                        // While collapsed, what its busy specialists are doing, as their rows' dots.
+                        if !specialistsExpanded {
+                            let summary = BotRowSummary(merging: specialists.map { ($0.name, model.botRowSummary(of: $0)) })
+                            if !summary.dots.isEmpty { BotRowDots(summary: summary) }
+                        }
+                    }
+                    .accessibilityIdentifier("sidebar-specialists")
+                }
+            }
         }
         .listStyle(.sidebar)
         // What is selected from elsewhere (Agents, a new bot or task, ⌃Tab) shows, in its section.
         .onChange(of: model.sidebarSelection) { _, selection in
-            if let id = selection?.botID { reveal(model.sections[id] ?? BotSections.unsectioned) }
+            guard let id = selection?.botID else { return }
+            if model.bot(id)?.isSpecialist == true { specialistsExpanded = true }
+            else { reveal(model.sections[id] ?? BotSections.unsectioned) }
         }
         // Above New Bot, while the sidebar's changes aren't saved.
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -86,20 +115,15 @@ struct SidebarView: View {
             .padding(.vertical, 10)
         }
         .modifier(SidebarShade())
-        .confirmationDialog("Delete \(pendingDelete?.name ?? "bot")?", isPresented: Binding(
-            get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { bot in
-            Button("Delete", role: .destructive) { model.delete(bot.id) }
-        } message: { bot in
-            let jobs = model.jobs.jobs(of: bot.id).count
-            if bot.isRemoteQueue {
-                Text("Its conversation and waiting remote messages are deleted. Its connection stops.")
-            } else {
-            Text("Its conversation and tasks are deleted"
-                 + (jobs == 0 ? "" : ", and its \(jobs == 1 ? "scheduled job stops and is" : "\(jobs) scheduled jobs stop and are") deleted with them")
-                 + ". Its workspace folder, \(bot.workspace), and its tasks' worktrees are kept.")
-            }
-        }
+        .botDeletionDialog($pendingDelete)
         .sectionNamingAlert($naming)
+    }
+
+    private func row(_ bot: Bot) -> some View {
+        BotRow(bot: bot, status: model.status(of: bot), summary: model.botRowSummary(of: bot),
+               selected: model.visibleBotID == bot.id)
+            .tag(SidebarDestination.bot(bot.id))
+            .accessibilityIdentifier("sidebar-bot-\(bot.id)")
     }
 
     private func isExpanded(_ group: BotSections.Group) -> Binding<Bool> {
@@ -118,6 +142,32 @@ struct SidebarView: View {
         let shown = group.botIDs.filter { model.bot($0) != nil }
         let next = shown.indices.contains(index) ? shown[index] : nil
         _ = BotDrag.load(providers) { model.dropBot($0, inSection: group.name, before: next) }
+    }
+}
+
+extension View {
+    /// Asks before deleting the bot `pending` holds, saying what goes with it and what is kept.
+    func botDeletionDialog(_ pending: Binding<Bot?>) -> some View { modifier(BotDeletionDialog(pending: pending)) }
+}
+
+struct BotDeletionDialog: ViewModifier {
+    @Environment(AppModel.self) private var model
+    @Binding var pending: Bot?
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog("Delete \(pending?.name ?? "bot")?", isPresented: Binding(
+            get: { pending != nil }, set: { if !$0 { pending = nil } }), presenting: pending) { bot in
+            Button("Delete", role: .destructive) { model.delete(bot.id) }
+        } message: { bot in
+            let jobs = model.jobs.jobs(of: bot.id).count
+            if bot.isRemoteQueue {
+                Text("Its conversation and waiting remote messages are deleted. Its connection stops.")
+            } else {
+            Text("Its conversation and tasks are deleted"
+                 + (jobs == 0 ? "" : ", and its \(jobs == 1 ? "scheduled job stops and is" : "\(jobs) scheduled jobs stop and are") deleted with them")
+                 + ". Its workspace folder, \(bot.workspace), and its tasks' worktrees are kept.")
+            }
+        }
     }
 }
 

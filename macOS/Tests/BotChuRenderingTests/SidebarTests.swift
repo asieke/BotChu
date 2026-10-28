@@ -548,14 +548,14 @@ extension RenderingTests {
                 try agentsCapture(window, into: URL(fileURLWithPath: path), name: name)
             }
         }
-        // A card's Move to Section is the sidebar's, with its own section checked.
-        let card = NSHostingView(rootView: AgentCardHarness(bot: bot).environment(model).defaultAppStorage(fixture.defaults))
-        window.contentView = card
-        window.setContentSize(NSSize(width: 360, height: 340))
+        // A row's Move to Section is the sidebar's, with its own section checked.
+        let row = NSHostingView(rootView: AgentRowHarness(bot: bot).environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = row
+        window.setContentSize(NSSize(width: 1000, height: 100))
         window.makeKeyAndOrderFront(nil)
         try await Task.sleep(for: .milliseconds(250))
         func moveMenu() throws -> NSMenu {
-            try #require(try agentsMenu(at: NSPoint(x: card.bounds.midX, y: card.bounds.midY), in: card)
+            try #require(try agentsMenu(at: NSPoint(x: 40, y: row.bounds.midY), in: row)
                 .items.first { $0.title == "Move to Section" }?.submenu)
         }
         let move = try moveMenu()
@@ -773,6 +773,163 @@ extension RenderingTests {
          a.blueComponent - b.blueComponent, a.alphaComponent - b.alphaComponent].allSatisfy { abs($0) < 0.02 }
     }
 
+    /// #250: specialists leave the owner's sections for one Specialists section, last and collapsed
+    /// until opened, whose heading has no menu and takes no drops. A specialist's row has no New
+    /// Task… or Move to Section and gives no drag; showing one opens the section. Its section is
+    /// kept, so it is back in it as an agent.
+    @Test func specialistsAreLastInTheSidebarCollapsedWithoutTaskActions() async throws {
+        _ = NSApplication.shared
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot
+        model.moveBot(fixture.quiet.id, toSection: "Research")
+        var quiet = try #require(model.bot(fixture.quiet.id))
+        quiet.role = .specialist
+        model.update(quiet)
+        #expect(model.agentSections.groups == [.init(name: nil, botIDs: [bot.id])])
+        #expect(model.specialists.map(\.id) == [quiet.id])
+        #expect(model.sections[quiet.id] == "Research")
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 640),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let host = NSHostingView(rootView: SidebarView().environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        let outline = try #require(sidebarTable(in: host) as? NSOutlineView)
+        let source = try #require(outline.dataSource)
+        func headings() -> [Int] { (0..<outline.numberOfRows).filter { outline.level(forRow: $0) == 0 } }
+        // Workspace, Conversations with the agent, then Specialists, collapsed: its row is hidden.
+        #expect(headings().count == 3)
+        #expect(outline.numberOfRows == firstBotRow + 2)
+        #expect(headings().last == outline.numberOfRows - 1)
+        #expect(!fixture.defaults.bool(forKey: "sidebar.specialistsExpanded"))
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            DevHooks.snapshotSidebar(model: model, into: URL(fileURLWithPath: path).appendingPathComponent("sidebar-specialists"))
+        }
+        // Its heading has no section menu and takes no bot, dropped on it or among its rows.
+        let specialistsHeading = try #require(headings().last)
+        #expect(try sidebarMenuIfAny(row: specialistsHeading, of: outline, in: host)?.items.contains { $0.title == "Rename Section…" } != true)
+        let headingRow = try #require(outline.rowView(atRow: specialistsHeading, makeIfNecessary: true))
+        #expect(dropTarget(in: headingRow) == nil)
+        let board = NSPasteboard(name: .init("BotChu.SidebarTests.\(UUID().uuidString)"))
+        board.clearContents()
+        board.setData(BotSections.dragPayload(bot.id), forType: .init(BotDrag.contentType.identifier))
+        #expect(source.outlineView?(outline, validateDrop: SidebarDrag(board, in: window),
+                                    proposedItem: outline.item(atRow: specialistsHeading), proposedChildIndex: 0) == [])
+        // Opened, its specialist's menu starts no task and moves it nowhere, and its row gives no drag.
+        fixture.defaults.set(true, forKey: "sidebar.specialistsExpanded")
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(outline.numberOfRows == firstBotRow + 3)
+        let menu = try sidebarMenu(row: outline.numberOfRows - 1, of: outline, in: host)
+        #expect(menu.items.map(\.title) == ["Edit…", "New Session", "Show Workspace in Finder", "", "Delete…"])
+        let item = try #require(outline.item(atRow: outline.numberOfRows - 1))
+        #expect(source.outlineView?(outline, pasteboardWriterForItem: item) == nil)
+        // An agent's menu still has them.
+        let agentMenu = try sidebarMenu(row: firstBotRow, of: outline, in: host)
+        #expect(agentMenu.items.map(\.title).contains("New Task…") && agentMenu.items.map(\.title).contains("Move to Section"))
+        // A specialist dropped on a section stays out of it.
+        model.dropBot(quiet.id, inSection: nil, before: bot.id)
+        #expect(model.sections[quiet.id] == "Research")
+        // Collapsed again, showing the specialist opens it.
+        fixture.defaults.set(false, forKey: "sidebar.specialistsExpanded")
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(outline.numberOfRows == firstBotRow + 2)
+        model.show(.home(quiet.id))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(fixture.defaults.bool(forKey: "sidebar.specialistsExpanded"))
+        #expect(outline.numberOfRows == firstBotRow + 3)
+        // An agent again, it is back in its section, and Specialists is gone.
+        quiet.role = .agent
+        model.update(quiet)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(model.agentSections.groups == [.init(name: nil, botIDs: [bot.id]), .init(name: "Research", botIDs: [quiet.id])])
+        #expect(headings().count == 3)
+        #expect(outline.numberOfRows == firstBotRow + 3)
+    }
+
+    /// #250: Agents is a table per section, then the specialists' table with New Specialist; the
+    /// top count and the sections' tables are the agents'. A search finds specialists as agents. A
+    /// specialist's row has no task counts and its menu no task, job or section actions.
+    @Test func agentsShowsAgentsAndSpecialistsInSeparateTables() async throws {
+        _ = NSApplication.shared
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot
+        var quiet = fixture.quiet
+        quiet.role = .specialist
+        model.update(quiet)
+        quiet = try #require(model.bot(quiet.id))
+        #expect(AgentsView.groups(in: model, matching: "") == [.init(name: nil, botIDs: [bot.id])])
+        #expect(AgentsView.specialists(in: model, matching: "").map(\.id) == [quiet.id])
+        #expect(AgentsView.groups(in: model, matching: "scout").isEmpty)
+        #expect(AgentsView.specialists(in: model, matching: "scout").map(\.id) == [quiet.id])
+        #expect(AgentsView.specialists(in: model, matching: "SPECIAL").map(\.id) == [quiet.id])
+        #expect(AgentsView.specialists(in: model, matching: "10x").isEmpty)
+        // Tasks · Jobs: the agent's three open tasks and no jobs; nothing for the specialist.
+        #expect(AgentTableRow.counts(of: bot, in: model) == "3 · 0")
+        #expect(AgentTableRow.counts(of: quiet, in: model) == nil)
+        // Columns: all of them wide; narrower, counts go and status folds, then account is its mark.
+        #expect(AgentColumns(width: 1000).showsCounts && !AgentColumns(width: 1000).statusInName)
+        #expect(!AgentColumns(width: 979).showsCounts && AgentColumns(width: 979).statusInName && !AgentColumns(width: 979).accountMarkOnly)
+        #expect(AgentColumns(width: 779).accountMarkOnly && AgentColumns(width: 779).account == 40 && !AgentColumns(width: 779).effortGlyphOnly)
+        #expect(AgentColumns(width: 679).effortGlyphOnly)
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let gallery = NSHostingView(rootView: AgentsView().environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = gallery
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(400))
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            for (name, width) in [("agents-specialists", 1000.0), ("agents-specialists-900", 900.0), ("agents-specialists-700", 700.0)] {
+                window.setContentSize(NSSize(width: width, height: 700))
+                try await Task.sleep(for: .milliseconds(300))
+                try agentsCapture(window, into: URL(fileURLWithPath: path), name: name)
+            }
+            window.setContentSize(NSSize(width: 1000, height: 700))
+        }
+        // New Agent, at the top, and New Specialist, beside its heading, open New Bot in their roles.
+        func click(across xs: [CGFloat], fromTop y: CGFloat, in host: NSView, until done: () -> Bool) async throws {
+            for x in xs where !done() {
+                let point = host.convert(NSPoint(x: x, y: host.isFlipped ? y : host.bounds.height - y), to: nil)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    let event = try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                                                                windowNumber: window.windowNumber, context: nil, eventNumber: 1,
+                                                                clickCount: 1, pressure: 1))
+                    window.sendEvent(event)
+                }
+                try await Task.sleep(for: .milliseconds(60))
+            }
+        }
+        // The page's heading is 24 points in, its button at its trailing end.
+        try await click(across: stride(from: gallery.bounds.width - 30, to: gallery.bounds.width - 200, by: -15).map { $0 },
+                        fromTop: 24 + 20, in: gallery) { model.editor != nil }
+        #expect(model.editor?.isNew == true && model.editor?.bot.role == .agent)
+        model.editor = nil
+        let heading = NSHostingView(rootView: SpecialistsHeading(count: 1).frame(width: 420, height: 44)
+            .environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = heading
+        try await Task.sleep(for: .milliseconds(250))
+        try await click(across: stride(from: 130, to: 400, by: 12).map { $0 }, fromTop: 22, in: heading) { model.editor != nil }
+        #expect(model.editor?.isNew == true && model.editor?.bot.role == .specialist)
+        model.editor = nil
+
+        // A row's menu: an agent's has its task, job and section actions; a specialist's has none.
+        func rowMenu(_ bot: Bot) async throws -> [String] {
+            let row = NSHostingView(rootView: AgentRowHarness(bot: bot).environment(model).defaultAppStorage(fixture.defaults))
+            window.contentView = row
+            try await Task.sleep(for: .milliseconds(250))
+            return try agentsMenu(at: NSPoint(x: 40, y: row.bounds.midY), in: row).items.map(\.title)
+        }
+        #expect(try await rowMenu(bot) == ["Open Chat", "Edit…", "", "New Task…", "New Job…", "Show Jobs", "",
+                                           "Move to Section", "Show Workspace in Finder", "", "Delete…"])
+        #expect(try await rowMenu(quiet) == ["Open Chat", "Edit…", "", "Show Workspace in Finder", "", "Delete…"])
+    }
+
     /// The first bot's row, below the Workspace heading, its galleries and the Conversations heading.
     private var firstBotRow: Int { LibraryDestination.sidebar.count + 2 }
 
@@ -790,6 +947,21 @@ extension RenderingTests {
             view = current.superview
         }
         return try #require(menu)
+    }
+
+    /// The context menu a right click on the row shows, if any.
+    private func sidebarMenuIfAny(row: Int, of table: NSTableView, in host: NSView) throws -> NSMenu? {
+        let rowView = try #require(table.rowView(atRow: row, makeIfNecessary: false))
+        let point = rowView.convert(NSPoint(x: 60, y: rowView.bounds.midY), to: nil)
+        let event = try #require(NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                                                    windowNumber: host.window?.windowNumber ?? 0, context: nil,
+                                                    eventNumber: 0, clickCount: 1, pressure: 1))
+        var view = host.hitTest(host.convert(point, from: nil))
+        while let current = view {
+            if let menu = current.menu(for: event) { return menu }
+            view = current.superview
+        }
+        return nil
     }
 
     /// The context menu a right click at the point shows, in a view hosted alone in a window.
@@ -903,15 +1075,15 @@ private final class SidebarDrag: NSObject, NSDraggingInfo {
     }
 }
 
-/// An agent's card as Agents shows it, with the alert that names a section for it.
-private struct AgentCardHarness: View {
+/// A bot's row as Agents shows it at full width, with the alert that names a section for it.
+private struct AgentRowHarness: View {
     let bot: Bot
     @State private var naming = SectionNaming()
 
     var body: some View {
-        AgentCard(bot: bot) { naming.ask(.new(botID: bot.id)) }
-            .frame(width: 320)
-            .padding(20)
+        AgentTableRow(bot: bot, columns: AgentColumns(width: 1000), newSection: { naming.ask(.new(botID: bot.id)) }, delete: {})
+            .frame(width: 952)
+            .padding(24)
             .sectionNamingAlert($naming)
     }
 }

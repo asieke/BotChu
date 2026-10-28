@@ -57,6 +57,9 @@ import Testing
         #expect(BotActivity.next(after: .toolFinished(id: "1", name: "Read", output: "", isError: false)) == .thinking)
         #expect(BotActivity.next(after: .session("s")) == nil)
         #expect(BotActivity.next(after: .finished) == nil)
+        // #255: waiting on background tasks shows the most telling of them.
+        #expect(BotActivity.next(after: .backgroundTasks([.working, .testing])) == .testing)
+        #expect(BotActivity.next(after: .backgroundTasks([])) == nil)
     }
 
     @Test func clipsFallBackToACloseOneThenIdle() {

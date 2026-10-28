@@ -167,11 +167,13 @@ def wait_for(ids):
         time.sleep(0.25)
     return 1 if failed else 0
 
-def roster():
+def roster(tasks=False):
     for bot in read_json(ROOT / "roster.json"):
-        if bot.get("remote"):
+        # A specialist is only called as a sub-agent, so it can't get a Task.
+        if bot.get("remote") or (tasks and bot.get("specialist")):
             continue
-        print(str(bot.get("emoji", "")) + " " + bot["slug"] + " — " + bot["name"] + " — " + bot.get("title", "") + " (" + bot["id"] + ")")
+        role = " [specialist: sub-agent only]" if bot.get("specialist") else ""
+        print(str(bot.get("emoji", "")) + " " + bot["slug"] + " — " + bot["name"] + " — " + bot.get("title", "") + " (" + bot["id"] + ")" + role)
     return 0
 
 TASK_PHASES = ("pending", "created", "started", "startFailed", "failed")
@@ -262,7 +264,7 @@ def task_main():
         "conversations under the bot in BotChu's sidebar, which go on after this turn ends. For child work that "
         "returns a handoff to this turn, use botchu-subagent instead.")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("list", help="List available bots, with UUIDs for ambiguous names")
+    commands.add_parser("list", help="List the bots that can own Tasks, with UUIDs for ambiguous names")
     create = commands.add_parser("create", help="Create and start a Task under a bot")
     create.add_argument("--agent", required=True, help="The bot that gets the Task: its name, slug or UUID")
     create.add_argument("--repo", required=True, help="The repository, owner/name")
@@ -279,7 +281,7 @@ def task_main():
     status.add_argument("id")
     args = parser.parse_args()
     if args.command == "list":
-        return roster()
+        return roster(tasks=True)
     if args.command == "status":
         request_id = canonical(args.id)
         return task_report(request_id, task_result(request_id))

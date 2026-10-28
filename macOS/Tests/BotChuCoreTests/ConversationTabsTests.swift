@@ -232,6 +232,26 @@ import Testing
         #expect(quiet.dots.isEmpty && quiet.more == 0 && quiet.spokenDots.isEmpty)
     }
 
+    /// #250: a collapsed heading, such as the sidebar's Specialists, shows its bots' dots together:
+    /// the most urgent first, at most four, then +N counting the rest and each row's own +N.
+    @Test func aCollapsedHeadingShowsItsBotsDotsTogether() {
+        let working = TabState.working(.coding, since: now)
+        let idle = BotRowSummary(account: "Claude Dev", home: .idle(since: now), tasks: [])
+        let thinking = BotRowSummary(account: "Codex Work", home: working, tasks: [])
+        let asking = BotRowSummary(account: "Claude Dev", home: .needsInput(requests: 1, at: now), tasks: [(issue, working)])
+        let quiet = BotRowSummary(merging: [("Mike", idle)])
+        #expect(quiet.dots.isEmpty && quiet.more == 0 && quiet.spokenDots.isEmpty)
+        let two = BotRowSummary(merging: [("Mike", idle), ("David", thinking), ("Ann", asking)])
+        #expect(two.dots == [.needsInput, .working, .working])
+        #expect(two.more == 0)
+        #expect(two.spokenDots == "David: 1 working; Ann: 1 needs input, 1 working")
+        let full = BotRowSummary(account: "Claude Dev", home: working, tasks: Array(repeating: (issue, working), count: 5))
+        #expect(full.dots.count == 4 && full.more == 2)
+        let many = BotRowSummary(merging: [("David", thinking), ("Ann", full), ("Bea", asking)])
+        #expect(many.dots == [.needsInput, .working, .working, .working])
+        #expect(many.more == 3 + 2)
+    }
+
     /// #237: a bot row's dots are its tabs' own states, never others. For every Home with every
     /// pair of tasks, and for rows with more than four busy tabs, the dots and +N count exactly the
     /// tabs that aren't idle, kind for kind, the most urgent first, and the tooltip names them all;
