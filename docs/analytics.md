@@ -216,6 +216,12 @@ next dashboard can make offline comparisons using exactly those rates. No price 
 For one-hour cache writes without a dedicated rate, the price engine uses twice the input rate;
 a missing rate for any other used bucket makes that estimate unavailable.
 
+The ledger aggregates each model's requests within an invocation. Request boundaries are not
+retained, so a context tier is selected from that aggregate input: several smaller requests can
+cross a tier together even when none did individually. These list-price figures and the dashboard's
+alternative-model comparisons remain estimates, not reconstructed bills. Whole-turn OpenRouter
+amendments use the sum of its generation bills and take precedence over that approximation.
+
 Any usage marked `cumulative` is differenced by account, CLI family, backend and canonical UUID
 session identity, across the complete retained ledger before joining transcripts. Equal timestamps
 preserve ledger order. The first reading of a new session counts in full; the first resumed reading
@@ -320,3 +326,32 @@ specified dollar amounts and its resulting selection, filter intersections, sort
 and missing usage. The gated `theAnalyticsPageShowsItsTotalsFiltersByDateAndLoadsNothing` test
 exercises the controls and CSP in WebKit. Set `BOTCHU_ANALYTICS_PREVIEW` to the generated sample's
 absolute path to additionally write `.light.png` and `.dark.png` snapshots beside it.
+
+### End-to-end acceptance evidence (#295)
+
+`swift test --package-path macOS --filter AnalyticsIntegrationTests` writes a mixed day's captures
+through `StorageQueue`, reconciles two fixture OpenRouter generations, reads the persisted ledger
+into a snapshot, and runs that snapshot through the page's JavaScript. The fixture includes Claude
+live follow-ups, a first resumed Codex baseline followed by two deltas, Pi, Sail, an unknown model,
+an older unmeasured turn, a task, a job and a root-owned delegated run. Repeated entries and billing
+amendments count once; a damaged line leaves readable neighbors intact. Expected totals are derived
+independently from the fixture's counts and bundled rates: 1,175 tokens, $0.0015 actual and
+$0.003143245 estimated, with one unpriced and three unavailable records. Every grouping preserves
+those totals, and each insight's selection reproduces its displayed metric. Planted transcript,
+credential and response-body content is absent from both ledger and page; collection changes no
+input files, and the page retains its no-network CSP.
+
+The original implementation measurements are local debug microbenchmarks, not animation or
+end-to-end latency guarantees. [PR #300](https://github.com/asieke/BotChu/pull/300) measured 20,000
+captured-turn iterations: usage extraction/aggregation from already-decoded JSON took 5.03 µs for
+Claude, 2.50 µs for Codex, 3.01 µs for Antigravity, 3.26 µs for Muse and 11.76 µs for Pi's two requests.
+All of that work runs off the main thread. #283 measured 500 main-actor `Capture.finish` submissions
+with the writer blocked: 2.252417 µs each with an empty ledger and 1.985583 µs with 100,000 prior
+lines. The blocked-worker test separately verifies that submission returns without reading or
+creating ledger files on the main actor. These measurements support bounded capture overhead;
+they do not claim zero additional instructions. Pricing, serialization, scans and billing requests
+remain outside the turn's main-thread work.
+
+Reproduce the existing benchmarks with `BOTCHU_USAGE_PARSER_BENCHMARK=/tmp/usage-parser.txt`
+and `--filter usageParserBenchmark`, or `BOTCHU_LEDGER_BENCHMARK=/tmp/usage-ledger.csv`
+and `--filter usageLedgerEnqueueBenchmark`. Timings are evidence, not load-sensitive test thresholds.
