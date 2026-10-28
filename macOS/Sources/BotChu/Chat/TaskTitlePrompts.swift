@@ -35,8 +35,6 @@ struct TaskTitlePrompts: ViewModifier {
                 TextField("Title", text: Binding(get: { model.renamingText }, set: { model.renamingText = $0 }))
                 Button("Rename") { _ = model.renameTask(target, to: model.renamingText) }
                 Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text("The title its tab shows. Its issue, branch and folder keep their names.")
             }
             .alert(notice?.title ?? "", isPresented: Binding(
                 get: { model.titleNotice?.botID == botID },
