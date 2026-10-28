@@ -311,6 +311,66 @@ extension RenderingTests {
         }
     }
 
+    /// #237: a bot row's dots are drawn as the task column's, in light and dark. Unselected, each is
+    /// its tab's dot, only smaller. Where a List raises a selected row's background prominence, each
+    /// sits on a disc of the column's own background, as a rail tile's does, so it is drawn on the
+    /// same ground as its tab's: on the white disc it had, dark mode's colours, made for a dark
+    /// ground, read pale.
+    @Test func botRowDotsAreDrawnAsTheColumnsAlsoOnASelectedRow() async throws {
+        _ = NSApplication.shared
+        func draw<Content: View>(_ view: Content, in appearance: NSAppearance.Name) async throws -> Drawing {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 40, height: 40), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: appearance)
+            defer { window.contentView = nil; window.close() }
+            let host = NSHostingView(rootView: view)
+            window.contentView = host
+            window.setContentSize(host.fittingSize)
+            window.orderFront(nil)
+            try await settle(window)
+            return try Drawing(of: host)
+        }
+        // The middle of what is drawn; the rest of each drawing is clear.
+        func middle(of drawing: Drawing) throws -> CGPoint {
+            let drawn = try #require(drawing.bounds(in: CGRect(x: 0, y: 0, width: 100, height: 100)) { $0.alphaComponent > 0.5 })
+            return CGPoint(x: drawn.midX, y: drawn.midY)
+        }
+        let filled: [TabState.Kind] = [.working, .news, .failed, .stopped, .needsInput]
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            // The column's background as this window draws it: the display's color profile shifts
+            // the values, so the dots' ground is found by this swatch rather than by numbers.
+            let swatch = try await draw(Palette.conversationColumn.frame(width: 20, height: 20), in: appearance)
+            let swatchMiddle = try middle(of: swatch)
+            let ground = try #require(swatch.colours(around: swatchMiddle, at: 0...0.8).first, "\(appearance.rawValue): the column's ground")
+            for kind in [TabState.Kind.preparing, .starting] + filled {
+                let label = "\(appearance.rawValue), \(kind)"
+                var summary = BotRowSummary(account: "Claude Dev", home: .idle(since: nil), tasks: [])
+                summary.dots = [kind]
+                // The column's 8-point dot, and the row's 6-point one, unselected and selected.
+                let column = try await draw(StatusDot(kind: kind).padding(4), in: appearance)
+                let row = try await draw(BotRowDots(summary: summary).padding(4), in: appearance)
+                let selected = try await draw(BotRowDots(summary: summary).padding(4).environment(\.backgroundProminence, .increased),
+                                              in: appearance)
+                let columnMiddle = try middle(of: column), rowMiddle = try middle(of: row), selectedMiddle = try middle(of: selected)
+                // Selected, all round the dot (between its 3-point radius and its disc's 5) is the column's ground.
+                let around = selected.colours(around: selectedMiddle, at: 3.6...4.4)
+                #expect(around.count >= 8 && around.filter { near($0, ground) }.count * 4 >= around.count * 3,
+                        "\(label): around the selected row's dot \(around.prefix(3)), the column's ground \(ground)")
+                let selectedCentre = selected.colours(around: selectedMiddle, at: 0...0.8)
+                if filled.contains(kind) {
+                    let colour = try #require(column.colours(around: columnMiddle, at: 0...0.8).first, "\(label): the column's dot")
+                    for (name, centre) in [("unselected", row.colours(around: rowMiddle, at: 0...0.8)), ("selected", selectedCentre)] {
+                        #expect(!centre.isEmpty && centre.allSatisfy { near($0, colour) }, "\(label): the \(name) row's dot is \(centre), the column's \(colour)")
+                    }
+                } else {
+                    // A ring shows its ground through it, as in the column.
+                    #expect(!selectedCentre.isEmpty && selectedCentre.allSatisfy { near($0, ground) },
+                            "\(label): inside the selected row's ring \(selectedCentre), the column's ground \(ground)")
+                }
+            }
+        }
+    }
+
     /// #218: a conversation waits on the owner while a Needs input delivery it sent isn't answered
     /// or Done, whatever else it does, and reading it doesn't change that; the owner's Stop shows
     /// until the next turn, also once looked at; and both come back after a relaunch.
@@ -681,6 +741,21 @@ private struct HoveredRow: View {
                 guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), match(color) else { continue }
                 let pixel = CGRect(x: CGFloat(x) / scale, y: CGFloat(y) / scale, width: 1 / scale, height: 1 / scale)
                 found = found.map { $0.union(pixel) } ?? pixel
+            }
+        }
+        return found
+    }
+
+    /// The colours of the pixels whose middles are `distances` points from `centre`.
+    func colours(around centre: CGPoint, at distances: ClosedRange<CGFloat>) -> [NSColor] {
+        let reach = Int((distances.upperBound * scale).rounded(.up)) + 1
+        let middleX = Int(centre.x * scale), middleY = Int(centre.y * scale)
+        var found: [NSColor] = []
+        for y in stride(from: max(0, middleY - reach), through: min(rep.pixelsHigh - 1, middleY + reach), by: 1) {
+            for x in stride(from: max(0, middleX - reach), through: min(rep.pixelsWide - 1, middleX + reach), by: 1) {
+                let dx = (CGFloat(x) + 0.5) / scale - centre.x, dy = (CGFloat(y) + 0.5) / scale - centre.y
+                guard distances.contains((dx * dx + dy * dy).squareRoot()), let colour = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                found.append(colour)
             }
         }
         return found
