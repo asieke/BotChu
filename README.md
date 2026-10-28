@@ -517,6 +517,10 @@ on that pull request's branch to continue in instead). The same command run agai
     rather than a second. "New subagent @bot" (or "delegate this to @bot as a sub-agent") is a
     **sub-agent run** (above): child work of the turn, in its Sub-agents inspector, with no tab of
     its own. A batch goes to one bot as one Task, whose turn spawns a sub-agent run per issue.
+    `botchu-task list --mine` (#262), from a bot's Home, Task or sub-agent run, prints that bot's
+    open Tasks as its Tasks column shows them, in its order and count: title, summary, state
+    (`Idle`, `Running a tool…`), elapsed or idle time, issue or pull request, branch and ID, from
+    BotChu's live run state (`--json` for the same fields).
   - **Agents and specialists (#250):** a local bot is an **agent**, which owns tasks and scheduled
     jobs, or a **specialist**, which is only called as a sub-agent (`botchu-subagent`) and keeps its own
     Home, instructions, personality, memory, skills, pet and account. Its role is kept in its
@@ -1366,7 +1370,7 @@ on that pull request's branch to continue in instead). The same command run agai
     handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation. A Task
     handed to another bot (`botchu-task create`, the same helper under a second name) goes through
     the same mailbox; `TaskHandoff.swift` reads and checks the request, recognizes it when asked
-    again, and holds what is written back. A delivery to the Inbox (`botchu-inbox send`) goes through
+    again, and holds what is written back; `TaskList.swift` does the same for `botchu-task list --mine`. A delivery to the Inbox (`botchu-inbox send`) goes through
     it too: `Inbox.swift` reads and checks the request, keeps deliveries and their copies in a bot's
     folder, what the owner did with them (`InboxState`), the list's groups (`InboxList`) and a reply's
     prompt (`InboxReply`); the app's `InboxModel` takes them in and sends the replies, one at a time.

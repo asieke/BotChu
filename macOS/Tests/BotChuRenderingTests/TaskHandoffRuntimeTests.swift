@@ -171,6 +171,47 @@ extension RenderingTests {
         try Data().write(to: fixture.root.appendingPathComponent("release-work"))
     }
 
+    /// #262: `botchu-task list --mine` lists the asking bot's open Tasks as its Tasks column shows
+    /// them, from Home, from a Task (whose own turn shows as running) and from a sub-agent run,
+    /// whose own bot is the one asking.
+    @Test func aBotListsItsOwnOpenTasksAsItsTasksColumnShowsThem() async throws {
+        let fixture = try HandoffFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app, home = ChatTarget.home(fixture.fox.id)
+        let intake = try #require(fixture.foxTask.taskID).uuidString.lowercased()
+        // A task closed in the sidebar isn't listed.
+        let old = BotTask(for: fixture.fox, repo: "fixture/project", checkout: fixture.checkout, work: nil, brief: "Old", title: "Old")
+        app.tasks[fixture.fox.id, default: []].append(old)
+        app.closeTask(.task(old.id, of: fixture.fox.id))
+        #expect(app.openTasks(of: fixture.fox.id).count == 1)
+
+        app.send("LIST_MINE", to: home)
+        try await fixture.wait { !app.isRunning(home) }
+        let listed = try #require(app.thread(home).last { $0.role == .assistant }?.text)
+        let row = try #require(app.taskList(of: fixture.fox.id).first)
+        #expect(row.state == "Idle" && row.title == "project" && row.summary == "Intake")
+        #expect(listed.contains("Fox has 1 open Task, as BotChu's sidebar lists them:\n1. \(row.line)\nEXIT=0"), "\(listed)")
+        #expect(!listed.contains(old.id.uuidString.lowercased()))
+        let json = try #require(listed.components(separatedBy: "\n---\n").last?.replacingOccurrences(of: "EXIT=0", with: ""))
+        let printed = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect((printed["bot"] as? [String: Any])?["name"] as? String == "Fox")
+        let tasks = try #require(printed["tasks"] as? [[String: Any]])
+        #expect(tasks.count == 1 && tasks.first?["id"] as? String == intake && tasks.first?["state"] as? String == "Idle")
+
+        // From the Task itself, which BotChu shows running while it asks.
+        app.send("LIST_MINE", to: fixture.foxTask)
+        try await fixture.wait { !app.isRunning(fixture.foxTask) }
+        let own = try #require(app.thread(fixture.foxTask).last { $0.role == .assistant }?.text)
+        #expect(["Thinking… for", "Starting… for"].contains { own.contains("1. project · Intake · \($0) ") }, "\(own)")
+        #expect(own.contains("\"running\": true") && own.contains(intake))
+
+        // A sub-agent run lists its own bot's Tasks, not its caller's.
+        app.send("LIST_AS_SUBAGENT", to: home)
+        try await fixture.wait { !app.isRunning(home) }
+        let child = try #require(app.thread(home).last { $0.role == .assistant }?.text)
+        #expect(child.contains("Worker has no open Tasks.") && !child.contains(intake), "\(child)")
+    }
+
     /// The batch journey: one Task for the destination bot, whose parallel workers are its own
     /// sub-agent runs; the asking turn ends while they work, and stopping the Task stops them.
     @Test func aBatchHandoffIsOneTaskWhoseWorkersAreItsOwnSubagents() async throws {
@@ -335,6 +376,10 @@ extension RenderingTests {
     elif brief == "DISPATCH_PR_213":
         request(os.path.join(root, "worker", ".botchu", "dispatch"), "pr.json", {"repo": "fixture/project", "pullRequest": 213})
         answer = "Written"
+    elif brief == "LIST_MINE":
+        answer = run("botchu-task", "list", "--mine") + "\n---\n" + run("botchu-task", "list", "--mine", "--json")
+    elif brief == "LIST_AS_SUBAGENT":
+        answer = run("botchu-subagent", "call", "--agent", "Worker", "--brief", "LIST_MINE")
     elif brief == "HAND_OFF_BATCH":
         answer = run(*create, "--brief", "FANOUT")
     elif brief == "DISPATCH_FILE":

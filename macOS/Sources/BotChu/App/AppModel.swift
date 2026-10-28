@@ -398,7 +398,7 @@ final class AppModel {
     func bot(_ id: UUID) -> Bot? { bots.first { $0.id == id } }
     func task(_ id: UUID, of botID: UUID) -> BotTask? { tasks[botID]?.first { $0.id == id } }
     func task(_ target: ChatTarget) -> BotTask? { target.taskID.flatMap { task($0, of: target.botID) } }
-    func openTasks(of botID: UUID) -> [BotTask] { tasks[botID, default: []].filter { !$0.isArchived } }
+    func openTasks(of botID: UUID) -> [BotTask] { tasks[botID, default: []].open }
     /// The closed tasks to open again from Home's status; a job's run whose history keeps it is
     /// found there instead (#146).
     func closedTasks(of botID: UUID) -> [BotTask] {
