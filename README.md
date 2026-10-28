@@ -736,8 +736,7 @@ on that pull request's branch to continue in instead). The same command run agai
     job leaves its runs' tasks, as it leaves the tasks it asked for. Runs from before runs were tasks
     keep their transcripts in the history, and a run that never started (its agent's folder gone, or
     in a review copy) has only its reason there. A job's own choice is saved with it, and a
-    job saved before jobs had one runs on its agent's. When its account is gone from Providers, or
-    OpenRouter's catalog no longer lists its OpenRouter model, its runs use the agent's account,
+    job saved before jobs had one runs on its agent's. When its account is gone from Providers, its runs use the agent's account,
     model and effort instead, never another provider, and the editor (which shows the choice as
     unavailable), the job's row, its history and the run's first line say so; it keeps the choice for
     when the account is back. A CLI's own models and custom IDs run as chosen: one the CLI rejects
