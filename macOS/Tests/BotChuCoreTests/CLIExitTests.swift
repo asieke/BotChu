@@ -147,6 +147,18 @@ import Testing
         #expect(ending.stderr.hasSuffix("BotChu ended it: it was still running 1 s after it said its turn had ended, waiting for its background tasks."))
     }
 
+    @Test func museApprovalEndsTheProcessAndPreservesItsFailure() async {
+        let approval = #"{"payload_type":"approval.requested","payload":{}}"#
+        let ending = await Self.run(Self.stuck, arguments: [approval], kind: .muse) {
+            $0.killDelay = 0.1
+        }
+        #expect(!ending.hung)
+        #expect(!ending.stopped)
+        #expect(!ending.lingered)
+        #expect(ending.status != 0)
+        #expect(ending.events == [.failed("Muse is waiting for an approval BotChu can't show")])
+    }
+
     @Test func stopEndsACLIThatIgnoresInterruptAndTerminate() async {
         let ending = await Self.run(Self.stuck, kind: .antigravity) {
             $0.killDelay = 0.5
