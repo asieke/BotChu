@@ -54,6 +54,7 @@ let issueOnly = CommandLine.arguments.dropFirst().first == "--issue"
 let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly || connectorsOnly || summaryOnly || modelsOnly || issueOnly ? 2 : 1))
 let accounts = requested.isEmpty ? Accounts.all : requested.map { Accounts.account(id: $0) }
 let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-smoke-\(UUID().uuidString)")
+let preparation = SessionPreparation()
 /// The catalog tools BOTCHU_SMOKE_BLOCK names, and the profile that blocks them where they are installed.
 let blockedTools = (ProcessInfo.processInfo.environment["BOTCHU_SMOKE_BLOCK"] ?? "").split(separator: ",").map(String.init)
 let toolProfile: String? = blockedTools.isEmpty ? nil : {
@@ -106,9 +107,13 @@ func showConnectors(_ connectors: [Connector], kind: AgentKind? = nil) {
 /// `followUp` is written to a CLI that takes input mid-turn at its first tool call.
 func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: String? = nil) async -> Turn {
     let resume = bot.resumableSessionID
+    let context: SessionPreparation.Snapshot
+    do {
+        context = try await preparation.prepare(.init(bot: bot, sharedMemoryPath: root.appendingPathComponent("MEMORY.md").path))
+    } catch { return Turn(messages: [ChatMessage(role: .error, text: error.localizedDescription)], status: -1) }
     let preamble = resume == nil
-        ? BotContext.sessionPreamble(bot: bot, memory: Workspace.read(bot.workspace + "/MEMORY.md"), sharedMemory: "", history: history,
-                                     soul: Workspace.read(bot.workspace + "/SOUL.md"))
+        ? BotContext.sessionPreamble(bot: bot, memory: context.memory, sharedMemory: context.sharedMemory, history: history,
+                                     soul: context.soul, instructions: context.instructions, team: context.team, skills: context.skills)
         : nil
     let kind = bot.account.kind
     let fullPrompt = BotContext.prompt(for: prompt, preamble: preamble)
@@ -365,7 +370,6 @@ Task {
         bot.selectModel(ProcessInfo.processInfo.environment["BOTCHU_SMOKE_MODEL"] ?? "")
         bot.reasoningEffort = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_EFFORT"].flatMap(ReasoningEffort.init(rawValue:))
         if ProcessInfo.processInfo.environment["BOTCHU_SMOKE_FAST"] == "1" { bot.fastMode = true }
-        try? Workspace.prepare(bot: bot, sharedMemoryPath: root.appendingPathComponent("MEMORY.md").path)
         print("== \(account.name)")
         let started = Date()
         let imageRequest = smokeImage == nil ? "" : " Also read the large word in the attached image and include it in your reply."

@@ -1017,6 +1017,17 @@ public enum Workspace {
     /// catalog of its skills (`Skills.active`), as they are now, so call it before each session.
     public static func prepare(bot: Bot, sharedMemoryPath: String, repositoriesPath: String? = nil, machines: [String] = [],
                                availableBots: [BotRosterEntry] = [], fileManager: FileManager = .default) throws {
+        try seed(bot: bot, sharedMemoryPath: sharedMemoryPath, fileManager: fileManager)
+        let dir = URL(fileURLWithPath: bot.workspace, isDirectory: true)
+        try prepareOwned(bot: bot, sharedMemoryPath: sharedMemoryPath,
+                         instructions: read(dir.appendingPathComponent(BotContext.instructionsFile).path),
+                         team: read(BotContext.teamPath(besideSharedMemory: sharedMemoryPath)),
+                         repositoriesPath: repositoriesPath, machines: machines, availableBots: availableBots,
+                         skills: Skills.active(for: bot, sharedFolder: Skills.sharedFolder(besideSharedMemory: sharedMemoryPath),
+                                               fileManager: fileManager), fileManager: fileManager)
+    }
+
+    static func seed(bot: Bot, sharedMemoryPath: String, fileManager: FileManager = .default) throws {
         let dir = URL(fileURLWithPath: bot.workspace, isDirectory: true)
         try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
         let shared = URL(fileURLWithPath: sharedMemoryPath)
@@ -1024,12 +1035,17 @@ public enum Workspace {
         try writeIfMissing(BotContext.seedSharedMemory, to: shared, fileManager: fileManager)
         try writeIfMissing(BotContext.seedMemory(bot: bot), to: dir.appendingPathComponent(BotContext.memoryFile), fileManager: fileManager)
         try writeIfMissing(BotContext.seedSoul(bot: bot), to: dir.appendingPathComponent(BotContext.soulFile), fileManager: fileManager)
+    }
+
+    /// Writes the catalog already read by session preparation, without discovering it a second time.
+    static func prepareOwned(bot: Bot, sharedMemoryPath: String, instructions: String, team: String,
+                             repositoriesPath: String?, machines: [String], availableBots: [BotRosterEntry],
+                             skills: [Skill], fileManager: FileManager = .default) throws {
+        let dir = URL(fileURLWithPath: bot.workspace, isDirectory: true)
         let agents = BotContext.agentsFile(bot: bot, sharedMemoryPath: sharedMemoryPath,
-                                          instructions: read(dir.appendingPathComponent(BotContext.instructionsFile).path),
-                                          team: read(BotContext.teamPath(besideSharedMemory: sharedMemoryPath)),
+                                          instructions: instructions, team: team,
                                           repositoriesPath: repositoriesPath, machines: machines, availableBots: availableBots,
-                                          skills: Skills.active(for: bot, sharedFolder: Skills.sharedFolder(besideSharedMemory: sharedMemoryPath),
-                                                                fileManager: fileManager))
+                                          skills: skills)
         try writeOwned(agents, to: dir.appendingPathComponent("AGENTS.md"), fileManager: fileManager)
         try writeOwned(agents, to: dir.appendingPathComponent("GEMINI.md"), fileManager: fileManager)
         try writeOwned(BotContext.claudeFile, to: dir.appendingPathComponent("CLAUDE.md"), fileManager: fileManager)
@@ -1086,7 +1102,7 @@ public enum Workspace {
 
     static func writeOwned(_ text: String, to url: URL, fileManager: FileManager) throws {
         if fileManager.fileExists(atPath: url.path) {
-            let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            let existing = try String(contentsOf: url, encoding: .utf8)
             guard existing.hasPrefix(BotContext.marker), existing != text else { return }
         }
         try text.write(to: url, atomically: true, encoding: .utf8)

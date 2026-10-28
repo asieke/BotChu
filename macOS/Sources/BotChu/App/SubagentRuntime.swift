@@ -581,20 +581,28 @@ final class SubagentRuntime {
             if account.kind == .sail, let problem = SailLaunch.problem(remote: machine.isRemote, key: sailKey) {
                 throw DelegationFailure(problem)
             }
-            let prompt = BotContext.subagentPreamble(bot: targetBot, run: record,
+            record.phase = .running
+            record.startedAt = Date()
+            try await archive.save(snapshot(record, messages: live(id).messages))
+            // Stopped while its start was being saved: its end is saved instead.
+            guard run(id)?.phase.isActive == true, !finalizing.contains(id), !Task.isCancelled else { endCaller(context.id); return }
+            // Tool policy is always live, never part of the reusable identity snapshot.
+            let prepared = try await model.prepareSessionForLaunch(of: targetBot.id, kind: account.kind, remote: machine.isRemote,
+                current: { self.run(id)?.phase.isActive == true && !self.finalizing.contains(id) })
+            let snapshot = prepared.context
+            guard run(id)?.phase.isActive == true, !Task.isCancelled,
+                  let currentBot = model.bot(targetBot.id) else { endCaller(context.id); return }
+            let prompt = BotContext.subagentPreamble(bot: currentBot, run: record,
                 callerDescription: caller.parent.flatMap { run($0)?.targetBotName } ?? model.bot(target.botID)?.name ?? "Bot",
-                memory: Workspace.read(targetBot.workspace + "/MEMORY.md"), sharedMemory: Workspace.read(model.settings.sharedMemoryPath),
-                soul: Workspace.read(targetBot.workspace + "/SOUL.md"),
-                instructions: Workspace.read(BotDocument.instructions.url(for: targetBot).path),
-                team: Workspace.read(model.settings.teamPath), availableBots: roster, skills: model.activeSkills(of: targetBot),
+                memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, soul: snapshot.soul,
+                instructions: snapshot.instructions, team: snapshot.team, availableBots: roster, skills: snapshot.skills,
                 tools: machine.isRemote ? nil : model.tools.instructions())
             var invocation = CommandBuilder.invocation(kind: account.kind, prompt: prompt,
                 model: GenerationOptions.effectiveModel(record.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
                                                         sailDefault: model.settings.sailModel),
                 sessionID: nil, reasoningEffort: record.reasoningEffort, fast: record.fastMode == true, openRouterKey: key, sailKey: sailKey)
             invocation.environment.merge(context.environment) { _, new in new }
-            // Blocks the tools that are off, as its caller's turn does on This Mac (#246).
-            invocation.toolProfile = machine.isRemote ? nil : try await model.tools.turnProfile(for: account.kind)
+            invocation.toolProfile = prepared.toolProfile
             let command = model.settings.host(record.hostID)?.command(for: account) ?? model.settings.command(for: account)
             let runner = machine.isRemote
                 ? AgentRun(command: command, invocation: invocation, on: machine, folder: record.workingDirectory)
@@ -666,11 +674,6 @@ final class SubagentRuntime {
                     ? "\(account.name) ended without a successful handoff (exit \(status)). \(AppModel.lastLines(stderr))" : nil)
                 self.finish(id, phase: persistenceFailure != nil ? .failed : runner.stopped ? .stopped : reason == nil ? .completed : .failed, error: reason)
             }
-            record.phase = .running
-            record.startedAt = Date()
-            try await archive.save(snapshot(record, messages: live(id).messages))
-            // Stopped while its start was being saved: its end is saved instead.
-            guard run(id)?.phase.isActive == true, !finalizing.contains(id), !Task.isCancelled else { endCaller(context.id); return }
             replace(record)
             runners[id] = runner
             live(id).state = RunState()
