@@ -146,6 +146,34 @@ import Testing
         #expect(saved.model == "primary-B" && saved.modelSource == .reported && saved.usage == usage)
     }
 
+    @Test(arguments: ["/private/planted/model", "./planted/model", "C:/planted/model", "FILE:/planted/model",
+                      "https://planted/model", "~/planted/model", "../planted/model", "publisher/./planted"])
+    func pathLikeReportedIdentifiersKeepCountsWithoutLeakingLocations(_ path: String) async throws {
+        let home = home(), queue = StorageQueue()
+        defer { try? FileManager.default.removeItem(at: home.url.deletingLastPathComponent()) }
+        let capture = UsageLedger.Capture(entry())
+        capture.record(.model(path))
+        capture.record(.usage(TurnUsage(models: [ModelUsage(model: path, output: 7)], generationIDs: [path])))
+        capture.finish(.finished, in: home, queue: queue)
+        await queue.settle()
+        let saved = try #require(UsageLedger.read(in: home).entries.first)
+        #expect(saved.model == nil && saved.modelSource == .unreported)
+        #expect(saved.usage?.models == [ModelUsage(model: "", output: 7)])
+        #expect(saved.usage?.generationIDs == ["unrecorded"])
+        let file = try #require(FileManager.default.contentsOfDirectory(at: UsageLedger.directory(in: home), includingPropertiesForKeys: nil).first)
+        #expect(try !String(contentsOf: file, encoding: .utf8).contains("planted"))
+    }
+
+    @Test func namespacedAndVersionedModelIDsStayIntact() async throws {
+        let home = home(), queue = StorageQueue()
+        defer { try? FileManager.default.removeItem(at: home.url.deletingLastPathComponent()) }
+        let usage = TurnUsage(models: [ModelUsage(model: "publisher/model:version", output: 7)], generationIDs: ["gen-123-abcd"])
+        UsageLedger.append(entry(usage: usage), in: home, queue: queue)
+        await queue.settle()
+        let saved = try #require(UsageLedger.read(in: home).entries.first)
+        #expect(saved.model == "publisher/model:version" && saved.usage == usage)
+    }
+
     @MainActor @Test func turnEndOnlySubmitsWorkWhileStorageIsBlocked() async throws {
         let home = home(), entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
         defer { try? FileManager.default.removeItem(at: home.url.deletingLastPathComponent()) }

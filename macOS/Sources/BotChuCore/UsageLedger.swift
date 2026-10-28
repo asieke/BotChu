@@ -159,8 +159,9 @@ public enum UsageLedger {
 
     private static func identifier(_ value: String, slash: Bool = false) -> String? {
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:" + (slash ? "/" : ""))
-        guard !value.isEmpty, value.utf8.count <= 512, !value.hasPrefix("/"), !value.hasPrefix("file:"),
-              !value.split(separator: "/").contains(".."), value.unicodeScalars.allSatisfy(allowed.contains) else { return nil }
+        let segments = value.split(separator: "/")
+        guard !value.isEmpty, value.utf8.count <= 512, !value.hasPrefix("/"), !value.contains(":/"),
+              !segments.contains("."), !segments.contains(".."), value.unicodeScalars.allSatisfy(allowed.contains) else { return nil }
         return value
     }
 
