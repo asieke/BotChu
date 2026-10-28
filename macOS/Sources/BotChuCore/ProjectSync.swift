@@ -50,9 +50,6 @@ public actor ProjectSync {
         public var recordErrors: [String: String] = [:]
         public var openItems: [GitHubLookup.OpenItem]?
         public var unreadableWork: [String] = []
-        /// Each listed repository's open issue count, by lower-cased `owner/name`; nil until a list
-        /// was saved or read.
-        public var issueStatus: [String: OpenIssueStatus]?
         public var syncing: Scope?
         /// Why the last sync failed; nil once one succeeds.
         public var error: String?
@@ -122,7 +119,7 @@ public actor ProjectSync {
         let worked = snapshot.syncedAt != nil || !snapshot.work.isEmpty || !snapshot.workProblems.isEmpty
         return State(login: snapshot.login, syncedAt: snapshot.syncedAt, repositories: listed ? snapshot.repositories : nil,
                      records: snapshot.projectRecords, recordErrors: snapshot.recordErrors, openItems: worked ? snapshot.openItems : nil,
-                     unreadableWork: snapshot.unreadableWork, issueStatus: listed ? snapshot.issueStatus : nil, syncing: active, error: error)
+                     unreadableWork: snapshot.unreadableWork, syncing: active, error: error)
     }
 
     /// The scope a sync due now has: full when the last full one is older than `fullInterval`.

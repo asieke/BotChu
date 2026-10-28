@@ -1060,17 +1060,8 @@ on that pull request's branch to continue in instead). The same command run agai
     actions stay visible while the selected area's content scrolls. Home's Activity lists only its
     **Closed tasks** (collapsed at first, with their count), each to open again with a click: the
     open ones are the tabs beside the chat. Home keeps Edit and New Session;
-    tasks keep Close Task and New Session. Task Activity includes the repository, computer and
-    linked issue, then the repository's open issues, from the saved Projects catalog: **Issues · N**,
-    GitHub's count of its open issues (pull requests aside), which stays in the heading when the
-    section is collapsed, then the five most recently updated, each a number and title that opens it
-    in the Projects sidebar, **View All Issues** (with the count when there are more), which opens
-    the repository's Issues there, and Refresh, which syncs Projects. Going to Projects keeps the task
-    and its draft to come back to. Until the count is read, the heading says why instead (reading,
-    not read, couldn't read, or unavailable for a repository `gh` doesn't list), never zero; an empty
-    repository shows **No open issues**, and a sync that fails keeps what was read, marked not
-    updated, with why, and Refresh tries again. Showing it checks the catalog is current, at most
-    every two minutes, like Projects. Home and task accounts can change in Model & Usage; Session keeps Finder, Terminal and
+    tasks keep Close Task and New Session. Task Activity shows the repository, computer and
+    the issue it works on, if any. Home and task accounts can change in Model & Usage; Session keeps Finder, Terminal and
     remote SSH controls. Branch names, review commits, generated pull request metadata and task
     authorship are managed internally and omitted from the task form, cards, headers, sidebar tooltips
     and new automatic progress notes. Explicitly choosing a pull request to continue or review is
@@ -1343,8 +1334,7 @@ on that pull request's branch to continue in instead). The same command run agai
     the saved Projects catalog, what a sync reads again and how it takes the answers, GitHub's REST
     answers, and the projects offline readers such as completion see (`ProjectCatalog.swift`), and the
     sync that keeps it on disk and in step with GitHub, with its ETags, probes, bounded requests and
-    coalesced refreshes, and deleting an issue with `gh` (`ProjectSync.swift`), a repository's open issues at a glance as a task's
-    Activity shows them, from that catalog (`IssuePreview.swift`),
+    coalesced refreshes, and deleting an issue with `gh` (`ProjectSync.swift`),
     an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store, with
     the index saved whole or a failure to show (`Store.swift`), with conversations' files read without losing
     what can't be read (`Transcript.swift`), the writer that saves files off the main thread, each
@@ -1405,7 +1395,7 @@ on that pull request's branch to continue in instead). The same command run agai
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished turns and runs to the daily run reviews, `Evaluations.swift`),
     `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, selecting a reply's text across its blocks, `ReplySelection.swift`, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
-    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (the
+    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (the
     in-window Settings page with its rail and pages, with the hosts, Telegram and run reviews), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
@@ -1503,10 +1493,7 @@ on that pull request's branch to continue in instead). The same command run agai
     empty and failed results; a job's run as a task: in the agent's workspace on the run's account,
     model and effort, named after its job and time, what its tab and context say, the earlier runs'
     tasks a new run closes unless the owner took one over, and those that go with the runs the
-    history lets go; a task's glance at its repository's open issues: GitHub's count
-    whatever the preview and the read list hold, pull requests left out, loading, not read,
-    unavailable, zero and kept after a failed read, and another repository's answer never showing
-    under the one switched to; and run reviews, with stand-in reviewers (no test
+    history lets go; and run reviews, with stand-in reviewers (no test
     runs a real review): a stretch and its cursor, so that nothing is reviewed twice or missed; the
     signal gate (failures, stops, steering, failed tool calls, tool calls, time, Home's messages not
     steering); the review time once a day, missed days, time zone and daylight-saving changes; a
@@ -1592,9 +1579,7 @@ on that pull request's branch to continue in instead). The same command run agai
     closed), a sub-agent's handoff and a task's receipt that
     don't wait for run reviews, which review each bot's own work on its own account, Activity's run
     reviews (the summary line, news rows and counts line, in light and dark, and Review now) and
-    the review time in Settings, a task's Activity listing its repository's open issues:
-    one or all opened in Projects and back to the task with its draft, switching tasks, a failed
-    refresh keeping what was read, and no GitHub request from showing or updating it, a Task handed
+    the review time in Settings, a Task handed
     to another bot whose Home is idle, from Home, a task and a task on a host, that goes on after
     the asking turn (also a batch whose workers are its own sub-agent runs, stopped with it), asked
     for again, a bot or repository that can't be found, and a dispatch file in another bot's folder
