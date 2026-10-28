@@ -1715,6 +1715,12 @@ on that pull request's branch to continue in instead). The same command run agai
   preserving its lock and run folders. Other repositories retain the same `start`, `wait`, `status`
   interface. BotChu's windowless wrapper is recognized by ancestry; unwrapped window tests and
   other repositories' tests still block the gate.
+- Window tests never show their windows: every window they order in is fully transparent and
+  ignores the real mouse (`QuietWindows`, in the window tests' suite), so a run neither covers nor
+  takes clicks from what is on screen. They lay out, draw with `cacheDisplay` and take events sent
+  to the window as before, and under the test runner WebKit counts every window as hidden either
+  way. The screenshot test shows its window behind every other one, since the window server's
+  picture needs it drawn. `BOTCHU_SHOW_TEST_WINDOWS=1` shows them all again, to watch a test.
 - Debug tests use `macOS/.build/`, release tests with testability use `macOS/.build/release-tests/`,
   and the app uses `macOS/.build/app/`. Each keeps its own build manifest: on Xcode's build system,
   even a debug test build can invalidate optimized Core when it shares the app's scratch directory.

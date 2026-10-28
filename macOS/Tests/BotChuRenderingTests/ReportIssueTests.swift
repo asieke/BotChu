@@ -258,6 +258,10 @@ extension RenderingTests {
         window.contentView = view
         defer { window.contentView = nil; window.close() }
         window.makeKeyAndOrderFront(nil)
+        // The window server's picture needs the window drawn (QuietWindows): it goes behind every
+        // other window instead, where the owner doesn't see it.
+        window.alphaValue = 1
+        window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) + 1)
         try await Task.sleep(for: .milliseconds(300))
 
         let png = try await WindowCapture.screen(window)
