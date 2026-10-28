@@ -164,12 +164,13 @@ public struct ClaudeParser: StreamParser {
                                      isError: block["is_error"] as? Bool ?? false)
             }
         case "result":
+            let usage = UsageParsing.claude(obj).map { [AgentEvent.usage($0)] } ?? []
             if obj["is_error"] as? Bool == true || (obj["subtype"] as? String).map({ $0 != "success" }) == true {
                 let reason = (obj["result"] as? String) ?? (obj["errors"] as? [String])?.joined(separator: "\n")
-                return [.failed(reason?.isEmpty == false ? reason! : "Claude Code stopped with \(obj["subtype"] as? String ?? "an error").")]
+                return usage + [.failed(reason?.isEmpty == false ? reason! : "Claude Code stopped with \(obj["subtype"] as? String ?? "an error").")]
             }
             // Its turn ended with background tasks running: it waits for them, doing what they do.
-            return backgroundTasks.isEmpty ? [.finished] : [.finished, runningInBackground]
+            return usage + (backgroundTasks.isEmpty ? [.finished] : [.finished, runningInBackground])
         default: break
         }
         return []
@@ -236,7 +237,7 @@ public struct CodexParser: StreamParser {
         case "error":
             if let message = obj["message"] as? String { return [.failed(message)] }
         case "turn.completed":
-            return [.finished]
+            return UsageParsing.codex(obj).map { [.usage($0), .finished] } ?? [.finished]
         default: break
         }
         return []
@@ -310,11 +311,12 @@ public struct AntigravityParser: StreamParser {
         case "result":
             let result = obj["result"] as? JSON
             let status = result?["status"] as? String ?? ""
+            let usage = UsageParsing.antigravity(result).map { [AgentEvent.usage($0)] } ?? []
             // Status summarizes the whole trajectory, including earlier failed turns.
             // response is the assistant's reply, never an error diagnostic.
-            if reportedError { return [] } // The error event already reported this failure.
-            if status == "SUCCESS" || completedResponse { return [.finished] }
-            return [.failed("Antigravity stopped: \(status.isEmpty ? "unknown status" : status).")]
+            if reportedError { return usage } // The error event already reported this failure.
+            if status == "SUCCESS" || completedResponse { return usage + [.finished] }
+            return usage + [.failed("Antigravity stopped: \(status.isEmpty ? "unknown status" : status).")]
         case "error":
             reportedError = true
             let message = (obj["error"] as? JSON)?["message"] as? String ?? obj["error"] as? String ?? obj["message"] as? String
@@ -370,6 +372,7 @@ public struct MuseParser: StreamParser {
                 return (model, entry["calls"] as? Int ?? 0)
             }
             if let top = models.max(by: { $0.1 < $1.1 }) { events.append(.model(top.0)) }
+            if let usage = UsageParsing.muse(payload) { events.append(.usage(usage)) }
         case "tool.result":
             let id = payload["call_id"] as? String ?? UUID().uuidString
             let facts = payload["correlation_facts"] as? JSON
@@ -406,6 +409,7 @@ public struct MuseParser: StreamParser {
 
 /// `pi -p --mode json`.
 public struct PiParser: StreamParser {
+    private var usage = TurnUsageAccumulator()
     public init() {}
 
     public mutating func parse(line: String) -> [AgentEvent] {
@@ -434,12 +438,15 @@ public struct PiParser: StreamParser {
                                   output: contentText(result?["content"]), isError: isError)]
         case "message_end":
             guard let message = obj["message"] as? JSON, message["role"] as? String == "assistant" else { return [] }
+            if let reported = UsageParsing.pi(message) { usage.add(reported) }
             if message["stopReason"] as? String == "error" || message["stopReason"] as? String == "aborted" {
                 let reason = message["errorMessage"] as? String
                 return [.failed(reason.flatMap { $0.isEmpty ? nil : $0 } ?? "The model stopped with an error.")]
             }
         case "agent_end":
-            return [.finished]
+            let reported = usage.value
+            usage = TurnUsageAccumulator()
+            return reported.map { [.usage($0), .finished] } ?? [.finished]
         default: break
         }
         return []
@@ -457,6 +464,7 @@ public struct SailParser: StreamParser {
         switch event {
         case .session(let id): return [.session(id)]
         case .model(let id): return [.model(id)]
+        case .usage(let usage): return [.usage(usage)]
         case let .flex(row, detail, state):
             // The row reads as where the submission is now; once it has ended, as how it ended.
             let now = AgentEvent.toolStarted(id: row, name: SailAgent.rowName, input: detail)

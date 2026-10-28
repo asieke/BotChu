@@ -162,3 +162,9 @@ struct SailHarness {
         return messages
     }
 }
+
+// Captured from a completed Sail Flex response on 2026-10-28; response ID made up.
+// No billed cost field. Output includes its reasoning subset (18 = 5 text + 13 reasoning).
+extension SailSamples {
+    static let capturedUsage = #"{"object":"response","status":"completed","model":"deepseek-ai/DeepSeek-V4.1-Flash-1017","usage":{"input_tokens":38,"input_tokens_details":{"cached_tokens":0,"reasoning_tokens":0},"output_tokens":18,"output_tokens_details":{"cached_tokens":0,"reasoning_tokens":13},"total_tokens":56},"background":true,"metadata":{"completion_window":"flex","supercache_write_input_tokens":"0","supercached_input_tokens":"0"},"id":"resp_usage_sample"}"#
+}

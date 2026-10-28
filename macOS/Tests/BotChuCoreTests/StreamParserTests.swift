@@ -155,6 +155,7 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
             .toolStarted(id: "item_1", name: "Shell", input: "ls"),
             .toolFinished(id: "item_1", name: "Shell", output: "", isError: false, exitCode: 0),
             .text("Done"),
+            .usage(TurnUsage(models: [ModelUsage(model: "", uncachedInput: 42103, output: 71)], cumulative: true)),
             .finished,
         ])
     }
@@ -418,4 +419,199 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         let messages = thread([.textDelta("partial"), .failed("boom"), .textDelta("new")])
         #expect(messages.map(\.role) == [.assistant, .error, .assistant])
     }
+}
+
+// Captured 2026-10-28: Codex 0.165.0, Antigravity 1.4.9, Muse 1.4.14, Pi 1.4.0.
+// Unrelated fields omitted, generation IDs made up; token counts and costs unchanged.
+enum TokenUsageSamples {
+    static let codex = #"{"type":"turn.completed","usage":{"input_tokens":14610,"cached_input_tokens":12160,"cache_write_input_tokens":0,"output_tokens":6,"reasoning_output_tokens":0}}"#
+    static let antigravity = #"{"event":"result","result":{"status":"SUCCESS","usage":{"input_tokens":7578,"output_tokens":42,"thinking_tokens":36,"cache_read_tokens":0,"total_tokens":7620}}}"#
+    static let muse = #"{"payload_type":"run.usage","payload":{"models":[{"model":"muse-wonder-full-1.0","input_tokens":27363,"cached_tokens":0,"output_tokens":61,"reasoning_tokens":50,"calls":1}]}}"#
+    static let pi = [
+        #"{"type":"message_end","message":{"role":"assistant","model":"deepseek/deepseek-v4.1-flash","usage":{"input":2343,"output":59,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2402,"cost":{"input":8.013060000000001e-05,"output":8.0712e-06,"cacheRead":0,"cacheWrite":0,"total":8.82018e-05}},"responseId":"gen-sample-1","stopReason":"toolUse"}}"#,
+        #"{"type":"message_end","message":{"role":"assistant","model":"deepseek/deepseek-v4.1-flash","usage":{"input":2417,"output":6,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2423,"cost":{"input":8.26614e-05,"output":8.208e-07,"cacheRead":0,"cacheWrite":0,"total":8.34822e-05}},"responseId":"gen-sample-2","stopReason":"stop"}}"#,
+        #"{"type":"agent_end"}"#,
+    ]
+}
+
+@Suite struct StreamParserTests {
+    private func usage(_ kind: AgentKind, _ lines: [String]) -> [TurnUsage] {
+        run(kind, lines).compactMap { if case .usage(let value) = $0 { value } else { nil } }
+    }
+
+    @Test func capturedClaudeBucketsAndCost() throws {
+        let value = try #require(usage(.claude, [ClaudeInputSamples.tokenUsage]).first)
+        #expect(value == TurnUsage(models: [ModelUsage(model: "claude-haiku-5-5", uncachedInput: 2,
+            cacheRead: 11382, cacheWrite: 9705, cacheWrite1h: 9705, output: 6, reasoning: 0)], reportedCostUSD: 0.00205802))
+        // Acceptance example from #280, in the captured wire shape.
+        let example = ClaudeInputSamples.tokenUsage.replacingOccurrences(of: "9705", with: "8673")
+            .replacingOccurrences(of: "0.00205802", with: "0.00185062")
+        let expected = try #require(usage(.claude, [example]).first)
+        #expect(expected.models.first?.cacheWrite == 8673)
+        #expect(expected.models.first?.cacheWrite1h == 8673)
+        #expect(expected.models.first?.cacheRead == 11382)
+        #expect(expected.reportedCostUSD == 0.00185062)
+    }
+
+    @Test func claudePrefersTurnMapAndFallsBackToLegacyMap() throws {
+        var object = try #require(decode(ClaudeInputSamples.tokenUsage))
+        object["modelUsage"] = ["old-model": ["inputTokens": 9999]]
+        let line = summarizeToolInput(object)
+        #expect(usage(.claude, [line]).first?.models.first?.model == "claude-haiku-5-5")
+        object.removeValue(forKey: "model_usage_since_last_result")
+        #expect(usage(.claude, [summarizeToolInput(object)]).first?.models == [ModelUsage(model: "old-model", uncachedInput: 9999)])
+        object["model_usage_since_last_result"] = [String: Int]()
+        #expect(usage(.claude, [summarizeToolInput(object)]).isEmpty)
+    }
+
+    @Test func codexCumulativeIncludesCachedInput() throws {
+        let captured = try #require(usage(.codex, [TokenUsageSamples.codex]).first)
+        #expect(captured.models == [ModelUsage(model: "", uncachedInput: 2450, cacheRead: 12160, cacheWrite: 0, output: 6, reasoning: 0)])
+        #expect(captured.cumulative)
+        let example = #"{"type":"turn.completed","usage":{"input_tokens":39555,"cached_input_tokens":31744}}"#
+        #expect(usage(.codex, [example]) == [TurnUsage(models: [ModelUsage(model: "", uncachedInput: 7811, cacheRead: 31744)], cumulative: true)])
+    }
+
+    @Test func antigravityAndMuseKeepReasoningInsideOutput() throws {
+        #expect(usage(.antigravity, [TokenUsageSamples.antigravity]) == [TurnUsage(models: [
+            ModelUsage(model: "", uncachedInput: 7578, cacheRead: 0, output: 42, reasoning: 36)], cumulative: true)])
+        #expect(usage(.muse, [TokenUsageSamples.muse]) == [TurnUsage(models: [
+            ModelUsage(model: "muse-wonder-full-1.0", uncachedInput: 27363, cacheRead: 0, output: 61, reasoning: 50)])])
+        #expect(usage(.antigravity, TokenUsageSamples.antigravityCached) == [TurnUsage(models: [
+            ModelUsage(model: "", uncachedInput: 9835, cacheRead: 5520, output: 966, reasoning: 918)], cumulative: true)])
+    }
+
+    @Test func antigravityResumedResultIsCumulativeNotItsLastStep() {
+        let first = usage(.antigravity, TokenUsageSamples.antigravityResumed[0])
+        let resumed = usage(.antigravity, TokenUsageSamples.antigravityResumed[1])
+        #expect(first == [TurnUsage(models: [ModelUsage(model: "", uncachedInput: 7583, cacheRead: 0, output: 46, reasoning: 41)], cumulative: true)])
+        #expect(resumed == [TurnUsage(models: [ModelUsage(model: "", uncachedInput: 9899, cacheRead: 5529, output: 91, reasoning: 80)], cumulative: true)])
+    }
+
+    @Test func piAggregatesAssistantRequestsOnceAndResets() throws {
+        var parser = PiParser()
+        for line in TokenUsageSamples.pi.dropLast() { #expect(parser.parse(line: line).isEmpty) }
+        let events = parser.parse(line: TokenUsageSamples.pi.last!)
+        let value = try #require(events.compactMap { if case .usage(let v) = $0 { v } else { nil } }.first)
+        #expect(events.count == 2)
+        #expect(value.models == [ModelUsage(model: "deepseek/deepseek-v4.1-flash", uncachedInput: 4760,
+            cacheRead: 0, cacheWrite: 0, output: 65, reasoning: 0)])
+        #expect(abs((value.reportedCostUSD ?? 0) - 0.000171684) < 1e-12)
+        #expect(value.generationIDs == ["gen-sample-1", "gen-sample-2"])
+        #expect(parser.parse(line: #"{"type":"agent_end"}"#) == [.finished])
+    }
+
+    @Test func piSeparatesModelsAndIgnoresUserUsage() {
+        let lines = [
+            #"{"type":"message_end","message":{"role":"user","usage":{"input":900}}}"#,
+            #"{"type":"message_end","message":{"role":"assistant","model":"a","usage":{"input":3}}}"#,
+            #"{"type":"message_end","message":{"role":"assistant","model":"b","usage":{"output":4}}}"#,
+            #"{"type":"agent_end"}"#,
+        ]
+        #expect(usage(.pi, lines) == [TurnUsage(models: [ModelUsage(model: "a", uncachedInput: 3), ModelUsage(model: "b", output: 4)])])
+    }
+
+    @Test func missingMalformedAndExplicitZeroStayDistinct() {
+        for (kind, line) in [(AgentKind.claude, #"{"type":"result"}"#), (.codex, #"{"type":"turn.completed","usage":{}}"#),
+            (.antigravity, #"{"event":"result","result":{"status":"SUCCESS"}}"#), (.muse, #"{"payload_type":"run.usage","payload":{"models":[]}}"#),
+            (.pi, #"{"type":"agent_end"}"#), (.sail, SailEvent.finished.line)] {
+            #expect(usage(kind, [line]).isEmpty)
+        }
+        #expect(usage(.codex, [#"{"type":"turn.completed","usage":{"input_tokens":true,"output_tokens":-2}}"#]).isEmpty)
+        #expect(usage(.codex, [#"{"type":"turn.completed","usage":{"input_tokens":0}}"#]).first?.models == [ModelUsage(model: "", uncachedInput: 0)])
+    }
+
+    @Test func usageDoesNotChangeTranscriptOrEndText() {
+        var assembler = ThreadAssembler()
+        var messages: [ChatMessage] = []
+        assembler.apply(.textDelta("hello"), to: &messages)
+        assembler.apply(.usage(TurnUsage(models: [])), to: &messages)
+        assembler.apply(.textDelta(" world"), to: &messages)
+        #expect(messages.count == 1)
+        #expect(messages.first?.text == "hello world")
+    }
+
+    @Test func aggregationDoesNotOverflowOrAddCumulativeReports() {
+        var accumulator = TurnUsageAccumulator()
+        let large = TurnUsage(models: [ModelUsage(model: "a", uncachedInput: Int.max / 2 + 1, output: 1)], reportedCostUSD: Double.greatestFiniteMagnitude)
+        accumulator.add(large)
+        accumulator.add(large)
+        accumulator.add(large)
+        #expect(accumulator.value?.models.first?.uncachedInput == nil)
+        #expect(accumulator.value?.models.first?.output == 3)
+        #expect(accumulator.value?.reportedCostUSD == nil)
+        let cumulative = TurnUsage(models: [ModelUsage(model: "a", uncachedInput: 100)], cumulative: true)
+        accumulator.add(cumulative)
+        accumulator.add(cumulative)
+        #expect(accumulator.value == cumulative)
+    }
+
+    @Test func usageBeforeFailureIsRetained() {
+        let claude = ClaudeInputSamples.tokenUsage.replacingOccurrences(of: "\"is_error\":false", with: "\"is_error\":true")
+        #expect(usage(.claude, [claude]).count == 1)
+        #expect(usage(.antigravity, [#"{"event":"error","message":"failed"}"#, TokenUsageSamples.antigravity]).count == 1)
+    }
+
+    /// Opt-in, no timing threshold: full parsing and isolated usage extraction from decoded JSON.
+    @Test func usageParserBenchmark() throws {
+        guard let path = ProcessInfo.processInfo.environment["BOTCHU_USAGE_PARSER_BENCHMARK"] else { return }
+        let samples: [(AgentKind, [String])] = [(.claude, [ClaudeInputSamples.tokenUsage]), (.codex, [TokenUsageSamples.codex]),
+            (.antigravity, [TokenUsageSamples.antigravity]), (.muse, [TokenUsageSamples.muse]), (.pi, TokenUsageSamples.pi)]
+        var results = "Parser: microseconds per complete turn (20000 iterations); JSON decoding included\n"
+        for (kind, lines) in samples {
+            let start = Date()
+            var count = 0
+            for _ in 0..<20_000 { count += run(kind, lines).count }
+            let full = Date().timeIntervalSince(start) * 1_000_000 / 20_000
+            let objects = lines.compactMap(decode)
+            let extraction = Date()
+            var usages = 0
+            for _ in 0..<20_000 {
+                var accumulator = TurnUsageAccumulator()
+                for object in objects {
+                    let value: TurnUsage?
+                    switch kind {
+                    case .claude: value = UsageParsing.claude(object)
+                    case .codex: value = UsageParsing.codex(object)
+                    case .antigravity: value = UsageParsing.antigravity(object["result"] as? JSON)
+                    case .muse: value = UsageParsing.muse(object["payload"] as? JSON ?? [:])
+                    case .pi: value = UsageParsing.pi(object["message"] as? JSON ?? [:])
+                    case .sail: value = nil
+                    }
+                    if let value { accumulator.add(value) }
+                }
+                usages += accumulator.value?.models.count ?? 0
+            }
+            let added = Date().timeIntervalSince(extraction) * 1_000_000 / 20_000
+            results += "\(kind.rawValue): full \(full) us; usage extraction/aggregation \(added) us; events \(count), models \(usages)\n"
+        }
+        try results.write(toFile: path, atomically: true, encoding: .utf8)
+    }
+}
+
+// Captured agy 1.4.9 on 2026-10-28 after a shell call. Its input_tokens already
+// excludes cache_read_tokens: the second step reports 2261 input and 5520 cached.
+// Final usage adds each step; total_tokens here is input + output, also excluding cache.
+extension TokenUsageSamples {
+    static let antigravityCached = [
+        #"{"event":"step_update","step_update":{"step_index":1,"step_type":"agent_response","usage":{"input_tokens":7574,"output_tokens":105,"thinking_tokens":63,"cache_read_tokens":0,"total_tokens":7679}}}"#,
+        #"{"event":"step_update","step_update":{"step_index":3,"step_type":"agent_response","usage":{"input_tokens":2261,"output_tokens":861,"thinking_tokens":855,"cache_read_tokens":5520,"total_tokens":3122}}}"#,
+        #"{"event":"result","result":{"status":"SUCCESS","usage":{"input_tokens":9835,"output_tokens":966,"thinking_tokens":918,"cache_read_tokens":5520,"total_tokens":10801}}}"#,
+    ]
+}
+
+// Captured new and resumed agy 1.4.9 turns, 2026-10-28, no tools.
+// The resumed step is 2316 input / 45 output but result is 9899 / 91: result usage
+// is cumulative for its UUID conversation, including the first turn's 7583 / 46.
+extension TokenUsageSamples {
+    static let antigravityResumed = [
+        [
+            #"{"event":"step_update","step_update":{"step_index":1,"step_type":"agent_response","usage":{"input_tokens":7583,"output_tokens":46,"thinking_tokens":41,"cache_read_tokens":0,"total_tokens":7629}}}"#,
+            #"{"event":"result","result":{"status":"SUCCESS","usage":{"input_tokens":7583,"output_tokens":46,"thinking_tokens":41,"cache_read_tokens":0,"total_tokens":7629},"num_turns":1}}"#,
+        ],
+        [
+            #"{"event":"step_update","step_update":{"step_index":4,"step_type":"agent_response","usage":{"input_tokens":2316,"output_tokens":45,"thinking_tokens":39,"cache_read_tokens":5529,"total_tokens":2361}}}"#,
+            #"{"event":"result","result":{"status":"SUCCESS","usage":{"input_tokens":9899,"output_tokens":91,"thinking_tokens":80,"cache_read_tokens":5529,"total_tokens":9990},"num_turns":2}}"#,
+        ],
+    ]
 }
