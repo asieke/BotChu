@@ -7,8 +7,9 @@ import Foundation
 /// A message leaving the pending ones is never in neither file. A message the CLI took, or one a
 /// turn starts with, stays in the saved queue until a saved transcript holds it, and only the
 /// messages the written transcript holds leave the queue, from the queue as it is once that write
-/// is done, so a message taken meanwhile stays (`MessageQueue.saved`). Each file is saved whole and
-/// a newer state takes the place of one not written yet, so a late save never overwrites a newer
+/// is done, so a message taken meanwhile stays (`MessageQueue.saved`). Transcript suffixes commit
+/// durably before queue files are replaced. A newer state takes the place of one not written yet,
+/// so a late save never overwrites a newer
 /// one; a state already written isn't written again.
 @MainActor
 public struct ConversationStorage {
@@ -50,8 +51,14 @@ public struct ConversationStorage {
     public func saveTranscript(_ transcript: [ChatMessage], version: AnyHashable? = nil, queue: Queue,
                                failed: @escaping @MainActor @Sendable ([SaveFailure]) -> Void,
                                done: (@MainActor @Sendable (Bool) -> Void)? = nil) {
+        saveTranscript(PagedTranscript.Snapshot(transcript), version: version, queue: queue, failed: failed, done: done)
+    }
+
+    public func saveTranscript(_ snapshot: PagedTranscript.Snapshot, version: AnyHashable? = nil, queue: Queue,
+                               failed: @escaping @MainActor @Sendable ([SaveFailure]) -> Void,
+                               done: (@MainActor @Sendable (Bool) -> Void)? = nil) {
         let home = home, task = task, file = transcriptURL
-        storage.replace(lane, slot: "thread", value: transcript, version: version,
+        storage.replace(lane, slot: "thread", value: snapshot, version: version,
                         write: { try home.writeTranscript($0, task: task) }) { result in
             guard var current = queue.get() else {
                 done?(result.isSuccess)
@@ -61,7 +68,7 @@ public struct ConversationStorage {
             var failures: [SaveFailure] = []
             switch result {
             case .success(let written):
-                current.saved(written)
+                current.saved(written.messages)
             case .failure(let error):
                 if !current.taken.isEmpty, (error as? StorageQueue.Failure) != .retired {
                     if !current.messages.isEmpty { current.pause() }

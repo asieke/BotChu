@@ -3,7 +3,7 @@ import Foundation
 /// Saves sub-agents' transcripts and records (`BotHome.saveSubagentThread`, `saveSubagent`) off the
 /// caller's thread, each run in its own lane of a `StorageQueue`, so one run's write never waits
 /// for another's. While a run streams, its latest state is written at most once per `interval`
-/// (`checkpoint`), each write replacing the transcript atomically, rather than on every batch of
+/// (`checkpoint`), each write committing only the changed suffix, rather than on every batch of
 /// output. A run's start and end (`save`) drop the checkpoint still waiting and are written at
 /// once, after any write of that run under way, so an older checkpoint never replaces a newer
 /// state; the caller waits for them without blocking, and a handoff goes back only once its record
@@ -14,11 +14,17 @@ public final class SubagentArchive: @unchecked Sendable {
         public var messages: [ChatMessage]
         /// The owning bot's folder.
         public var home: BotHome
+        public var start: Int
+        public var base: [ChatMessage]?
+        public var pending: [PagedTranscript.Pending]
 
-        public init(record: SubagentRun, messages: [ChatMessage], home: BotHome) {
+        public init(record: SubagentRun, messages: [ChatMessage], home: BotHome, start: Int = 0, base: [ChatMessage]? = nil, pending: [PagedTranscript.Pending] = []) {
             self.record = record
             self.messages = messages
             self.home = home
+            self.start = start
+            self.base = base
+            self.pending = pending
         }
 
         /// The run's lane: its folder.
@@ -40,19 +46,22 @@ public final class SubagentArchive: @unchecked Sendable {
     }
 
     public static func writeToDisk(_ snapshot: Snapshot) throws {
-        try snapshot.home.saveSubagentThread(snapshot.messages, id: snapshot.record.id, taskID: snapshot.record.rootTaskID)
+        try snapshot.home.saveSubagentThread(PagedTranscript.Snapshot(snapshot.messages, start: snapshot.start, base: snapshot.base, pending: snapshot.pending), id: snapshot.record.id, taskID: snapshot.record.rootTaskID)
         try snapshot.home.saveSubagent(snapshot.record)
     }
 
     /// Keeps the run's latest state and writes it within `interval`, off the caller's thread. A
     /// write that fails is reported to `failed`, on the main queue.
-    public func checkpoint(_ snapshot: Snapshot, failed: @escaping @MainActor (Error) -> Void) {
+    public func checkpoint(_ snapshot: Snapshot, saved: (@MainActor @Sendable (Snapshot) -> Void)? = nil, failed: @escaping @MainActor (Error) -> Void) {
         // Called on the main actor only.
         nonisolated(unsafe) let failed = failed
         let write = write
         storage.replace(snapshot.lane, slot: Self.slot, value: snapshot, delay: interval, write: { try write($0); return 0 }) { result in
-            guard case .failure(let error) = result, (error as? StorageQueue.Failure) == nil else { return }
-            failed(error)
+            switch result {
+            case .success(let snapshot): saved?(snapshot)
+            case .failure(let error):
+                if (error as? StorageQueue.Failure) == nil { failed(error) }
+            }
         }
     }
 

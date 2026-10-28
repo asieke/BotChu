@@ -14,6 +14,72 @@ final class ConversationState {
     /// The thread, oldest first. It changes through `load`, `replace`, `append`, `stream` and
     /// `edit`, which keep `summary` up to date.
     private(set) var messages: [ChatMessage] = []
+    private(set) var historyStart = 0
+    @ObservationIgnored private var pending: [UUID: PagedTranscript.Pending] = [:]
+    @ObservationIgnored private(set) var prefixDigest = ThreadDigest([])
+    @ObservationIgnored private var savedBase: [ChatMessage]? = []
+    private(set) var browsing: HistoryLoad?
+    var isPaging = false
+    var reportDigest: ThreadDigest {
+        guard isLoaded else { return digest ?? ThreadDigest([]) }
+        let reply = messages.last(where: { $0.role == .assistant })?.text
+        var result = ThreadDigest(summary: summary, count: historyStart + messages.count,
+                                  lastReply: reply ?? prefixDigest.lastReply ?? digest?.lastReply,
+                                  shellCount: prefixDigest.shellCount + ToolCounts(messages: messages).shell)
+        if reply == nil { result.lastReplyCut = prefixDigest.lastReply != nil ? prefixDigest.lastReplyCut : (digest?.lastReplyCut ?? false) }
+        return result
+    }
+    var displayMessages: [ChatMessage] {
+        let tail = messages
+        guard let browsing else { return tail }
+        let latest = Dictionary(tail.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        return browsing.messages.map { latest[$0.id] ?? pending[$0.id]?.message ?? $0 }
+    }
+    var displayStart: Int { browsing?.start ?? historyStart }
+    var hasLaterPage: Bool { browsing.map { $0.start + $0.messages.count < historyStart + messages.count } ?? false }
+    var snapshot: PagedTranscript.Snapshot { .init(messages, start: historyStart, base: savedBase, pending: Array(pending.values)) }
+
+    func load(_ history: HistoryLoad) {
+        load(history.messages, summary: history.digest.summary)
+        historyStart = history.start
+        prefixDigest = history.prefix
+        digest = history.digest
+    }
+
+    func browse(_ page: HistoryLoad) {
+        var page = page
+        let current = browsing?.messages ?? messages
+        page.messages = Array((page.messages + current).prefix(PagedTranscript.browsingLimit))
+        browsing = page
+        epoch += 1
+    }
+
+    func pinDisplay() {
+        guard browsing == nil else { return }
+        let shown = Array(messages.suffix(PagedTranscript.browsingLimit))
+        browsing = HistoryLoad(messages: shown, digest: ThreadDigest(summary: summary, count: historyStart + messages.count,
+                                lastReply: messages.last(where: { $0.role == .assistant })?.text), bytes: 0, reindexed: false,
+                                start: historyStart + messages.count - shown.count, prefix: prefixDigest)
+    }
+
+    func browseLater(_ page: HistoryLoad) {
+        guard var current = browsing else { return }
+        let end = current.start + current.messages.count
+        let overlap = max(0, end - page.start)
+        current.messages += page.messages.dropFirst(overlap)
+        let drop = max(0, current.messages.count - PagedTranscript.browsingLimit)
+        current.messages.removeFirst(drop)
+        current.start += drop
+        browsing = current
+        epoch += 1
+    }
+
+    func showLatest() {
+        guard browsing != nil else { return }
+        browsing = nil
+        epoch += 1
+    }
+
     /// What a status reads from the thread. It changes when a message is added, not while a
     /// reply's text streams in, so a view that shows only the status isn't redrawn by every delta.
     private(set) var summary = ThreadSummary()
@@ -59,6 +125,11 @@ final class ConversationState {
         isLoaded = true
         revision += 1
         self.messages = messages
+        historyStart = 0
+        pending = [:]
+        prefixDigest = ThreadDigest([])
+        savedBase = messages
+        browsing = nil
         epoch += 1
         summarize(summary ?? ThreadSummary(messages))
         savedRevision = revision
@@ -74,11 +145,14 @@ final class ConversationState {
 
     /// Drops the thread from memory, keeping its digest for the sidebar and task reports.
     func unload() {
-        digest = ThreadDigest(summary: summary, count: messages.count, lastReply: messages.last(where: { $0.role == .assistant })?.text)
+        digest = reportDigest
         revision += 1
         savedRevision = revision
         isLoaded = false
         messages = []
+        savedBase = []
+        pending = [:]
+        browsing = nil
         epoch += 1
     }
 
@@ -94,9 +168,49 @@ final class ConversationState {
         savedRevision = max(savedRevision, revision)
     }
 
+    /// Drop only payload confirmed on disk. An unresolved tool remains mutable, even across a
+    /// very long turn. Browsing owns its own bounded window and never pins the live tail.
+    func saved(_ revision: Int, snapshot: PagedTranscript.Snapshot) {
+        saved(revision)
+        for update in snapshot.pending {
+            guard var current = pending[update.message.id] else { continue }
+            current.base = update.message
+            if let index = browsing?.messages.firstIndex(where: { $0.id == update.message.id }) {
+                browsing?.messages[index] = update.message
+            }
+            pending[update.message.id] = current.message == update.message && current.message.toolState != .running ? nil : current
+        }
+        guard historyStart == snapshot.start else { return }
+        savedBase = snapshot.messages
+        let safe = min(snapshot.messages.count, messages.count) - PagedTranscript.residentLimit
+        let keep = max(0, safe)
+        guard keep > 0, messages.prefix(keep).elementsEqual(snapshot.messages.prefix(keep)) else { return }
+        let dropped = Array(messages.prefix(keep))
+        for (offset, message) in dropped.enumerated() where message.toolState == .running {
+            pending[message.id] = .init(position: historyStart + offset, message: message)
+        }
+        var summary = prefixDigest.summary
+        summary.extend(with: dropped, from: 0)
+        let priorCut = prefixDigest.lastReplyCut
+        let droppedReply = dropped.last(where: { $0.role == .assistant })?.text
+        prefixDigest = ThreadDigest(summary: summary, count: historyStart + keep,
+                                    lastReply: droppedReply ?? prefixDigest.lastReply,
+                                    shellCount: prefixDigest.shellCount + ToolCounts(messages: dropped).shell)
+        if droppedReply == nil { prefixDigest.lastReplyCut = priorCut }
+        historyStart += keep
+        messages.removeFirst(keep)
+        savedBase?.removeFirst(keep)
+        epoch += 1
+    }
+
     /// The whole thread given anew. Given to a conversation not in memory, it is the thread now:
     /// no read under way is taken, and it is saved as any change is.
     func replace(_ messages: [ChatMessage]) {
+        historyStart = 0
+        pending = [:]
+        prefixDigest = ThreadDigest([])
+        savedBase = nil
+        browsing = nil
         if !isLoaded {
             history.adopt()
             isLoaded = true
@@ -105,7 +219,7 @@ final class ConversationState {
         revision += 1
         self.messages = messages
         epoch += 1
-        summarize(ThreadSummary(messages))
+        summarize(combinedSummary())
     }
 
     func append(_ message: ChatMessage) {
@@ -122,7 +236,20 @@ final class ConversationState {
     func stream(_ write: (inout [ChatMessage]) -> Void) {
         revision += 1
         let start = messages.count
-        write(&messages)
+        if pending.isEmpty { write(&messages) }
+        else {
+            let held = pending.values.sorted { $0.position < $1.position }
+            var working = held.map(\.message) + messages
+            write(&working)
+            let ids = Set(held.map { $0.message.id })
+            for message in working where ids.contains(message.id) {
+                if let prior = pending[message.id]?.message {
+                    prefixDigest.shellCount += ToolCounts(messages: [message]).shell - ToolCounts(messages: [prior]).shell
+                }
+                pending[message.id]?.message = message
+            }
+            messages = working.filter { !ids.contains($0.id) }
+        }
         var summary = self.summary
         summary.extend(with: messages, from: start)
         summarize(summary)
@@ -133,7 +260,13 @@ final class ConversationState {
         revision += 1
         change(&messages)
         epoch += 1
-        summarize(ThreadSummary(messages))
+        summarize(combinedSummary())
+    }
+
+    private func combinedSummary() -> ThreadSummary {
+        var value = prefixDigest.summary
+        value.extend(with: messages, from: 0)
+        return value
     }
 
     private func summarize(_ new: ThreadSummary) {

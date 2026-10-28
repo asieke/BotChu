@@ -25,7 +25,8 @@ struct ChatView: View {
     var body: some View {
         if let bot = model.bot(target.botID), let current = model.runSettings(of: target) {
             let task = model.task(target)
-            let messages = model.thread(target)
+            let conversation = model.conversation(target)
+            let messages = conversation.displayMessages
             let running = model.isRunning(target)
             // Its own turn, not only sub-agents it started, keeps its newest group live.
             let turnRunning = model.runStates[target] != nil
@@ -43,14 +44,19 @@ struct ChatView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         VStack(spacing: 0) {
-                            if start > 0 {
+                            if start > 0 || conversation.displayStart > 0 {
                                 Button {
                                     // The rows shown stay put as earlier ones go in above them.
-                                    transcript.showEarlier(items: items)
+                                    if start > 0 {
+                                        transcript.showEarlier(items: items)
+                                    } else {
+                                        model.pageEarlier(target) { transcript.revealEarlier() }
+                                    }
                                 } label: {
-                                    Label("Show \(min(start, TranscriptModel.page)) earlier", systemImage: "arrow.up")
+                                    Label("Show \(min(start + conversation.displayStart, TranscriptModel.page)) earlier", systemImage: "arrow.up")
                                         .font(.callout)
                                 }
+                                .disabled(conversation.isPaging)
                                 .buttonStyle(.link)
                                 .frame(maxWidth: .infinity)
                                 .padding(.bottom, 4)
@@ -97,7 +103,21 @@ struct ChatView: View {
                 }
                 .scrollsOnlyWithTheProbe()
                 // Opening a conversation, or switching to it, shows its newest message.
-                .onAppear { transcript.follow(.opened) }
+                .onAppear {
+                    conversation.showLatest()
+                    transcript.hasLaterPage = false
+                    transcript.loadLater = { model.pageLater(target) }
+                    transcript.follow(.opened)
+                }
+                .onDisappear {
+                    conversation.showLatest()
+                    transcript.loadLater = nil
+                }
+                .onChange(of: conversation.hasLaterPage) { _, later in transcript.hasLaterPage = later }
+                .onChange(of: transcript.isPinned) { _, pinned in
+                    if pinned { conversation.showLatest() }
+                    else { conversation.pinDisplay() }
+                }
                 // A card the reader opens stays where they clicked it, growing downward.
                 .onChange(of: transcript.overrides) { old, new in
                     if new.count(where: { $0.value }) > old.count(where: { $0.value }) { transcript.follow(.openedCard) }
@@ -105,6 +125,7 @@ struct ChatView: View {
                 .overlay(alignment: .bottom) {
                     if !transcript.isPinned {
                         Button {
+                            conversation.showLatest()
                             transcript.follow(.jumped)
                         } label: {
                             Label(running ? "Follow Live" : "Jump to Latest", systemImage: "arrow.down")

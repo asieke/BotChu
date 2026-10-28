@@ -124,7 +124,7 @@ final class SubagentRuntime {
         return made
     }
 
-    fileprivate func live(_ id: UUID) -> SubagentLive {
+    func live(_ id: UUID) -> SubagentLive {
         if let existing = lives[id] { return existing }
         let made = SubagentLive()
         lives[id] = made
@@ -642,7 +642,9 @@ final class SubagentRuntime {
                     self.stop(id)
                 }
                 do {
-                    self.archive.checkpoint(try self.snapshot(record, messages: live.messages), failed: failed)
+                    self.archive.checkpoint(try self.snapshot(record, messages: live.messages), saved: { [weak live] snapshot in
+                        live?.saved(snapshot)
+                    }, failed: failed)
                 } catch {
                     failed(error)
                 }
@@ -660,7 +662,7 @@ final class SubagentRuntime {
                         messages.append(ChatMessage(role: .note, text: "\(account.name) didn't exit after its reply, so BotChu ended it."))
                     }
                 }
-                let reply = live.messages.last(where: { $0.role == .assistant })?.text ?? ""
+                let reply = live.messages.last(where: { $0.role == .assistant })?.text ?? live.lastReply ?? ""
                 // A CLI that BotChu ended for staying on after its turn (#145) exits by a signal; its handoff stands.
                 let reason = persistenceFailure ?? failure ?? ((status != 0 && !runner.lingered || !finished || reply.isEmpty)
                     ? "\(account.name) ended without a successful handoff (exit \(status)). \(AppModel.lastLines(stderr))" : nil)
@@ -765,10 +767,11 @@ final class SubagentRuntime {
         record.finishedAt = Date()
         record.errorMessage = error
         let live = live(id)
-        record.handoffOutput = live.messages.last(where: { $0.role == .assistant }).map { MemoryNotes.handoffText($0.text) }
+        record.handoffOutput = (live.messages.last(where: { $0.role == .assistant })?.text ?? live.lastReply).map(MemoryNotes.handoffText)
         var messages = live.messages
         ThreadAssembler.closeRunningTools(&messages)
         if let error { messages.append(ChatMessage(role: phase == .stopped ? .note : .error, text: error)) }
+        live.update { ThreadAssembler.closeRunningTools(&$0) }
         live.messages = messages
         live.state = nil
         preparations[id] = nil
@@ -776,8 +779,19 @@ final class SubagentRuntime {
         // What the run asked to remember goes into the called bot's memory, which its Home hears
         // about; a save that fails waits to be tried again, and doesn't fail the handoff.
         if phase == .completed, let model, let targetBot = model.bot(record.targetBotID) {
-            model.saveMemory(from: messages, of: targetBot, reportTo: .home(targetBot.id)) { [weak self] lines in
-                self?.commit(record, messages: messages + lines, reviewed: reviewed)
+            let start = live.historyStart, rootTaskID = record.rootTaskID
+            let home = model.bot(record.rootBotID).map { BotHome(workspace: $0.workspace) }
+            Task { [weak self, weak model] in
+                guard let self, let model else { return }
+                let prefix: [ChatMessage]
+                if start > 0, let home {
+                    prefix = (try? await archive.storage.perform(home.subagentURL(id: id, taskID: rootTaskID).path, label: "memory history") {
+                        try home.loadSubagentHistory(id: id, taskID: rootTaskID, before: start, limit: start).messages
+                    }) ?? []
+                } else { prefix = [] }
+                model.saveMemory(from: prefix + messages, of: targetBot, reportTo: .home(targetBot.id)) { [weak self] lines in
+                    self?.commit(record, messages: messages + lines, reviewed: reviewed)
+                }
             }
         } else {
             commit(record, messages: messages, reviewed: reviewed)
@@ -808,7 +822,11 @@ final class SubagentRuntime {
             self.model?.sendNextQueued(to: ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID))
         }
         do {
-            archive.save(try snapshot(record, messages: messages), done: done)
+            let snapshot = try snapshot(record, messages: messages)
+            archive.save(snapshot) { [weak self] error in
+                if error == nil { self?.lives[record.id]?.saved(snapshot) }
+                done(error)
+            }
         } catch {
             done(error)
         }
@@ -859,7 +877,9 @@ final class SubagentRuntime {
     /// The run as it stands, with the folder of the bot that owns its records.
     private func snapshot(_ record: SubagentRun, messages: [ChatMessage]) throws -> SubagentArchive.Snapshot {
         guard let owner = model?.bot(record.rootBotID) else { throw DelegationFailure("The owning bot no longer exists.") }
-        return SubagentArchive.Snapshot(record: record, messages: messages, home: BotHome(workspace: owner.workspace))
+        let live = lives[record.id]
+        return SubagentArchive.Snapshot(record: record, messages: messages, home: BotHome(workspace: owner.workspace),
+                                        start: live?.historyStart ?? 0, base: live?.base, pending: Array(live?.pending.values ?? [:].values))
     }
 
 
@@ -891,7 +911,10 @@ final class SubagentRuntime {
                                                work: { home.loadSubagentThread(id: id, taskID: taskID) }) { [weak self] result in
                             guard let self, self.reading.remove(id) != nil, self.run(id)?.phase.isActive == true else { return }
                             let live = self.live(id)
-                            if !live.isLoaded { live.messages = (try? result.get()) ?? [] }
+                            if !live.isLoaded {
+                                let messages = (try? result.get()) ?? []
+                                live.load(HistoryLoad(messages: messages, digest: ThreadDigest(messages), bytes: 0, reindexed: false))
+                            }
                             self.pendingFinishes[id] = nil
                             self.finish(id, phase: .stopped, error: "BotChu restarted before this sub-agent finished.")
                         }
@@ -910,13 +933,51 @@ final class SubagentRuntime {
         live.isReading = true
         let home = BotHome(workspace: owner.workspace), taskID = record.rootTaskID
         archive.storage.submit(home.subagentURL(id: id, taskID: taskID).path, label: "read",
-                               work: { home.loadSubagentThread(id: id, taskID: taskID) }) { [weak self, weak live] result in
+                               work: { try home.loadSubagentHistory(id: id, taskID: taskID) }) { [weak self, weak live] result in
             guard let self, let live, self.lives[id] === live else { return }
             live.isReading = false
-            guard !live.isLoaded, case .success(let messages) = result else { return }
-            live.messages = messages
-            self.budget.use(id, bytes: HistoryBudget<UUID>.estimate(messages))
+            guard !live.isLoaded, case .success(let history) = result else { return }
+            live.load(history)
+            self.budget.use(id, bytes: HistoryBudget<UUID>.estimate(history.messages))
             self.trimThreads()
+        }
+    }
+
+    func pageEarlier(_ id: UUID, done: @escaping @MainActor () -> Void) {
+        let live = live(id)
+        guard !live.isReading, live.displayStart > 0, let record = run(id), let owner = model?.bot(record.rootBotID) else { return }
+        live.isReading = true
+        let home = BotHome(workspace: owner.workspace), end = live.displayStart
+        archive.storage.submit(home.subagentURL(id: id, taskID: record.rootTaskID).path, label: "page",
+                               work: { try home.loadSubagentHistory(id: id, taskID: record.rootTaskID, before: end, limit: PagedTranscript.pageSize) }) { [weak live] result in
+            guard let live else { return }
+            live.isReading = false
+            guard live.displayStart == end, case .success(let page) = result else { return }
+            live.browse(page)
+            done()
+        }
+    }
+
+    func pageLater(_ id: UUID, done: @escaping @MainActor () -> Void) {
+        let live = live(id)
+        guard !live.isReading, live.hasLaterPage, let page = live.browsing,
+              let record = run(id), let owner = model?.bot(record.rootBotID) else { return }
+        let home = BotHome(workspace: owner.workspace), end = page.start + page.messages.count
+        if end >= live.historyStart {
+            let messages = Array(live.messages.dropFirst(end - live.historyStart).prefix(PagedTranscript.pageSize))
+            live.browseLater(HistoryLoad(messages: messages, digest: ThreadDigest([]), bytes: 0, reindexed: false, start: end))
+            done()
+            return
+        }
+        live.isReading = true
+        archive.storage.submit(home.subagentURL(id: id, taskID: record.rootTaskID).path, label: "page",
+                               work: { try home.loadSubagentHistory(id: id, taskID: record.rootTaskID,
+                                        before: end + PagedTranscript.pageSize, limit: PagedTranscript.pageSize) }) { [weak live] result in
+            guard let live else { return }
+            live.isReading = false
+            guard live.browsing?.start == page.start, case .success(let later) = result else { return }
+            live.browseLater(later)
+            done()
         }
     }
 
@@ -990,10 +1051,85 @@ final class SubagentLive {
     var messages: [ChatMessage] = [] {
         didSet {
             isLoaded = true
+            if let reply = messages.last(where: { $0.role == .assistant })?.text { lastReply = reply }
             tally.update(messages)
-            if tally.counts != counts { counts = tally.counts }
+            let total = ToolCounts(tools: prefixCounts.tools + tally.counts.tools, shell: prefixCounts.shell + tally.counts.shell)
+            if total != counts { counts = total }
         }
     }
+    @ObservationIgnored private(set) var lastReply: String?
+    private(set) var historyStart = 0
+    @ObservationIgnored private(set) var pending: [UUID: PagedTranscript.Pending] = [:]
+    @ObservationIgnored private(set) var base: [ChatMessage] = []
+    @ObservationIgnored private var prefixCounts = ToolCounts()
+    private(set) var browsing: HistoryLoad?
+    var displayMessages: [ChatMessage] {
+        let tail = messages
+        guard let browsing else { return tail }
+        let latest = Dictionary(tail.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        return browsing.messages.map { latest[$0.id] ?? pending[$0.id]?.message ?? $0 }
+    }
+    var displayStart: Int { browsing?.start ?? historyStart }
+    var hasLaterPage: Bool { browsing.map { $0.start + $0.messages.count < historyStart + messages.count } ?? false }
+
+    func load(_ history: HistoryLoad) {
+        historyStart = history.start
+        lastReply = history.digest.lastReply
+        prefixCounts = ToolCounts(tools: history.prefix.summary.toolCallCount, shell: history.prefix.shellCount)
+        messages = history.messages
+        base = messages
+    }
+
+    func browse(_ history: HistoryLoad) {
+        var page = history
+        page.messages = Array((page.messages + displayMessages).prefix(PagedTranscript.browsingLimit))
+        browsing = page
+    }
+
+    func pinDisplay() {
+        guard browsing == nil, !messages.isEmpty else { return }
+        let shown = Array(messages.suffix(PagedTranscript.browsingLimit))
+        browsing = HistoryLoad(messages: shown, digest: ThreadDigest([]), bytes: 0, reindexed: false,
+                               start: historyStart + messages.count - shown.count)
+    }
+
+    func showLatest() { browsing = nil }
+
+    func browseLater(_ page: HistoryLoad) {
+        guard var current = browsing else { return }
+        let end = current.start + current.messages.count
+        current.messages += page.messages.dropFirst(max(0, end - page.start))
+        let drop = max(0, current.messages.count - PagedTranscript.browsingLimit)
+        current.messages.removeFirst(drop)
+        current.start += drop
+        browsing = current
+    }
+
+    func saved(_ snapshot: SubagentArchive.Snapshot) {
+        for update in snapshot.pending {
+            guard var current = pending[update.message.id] else { continue }
+            current.base = update.message
+            if let index = browsing?.messages.firstIndex(where: { $0.id == update.message.id }) {
+                browsing?.messages[index] = update.message
+            }
+            pending[update.message.id] = current.message == update.message && current.message.toolState != .running ? nil : current
+        }
+        guard historyStart == snapshot.start else { return }
+        base = snapshot.messages
+        let safe = min(snapshot.messages.count, messages.count) - PagedTranscript.residentLimit
+        let keep = max(0, safe)
+        guard keep > 0, messages.prefix(keep).elementsEqual(snapshot.messages.prefix(keep)) else { return }
+        for (offset, message) in messages.prefix(keep).enumerated() where message.toolState == .running {
+            pending[message.id] = .init(position: historyStart + offset, message: message)
+        }
+        let counts = ToolCounts(messages: Array(messages.prefix(keep)))
+        prefixCounts.tools += counts.tools
+        prefixCounts.shell += counts.shell
+        historyStart += keep
+        base.removeFirst(keep)
+        messages.removeFirst(keep)
+    }
+
     /// Whether the transcript is in memory: a finished run's, restored after a relaunch, is read
     /// when shown (`SubagentRuntime.readThread`); one dropped again keeps its counts.
     @ObservationIgnored private(set) var isLoaded = false
@@ -1003,6 +1139,10 @@ final class SubagentLive {
     fileprivate func unload() {
         let kept = counts
         tally = ToolCallTally()
+        prefixCounts = ToolCounts()
+        base = []
+        pending = [:]
+        browsing = nil
         messages = []
         counts = kept
         isLoaded = false
@@ -1016,7 +1156,20 @@ final class SubagentLive {
 
     /// Changes the transcript in place, without copying it.
     func update(_ change: (inout [ChatMessage]) -> Void) {
-        change(&messages)
+        if pending.isEmpty { change(&messages) }
+        else {
+            let held = pending.values.sorted { $0.position < $1.position }
+            var working = held.map(\.message) + messages
+            change(&working)
+            let ids = Set(held.map { $0.message.id })
+            for message in working where ids.contains(message.id) {
+                if let prior = pending[message.id]?.message {
+                    prefixCounts.shell += ToolCounts(messages: [message]).shell - ToolCounts(messages: [prior]).shell
+                }
+                pending[message.id]?.message = message
+            }
+            messages = working.filter { !ids.contains($0.id) }
+        }
     }
 }
 

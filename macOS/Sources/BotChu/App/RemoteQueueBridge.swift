@@ -213,14 +213,14 @@ import BotChuCore
     func reconcile() async {
         guard let id = botID, let queue, let model else { return }
         let target = ChatTarget.home(id)
-        _ = await model.loadedThread(target)
+        let history = await model.loadedThread(target)
         let snapshot = await queue.snapshot()
         guard botID == id, model.bot(id) != nil, snapshot.messages.count >= appliedRevision else { return }
         appliedRevision = snapshot.messages.count
         pending = snapshot.pending
         if let poll = snapshot.lastPoll, poll > (lastPoll ?? .distantPast) { lastPoll = poll }
         now = Date()
-        let existing = Set(model.thread(target).map(\.id))
+        let existing = Set((history ?? model.thread(target)).map(\.id))
         let added = snapshot.messages.filter { !existing.contains($0.id) }
         for message in added { model.append(message, to: target) }
         if added.contains(where: { $0.role == .assistant || $0.role == .error }), !model.isShown(target) { model.unread.insert(target) }
@@ -246,9 +246,9 @@ import BotChuCore
             model.note("\(sender.name)'s conversation is gone, so this reply stays here.", in: .home(remoteID))
             return
         }
-        _ = await model.loadedThread(target)
+        let history = await model.loadedThread(target)
         if model.messageQueues[target]?.messages.contains(where: { $0.id == reply.id }) == true
-            || model.thread(target).contains(where: { $0.id == reply.id }) {
+            || history?.contains(where: { $0.id == reply.id }) == true {
             try? await queue.markForwarded(messageID)
             forwarding.remove(messageID)
             return

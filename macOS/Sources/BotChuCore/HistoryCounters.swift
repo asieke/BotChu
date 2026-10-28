@@ -11,7 +11,12 @@ public final class HistoryCounters: @unchecked Sendable {
         public var bytesRead = 0
         /// Messages decoded from them.
         public var decoded = 0
-        /// JSON Lines files written whole, and their bytes.
+        public var encoded = 0
+        public var bytesCopied = 0
+        public var journalBytesWritten = 0
+        public var indexBytesRead = 0
+        public var indexBytesWritten = 0
+        /// JSON Lines payload writes (whole files or changed suffixes), and their bytes.
         public var writes = 0
         public var bytesWritten = 0
         /// Files rewritten while being read, with what could be read (`TranscriptRead`).
@@ -29,6 +34,11 @@ public final class HistoryCounters: @unchecked Sendable {
             sum.reads += rhs.reads
             sum.bytesRead += rhs.bytesRead
             sum.decoded += rhs.decoded
+            sum.encoded += rhs.encoded
+            sum.bytesCopied += rhs.bytesCopied
+            sum.journalBytesWritten += rhs.journalBytesWritten
+            sum.indexBytesRead += rhs.indexBytesRead
+            sum.indexBytesWritten += rhs.indexBytesWritten
             sum.writes += rhs.writes
             sum.bytesWritten += rhs.bytesWritten
             sum.repairs += rhs.repairs
@@ -40,8 +50,8 @@ public final class HistoryCounters: @unchecked Sendable {
 
         /// One line, for a benchmark's report.
         public var summary: String {
-            "\(reads) reads (\(bytesRead) B), \(decoded) decoded, \(writes) writes (\(bytesWritten) B), "
-                + "\(repairs) repairs, \(copies) copies, index \(indexReads) read / \(indexWrites) written"
+            "\(reads) reads (\(bytesRead) B), \(decoded) decoded / \(encoded) encoded, \(writes) writes (\(bytesWritten) B), "
+                + "\(bytesCopied) copied B, \(journalBytesWritten) journal B, \(indexBytesRead)/\(indexBytesWritten) index B, \(repairs) repairs, \(copies) copies, index \(indexReads) read / \(indexWrites) written"
         }
     }
 

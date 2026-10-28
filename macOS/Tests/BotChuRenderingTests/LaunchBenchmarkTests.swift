@@ -87,7 +87,7 @@ extension RenderingTests {
                            Double(memory.footprint) / 1_000_000, Double(memory.footprint - memory.baseline) / 1_000_000,
                            Double(memory.heap) / 1_000_000, memory.loaded, Double(memory.retained) / 1_000_000))
         report.note("Counters for that launch: \(memory.counts.summary)")
-        report.note("Every message decoded: \(memory.allDecoded ? "yes" : "NO") (\(memory.decodedOpen) of \(bench.openMessages) in Homes and open tasks)")
+        report.note("Every message indexed; requested tails decoded: \(memory.allDecoded ? "yes" : "NO") (\(memory.decodedOpen) of \(bench.openMessages) in Homes and open tasks)")
         report.note("Load after: \(ChatBenchReport.load())")
 
         let text = report.text(title: "Launch benchmark · \(samples) launches")
@@ -270,7 +270,7 @@ extension RenderingTests {
         try await Self.waitUntil(window) { app.drafts[selected] == "x" }
         let input = Self.ms(start)
         let count = expected[selected] ?? 0
-        try await Self.waitUntil(window) { app.thread(selected).count >= count }
+        try await Self.waitUntil(window) { app.thread(selected).count == min(count, PagedTranscript.residentLimit) }
         let content = Self.ms(start)
         // A conversation never shown in this launch.
         try await Task.sleep(for: .milliseconds(150))
@@ -279,7 +279,7 @@ extension RenderingTests {
         Self.draw(window)
         let feedback = Self.ms(click)
         let opened = expected[target] ?? 0
-        try await Self.waitUntil(window) { app.thread(target).count >= opened }
+        try await Self.waitUntil(window) { app.thread(target).count == min(opened, PagedTranscript.residentLimit) }
         let shown = Self.ms(click)
         try await Task.sleep(for: .milliseconds(400))
         await storage.settle()
@@ -306,9 +306,9 @@ extension RenderingTests {
             let click = Self.now()
             app.show(target)
             Self.draw(window)
-            try await Self.waitUntil(window) { app.thread(target).count >= count }
+            try await Self.waitUntil(window) { app.thread(target).count == min(count, PagedTranscript.residentLimit) }
             visits.append(Self.ms(click))
-            decodedOpen += app.thread(target).count
+            decodedOpen += app.conversation(target).historyStart + app.thread(target).count
             try await Task.sleep(for: .milliseconds(30))
         }
         try await Task.sleep(for: .milliseconds(500))
