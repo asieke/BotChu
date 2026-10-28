@@ -89,6 +89,8 @@ struct AnalyticsExplorerTests {
         let c = try context()
         c.evaluateScript("fixture.records[0].provider='pi';fixture.records[0].providerID='openrouter';fixture.records[1].provider='pi';fixture.records[1].providerID='radius';fixture.records[0].cost=null;fixture.records[0].costProvenance='unpriced';fixture.records[1].cost=null;fixture.records[1].costProvenance='unavailable';E=BotChuAnalytics.createExplorer(fixture)")
         #expect(c.evaluateScript("E.groups(E.range(from,through),'provider','name',1).map(g=>g.label).join(',')").toString() == "Claude Code,OpenRouter,Radius")
+        #expect(c.evaluateScript("E.label('model','claude-opus-4-6')").toString() == "Opus 4.6")
+        #expect(c.evaluateScript("E.resolve('claude-opus-4-6',fixture.records[1])===null").toBool() == true)
         #expect(c.evaluateScript("E.range(from,through).filter(r=>E.matches(r,[{k:'price',v:'unpriced'}])).length").toInt32() == 1)
         #expect(c.evaluateScript("E.range(from,through).filter(r=>E.matches(r,[{k:'price',v:'unavailable'}])).length").toInt32() == 1)
     }

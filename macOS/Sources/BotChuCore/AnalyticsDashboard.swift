@@ -460,7 +460,8 @@ public enum AnalyticsDashboard {
             var record = records.find(function (r) {
                 return dimension(r, "model") === v;
               }),
-              price = record && resolve(v, record);
+              price = (record && resolve(v, record)) || prices.find(function(p) { return p.model === v; });
+            // Display names are metadata; matching one never makes an unknown backend priceable.
             // An unknown ID stays recognizable, without presenting it as a priced model.
             return price
               ? price.displayName
