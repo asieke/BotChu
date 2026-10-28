@@ -205,6 +205,8 @@ extension RenderingTests {
         try draft.save { model.newSession(home) }
         #expect(try String(contentsOf: BotDocument.instructions.url(for: scout), encoding: .utf8) == "Answer in haiku.")
         #expect(model.runSettings(of: home)?.resumableSessionID == nil)
+        // The note joins the thread once its history has loaded, which happens after showing it.
+        for _ in 0..<300 where model.thread(home).last?.text != "New session" { try await Task.sleep(for: .milliseconds(10)) }
         #expect(model.thread(home).last?.text == "New session")
         #expect(model.runSettings(of: taskTarget)?.resumableSessionID == "task-session")
         #expect(model.runSettings(of: .home(other.id))?.resumableSessionID == "other-session")
