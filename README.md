@@ -259,7 +259,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     conversation (Sail keeps no `previous_response_id` state), polls `GET /responses/{id}` (2 s at
     first, then up to every 30 s, honouring `Retry-After`), runs the function tools the model calls
     in the bot's folder — `read`, `write`, `edit` and `bash`, as Pi's, whose environment never has
-    the key — and submits again until the model answers without one. Every request is on Flex; a
+    the key — and submits again until the model answers without one. A reply without a call that
+    stops short (empty, or ending by announcing its next step, such as `…one at a time:`) is asked
+    to go on, up to twice in a row, so a model that narrates instead of calling doesn't end the turn
+    mid-task (#251); its system prompt says the same. Every request is on Flex; a
     model or request Sail won't take on Flex fails the turn saying so, with the choices (another
     model in Settings ▸ Sail or the model menu, or another account): BotChu never moves work to a
     faster, pricier window for queue delay. A submission is retried with the same idempotency key

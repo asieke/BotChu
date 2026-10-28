@@ -84,6 +84,8 @@ public enum SailInstructions {
             - Use bash for the rest: listing and searching (ls, rg, find), git, builds and tests.
             - Each of your requests waits in Sail's Flex queue, so work in fewer, larger steps: run independent \
             commands in one bash call where that is safe, and read what you need at once.
+            - Keep going until the task is done. A reply without a tool call ends your turn and hands it back to \
+            the owner, so never end one by saying what you'll do next: make the call instead.
             - Reply in Markdown, briefly: what you did, and anything left.
 
             Today is \(formatter.string(from: date)).
@@ -121,6 +123,27 @@ public enum SailInstructions {
         }
         return found.reversed()
     }
+
+    /// What BotChu says when a reply ends the turn by announcing a step it didn't take.
+    static let keepGoing = """
+        BotChu: your last reply said what you'd do next but called no tool, and a reply without a tool call ends \
+        your turn. If there's more to do, make the call now. If you're done, reply with your final summary.
+        """
+
+    /// Whether a reply without a tool call stops short: empty, or ending by announcing its next step
+    /// ("Now the two failing tests, one at a time:"), as some models do mid-task instead of calling
+    /// the tool. A final answer doesn't read as one.
+    public static func announcesNextStep(_ reply: String) -> Bool {
+        let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return true }
+        if text.hasSuffix(":") || text.hasSuffix("…") || text.hasSuffix("...") { return true }
+        let body = text.trimmingCharacters(in: CharacterSet(charactersIn: ".!"))
+        let start = body.lastIndex { ".!?\n".contains($0) }.map(body.index(after:)) ?? body.startIndex
+        let sentence = body[start...].trimmingCharacters(in: .whitespaces).lowercased()
+        guard !sentence.hasPrefix("let me know") else { return false }
+        return ["let me ", "now let me ", "next, let me ", "now i'll ", "next, i'll ", "next i'll ", "continuing "]
+            .contains { sentence.hasPrefix($0) }
+    }
 }
 
 /// One Sail turn, end to end: picks up a submission an earlier run left at Sail, adds the owner's
@@ -153,6 +176,9 @@ public struct SailAgent: Sendable {
     public var live: SailLive?
     /// Requests one turn may make, as a guard against a model that never stops calling tools.
     public var maxRequests = 200
+    /// Replies in a row that stop short (`SailInstructions.announcesNextStep`) and are asked to go
+    /// on, before one is taken as the answer.
+    public var maxNudges = 2
     public var newKey: @Sendable () -> String = { UUID().uuidString.lowercased() }
     public var now: @Sendable () -> Date = { Date() }
 
@@ -212,6 +238,7 @@ public struct SailAgent: Sendable {
         emit(.session(session.id))
 
         var reportedModel: String?
+        var nudges = 0
         for _ in 0..<maxRequests {
             let response = try await submitAndWait(model: model, effort: turn.effort, session: &session, emit: emit)
             if let ran = response.model, ran != reportedModel {
@@ -221,7 +248,16 @@ public struct SailAgent: Sendable {
             switch response.status {
             case .completed:
                 let calls = try record(response, in: &session, includeCalls: true, emit: emit)
-                if calls.isEmpty { return }
+                if calls.isEmpty {
+                    // A reply announcing its next step without the call would end the turn
+                    // mid-task, so the model is asked to go on, or to say it's done.
+                    guard nudges < maxNudges, SailInstructions.announcesNextStep(response.texts.last ?? "") else { return }
+                    nudges += 1
+                    session.items.append(SailRequest.userMessage(SailInstructions.keepGoing))
+                    try save(&session)
+                    continue
+                }
+                nudges = 0
                 for call in calls {
                     try Task.checkCancellation()
                     emit(.toolStarted(id: call.callID, name: call.name, arguments: SailJSON.parse(call.arguments) ?? .string(call.arguments)))
