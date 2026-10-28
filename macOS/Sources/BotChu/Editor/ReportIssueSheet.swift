@@ -1,9 +1,10 @@
 import SwiftUI
 import BotChuCore
 
-/// Report a Bug or Feature: one field for the report, which takes images and starts with a
-/// screenshot of the window behind the sheet, filed as a public issue in BotChu's repository with
-/// gh, beneath it the title it gets and the app state that goes with it, so nothing is posted unseen.
+/// Report a Bug or Feature: a title (the report's first line until one is typed) and one field for
+/// the report, which takes images and starts with a screenshot of the window behind the sheet, filed
+/// as a public issue in BotChu's repository with gh, as its header says, beneath it the app state
+/// that goes with it, so nothing is posted unseen.
 struct ReportIssueSheet: View {
     @Environment(AppModel.self) private var model
     @Bindable var request: IssueReportRequest
@@ -12,10 +13,16 @@ struct ReportIssueSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Report a Bug or Feature").font(.headline)
-                Text("Files a public issue in \(IssueReport.repository) on GitHub, with gh as you're signed in.")
-                    .font(.caption).foregroundStyle(.secondary)
+                // Where it goes and who sees it, with what it attaches, in one place (#232).
+                Label(IssueReport.repository + " · " + request.visibility, systemImage: "globe")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(.quaternary, in: Capsule())
+                    .help("Anyone can read the issue on GitHub, and see what it attaches. gh files it as you're signed in.")
             }
             .padding(16)
             Divider()
@@ -32,8 +39,17 @@ struct ReportIssueSheet: View {
     private var form: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
+                // Typed, or left empty for the report's first line, which it shows until then.
+                LabeledContent("Title") {
+                    TextField("Title", text: $request.typedTitle,
+                              prompt: Text(request.isEmpty ? "Title" : IssueReport.title(from: request.text)))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                }
+                .font(.callout)
+                .disabled(request.state == .filing)
                 DraftEditor(text: $request.text, focused: $editing, images: request.images,
-                            placeholder: "What went wrong, or what would you like BotChu to do? The first line becomes the title.",
+                            placeholder: "What went wrong, or what would you like BotChu to do?",
                             editable: request.state != .filing, minHeight: 170, maxHeight: 170, identifier: "report-input")
                 if let problem = request.screenshotProblem {
                     Label("No screenshot of this window is attached. " + problem, systemImage: "exclamationmark.triangle")
@@ -46,13 +62,6 @@ struct ReportIssueSheet: View {
             .padding(.vertical, 10)
             Divider()
             VStack(alignment: .leading, spacing: 12) {
-                LabeledContent("Title") {
-                    Text(request.isEmpty ? "From the report's first line" : request.title)
-                        .foregroundStyle(request.isEmpty ? .tertiary : .primary)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .font(.callout)
                 DisclosureGroup(isExpanded: $showsState) {
                     Text(request.snapshot.lines.joined(separator: "\n"))
                         .font(.caption)
@@ -78,8 +87,6 @@ struct ReportIssueSheet: View {
                     .foregroundStyle(.red)
                 }
                 HStack(spacing: 12) {
-                    Text(notice)
-                        .font(.caption).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                     if request.state == .filing {
                         ProgressView().controlSize(.small)
@@ -96,17 +103,6 @@ struct ReportIssueSheet: View {
                 }
             }
             .padding(16)
-        }
-    }
-
-    /// Who sees what the report sends, the window's screenshot included.
-    private var notice: String {
-        let others = request.images.images.count - (request.hasScreenshot ? 1 : 0)
-        switch (request.hasScreenshot, others > 0) {
-        case (true, false): return "Anyone can read the issue, and see the window's screenshot, on GitHub."
-        case (true, true): return "Anyone can read the issue, and see the window's screenshot and other images, on GitHub."
-        case (false, true): return "Anyone can read the issue, and see its images, on GitHub."
-        case (false, false): return "Anyone can read the issue on GitHub."
         }
     }
 

@@ -38,6 +38,7 @@ struct ContentView: View {
         }
         .sheet(item: $model.documentEditor) { request in
             BotDocumentEditor(request: request)
+                .environment(model)
                 .frame(width: contentSize.width * 0.5, height: contentSize.height * 0.5)
         }
         .sheet(item: $model.issueReport) { request in
