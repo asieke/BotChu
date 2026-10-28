@@ -78,6 +78,15 @@ struct AnalyticsExplorerTests {
         #expect(c.evaluateScript("E.insights(from,through).find(c=>c.id==='fanout').value===null").toBool() == true)
     }
 
+    @Test func dollarAxisKeepsFractionalAndSubCentTicksExact() throws {
+        let c = try context()
+        #expect(c.evaluateScript("BotChuAnalytics.dollarTick(2.5,2.5)").toString() == "$2.5")
+        #expect(c.evaluateScript("BotChuAnalytics.dollarTick(7.5,2.5)").toString() == "$7.5")
+        #expect(c.evaluateScript("BotChuAnalytics.dollarTick(.001,.00025)").toString() == "$0.00100")
+        #expect(c.evaluateScript("BotChuAnalytics.dollarTick(0,.00025)").toString() == "$0.00000")
+        #expect(c.evaluateScript("BotChuAnalytics.dollarTick(100,25)").toString() == "$100")
+    }
+
     @Test func reasoningOnlyLowerBoundCannotEstablishShortOutput() throws {
         let c = try context()
         c.evaluateScript("fixture.records[0].models[0].output=null;fixture.records[0].models[0].reasoning=100;fixture.records[0].tokens.output=100;E=BotChuAnalytics.createExplorer(fixture)")

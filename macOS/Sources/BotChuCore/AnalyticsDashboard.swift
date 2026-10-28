@@ -373,6 +373,15 @@ public enum AnalyticsDashboard {
         var measure = measureText({metric: "cost", value: value, provenance: estimated ? "estimated" : "actual"});
         return measure.unavailable ? "—" : measure.value.replace("≈ ", "≈");
       }
+      function dollarTick(value, step) {
+        var precision = 0;
+        while (precision < 12) {
+          var scaled = step * Math.pow(10, precision);
+          if (Math.abs(scaled - Math.round(scaled)) <= Math.max(1, Math.abs(scaled)) * 1e-10) break;
+          precision += 1;
+        }
+        return "$" + value.toFixed(precision);
+      }
       function compact(value) {
         return typeof value !== "number"
           ? "—"
@@ -913,7 +922,8 @@ public enum AnalyticsDashboard {
         formatPercent: formatPercent,
         measureText: measureText,
         createExplorer: createExplorer,
-        money: money
+        money: money,
+        dollarTick: dollarTick
       };
       root.BotChuAnalytics = api;
       if (typeof document === "undefined") return;
@@ -1010,7 +1020,7 @@ public enum AnalyticsDashboard {
         render();
       }
       function swatch(color, provenance) {
-        var n = el("i", "sw " + (provenance === "unpriced" ? "unp" : provenance === "estimated" ? "est" : "act"));
+        var n = el("i", "sw " + (provenance === "unpriced" || provenance === "unavailable" ? "unp" : provenance === "estimated" ? "est" : "act"));
         n.style.setProperty("--c", color);
         return n;
       }
@@ -1359,8 +1369,7 @@ public enum AnalyticsDashboard {
           ),
           positiveMax = max > 0 ? max : 1,
           power = Math.pow(10, Math.floor(Math.log10(positiveMax))),
-          top = Math.ceil(positiveMax / power) * power,
-          tickPrecision = top < 1 ? Math.min(8, 2 - Math.floor(Math.log10(top))) : top < 4 ? 2 : 0;
+          top = Math.ceil(positiveMax / power) * power;
         var box = el("div", "chart"),
           root = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Spend a day" }),
           defs = svg("defs"),
@@ -1391,7 +1400,7 @@ public enum AnalyticsDashboard {
           var y = T + ih - (ih * i) / 4;
           add(root, svg("line", { x1: L, x2: W - 4, y1: y, y2: y, class: i ? "gl" : "base" }));
           var text = svg("text", { x: L - 7, y: y + 4, "text-anchor": "end", class: "axis" });
-          text.textContent = "$" + ((top * i) / 4).toFixed(tickPrecision);
+          text.textContent = dollarTick((top * i) / 4, top / 4);
           add(root, text);
         }
         var band = iw / list.length,
