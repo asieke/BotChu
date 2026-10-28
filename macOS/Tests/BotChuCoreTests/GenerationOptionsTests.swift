@@ -10,7 +10,7 @@ import Testing
                                                        sessionID: session, reasoningEffort: .high)
             let expected: [String]
             switch kind {
-            case .claude, .antigravity: expected = ["--effort", "high"]
+            case .claude, .antigravity, .sail: expected = ["--effort", "high"]
             case .codex: expected = ["-c", "model_reasoning_effort=\"high\""]
             case .muse: expected = ["--reasoning-effort", "high"]
             case .pi: expected = ["--thinking", "high"]

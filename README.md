@@ -220,10 +220,37 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   - **Accounts:** any bot can run on any account, switchable in **Edit Bot**:
     Claude Personal, Claude Dev and Claude Work (`claude-personal`, `claude-dev`, `claude-work`),
     Codex Personal, Codex Dev and Codex Work (`codex-personal`, `codex-dev`, `codex-work`), Google
-    (Antigravity, `agy`), Muse (`muse`), and OpenRouter (the Pi agent, `pi`, with an OpenRouter key
-    and any OpenRouter model). Each account's command can be changed in Settings.
+    (Antigravity, `agy`), Muse (`muse`), OpenRouter (the Pi agent, `pi`, with an OpenRouter key
+    and any OpenRouter model), and Sail Research (`sail`: BotChu's own agent, below, with a Sail key
+    and model of its own). Each account's command can be changed in Settings.
     Wherever an account or a CLI family is shown, so is the family's logo, as in GitChu: Claude's
-    spark, OpenAI's knot for Codex, Google's G for Antigravity, Facebook's f for Muse, and π for Pi.
+    spark, OpenAI's knot for Codex, Google's G for Antigravity, Facebook's f for Muse, π for Pi, and a
+    sailboat on a tile for Sail (not Sail's own mark).
+  - **Sail Research:** for long-running agent work, on Sail's Flex completion window, which queues
+    requests for a lower price. Flex is taken only by background Responses requests (`background:
+    true`, `metadata.completion_window: "flex"`), which can't stream, so pointing Pi's streaming
+    providers at Sail can't use it: the Sail account runs `botchu-sail`, BotChu's own headless agent, built
+    beside the app and run like the other CLIs (`SailCommand`). Each turn sends the whole
+    conversation (Sail keeps no `previous_response_id` state), polls `GET /responses/{id}` (2 s at
+    first, then up to every 30 s, honouring `Retry-After`), runs the function tools the model calls
+    in the bot's folder — `read`, `write`, `edit` and `bash`, as Pi's, whose environment never has
+    the key — and submits again until the model answers without one. Every request is on Flex; a
+    model or request Sail won't take on Flex fails the turn saying so, with the choices (another
+    model in Settings ▸ Sail or the model menu, or another account): BotChu never moves work to a
+    faster, pricier window for queue delay. A submission is retried with the same idempotency key
+    (`Retry-After`, else backoff from 1 s to 60 s), and a poll that times out or fails is made again,
+    as it never cancels the inference. While Sail queues or runs a request, the conversation shows a
+    **Sail Flex** row (submitting, queued, running, retrying, then completed, incomplete, failed,
+    cancelled or refused, each said as itself). Each conversation's items and the submission still
+    out are saved (`~/Library/Application Support/BotChu/sail/sessions/`, readable only by you), the
+    submission before it is sent and again once Sail names its response. **Stop** ends BotChu's side
+    only: Sail can't cancel a response, so the row says it may still finish and be billed, and the
+    next message in that conversation picks the saved response up (or sends a submission Sail never
+    answered again, with its key) before it is answered; the picked-up reply is kept, and the tools it
+    calls are reported not run, for the model to call again. Settings ▸ Sail holds the key (its own
+    Keychain item) and the model a conversation runs when it chooses none (Load Models lists those
+    Sail offers the key), and links Sail's dashboard, which has its usage and billing: BotChu reads
+    or infers none. Sail runs on This Mac only, and not for run reviews or Quick tasks.
   - **Chat:** one continuous thread per bot (its **Home**), and one per task. Replies stream in, rendered as Markdown (each reply
     is parsed once, and recent ones ahead of time, so showing a conversation again doesn't parse it again; parsed replies are
     kept within about 64 MB, and none once macOS reports memory pressure); the
@@ -395,7 +422,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     as from every conversation (see **Saving memory**).
     The status sidebar names the computer, and **Terminal** opens a shell in the
     worktree there. The OpenRouter key never leaves this Mac, so Pi on a host needs that host's own
-    `OPENROUTER_API_KEY`.
+    `OPENROUTER_API_KEY`. Sail's key doesn't either, and Sail runs on This Mac only.
   - **Home coordinates:** a bot asks for a task itself by writing a JSON request into
     `.botchu/dispatch/` in its folder (`{"repo": "owner/name", "issue": 48, "task": "…"}`, or
     `"review": 12` with `"comment": true` to post it, and `"machine"` for a host), as its
@@ -1049,18 +1076,19 @@ on that pull request's branch to continue in instead). The same command run agai
     Session reports stay in memory, per conversation.
   - **Settings:** a page of the main window, beside the sidebar, opened by the sidebar's gear,
     ⌘, or BotChu ▸ Settings…, like a gallery: the conversation shown keeps its tab, its draft and its
-    turns. Its nine pages (General, Accounts, GitHub, Hosts, Run reviews, Pets, OpenRouter, Telegram,
-    Remote queue) are in a rail that marks a page needing you (a missing command, an unsaved key, a
+    turns. Its ten pages (General, Accounts, GitHub, Hosts, Run reviews, Pets, OpenRouter, Sail,
+    Telegram, Remote queue) are in a rail that marks a page needing you (a missing command, an unsaved key, a
     service on), which becomes a menu in the page's title when the page is under 720 points wide.
     It opens on the page last shown, and links elsewhere (Change Command…, GitHub Settings,
-    Connection Settings…) open their page. Preferences save as you change them; the OpenRouter key
-    and Telegram token save only with Save, and a key typed and not saved stays while you change
+    Connection Settings…) open their page. Preferences save as you change them; the OpenRouter and
+    Sail keys and Telegram token save only with Save, and a key typed and not saved stays while you change
     pages, until you leave Settings. **GitHub ▸ Test Connection** checks that `gh` is available and can authenticate to
     github.com, then shows its version and signed-in username. Connection failures give install/login
     guidance without displaying credentials. Settings also contains the bots folder, the repositories folder, the hosts and where you chose to work
     on repositories, each account's command, the Codex account that draws pets' stills, the
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
-    and default OpenRouter model, whether each bot's work gets a daily run review and at what time, and the Telegram gateway (below).
+    and default OpenRouter model, the Sail API key (a Keychain item of its own) and default Sail
+    model, whether each bot's work gets a daily run review and at what time, and the Telegram gateway (below).
   - **Quick tasks:** Settings ▸ General ▸ **Quick tasks** picks the profile and model of small
     background asks: for now, each new task's summary, the label of three or four words on its
     tab's second line. It is **Off** until you pick a profile (Claude Code, Codex or Muse, which
@@ -1262,6 +1290,13 @@ on that pull request's branch to continue in instead). The same command run agai
     and model-supplied scripts, uses Mermaid's strict mode and disables trusted TeX commands.
   - `Sources/botchu-smoke/` — a command-line check, not shipped in the app, that runs two real
     turns on each account named the way the app does (see **Test**).
+  - `Sources/botchu-sail/` — the Sail account's headless agent, which `build.sh` signs and puts
+    beside the app (`Contents/MacOS/botchu-sail`), where Settings' Sail account runs it. Its work
+    is in Core: Sail's Responses API, request bodies and responses (`SailAPI.swift`, values as
+    `SailJSON.swift`), submitting with idempotency keys and retries, and polling (`SailClient.swift`,
+    over an injectable transport), the saved conversation and submission (`SailSession.swift`),
+    the tools (`SailTools.swift`), the turn's loop and its events (`SailAgent.swift`), and its
+    command line and signals (`SailCommand.swift`), all tested against fixtures (`SailTests.swift`).
   - `Tests/BotChuCoreTests/` — parser tests against captured output of every CLI (with the model
     Claude Code and Muse report running), how models are named, command lines,
     context and store, and tasks: naming, dispatch requests, Tasks handed to other bots (the
@@ -1473,8 +1508,9 @@ on that pull request's branch to continue in instead). The same command run agai
   Project metadata stays in each repository’s `PROJECT.md` on GitHub; what Projects read from GitHub
   for the signed-in account is saved in `projects.json` there, written off the main thread. Settings,
   with added CLI profiles, the hosts, where you chose to work on repositories and the Telegram
-  chats, are in the `defaults` domain `local.BotChu`; the OpenRouter key and the Telegram bot token
-  are in the Keychain (service `local.BotChu`). Bot workspaces are
+  chats, are in the `defaults` domain `local.BotChu`; the OpenRouter and Sail keys and the Telegram
+  bot token are in the Keychain (service `local.BotChu`; accounts `openrouter`, `sail`, `telegram`).
+  Sail conversations are in `~/Library/Application Support/BotChu/sail/sessions/`. Bot workspaces are
   under `~/BotChu/` by default; tasks run in worktrees of checkouts on this Mac or on a host. No
   database and no port.
 - Each turn runs one headless CLI process in the bot's folder, or a task's worktree. On a host,
@@ -1485,6 +1521,8 @@ on that pull request's branch to continue in instead). The same command run agai
   - Antigravity: `agy -p … --output-format stream-json --dangerously-skip-permissions`, then `--conversation <id>`.
   - Muse: `muse exec --json --session-id <uuid>` (the same id resumes it).
   - Pi: `pi -p --mode json --provider openrouter --model <id> --session-id <uuid>`, with `OPENROUTER_API_KEY` from the Keychain.
+  - Sail: `botchu-sail --session-id <uuid> --model <id>`, then with `--resume`, with `SAIL_API_KEY`
+    from the Keychain; it prints its own JSON lines (`SailEvent`), on this Mac only.
 - A run review runs one of those CLIs on this Mac in a new session without tools, which nothing
   saves: `claude -p … --tools "" --disallowedTools "*" --strict-mcp-config --disable-slash-commands
   --permission-mode dontAsk --no-session-persistence`; `codex exec --json --sandbox read-only -c
@@ -1492,7 +1530,7 @@ on that pull request's branch to continue in instead). The same command run agai
   with `--disable` for its shell, unified exec, code mode, sub-agents, apps, plugins, browser,
   computer use, images, goals, sleep, tool suggestions, skills and hooks; and `muse exec --json
   --preset empty --disable-shell --disable-write --disable-web-tools --disable-request-user-input
-  --disable-reminders --no-session-log`, on the reviewed bot's own account. None runs on Antigravity or Pi.
+  --disable-reminders --no-session-log`, on the reviewed bot's own account. None runs on Antigravity, Pi or Sail.
 
 ## Run locally
 - Prerequisites: macOS 14 or later with full Xcode 16 or later (`xcode-select -p` must point into
@@ -1504,7 +1542,7 @@ on that pull request's branch to continue in instead). The same command run agai
   after 20 seconds says so in its chat. Because the app is signed with the same certificate every
   build, the answer survives reinstalls.
 - Install: no dependency installation is needed; the renderer assets are included in the repository.
-- Configure: nothing in `.env`. The OpenRouter key goes in BotChu ▸ Settings.
+- Configure: nothing in `.env`. The OpenRouter and Sail keys go in BotChu ▸ Settings.
 - Run from a checkout without touching the installed copy:
   ```sh
   pkill -x BotChu; macOS/build.sh && open macOS/build/BotChu.app
@@ -1548,7 +1586,9 @@ on that pull request's branch to continue in instead). The same command run agai
   account (all of them when none is named), a new session that opens with the bot's context and
   runs a shell command, then a resumed session that must recall a code word from the first, and
   prints both threads, each with the model it ran as the chat names it. It spends the accounts' own
-  allowance, so it is not part of `check`; OpenRouter needs `OPENROUTER_API_KEY` in its environment. To exercise explicit generation
+  allowance, so it is not part of `check`; OpenRouter needs `OPENROUTER_API_KEY` in its environment,
+  and Sail `SAIL_API_KEY` and `BOTCHU_SMOKE_MODEL=<a Sail model id>` (its helper runs from the smoke
+  binary itself, and each turn can wait in Sail's Flex queue). To exercise explicit generation
   settings, prefix the command with `BOTCHU_SMOKE_EFFORT=low` and optionally
   `BOTCHU_SMOKE_MODEL=<model id>`; both settings apply to the new and resumed turns.
   To test image delivery, set `BOTCHU_SMOKE_IMAGE=/absolute/path/to/fixture.png` and optionally
@@ -1564,7 +1604,7 @@ on that pull request's branch to continue in instead). The same command run agai
   `BOTCHU_OPEN=editor`, `BOTCHU_OPEN=task` or `BOTCHU_OPEN=settings` opens the bot editor, New
   Task or Settings instead (`BOTCHU_TASK_REPO=<owner/name>` picks New Task's repository;
   `BOTCHU_SETTINGS=<page>` picks Settings' page: `general`, `accounts`, `github`, `hosts`,
-  `run-reviews`, `pets`, `openrouter`, `telegram` or `remote-queue`).
+  `run-reviews`, `pets`, `openrouter`, `sail`, `telegram` or `remote-queue`).
   `BOTCHU_OPEN=projects`, `agents`, `providers`, `skills` or `jobs` opens that workspace screen;
   with `projects`, `BOTCHU_PROJECT=<owner/name>` shows that repository's sidebar, and
   `BOTCHU_PROJECT_TAB=issues` (or `pulls`, `overview`) with `BOTCHU_PROJECT_ITEM=<number>` opens a
@@ -1715,7 +1755,7 @@ on that pull request's branch to continue in instead). The same command run agai
 
 ## Deploy
 - **Live checkout:** `Alexs-MacBook-Pro-92440` runs the app from `~/Desktop/WORKSPACE/BotChu`, which stays on `main` and is never edited; the app is installed to `~/Applications/BotChu.app`.
-- **Secrets:** None in the repository or `.env`. The OpenRouter key and the Telegram bot token live in the Keychain, entered in Settings.
+- **Secrets:** None in the repository or `.env`. The OpenRouter and Sail keys and the Telegram bot token live in the Keychain, entered in Settings.
 - **Deploy:** `scripts/deploy.sh`, run in `~/Desktop/WORKSPACE/BotChu`, fast-forwards it to `origin/main`, reuses a full-suite pass recorded for that exact tree (or runs `scripts/test.sh` when none exists), installs the app with `macOS/install.sh` (which restarts BotChu if it was open and smoke-tests that it starts), and appends `<UTC time> <commit> ok|failed` to `.git/deploys`. `scripts/deploy.sh --tests` forces the full suite even when a pass is recorded; `--skip-tests` still explicitly skips it. The build and the install's smoke test always run. Success: it exits 0, the last line of `.git/deploys` is that commit with `ok`, and `BotChuCommit` in `~/Applications/BotChu.app/Contents/Info.plist` is that commit. Nothing else deploys. Restarting BotChu stops every turn under way, its bots' tasks and sub-agents included, so deploy only when the owner asks and no turns are running. It refuses if `~/Desktop/WORKSPACE/BotChu` has local edits or commits; fix those through a pull request.
 - **Recovery:** After a failed deploy, fix it (or revert the change) through a pull request and deploy again; `scripts/deploy.sh` retries, and reinstalls what is checked out when nothing new merged.
 - **Scheduled jobs:** none.

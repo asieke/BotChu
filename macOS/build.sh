@@ -13,6 +13,10 @@ app_scratch="$dir/.build/app"
 swift build -c release --package-path "$dir" --scratch-path "$app_scratch" --product BotChu 2>&1 | { grep -vE '^\[[0-9]+ ?/ ?[0-9]+\]' || true; }
 bin="$(swift build -c release --package-path "$dir" --scratch-path "$app_scratch" --show-bin-path)/BotChu"
 [ -x "$bin" ] || { echo "build: swift build did not produce $bin" >&2; exit 1; }
+# The Sail account's headless agent, which the app runs from beside itself (README.md, Sail).
+swift build -c release --package-path "$dir" --scratch-path "$app_scratch" --product botchu-sail 2>&1 | { grep -vE '^\[[0-9]+ ?/ ?[0-9]+\]' || true; }
+sail_helper="$(dirname "$bin")/botchu-sail"
+[ -x "$sail_helper" ] || { echo "build: swift build did not produce $sail_helper" >&2; exit 1; }
 
 rm -rf "$out"
 mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"
@@ -22,6 +26,7 @@ mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"
 minos=$(vtool -show-build "$bin" | awk '$1 == "minos" { print $2 }')
 vtool -set-build-version macos "$minos" "$(xcrun --sdk macosx --show-sdk-version)" -replace \
   -output "$out/Contents/MacOS/BotChu" "$bin"
+cp "$sail_helper" "$out/Contents/MacOS/botchu-sail"
 
 # SwiftPM's bundled, offline chat renderers must travel with the installed app.
 cp -R "$(dirname "$bin")/BotChu_BotChu.bundle" "$out/Contents/Resources/"
@@ -53,5 +58,7 @@ cat > "$out/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 # A stable identity keeps macOS permission and Keychain grants across rebuilds; ad hoc without one.
+# The helper is nested code, signed first.
+codesign -fs "Apple Development" "$out/Contents/MacOS/botchu-sail" 2>/dev/null || codesign -fs - "$out/Contents/MacOS/botchu-sail"
 codesign -fs "Apple Development" "$out" 2>/dev/null || codesign -fs - "$out"
 echo "build: $out"

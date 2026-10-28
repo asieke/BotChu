@@ -14,6 +14,7 @@ public enum StreamParsers {
         case .antigravity: AntigravityParser()
         case .muse: MuseParser()
         case .pi: PiParser()
+        case .sail: SailParser()
         }
     }
 }
@@ -393,5 +394,36 @@ public struct PiParser: StreamParser {
         default: break
         }
         return []
+    }
+}
+
+/// BotChu's own Sail helper (`botchu-sail`, `SailEvent`). Each submission is a "Sail Flex" row
+/// that stays running while Sail queues and runs it, and says when it ended; one BotChu stopped
+/// waiting for stays running until the run ends, then reads as interrupted, never cancelled.
+public struct SailParser: StreamParser {
+    public init() {}
+
+    public mutating func parse(line: String) -> [AgentEvent] {
+        guard let event = SailEvent(line: line) else { return [] }
+        switch event {
+        case .session(let id): return [.session(id)]
+        case .model(let id): return [.model(id)]
+        case let .flex(row, detail, state):
+            // The row reads as where the submission is now; once it has ended, as how it ended.
+            let now = AgentEvent.toolStarted(id: row, name: SailAgent.rowName, input: detail)
+            switch state {
+            case .waiting, .detached: return [now]
+            case .done: return [now, .toolFinished(id: row, name: SailAgent.rowName, output: detail, isError: false)]
+            case .failed: return [now, .toolFinished(id: row, name: SailAgent.rowName, output: detail, isError: true)]
+            }
+        case .text(let text): return [.text(text)]
+        case let .toolStarted(id, name, arguments):
+            let value = arguments.foundation
+            return [.toolStarted(id: id, name: name, input: summarizeToolInput(value), arguments: ToolArguments.digest(value))]
+        case let .toolFinished(id, name, output, isError, exitCode):
+            return [.toolFinished(id: id, name: name, output: output, isError: isError, exitCode: exitCode)]
+        case .failed(let message): return [.failed(message)]
+        case .finished: return [.finished]
+        }
     }
 }

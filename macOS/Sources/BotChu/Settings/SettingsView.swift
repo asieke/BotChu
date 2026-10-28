@@ -59,6 +59,7 @@ struct SettingsView: View {
             return nil
         case .runReviews: return model.settings.evaluateRuns ? .on : nil
         case .openRouter: return drafts.openRouterKey.isUnsaved ? .unsaved : nil
+        case .sail: return drafts.sailKey.isUnsaved ? .unsaved : nil
         case .telegram:
             let telegram: TelegramBridge = model.telegram
             var problem = false
@@ -78,6 +79,7 @@ struct SettingsView: View {
 /// The keys typed in Settings and not saved yet, which outlive a change of page.
 struct SettingsDrafts {
     var openRouterKey = SettingsKeyDraft()
+    var sailKey = SettingsKeyDraft()
     var telegramToken = SettingsKeyDraft()
 }
 
@@ -92,7 +94,7 @@ private struct SettingsRail: View {
     let mark: (SettingsPage) -> SettingsMark?
 
     var body: some View {
-        // Not scrolling: nine rows fit the shortest window, and a scroll view would draw the
+        // Not scrolling: ten rows fit the shortest window, and a scroll view would draw the
         // toolbar's edge over the rail alone.
         VStack(alignment: .leading, spacing: 14) {
             ForEach(SettingsPage.groups, id: \.self) { group in
@@ -225,6 +227,7 @@ private extension SettingsPage {
     var link: (title: String, url: URL)? {
         switch self {
         case .openRouter: ("Get a Key", URL(string: "https://openrouter.ai/keys")!)
+        case .sail: ("Dashboard", Sail.dashboard)
         case .telegram: ("Set Up", URL(string: "https://github.com/asieke/BotChu/blob/main/docs/telegram.md")!)
         default: nil
         }
@@ -252,6 +255,7 @@ private struct SettingsPageForm: View {
             case .runReviews: RunReviewSettings()
             case .pets: PetsSettings(key: $drafts.openRouterKey)
             case .openRouter: OpenRouterSettings(key: $drafts.openRouterKey)
+            case .sail: SailSettings(key: $drafts.sailKey)
             case .telegram: TelegramSection(token: $drafts.telegramToken)
             case .remoteQueue: RemoteQueueSection()
             }

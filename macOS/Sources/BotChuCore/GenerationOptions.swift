@@ -78,6 +78,9 @@ public enum GenerationOptions {
             return [ModelOption(id: "muse-spark-1.3", name: "Muse Spark 1.3", efforts: [.none, .minimal] + extended + [.ultra])]
         case .pi:
             return [ModelOption(id: CommandBuilder.defaultOpenRouterModel, name: "Claude Sonnet 4.5", efforts: [.off, .minimal] + common + [.xhigh, .max])]
+        case .sail:
+            // Sail's models depend on the key: Settings ▸ Sail lists them, and any ID can be typed.
+            return []
         }
     }
 
@@ -88,6 +91,7 @@ public enum GenerationOptions {
         case .codex: return [.low, .medium, .high, .xhigh, .max, .ultra]
         case .muse: return [.none, .minimal, .low, .medium, .high, .xhigh, .max, .ultra]
         case .pi: return [.off, .minimal, .low, .medium, .high, .xhigh, .max]
+        case .sail: return [.low, .medium, .high]
         }
     }
 
@@ -122,6 +126,10 @@ public enum GenerationOptions {
         let resolved = resolved.flatMap { $0.isEmpty ? nil : $0 }
         // Claude Code and Muse report the model a turn ran; the others never say, so stay unresolved.
         let pending = "version unresolved"
+        if model.isEmpty, kind == .sail {
+            // Sail has no default of its own: the turn runs Settings ▸ Sail's model.
+            return ModelLabel(title: "Default from Settings", detail: "Settings ▸ Sail" + (resolved.map { " · last ran \($0)" } ?? ""))
+        }
         if model.isEmpty {
             if let resolved {
                 return ModelLabel(title: "\(fullName(resolved, kind: kind)) · default",
@@ -186,11 +194,19 @@ public enum GenerationOptions {
 
     /// The model sent on the next turn. Native CLI defaults stay unspecified; OpenRouter always
     /// receives a model, inherited from Settings or the built-in fallback when Settings is blank.
-    public static func effectiveModel(_ model: String, kind: AgentKind, openRouterDefault: String) -> String {
+    /// Sail inherits Settings ▸ Sail's (`sailDefault`), and has none when that is blank.
+    public static func effectiveModel(_ model: String, kind: AgentKind, openRouterDefault: String, sailDefault: String = "") -> String {
         let selected = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard kind == .pi, selected.isEmpty else { return selected }
-        let fallback = openRouterDefault.trimmingCharacters(in: .whitespacesAndNewlines)
-        return fallback.isEmpty ? CommandBuilder.defaultOpenRouterModel : fallback
+        guard selected.isEmpty else { return selected }
+        switch kind {
+        case .pi:
+            let fallback = openRouterDefault.trimmingCharacters(in: .whitespacesAndNewlines)
+            return fallback.isEmpty ? CommandBuilder.defaultOpenRouterModel : fallback
+        case .sail:
+            return sailDefault.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .claude, .codex, .antigravity, .muse:
+            return selected
+        }
     }
 }
 

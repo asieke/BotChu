@@ -54,6 +54,10 @@ public enum ProviderUsageClient {
             }
             return try await OpenRouterUsage.read(key: key)
         }
+        if request.account.kind == .sail {
+            // Nothing is inferred: Sail's own dashboard has its usage and billing.
+            throw UsageFailure("Sail doesn’t report usage to BotChu. Its dashboard (app.sailresearch.com) has usage and billing.")
+        }
         return try await Task.detached(priority: .utility) { try readCLI(request) }.value
     }
 
@@ -70,7 +74,7 @@ public enum ProviderUsageClient {
         case .codex: arguments = ["app-server"]
         case .antigravity: arguments = ["-p", "/usage", "--output-format", "json", "--log-file", "/dev/null"]
         case .muse: arguments = ["serve", "--no-session-log"]
-        case .pi: throw UsageFailure.unrecognized
+        case .pi, .sail: throw UsageFailure.unrecognized
         }
         let process = try UsageProcess(command: request.command, arguments: arguments, directory: dir,
             environment: kind == .muse ? ["XDG_DATA_HOME": dir.appendingPathComponent("data").path] : [:],
@@ -86,7 +90,7 @@ public enum ProviderUsageClient {
                 return try UsageParser.codex(JSONSerialization.data(withJSONObject: process.call("account/rateLimits/read")))
             }
             return try museUsage(process, workspace: dir.path)
-        case .pi: throw UsageFailure.unrecognized
+        case .pi, .sail: throw UsageFailure.unrecognized
         }
     }
 

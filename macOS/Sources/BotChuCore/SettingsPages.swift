@@ -6,7 +6,7 @@ import Foundation
 public enum SettingsPage: String, CaseIterable, Identifiable, Sendable {
     case general, accounts, github, hosts
     case runReviews = "run-reviews", pets
-    case openRouter = "openrouter", telegram, remoteQueue = "remote-queue"
+    case openRouter = "openrouter", sail, telegram, remoteQueue = "remote-queue"
 
     public var id: String { rawValue }
 
@@ -19,6 +19,7 @@ public enum SettingsPage: String, CaseIterable, Identifiable, Sendable {
         case .runReviews: "Run reviews"
         case .pets: "Pets"
         case .openRouter: "OpenRouter"
+        case .sail: "Sail"
         case .telegram: "Telegram"
         case .remoteQueue: "Remote queue"
         }
@@ -33,6 +34,7 @@ public enum SettingsPage: String, CaseIterable, Identifiable, Sendable {
         case .runReviews: "checkmark.seal"
         case .pets: "pawprint"
         case .openRouter: "arrow.triangle.branch"
+        case .sail: "sailboat"
         case .telegram: "paperplane"
         case .remoteQueue: "antenna.radiowaves.left.and.right"
         }
@@ -43,7 +45,7 @@ public enum SettingsPage: String, CaseIterable, Identifiable, Sendable {
     public static let groups: [[SettingsPage]] = [
         [.general, .accounts, .github, .hosts],
         [.runReviews, .pets],
-        [.openRouter, .telegram, .remoteQueue],
+        [.openRouter, .sail, .telegram, .remoteQueue],
     ]
 
     /// Below this width of the page area, the rail folds into the page's title, as a menu.

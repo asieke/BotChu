@@ -1,9 +1,9 @@
 import Foundation
 
 /// The agent CLI behind an account. Each one has its own headless flags, session handling and
-/// JSON stream (see `StreamParsers.swift`).
+/// JSON stream (see `StreamParsers.swift`). Sail's is BotChu's own helper (`SailCommand`).
 public enum AgentKind: String, Codable, CaseIterable, Sendable {
-    case claude, codex, antigravity, muse, pi
+    case claude, codex, antigravity, muse, pi, sail
 
     public var displayName: String {
         switch self {
@@ -12,8 +12,13 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
         case .antigravity: "Antigravity"
         case .muse: "Muse"
         case .pi: "Pi"
+        case .sail: "Sail"
         }
     }
+
+    /// The families an added CLI profile can be: Sail is BotChu's own helper, with one key in
+    /// Settings, so it has its one account only.
+    public static var profileFamilies: [AgentKind] { allCases.filter { $0 != .sail } }
 }
 
 /// A signed-in CLI profile a bot can run on. The command is run through the login shell, so it may
@@ -49,6 +54,8 @@ public enum Accounts {
         Account(id: "google", name: "Google (Antigravity)", kind: .antigravity, defaultCommand: "agy", symbol: "g.circle"),
         Account(id: "muse", name: "Muse", kind: .muse, defaultCommand: "~/.local/bin/muse", symbol: "m.circle"),
         Account(id: "openrouter", name: "OpenRouter", kind: .pi, defaultCommand: "~/.local/bin/pi", symbol: "arrow.triangle.branch"),
+        // BotChu's own helper, built beside the app; Settings runs the copy there (`Sail.helperCommand`).
+        Account(id: "sail", name: "Sail Research", kind: .sail, defaultCommand: Sail.helperName, symbol: "sailboat"),
     ]
 
     public static let defaultID = "claude-personal"
@@ -95,8 +102,9 @@ public enum CommandBuilder {
     }
 
     /// The arguments for one turn. `sessionID` is the session to resume, or nil to start one;
-    /// `newID` makes the ids of sessions BotChu names itself (Claude, Muse, Pi) testable.
+    /// `newID` makes the ids of sessions BotChu names itself (Claude, Muse, Pi, Sail) testable.
     /// `liveInput` gives a CLI that takes input mid-turn its prompt on stdin, which stays open.
+    /// `openRouterKey` and `sailKey` reach only Pi and Sail, through their environment.
     public static func invocation(
         kind: AgentKind,
         prompt: String,
@@ -104,6 +112,7 @@ public enum CommandBuilder {
         sessionID: String?,
         reasoningEffort: ReasoningEffort? = nil,
         openRouterKey: String? = nil,
+        sailKey: String? = nil,
         liveInput: Bool = false,
         newID: () -> String = { UUID().uuidString.lowercased() }
     ) -> Invocation {
@@ -157,6 +166,16 @@ public enum CommandBuilder {
             if let effort { args += ["--thinking", effort] }
             args.append(prompt)
             if let openRouterKey, !openRouterKey.isEmpty { env["OPENROUTER_API_KEY"] = openRouterKey }
+        case .sail:
+            // `--resume` asks for the session saved before; a new one is made only on the first turn.
+            let id = sessionID ?? newID()
+            session = id
+            args = ["--session-id", id]
+            if sessionID != nil { args.append("--resume") }
+            if let model { args += ["--model", model] }
+            if let effort { args += ["--effort", effort] }
+            args.append(prompt)
+            if let sailKey, !sailKey.isEmpty { env[Sail.keyVariable] = sailKey }
         }
         return Invocation(arguments: args, environment: env, sessionID: session, input: input)
     }
@@ -184,7 +203,7 @@ public enum CommandBuilder {
     public static func runsToolFree(_ kind: AgentKind) -> Bool {
         switch kind {
         case .claude, .codex, .muse: true
-        case .antigravity, .pi: false
+        case .antigravity, .pi, .sail: false
         }
     }
 
@@ -230,7 +249,7 @@ public enum CommandBuilder {
                     "--disable-web-tools", "--disable-request-user-input", "--disable-reminders", "--no-session-log"]
             if let model { args += ["--model", model] }
             if let effort { args += ["--reasoning-effort", effort] }
-        case .antigravity, .pi:
+        case .antigravity, .pi, .sail:
             return nil
         }
         args.append(prompt)
@@ -243,11 +262,11 @@ public enum CommandBuilder {
         kind == .codex && message.localizedCaseInsensitiveContains("code-mode host is disabled")
     }
 
-    /// The id that resumes a run's session, once its stream reports one: Muse and Pi resume by the
-    /// id BotChu gave them, the others by the id they report.
+    /// The id that resumes a run's session, once its stream reports one: Muse, Pi and Sail resume
+    /// by the id BotChu gave them, the others by the id they report.
     public static func resumeID(kind: AgentKind, invocation: Invocation, reported: String) -> String {
         switch kind {
-        case .muse, .pi: invocation.sessionID ?? reported
+        case .muse, .pi, .sail: invocation.sessionID ?? reported
         case .claude, .codex, .antigravity: reported
         }
     }

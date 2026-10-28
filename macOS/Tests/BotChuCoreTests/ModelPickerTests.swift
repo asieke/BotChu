@@ -28,7 +28,8 @@ import Testing
     }
 
     @Test func nativeDefaultsStayUnspecifiedAndCatalogsCannotCrossProviders() {
-        for kind in AgentKind.allCases where kind != .pi {
+        // Pi and Sail inherit Settings' model (Sail's: SailCommandTests).
+        for kind in AgentKind.allCases where kind != .pi && kind != .sail {
             let picker = ModelPickerData(kind: kind, model: "", openRouterDefault: "recursive/flint-v1.0:free",
                 catalog: [CatalogModel(id: "other/provider", name: "Other")])
             #expect(picker.effectiveID.isEmpty)

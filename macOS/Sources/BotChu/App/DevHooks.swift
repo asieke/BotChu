@@ -228,6 +228,9 @@ enum DevHooks {
         case .pi:
             return ProviderUsage(windows: [UsageWindow(id: "key", title: "Key allowance", usedPercent: 0.04, resetsAt: at(0, 13, 48),
                                                        detail: "$24.99 of $25.00 left")], readAt: now)
+        case .sail:
+            // Sail reports no usage to BotChu (ProviderUsageClient); nothing is made up for it here.
+            return ProviderUsage(windows: [], note: "Usage is on the Sail dashboard", readAt: now)
         }
     }
 

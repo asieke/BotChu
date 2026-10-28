@@ -28,7 +28,7 @@ public struct QuickTasks: Equatable, Sendable {
         case .claude: "haiku"
         case .codex: "gpt-6-luna"
         case .muse: "muse-spark-1.3"
-        case .antigravity, .pi: GenerationOptions.models(for: kind).first?.id ?? ""
+        case .antigravity, .pi, .sail: GenerationOptions.models(for: kind).first?.id ?? ""
         }
     }
 

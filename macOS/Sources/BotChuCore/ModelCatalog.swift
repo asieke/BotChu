@@ -101,7 +101,7 @@ public struct ModelPickerData: Sendable {
         self.title = current.title
         self.detail = kind == .pi && selectedID.isEmpty ? "Default from Settings · \(current.detail)" : current.detail
         let defaultID = GenerationOptions.effectiveModel("", kind: kind, openRouterDefault: openRouterDefault)
-        var choices = [Choice(id: "", title: kind == .pi ? "Use default from Settings" : "Use account default",
+        var choices = [Choice(id: "", title: kind == .pi || kind == .sail ? "Use default from Settings" : "Use account default",
                               detail: kind == .pi ? label(defaultID).title : label("").detail)]
         var seen: Set<String> = [""]
         // Keep the current model reachable even if it is custom, retired, or the catalog is offline.

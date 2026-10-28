@@ -130,7 +130,7 @@ public final class AgentRun: @unchecked Sendable {
     public static func childEnvironment(_ env: [String: String]) -> [String: String] {
         let prefixes = ["CLAUDE", "CODEX_", "ANTHROPIC_", "OPENAI_", "BOTCHU_", "MCP_", "AI_AGENT"]
         let names: Set<String> = ["API_TIMEOUT_MS", "BAGGAGE", "DISABLE_AUTOUPDATER", "DISABLE_MICROCOMPACT",
-                                  "USE_LOCAL_OAUTH", "USE_STAGING_OAUTH", "OPENROUTER_API_KEY"]
+                                  "USE_LOCAL_OAUTH", "USE_STAGING_OAUTH", "OPENROUTER_API_KEY", "SAIL_API_KEY"]
         return env.filter { key, _ in !names.contains(key) && !prefixes.contains(where: key.hasPrefix) }
     }
 

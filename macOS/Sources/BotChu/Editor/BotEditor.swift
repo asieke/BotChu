@@ -211,7 +211,10 @@ struct BotEditor: View {
     }
 
     private var modelPrompt: String {
-        bot.account.kind == .pi ? "\(model.settings.openRouterModel) (OpenRouter id)" : "CLI default"
+        if bot.account.kind == .sail {
+            return model.settings.sailModel.isEmpty ? "Choose one in Settings ▸ Sail" : "\(model.settings.sailModel) (Sail id)"
+        }
+        return bot.account.kind == .pi ? "\(model.settings.openRouterModel) (OpenRouter id)" : "CLI default"
     }
 
     private func chooseFolder() {

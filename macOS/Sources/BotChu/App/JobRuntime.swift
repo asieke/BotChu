@@ -298,7 +298,8 @@ final class JobRuntime {
             return finish(runID, outcome: .failed, summary: "The agent is gone, so the run didn't start.")
         }
         targets[runID] = target
-        let modelChoice = GenerationOptions.effectiveModel(agent.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel)
+        let modelChoice = GenerationOptions.effectiveModel(agent.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
+                                                           sailDefault: model.settings.sailModel)
         engine.amend(runID) {
             $0.taskID = task.id
             $0.accountID = account.id
@@ -315,6 +316,10 @@ final class JobRuntime {
         let key = account.kind == .pi ? model.openRouterKey() : nil
         if account.kind == .pi, key?.isEmpty ?? true {
             return finish(runID, outcome: .failed, summary: "Add your OpenRouter API key in BotChu ▸ Settings first.")
+        }
+        let sailKey = account.kind == .sail ? Keychain.get(Keychain.sailAccount) : nil
+        if account.kind == .sail, let problem = SailLaunch.problem(remote: false, key: sailKey) {
+            return finish(runID, outcome: .failed, summary: problem)
         }
         let preamble = JobLaunch.preamble(
             bot: bot, job: job, run: launch.run, startedAt: startedAt, memory: Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.memoryFile)),
@@ -335,7 +340,8 @@ final class JobRuntime {
             guard let self, !Task.isCancelled, self.preparing.removeValue(forKey: runID) != nil, !self.quitting else {
                 return model.delegation.endCaller(caller.id)
             }
-            var invocation = JobLaunch.invocation(for: agent, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key)
+            var invocation = JobLaunch.invocation(for: agent, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key,
+                                                  sailDefault: model.settings.sailModel, sailKey: sailKey)
             invocation.environment.merge(caller.environment) { _, new in new }
             self.run(launch, prompt: prompt, invocation: invocation, caller: caller, account: account, agent: agent, target: target)
         }

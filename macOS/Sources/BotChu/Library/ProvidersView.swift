@@ -378,6 +378,7 @@ private struct ProviderProblemDetails: View {
         switch account.kind {
         case .muse: "Muse is checked with a brief request, at most hourly automatically and every five minutes with Try Again."
         case .pi: "Pi profiles share the OpenRouter key in Settings."
+        case .sail: "Sail reports no usage to BotChu; its dashboard has usage and billing."
         default: "Usage is read with the profile’s own CLI and sign-in, every 15 minutes in the background."
         }
     }
@@ -750,7 +751,7 @@ struct AddProviderSheet: View {
             Text("New CLI Profile").font(.headline).padding(20)
             Form {
                 TextField("Profile name", text: $name, prompt: Text("Claude Research"))
-                Picker("CLI family", selection: $kind) { ForEach(AgentKind.allCases, id: \.self) { ProviderMenuLabel(title: $0.displayName, kind: $0).tag($0) } }
+                Picker("CLI family", selection: $kind) { ForEach(AgentKind.profileFamilies, id: \.self) { ProviderMenuLabel(title: $0.displayName, kind: $0).tag($0) } }
                 TextField("Command", text: $command, prompt: Text("~/.local/bin/claude-research"))
                     .font(.system(.body, design: .monospaced))
                     .onChange(of: command) { found = nil }

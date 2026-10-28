@@ -3,16 +3,17 @@ import Testing
 @testable import BotChuCore
 
 @Suite struct SettingsPageTests {
-    @Test func ninePagesInThreeGroupsEachOnce() {
+    @Test func tenPagesInThreeGroupsEachOnce() {
         #expect(SettingsPage.groups.flatMap { $0 } == SettingsPage.allCases)
-        #expect(SettingsPage.groups.map(\.count) == [4, 2, 3])
-        #expect(Set(SettingsPage.allCases.map(\.symbol)).count == 9)
+        #expect(SettingsPage.groups.map(\.count) == [4, 2, 4])
+        #expect(Set(SettingsPage.allCases.map(\.symbol)).count == 10)
     }
 
     @Test func pageNamesAreTheOnesTheAppsMessagesUse() {
-        // "Settings ▸ Run reviews", "▸ Hosts", "▸ Telegram", "▸ Remote queue", "▸ Accounts".
+        // "Settings ▸ Run reviews", "▸ Hosts", "▸ Sail", "▸ Telegram", "▸ Remote queue", "▸ Accounts".
         #expect(SettingsPage.allCases.map(\.title) == ["General", "Accounts", "GitHub", "Hosts", "Run reviews", "Pets",
-                                                       "OpenRouter", "Telegram", "Remote queue"])
+                                                       "OpenRouter", "Sail", "Telegram", "Remote queue"])
+        #expect(SettingsPage(rawValue: "sail") == .sail)
         #expect(SettingsPage(rawValue: "remote-queue") == .remoteQueue)
         #expect(SettingsPage(rawValue: "run-reviews") == .runReviews)
         #expect(SettingsPage(rawValue: "Remote queue") == nil)

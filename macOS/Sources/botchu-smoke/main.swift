@@ -12,8 +12,12 @@
 // BOTCHU_SMOKE_MODEL names one: it must reply with a label of three or four words. `--models`
 // lists each Codex account's models the way its pickers read them (#220), starting no turn.
 //
+// Sail runs its helper from this same binary (`--sail-agent`), on its Flex window, so each turn can
+// wait in Sail's queue for a while; it needs a model, as Settings ▸ Sail gives the app one.
+//
 //   swift run --package-path macOS botchu-smoke claude-personal codex-dev
 //   OPENROUTER_API_KEY=… swift run --package-path macOS botchu-smoke openrouter
+//   SAIL_API_KEY=… BOTCHU_SMOKE_MODEL=<a Sail model id> swift run --package-path macOS botchu-smoke sail
 //   swift run --package-path macOS botchu-smoke --review claude-dev codex-dev muse
 //   swift run --package-path macOS botchu-smoke --summary claude-dev codex-dev
 //   swift run --package-path macOS botchu-smoke --models codex-work
@@ -22,6 +26,15 @@ import BotChuCore
 
 // Each line as it is printed, also when the output goes to a file.
 setvbuf(stdout, nil, _IOLBF, 0)
+
+// The Sail helper, as the app's `botchu-sail` runs it (`SailCommand`).
+if CommandLine.arguments.dropFirst().first == "--sail-agent" {
+    Task {
+        exit(await SailCommand.main(arguments: Array(CommandLine.arguments.dropFirst(2)), environment: ProcessInfo.processInfo.environment,
+                                    directory: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)))
+    }
+    dispatchMain()
+}
 
 // Optional image fixture is attached on both the new and resumed turn.
 let smokeImage = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_IMAGE"].map { URL(fileURLWithPath: $0) }
@@ -34,6 +47,14 @@ let modelsOnly = CommandLine.arguments.dropFirst().first == "--models"
 let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly || connectorsOnly || summaryOnly || modelsOnly ? 2 : 1))
 let accounts = requested.isEmpty ? Accounts.all : requested.map { Accounts.account(id: $0) }
 let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-smoke-\(UUID().uuidString)")
+
+/// The command a turn runs: the account's, or for Sail this binary as its helper, keeping its
+/// sessions with the smoke run's other files.
+func command(for account: Account) -> String {
+    guard account.kind == .sail else { return account.defaultCommand }
+    let executable = Bundle.main.executableURL?.path ?? CommandLine.arguments[0]
+    return Shell.quote(executable) + " --sail-agent --state-dir " + Shell.quote(root.appendingPathComponent("sail-sessions").path)
+}
 
 struct Turn {
     var messages: [ChatMessage] = []
@@ -74,7 +95,10 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
     let fullPrompt = BotContext.prompt(for: prompt, preamble: preamble)
     var invocation = CommandBuilder.invocation(
         kind: bot.account.kind, prompt: fullPrompt, model: bot.model, sessionID: resume, reasoningEffort: bot.reasoningEffort,
-        openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], liveInput: CommandBuilder.takesInputMidTurn(kind))
+        openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], sailKey: ProcessInfo.processInfo.environment[Sail.keyVariable],
+        liveInput: CommandBuilder.takesInputMidTurn(kind))
+    // A stand-in for Sail's API, when one is named; the app never sets it.
+    if kind == .sail, let base = ProcessInfo.processInfo.environment[Sail.baseVariable] { invocation.environment[Sail.baseVariable] = base }
     if let smokeImage {
         do { invocation = try ImageDelivery.attaching([smokeImage], to: invocation, kind: bot.account.kind, prompt: fullPrompt) }
         catch { return Turn(messages: [ChatMessage(role: .error, text: error.localizedDescription)], status: -1) }
@@ -84,7 +108,7 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
         var assembler = ThreadAssembler()
         var ledger = InputLedger()
         var pending = followUp
-        let run = AgentRun(command: bot.account.defaultCommand, invocation: invocation, directory: URL(fileURLWithPath: bot.workspace))
+        let run = AgentRun(command: command(for: bot.account), invocation: invocation, directory: URL(fileURLWithPath: bot.workspace))
         // As the app does: parsed off the main thread, delivered in batches.
         run.deliverEvents(parsedBy: StreamParsers.make(for: kind)) { events in
             for event in events {
