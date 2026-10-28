@@ -115,7 +115,8 @@ struct SidebarView: View {
     /// Puts a bot dropped at `index` among a section's bots, as the sidebar shows them, before the
     /// bot shown there, or last after them. The bot to go before is read now, as the drop lands.
     private func drop(_ providers: [NSItemProvider], in group: BotSections.Group, at index: Int) {
-        let next = group.botIDs.indices.contains(index) ? group.botIDs[index] : nil
+        let shown = group.botIDs.filter { model.bot($0) != nil }
+        let next = shown.indices.contains(index) ? shown[index] : nil
         _ = BotDrag.load(providers) { model.dropBot($0, inSection: group.name, before: next) }
     }
 }

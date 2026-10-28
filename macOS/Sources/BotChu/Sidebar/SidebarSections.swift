@@ -75,7 +75,8 @@ enum BotDrag {
     static func provider(for id: UUID) -> NSItemProvider {
         let provider = NSItemProvider()
         let payload = BotSections.dragPayload(id)
-        provider.registerDataRepresentation(forTypeIdentifier: contentType.identifier, visibility: .all) { load in
+        // Only BotChu reads it: another app or Finder gets nothing from a dragged bot.
+        provider.registerDataRepresentation(forTypeIdentifier: contentType.identifier, visibility: .ownProcess) { load in
             load(payload, nil)
             return nil
         }
