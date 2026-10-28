@@ -474,11 +474,18 @@ enum TokenUsageSamples {
 
     @Test func antigravityAndMuseKeepReasoningInsideOutput() throws {
         #expect(usage(.antigravity, [TokenUsageSamples.antigravity]) == [TurnUsage(models: [
-            ModelUsage(model: "", uncachedInput: 7578, cacheRead: 0, output: 42, reasoning: 36)])])
+            ModelUsage(model: "", uncachedInput: 7578, cacheRead: 0, output: 42, reasoning: 36)], cumulative: true)])
         #expect(usage(.muse, [TokenUsageSamples.muse]) == [TurnUsage(models: [
             ModelUsage(model: "muse-wonder-full-1.0", uncachedInput: 27363, cacheRead: 0, output: 61, reasoning: 50)])])
         #expect(usage(.antigravity, TokenUsageSamples.antigravityCached) == [TurnUsage(models: [
-            ModelUsage(model: "", uncachedInput: 9835, cacheRead: 5520, output: 966, reasoning: 918)])])
+            ModelUsage(model: "", uncachedInput: 9835, cacheRead: 5520, output: 966, reasoning: 918)], cumulative: true)])
+    }
+
+    @Test func antigravityResumedResultIsCumulativeNotItsLastStep() {
+        let first = usage(.antigravity, TokenUsageSamples.antigravityResumed[0])
+        let resumed = usage(.antigravity, TokenUsageSamples.antigravityResumed[1])
+        #expect(first == [TurnUsage(models: [ModelUsage(model: "", uncachedInput: 7583, cacheRead: 0, output: 46, reasoning: 41)], cumulative: true)])
+        #expect(resumed == [TurnUsage(models: [ModelUsage(model: "", uncachedInput: 9899, cacheRead: 5529, output: 91, reasoning: 80)], cumulative: true)])
     }
 
     @Test func piAggregatesAssistantRequestsOnceAndResets() throws {

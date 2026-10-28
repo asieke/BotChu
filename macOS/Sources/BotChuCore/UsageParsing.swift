@@ -59,9 +59,9 @@ enum UsageParsing {
     static func antigravity(_ obj: JSON?) -> TurnUsage? {
         guard let entry = obj?["usage"] as? JSON else { return nil }
         // agy's wire buckets are disjoint, unlike raw Gemini API promptTokenCount.
-        // Verified by the captured per-step cache hit and its final summed result.
+        // Its final result sums the conversation, including earlier resumed turns.
         return turn(ModelUsage(model: "", uncachedInput: count(entry, "input_tokens"),
-            cacheRead: count(entry, "cache_read_tokens"), output: count(entry, "output_tokens"), reasoning: count(entry, "thinking_tokens")))
+            cacheRead: count(entry, "cache_read_tokens"), output: count(entry, "output_tokens"), reasoning: count(entry, "thinking_tokens")), cumulative: true)
     }
 
     static func muse(_ obj: JSON) -> TurnUsage? {

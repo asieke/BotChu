@@ -1867,7 +1867,7 @@ on that pull request's branch to continue in instead). The same command run agai
   account (all of them when none is named), a new session that opens with the bot's context and
   runs a shell command, then a resumed session that must recall a code word from the first, and
   prints both threads, each with the model it ran as the chat names it and the reported token usage
-  (unknown buckets stay absent; Codex marks its session totals cumulative). It spends the accounts' own
+  (unknown buckets stay absent; Codex and Antigravity mark their session totals cumulative). It spends the accounts' own
   allowance, so it is not part of `check`; OpenRouter needs `OPENROUTER_API_KEY` in its environment,
   and Sail `SAIL_API_KEY` and `BOTCHU_SMOKE_MODEL=<a Sail model id>` (its helper runs from the smoke
   binary itself, and each turn can wait in Sail's Flex queue). To exercise explicit generation
