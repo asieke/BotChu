@@ -24,6 +24,9 @@ import BotChuCore
 ///   `mixed` gives each kind of profile a different state (`mixedUsage`).
 /// - `BOTCHU_CONNECTORS`: `sample` connectors for every profile check, `stale` (a check that fails
 ///   after the first), or `unavailable` (one that always fails), for an isolated review.
+/// - `BOTCHU_OPEN=tools`: open Skills & Tools on Tools; `add-tools` with Add Tools open. `BOTCHU_TOOL`
+///   selects a tool by its row's id (`catalog:gh`, `ssh:<alias>`, `botchu`), and `BOTCHU_SKILL`, with
+///   `BOTCHU_OPEN=skills`, a skill by its name. Seed `tools.json` in `BOTCHU_DATA_DIR` for a policy.
 /// - `BOTCHU_PROVIDER`: with `BOTCHU_OPEN=providers`, select this profile (an account id), showing
 ///   it in the sidebar.
 /// - `BOTCHU_PROFILE`: with `BOTCHU_DATA_DIR`, CLI profiles to add, from `name|family|command`
@@ -338,10 +341,18 @@ enum DevHooks {
         case "inbox", "projects", "agents", "providers", "skills", "jobs":
             model.destination = env["BOTCHU_OPEN"].flatMap(LibraryDestination.init(rawValue:))
             if let account = env["BOTCHU_PROVIDER"] { model.providerSelection = account }
+            if let name = env["BOTCHU_SKILL"] { model.skillSelection = model.skillEntries().first { $0.skill.name == name }?.id }
             if let item = env["BOTCHU_INBOX_ITEM"].flatMap(UUID.init(uuidString:)) { model.inbox.selected = item }
             if let repo = env["BOTCHU_PROJECT"] {
                 model.selectProject(repo, tab: env["BOTCHU_PROJECT_TAB"].flatMap(ProjectSelection.Tab.init(rawValue:)) ?? .overview,
                                     item: env["BOTCHU_PROJECT_ITEM"].flatMap(Int.init))
+            }
+        case "tools", "add-tools":
+            model.destination = .skills
+            model.skillsTab = .tools
+            model.addingTools = env["BOTCHU_OPEN"] == "add-tools"
+            model.toolSelection = env["BOTCHU_TOOL"].map { tool in
+                tool.hasPrefix("ssh:") ? model.tools.policy.destinations.first { "ssh:" + $0.alias == tool }.map { ToolRow.sshID($0) } ?? tool : tool
             }
         case "editor": model.newBot()
         case "job-editor", "job-model", "job-effort": model.jobs.newJob(for: model.selection)

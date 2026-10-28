@@ -554,12 +554,15 @@ final class SubagentRuntime {
                 memory: Workspace.read(targetBot.workspace + "/MEMORY.md"), sharedMemory: Workspace.read(model.settings.sharedMemoryPath),
                 soul: Workspace.read(targetBot.workspace + "/SOUL.md"),
                 instructions: Workspace.read(BotDocument.instructions.url(for: targetBot).path),
-                team: Workspace.read(model.settings.teamPath), availableBots: roster, skills: model.activeSkills(of: targetBot))
+                team: Workspace.read(model.settings.teamPath), availableBots: roster, skills: model.activeSkills(of: targetBot),
+                tools: machine.isRemote ? nil : model.tools.instructions())
             var invocation = CommandBuilder.invocation(kind: account.kind, prompt: prompt,
                 model: GenerationOptions.effectiveModel(record.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
                                                         sailDefault: model.settings.sailModel),
                 sessionID: nil, reasoningEffort: record.reasoningEffort, fast: record.fastMode == true, openRouterKey: key, sailKey: sailKey)
             invocation.environment.merge(context.environment) { _, new in new }
+            // Blocks the tools that are off, as its caller's turn does on This Mac (#246).
+            invocation.toolProfile = machine.isRemote ? nil : try await model.tools.turnProfile(for: account.kind)
             let command = model.settings.host(record.hostID)?.command(for: account) ?? model.settings.command(for: account)
             let runner = machine.isRemote
                 ? AgentRun(command: command, invocation: invocation, on: machine, folder: record.workingDirectory)

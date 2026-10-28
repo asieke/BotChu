@@ -859,7 +859,8 @@ public enum JobLaunch {
     /// or says it found nothing. No Home conversation: a job run starts clean.
     public static func preamble(bot: Bot, job: Job, run: JobRun, startedAt: Date, memory: String, sharedMemory: String,
                                 soul: String = "", instructions: String = "", team: String = "", skills: [Skill] = [],
-                                availableBots: [BotRosterEntry] = [], locale: Locale = Locale(identifier: "en_US_POSIX")) -> String {
+                                availableBots: [BotRosterEntry] = [], tools: String? = nil,
+                                locale: Locale = Locale(identifier: "en_US_POSIX")) -> String {
         let folder = (bot.workspace as NSString).appendingPathComponent(BotHome.folderName)
         var parts = ["""
             You are \(bot.name)\(bot.title.isEmpty ? "" : " — \(bot.title)"), a persistent bot in BotChu, running one of your \
@@ -876,6 +877,8 @@ public enum JobLaunch {
             \(BotContext.memoryCaptureRules(usesRememberTag: true))
             """)
         if let skills = BotContext.skillsContext(skills, remote: false) { parts.append(skills) }
+        // The tools and SSH destinations on This Mac (`ToolInventory.agentInstructions`, #246).
+        if let tools { parts.append(tools) }
         parts.append(timing(job: job, run: run, startedAt: startedAt, locale: locale))
         parts.append("""
             Don't change a repository's files from here. When the job needs work in a repository, ask for a task as your \

@@ -466,7 +466,7 @@ public enum BotContext {
     public static func subagentPreamble(bot: Bot, run: SubagentRun, callerDescription: String,
                                         memory: String, sharedMemory: String, soul: String = "",
                                         instructions: String = "", team: String = "",
-                                        availableBots: [BotRosterEntry] = [], skills: [Skill] = []) -> String {
+                                        availableBots: [BotRosterEntry] = [], skills: [Skill] = [], tools: String? = nil) -> String {
         var parts = ["""
             You are \(bot.name)\(bot.title.isEmpty ? "" : " — \(bot.title)"), called as a BotChu sub-agent by \
             \(callerDescription), at depth \(run.depth). Your identity, private instructions, personality and memory \
@@ -483,6 +483,8 @@ public enum BotContext {
             """)
         // On the caller's SSH host, the skills' files on the Mac are out of reach.
         if let skills = skillsContext(skills, remote: run.hostID != nil) { parts.append(skills) }
+        // The tools and SSH destinations on This Mac (`ToolInventory.agentInstructions`, #246).
+        if let tools { parts.append(tools) }
         parts.append("""
             Your delegated task is “\(run.title)”. Complete the brief thoroughly, within its scope and the \
             repository's instructions. You share files with the caller when using the shared workspace: coordinate \

@@ -21,6 +21,10 @@
 //   swift run --package-path macOS botchu-smoke --review claude-dev codex-dev muse
 //   swift run --package-path macOS botchu-smoke --summary claude-dev codex-dev
 //   swift run --package-path macOS botchu-smoke --models codex-work
+//   BOTCHU_SMOKE_BLOCK=gh swift run --package-path macOS botchu-smoke claude-personal codex-dev
+//
+// BOTCHU_SMOKE_BLOCK names catalog tools to block (#246): both turns run under the profile a turn on
+// This Mac gets with them off, and the first also runs them and `ssh -V`, which must still run.
 import Foundation
 import BotChuCore
 
@@ -47,6 +51,18 @@ let modelsOnly = CommandLine.arguments.dropFirst().first == "--models"
 let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly || connectorsOnly || summaryOnly || modelsOnly ? 2 : 1))
 let accounts = requested.isEmpty ? Accounts.all : requested.map { Accounts.account(id: $0) }
 let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-smoke-\(UUID().uuidString)")
+/// The catalog tools BOTCHU_SMOKE_BLOCK names, and the profile that blocks them where they are installed.
+let blockedTools = (ProcessInfo.processInfo.environment["BOTCHU_SMOKE_BLOCK"] ?? "").split(separator: ",").map(String.init)
+let toolProfile: String? = blockedTools.isEmpty ? nil : {
+    let locator = ToolLocator(loginPath: ProcessInfo.processInfo.environment["PATH"])
+    let locations = blockedTools.flatMap { name in ToolCatalog.tool(command: name)?.executables.flatMap { locator.locations(of: $0) } ?? [] }
+    guard let profile = ToolSandbox.profile(ToolSandbox.rules(blocking: locations)) else {
+        print("BOTCHU_SMOKE_BLOCK: none of \(blockedTools.joined(separator: ", ")) is a catalog tool installed here")
+        exit(2)
+    }
+    print("Blocking \(locations.map(\.path).joined(separator: ", "))")
+    return profile
+}()
 
 /// The command a turn runs: the account's, or for Sail this binary as its helper, keeping its
 /// sessions with the smoke run's other files.
@@ -99,6 +115,7 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
         liveInput: CommandBuilder.takesInputMidTurn(kind))
     // A stand-in for Sail's API, when one is named; the app never sets it.
     if kind == .sail, let base = ProcessInfo.processInfo.environment[Sail.baseVariable] { invocation.environment[Sail.baseVariable] = base }
+    invocation.toolProfile = toolProfile
     if let smokeImage {
         do { invocation = try ImageDelivery.attaching([smokeImage], to: invocation, kind: bot.account.kind, prompt: fullPrompt) }
         catch { return Turn(messages: [ChatMessage(role: .error, text: error.localizedDescription)], status: -1) }
@@ -317,7 +334,10 @@ Task {
         print("== \(account.name)")
         let started = Date()
         let imageRequest = smokeImage == nil ? "" : " Also read the large word in the attached image and include it in your reply."
-        let first = await runTurn(bot, prompt: "The code word is \(word). Use your shell tool to run `ls`, then reply with: stored." + imageRequest, history: [])
+        let blockRequest = blockedTools.isEmpty ? "" : " Then run each of " + (blockedTools.map { "`\($0) --version`" } + ["`ssh -V`"]).joined(separator: ", ")
+            + " as its own command, and after “stored” say which of them failed."
+        let first = await runTurn(bot, prompt: "The code word is \(word). Use your shell tool to run `ls`, then reply with: stored." + blockRequest + imageRequest,
+                                  history: [])
         show(first.messages)
         showModel(first, of: bot)
         if let connectors = first.connectors { showConnectors(connectors) }
