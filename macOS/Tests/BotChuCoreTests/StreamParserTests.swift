@@ -477,8 +477,8 @@ enum TokenUsageSamples {
             ModelUsage(model: "", uncachedInput: 7578, cacheRead: 0, output: 42, reasoning: 36)])])
         #expect(usage(.muse, [TokenUsageSamples.muse]) == [TurnUsage(models: [
             ModelUsage(model: "muse-wonder-full-1.0", uncachedInput: 27363, cacheRead: 0, output: 61, reasoning: 50)])])
-        let cached = TokenUsageSamples.antigravity.replacingOccurrences(of: "\"cache_read_tokens\":0", with: "\"cache_read_tokens\":7000")
-        #expect(usage(.antigravity, [cached]).first?.models.first?.uncachedInput == 578)
+        #expect(usage(.antigravity, TokenUsageSamples.antigravityCached) == [TurnUsage(models: [
+            ModelUsage(model: "", uncachedInput: 9835, cacheRead: 5520, output: 966, reasoning: 918)])])
     }
 
     @Test func piAggregatesAssistantRequestsOnceAndResets() throws {
