@@ -239,6 +239,7 @@ final class AppModel {
     /// Where conversations, settings, logs, memory, sub-agents' and jobs' files are written, off the
     /// main thread, each target in order (`StorageQueue`, #107).
     let storage: StorageQueue
+    let sessionPreparation: SessionPreparation
     /// How long moving or deleting a bot, a launch, and quitting wait for what is still being saved
     /// there. What quitting couldn't save by then is listed in `unsavedAtQuit` and the system log,
     /// never taken as saved.
@@ -255,6 +256,7 @@ final class AppModel {
     /// What each session was told about tools and SSH destinations (#246), "" for nothing, so a
     /// resumed one hears again only when that changed.
     @ObservationIgnored private var toolSessions: [ChatTarget: [String: String]] = [:]
+    @ObservationIgnored private var contextSessions: [ChatTarget: [String: UUID]] = [:]
     @ObservationIgnored private var runs: [ChatTarget: AgentRun] = [:]
     /// The heartbeat each conversation waits to send (`Heartbeats.swift`), dropped by any message to it.
     @ObservationIgnored var pendingHeartbeats: [ChatTarget: PendingHeartbeat] = [:]
@@ -320,6 +322,7 @@ final class AppModel {
              await GitHubLookup.work(number: $1, pullRequest: $2, repo: $0)
          }, evaluationRunner: RunEvaluator.Runner? = nil, storage: StorageQueue = .shared) {
         self.storage = storage
+        self.sessionPreparation = SessionPreparation(storage: storage)
         // Files still being written by this process (a model made before, in tests) are read once written.
         storage.wait(timeout: Self.saveTimeout)
         self.projectGitHub = projectGitHub
@@ -698,6 +701,7 @@ final class AppModel {
     }
 
     func delete(_ id: UUID) {
+        sessionPreparation.retire(id)
         delegation.stopBot(id)
         jobs.removeBot(id)
         inbox.forget(bot: id)
@@ -753,8 +757,9 @@ final class AppModel {
 
     func revealWorkspace(_ id: UUID) {
         guard let bot = bot(id), !bot.isRemoteQueue else { return }
-        prepareWorkspace(bot)
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: bot.workspace)])
+        prepareWorkspace(bot) {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: bot.workspace)])
+        }
     }
 
     /// Opens the bot's `.botchu` folder (its settings, thread, tasks and logs) in Finder.
@@ -1673,13 +1678,6 @@ final class AppModel {
         let id = bot.id
         let account = current.account
         let resume = current.resumableSessionID
-        prepareWorkspace(bot)
-        let memory = Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.memoryFile))
-        let soul = Workspace.read((bot.workspace as NSString).appendingPathComponent(BotContext.soulFile))
-        let instructions = Workspace.read(BotDocument.instructions.url(for: bot).path)
-        let sharedMemory = Workspace.read(settings.sharedMemoryPath)
-        let team = Workspace.read(settings.teamPath)
-        let skills = activeSkills(of: bot)
         let directory: String
         var machine = Machine.thisMac
         if let task {
@@ -1698,50 +1696,46 @@ final class AppModel {
         let ticket = UUID()
         waiting[target] = ticket
         runStates[target] = RunState(preparing: true)
-        let remote = machine
         Task { [self] in
-            // What the turn's context reads of conversations that may not be in memory: the digests
-            // of Home's tasks (never their transcripts), or, for a task on a host, which can't open
-            // the bot's folder, the recent Home conversation.
-            var preamble: String?
-            var updates = updates
-            if let task {
-                if resume == nil {
-                    let home = remote.isRemote ? await loadedThread(.home(id)) ?? [] : []
-                    preamble = BotContext.taskPreamble(bot: bot, task: task, memory: memory, sharedMemory: sharedMemory, history: history,
-                                                       machine: machineDescription(of: task), home: home, soul: soul,
-                                                       instructions: instructions, team: team, skills: skills)
-                }
-            } else {
+            defer { if waiting[target] == ticket { waiting[target] = nil } }
+            // Load only the conversation data this turn needs before preparing its latest context.
+            let home = task?.isRemote == true && resume == nil ? await loadedThread(.home(id)) ?? [] : []
+            if task == nil {
                 await digests(of: (resume == nil ? openTasks(of: id).map(\.id) : []) + reportedTasks(of: id, in: history), of: id)
-                if resume == nil {
-                    preamble = BotContext.sessionPreamble(bot: bot, memory: memory, sharedMemory: sharedMemory, history: history,
-                                                          tasks: openTasks(of: id).map { report(on: $0, of: id, replyLimit: 240) }, soul: soul,
-                                                          instructions: instructions, team: team, skills: skills)
-                }
-                // Home hears what its tasks did since the owner's last message there.
-                let sections = [taskUpdates(for: id, in: history), updates].compactMap { $0 }
-                updates = sections.isEmpty ? nil : sections.joined(separator: "\n\n")
             }
+            guard waiting[target] == ticket else { return }
             do {
                 let context = try await delegation.prepareCaller(target: target, directory: directory, machine: machine, hostID: task?.hostID)
                 guard waiting[target] == ticket else { delegation.endCaller(context.id); return }
-                waiting[target] = nil
                 let needsDelegationContext = resume.map { !(delegationSessions[target] ?? []).contains($0) } ?? true
                 let delegationInstructions = needsDelegationContext ? BotContext.subagentsSection(availableBots: delegation.roster) : nil
-                // The tools on This Mac, and the profile that blocks those that are off (#246); a
-                // host's turns have neither.
-                let toolProfile: String?
+                let prepared: PreparedSession
                 do {
-                    toolProfile = machine.isRemote ? nil : try await tools.turnProfile(for: account.kind)
-                } catch {
-                    delegation.endCaller(context.id)
-                    runStates[target] = nil
-                    pauseQueue(target)
-                    append(ChatMessage(role: .error, text: error.localizedDescription), to: target)
-                    saveThread(target)
-                    reportTaskStart(target, failure: error.localizedDescription)
-                    return
+                    prepared = try await prepareSessionForLaunch(of: id, kind: account.kind, remote: machine.isRemote,
+                                                                  current: { self.waiting[target] == ticket })
+                } catch { delegation.endCaller(context.id); throw error }
+                guard waiting[target] == ticket else { delegation.endCaller(context.id); return }
+                let snapshot = prepared.context
+                let toolProfile = prepared.toolProfile
+                let refreshContext = resume.map { contextSessions[target]?[$0] != snapshot.revision } ?? true
+                var preamble: String?
+                var updates = updates
+                if let task {
+                    if refreshContext {
+                        preamble = BotContext.taskPreamble(bot: self.bot(id) ?? bot, task: task,
+                            memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, history: resume == nil ? history : [],
+                            machine: machineDescription(of: task), home: home, soul: snapshot.soul,
+                            instructions: snapshot.instructions, team: snapshot.team, skills: snapshot.skills)
+                    }
+                } else {
+                    if refreshContext {
+                        preamble = BotContext.sessionPreamble(bot: self.bot(id) ?? bot,
+                            memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, history: resume == nil ? history : [],
+                            tasks: openTasks(of: id).map { report(on: $0, of: id, replyLimit: 240) }, soul: snapshot.soul,
+                            instructions: snapshot.instructions, team: snapshot.team, skills: snapshot.skills)
+                    }
+                    let sections = [taskUpdates(for: id, in: history), updates].compactMap { $0 }
+                    updates = sections.isEmpty ? nil : sections.joined(separator: "\n\n")
                 }
                 let toolText = machine.isRemote ? "" : tools.instructions() ?? ""
                 let toldBefore = resume.flatMap { toolSessions[target]?[$0] }
@@ -1884,6 +1878,7 @@ final class AppModel {
                         self.recordSession(session, accountID: accountID, for: target)
                         self.delegationSessions[target, default: []].insert(session)
                         self.toolSessions[target, default: [:]][session] = toolText
+                        self.contextSessions[target, default: [:]][session] = snapshot.revision
                     }
                     if let reported { self.recordReportedModel(reported, requested: current.model, accountID: accountID, for: target) }
                     if let connectors {
@@ -1983,6 +1978,7 @@ final class AppModel {
                     if let resume {
                         delegationSessions[target, default: []].insert(resume)
                         toolSessions[target, default: [:]][resume] = toolText
+                        contextSessions[target, default: [:]][resume] = snapshot.revision
                     }
                     runs[target] = run
                     if liveInput { inputs[target] = (account.kind, InputLedger()) }
@@ -2013,8 +2009,8 @@ final class AppModel {
                 waiting[target] = nil
                 runStates[target] = nil
                 pauseQueue(target)
-                append(ChatMessage(role: .error, text: "Couldn't prepare delegation: \(error.localizedDescription)"), to: target)
-                reportTaskStart(target, failure: "Couldn't prepare delegation: \(error.localizedDescription)")
+                append(ChatMessage(role: .error, text: "Couldn't prepare the turn: \(error.localizedDescription)"), to: target)
+                reportTaskStart(target, failure: "Couldn't prepare the turn: \(error.localizedDescription)")
                 saveThread(target)
             }
         }
@@ -2530,20 +2526,64 @@ final class AppModel {
         }
     }
 
-    private func prepareWorkspace(_ bot: Bot) {
-        guard !bot.isRemoteQueue else { return }
-        do {
-            // Instructions from an older bot.json move into INSTRUCTIONS.md once.
-            var bot = bot
-            if try Workspace.migrateInstructions(of: &bot), let i = bots.firstIndex(where: { $0.id == bot.id }) {
-                bots[i].instructions = bot.instructions
+    /// Captures only settings on MainActor. All context/catalog reads and owned-file work run on
+    /// a storage lane; changed settings while awaiting it are retried before a snapshot is used.
+    func prepareSession(of id: UUID) async throws -> SessionPreparation.Snapshot {
+        while let bot = bot(id), !bot.isRemoteQueue {
+            try Task.checkCancellation()
+            let input = sessionInput(bot)
+            let snapshot: SessionPreparation.Snapshot
+            do { snapshot = try await sessionPreparation.prepare(input) }
+            catch StorageQueue.Failure.superseded { continue }
+            guard let current = self.bot(id) else { throw CancellationError() }
+            guard sessionInput(current) == input else { continue }
+            if snapshot.migratedInstructions, let i = bots.firstIndex(where: { $0.id == id }),
+               bots[i].instructions == input.bot.instructions, !bots[i].instructions.isEmpty {
+                bots[i].instructions = ""
                 save(bots[i])
             }
-            try Workspace.prepare(bot: bot, sharedMemoryPath: settings.sharedMemoryPath, repositoriesPath: settings.expandedReposRoot,
-                                  machines: settings.hosts.map(\.nickname), availableBots: delegation.roster)
-            try BotHome(workspace: bot.persistencePath).prepareDispatch()
-        } catch {
-            append(ChatMessage(role: .error, text: "Couldn't prepare \(bot.workspace): \(error.localizedDescription)"), to: .home(bot.id))
+            return snapshot
+        }
+        throw CancellationError()
+    }
+
+    struct PreparedSession {
+        let context: SessionPreparation.Snapshot
+        let toolProfile: String?
+    }
+
+    /// Tool discovery can suspend too. Validate the context again afterwards, and retry when
+    /// either it or the policy changed meanwhile, so neither half of a launch is out of date.
+    func prepareSessionForLaunch(of id: UUID, kind: AgentKind, remote: Bool,
+                                 current: () -> Bool = { true }) async throws -> PreparedSession {
+        var snapshot = try await prepareSession(of: id)
+        while true {
+            guard current(), !Task.isCancelled else { throw CancellationError() }
+            let policy = tools.policy
+            let profile = remote ? nil : try await tools.turnProfile(for: kind)
+            guard current(), !Task.isCancelled else { throw CancellationError() }
+            let latest = try await prepareSession(of: id)
+            guard current(), !Task.isCancelled else { throw CancellationError() }
+            if latest.revision == snapshot.revision, remote || tools.policy == policy {
+                return PreparedSession(context: latest, toolProfile: profile)
+            }
+            snapshot = latest
+        }
+    }
+
+    private func sessionInput(_ bot: Bot) -> SessionPreparation.Input {
+        SessionPreparation.Input(bot: bot, sharedMemoryPath: settings.sharedMemoryPath,
+            repositoriesPath: settings.expandedReposRoot, machines: settings.hosts.map(\.nickname), availableBots: delegation.roster)
+    }
+
+    private func prepareWorkspace(_ bot: Bot, then: (() -> Void)? = nil) {
+        guard !bot.isRemoteQueue else { return }
+        Task {
+            do { _ = try await prepareSession(of: bot.id); then?() }
+            catch {
+                guard self.bot(bot.id) != nil else { return }
+                append(ChatMessage(role: .error, text: "Couldn't prepare \(bot.workspace): \(error.localizedDescription)"), to: .home(bot.id))
+            }
         }
     }
 

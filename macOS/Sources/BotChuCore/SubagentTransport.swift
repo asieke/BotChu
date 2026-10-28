@@ -76,11 +76,39 @@ public struct SubagentTransport: Sendable {
                 .map { SubagentEnvelope(filename: $0.filename, data: $0.data, problem: $0.problem) }
         }
         if heartbeat { try await self.heartbeat() }
+        return try localRequests()
+    }
+
+    /// Local callers arm this before their first drain. SSH keeps its existing poll protocol.
+    public func watchRequests() -> LocalMailboxWatcher? {
+        guard !machine.isRemote else { return nil }
+        return LocalMailboxWatcher(directory: URL(fileURLWithPath: directory).appendingPathComponent("requests"))
+    }
+
+    /// Consume bounded batches until empty. A request whose durable acknowledgment failed is
+    /// retried on the next hint/recovery, without spinning or hiding requests after that batch.
+    /// Returns the number of directory scans, including the final empty scan.
+    @discardableResult
+    public func drainRequests(_ receive: @Sendable ([SubagentEnvelope]) async -> Bool) async throws -> Int {
+        precondition(!machine.isRemote)
+        var seen: Set<String> = []
+        var scans = 0
+        while !Task.isCancelled {
+            let envelopes = try localRequests(excluding: seen)
+            scans += 1
+            guard !envelopes.isEmpty, await receive(envelopes) else { return scans }
+            seen.formUnion(envelopes.map(\.filename))
+        }
+        return scans
+    }
+
+    private func localRequests(excluding seen: Set<String> = []) throws -> [SubagentEnvelope] {
         try Task.checkCancellation()
         let folder = URL(fileURLWithPath: directory).appendingPathComponent("requests")
         let files = try FileManager.default.contentsOfDirectory(at: folder,
             includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
-            .filter { Self.validFilename($0.lastPathComponent) }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .filter { Self.validFilename($0.lastPathComponent) && !seen.contains($0.lastPathComponent) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
         return try files.prefix(Self.maximumBatchCount).map { file in
             let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
             guard values.isRegularFile == true, values.isSymbolicLink != true,

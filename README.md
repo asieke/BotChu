@@ -610,7 +610,11 @@ on that pull request's branch to continue in instead). The same command run agai
     shown at zero). A 392-point list
     (320 in a narrower window) in the tasks column's idiom: **Needs input** (Needs input deliveries
     not answered since they were sent), **Today**, **Yesterday**, then each earlier day, newest first, with
-    **Done** collapsed at the end with its count. Reading never files a delivery as Done; only Done
+    **Done** collapsed at the end with its recent count. Done deliveries leave the list 24 hours
+    after being handled; **Search Inbox and archive** finds them again by title, note, question,
+    filename or GitHub link. Their saved files and Done state stay intact. A delivery opened from
+    its chat card or a notification remains readable even after that cutoff. Older Done records
+    use their reply time, or last delivery time when no reply was recorded. Reading never files a delivery as Done; only Done
     or a reply does, and Done means handled, never approval. A row has the sender's pet (a credited bot's on its
     corner), the sender, the conversation it came from (Home, a task or a job's run) and the time,
     the title (semibold while unread, with a blue dot), its purpose (**Needs input**, **For
@@ -632,7 +636,7 @@ on that pull request's branch to continue in instead). The same command run agai
     says so, with **Try Again**. Answered, the question says when. The toolbar opens the conversation (**Open Home**, **Open
     Task** or **Open Run**, ⌘O) and files the delivery as **Done** (E, or ⌃⌘A while typing); its menu marks it read or
     unread and finds the copies and the originals. With nothing left to read it says when the last
-    delivery came, with **Show Done**. In the sending conversation's chat, a delivery is a card with
+    delivery came, with **Show Done** when any recent Done deliveries remain. In the sending conversation's chat, a delivery is a card with
     **Show in Inbox** and its question's choices until it is answered, each sent as from the Inbox,
     and a reply from the Inbox shows under a "Reply from your Inbox" line.
   - **Jobs:** an agent can own scheduled jobs, saved instructions it runs on a schedule, such as a
@@ -1155,13 +1159,14 @@ on that pull request's branch to continue in instead). The same command run agai
     parent window's width and height, its file's name with whose it is beside it (the bot's, or
     Every bot), a few words over an empty file, and Save (⌘S), Cancel (Escape), and Reload. Saving
     preserves exact Markdown and refuses to overwrite a file changed on disk since it was opened.
-    Saved changes apply at the next new session; **New Session** applies them to an existing
-    conversation. For one of the bot's own files (#232), while its Home or a task of it on this Mac
+    Saved changes apply at the next turn, including a resumed conversation. Context and skill
+    catalogs are prepared off the UI thread and reused while their inputs are unchanged; external
+    saves are checked too. **New Session** still starts the conversation over with its recent history. For one of the bot's own files (#232), while its Home or a task of it on this Mac
     is the conversation shown and has a CLI session, the editor also has **Save & Start New
     Session**: it saves, and only once the file is saved starts that one conversation over in a new
     session, as New Session does; it waits, disabled, while a turn or sub-agent runs there, and never
     touches the bot's other conversations, other bots, or a task on a host. The files every bot
-    shares, and skills, only save, for the next new sessions. The
+    shares, and skills, only save, for the next turns. The
     window is never narrower than the sidebar, chat and status
     need, so it widens when they do.
   - **Account usage:** the selected account's allowance used and reset times, shared by all bots
@@ -1377,7 +1382,8 @@ on that pull request's branch to continue in instead). The same command run agai
     rows the chat lays out, their heights kept by what they showed and how, and the reader's row and
     offset into it (`TranscriptViewport.swift`), when the chat keeps its reader at the newest content
     (`ChatPin.swift`), the identity, instructions,
-    team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`), the editable Markdown
+    team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`),
+    their reusable background preparation (`SessionPreparation.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries,
     with each window's model group and length, and what Providers makes of a reading: its windows by
     group, each reset as the time left and when, the credits and resets, what a row's second line
@@ -1432,13 +1438,18 @@ on that pull request's branch to continue in instead). The same command run agai
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
     `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (each run's transcript and record saved in
     a lane of its own, off the main thread, while they stream and at their start and end), `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
-    handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation. A Task
+    handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
+    `LocalMailboxWatcher.swift` wakes local request scans on directory changes, with a recovery
+    scan every 4.5 seconds; heartbeats and changed statuses are delivered independently. A Task
     handed to another bot (`botchu-task create`, the same helper under a second name) goes through
     the same mailbox; `TaskHandoff.swift` reads and checks the request, recognizes it when asked
     again, and holds what is written back; `TaskList.swift` does the same for `botchu-task list --mine`. A delivery to the Inbox (`botchu-inbox send`) goes through
     it too: `Inbox.swift` reads and checks the request, keeps deliveries and their copies in a bot's
     folder, what the owner did with them (`InboxState`), the list's groups (`InboxList`) and a reply's
     prompt (`InboxReply`); the app's `InboxModel` takes them in and sends the replies, one at a time.
+    `InboxStatus.swift` derives the counts and pending questions once per Inbox mutation, from all
+    deliveries. Tabs observe their own questions; each sidebar row observes its own conversations,
+    so an activity update doesn't rederive every other bot's status (#271).
     `DeliveryBanner.swift` makes a delivery's banner (its text, buttons and category, the newest 20
     categories kept registered) and reads a click back into a reply or "show it"; the app's
     `InboxNotifications.swift` (`InboxNotifier`) posts banners, answers clicks and keeps the Dock
@@ -1948,6 +1959,15 @@ on that pull request's branch to continue in instead). The same command run agai
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.
+- Sidebar status: `BOTCHU_INBOX_BENCHMARK=<file> swift test --package-path macOS --filter
+  inboxStatusBenchmark` compares uncached and cached status reads for 20 bots, 80 tasks and 2,000
+  deliveries. `BOTCHU_SIDEBAR_BENCHMARK=<file> swift test --package-path macOS --filter
+  sidebarStatusBenchmark` measures conversation switching, an activity update and typing until
+  drawn, with those same counts and four active tasks; run it through the shared window-test gate.
+  For a before/after pair, copy only `InboxStatusFixture.swift` and `SidebarBenchmarkTests.swift`
+  into a separate checkout of the earlier revision and run the same command and build configuration
+  in each. Both benchmarks report timing without asserting load-sensitive limits. The runtime
+  regression tests count whole-Inbox derivations and actual sidebar row bodies independently.
 - Launching: `BOTCHU_LAUNCH_BENCHMARK=<file> swift test --configuration release --package-path macOS
   --filter launchBenchmark` builds eight bots, forty open tasks, sixteen closed ones and a hundred
   finished sub-agents (101 MB), opens each Home and open task once and reads the process's memory,
@@ -1955,12 +1975,21 @@ on that pull request's branch to continue in instead). The same command run agai
   keystroke, the shown conversation's messages and opening a conversation not shown yet, and five
   more without indexes, as a first launch after the upgrade, with what each read, decoded, wrote and
   copied; and writes the table to the file. It asserts nothing about time and isn't part of `check`.
+- Inbox list preparation: `BOTCHU_INBOX_BENCHMARK=<file> swift test --package-path macOS --filter
+  inboxArchiveBenchmark` compares the former full sort/group with the cached visible candidates,
+  keeping 20 current deliveries while the Done archive grows from 100 to 10,000. It also measures
+  building that index at load; no window or provider is used, and it asserts nothing about time.
 - Markdown: `BOTCHU_MARKDOWN_BENCHMARK=<file> swift test --configuration release --package-path macOS
   --filter markdownBenchmark` times converting the next revision of prose, code, shell code with
   `$HOME`, equation-heavy, and table-and-diagram replies of 2 to 128 KB, gives a 128 KB reply 100
   rapid deltas (with the worker's counts and the main thread's time for each), and measures what
   ten 128 KB replies keep, then release under memory pressure. It needs no window, asserts nothing
   about time and isn't part of `check`.
+- Session preparation: `BOTCHU_PREPARATION_BENCHMARK=<file> swift test --package-path macOS
+  --filter sessionPreparationBenchmark` compares the previous synchronous launch preparation with
+  cold and reused background snapshots: 24 skills, 2,400 resource files, and five 20 KB context
+  files. It records preparation time and a queued MainActor input/Stop callback's delay (not drawing
+  time). Runtime tests also measure a draft edit and Stop while preparation is held on its worker.
 - Saving: `BOTCHU_PERSISTENCE_BENCHMARK=<file> swift test --configuration release --package-path macOS
   --filter persistenceBenchmark` times, for 1,500- and 5,000-message conversations and 12 MB of tool
   output, what a save costs the main thread (now, and as it was when it wrote there), how long it takes

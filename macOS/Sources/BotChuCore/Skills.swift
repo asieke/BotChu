@@ -72,7 +72,7 @@ public enum Skills {
     }
 
     /// The skills in `folder`: each subfolder (or link to one) with a readable `SKILL.md`, by name.
-    public static func discover(in folder: URL, scope: Skill.Scope, fileManager: FileManager = .default) -> [Skill] {
+    public static func discover(in folder: URL, scope: Skill.Scope, countResources: Bool = true, fileManager: FileManager = .default) -> [Skill] {
         // Paths stay as the folder is given (`contentsOfDirectory(at:)` would resolve links in them),
         // so the catalog names them as the owner's settings do.
         guard let names = try? fileManager.contentsOfDirectory(atPath: folder.path) else { return [] }
@@ -81,7 +81,7 @@ public enum Skills {
             let file = entry.appendingPathComponent(fileName)
             guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
             return Skill(slug: entry.lastPathComponent, text: text, scope: scope, url: file,
-                         resourceCount: resources(in: entry, fileManager: fileManager))
+                         resourceCount: countResources ? resources(in: entry, fileManager: fileManager) : 0)
         }
         .sorted(by: ordered)
     }
@@ -94,8 +94,8 @@ public enum Skills {
     }
 
     public static func active(for bot: Bot, sharedFolder: URL, fileManager: FileManager = .default) -> [Skill] {
-        active(for: bot, shared: discover(in: sharedFolder, scope: .shared, fileManager: fileManager),
-               own: discover(in: folder(of: bot), scope: .bot, fileManager: fileManager))
+        active(for: bot, shared: discover(in: sharedFolder, scope: .shared, countResources: false, fileManager: fileManager),
+               own: discover(in: folder(of: bot), scope: .bot, countResources: false, fileManager: fileManager))
     }
 
     static func ordered(_ a: Skill, _ b: Skill) -> Bool {
