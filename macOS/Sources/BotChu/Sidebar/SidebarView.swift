@@ -18,11 +18,7 @@ struct SidebarView: View {
             })) {
             Section("Workspace") {
                 ForEach(LibraryDestination.sidebar, id: \.self) { destination in
-                    let count = destination == .inbox ? model.inbox.unfinishedCount : 0
-                    // What in the Inbox isn't Done, read or not (#189); the Dock counts what is unread.
-                    Label(destination.title, systemImage: destination.symbol)
-                        .badge(count)
-                        .accessibilityValue(count > 0 ? "\(count) not done" : "")
+                    SidebarWorkspaceRow(destination: destination)
                         .tag(SidebarDestination.library(destination))
                 }
             }
@@ -82,8 +78,7 @@ struct SidebarView: View {
                         Spacer(minLength: 0)
                         // While collapsed, what its busy specialists are doing, as their rows' dots.
                         if !specialistsExpanded {
-                            let summary = BotRowSummary(merging: specialists.map { ($0.name, model.botRowSummary(of: $0)) })
-                            if !summary.dots.isEmpty { BotRowDots(summary: summary) }
+                            SidebarSpecialistSummary(bots: specialists)
                         }
                     }
                     .accessibilityIdentifier("sidebar-specialists")
@@ -120,8 +115,7 @@ struct SidebarView: View {
     }
 
     private func row(_ bot: Bot) -> some View {
-        BotRow(bot: bot, status: model.status(of: bot), summary: model.botRowSummary(of: bot),
-               selected: model.visibleBotID == bot.id)
+        SidebarBotRow(bot: bot)
             .tag(SidebarDestination.bot(bot.id))
             .accessibilityIdentifier("sidebar-bot-\(bot.id)")
     }
@@ -142,6 +136,42 @@ struct SidebarView: View {
         let shown = group.botIDs.filter { model.bot($0) != nil }
         let next = shown.indices.contains(index) ? shown[index] : nil
         _ = BotDrag.load(providers) { model.dropBot($0, inSection: group.name, before: next) }
+    }
+}
+
+/// Each row owns its status reads. Activity in one conversation updates its bot's row without
+/// evaluating the statuses of the other bots in the sidebar.
+private struct SidebarBotRow: View {
+    @Environment(AppModel.self) private var model
+    let bot: Bot
+
+    var body: some View {
+        let _ = SidebarStatusDiagnostics.didEvaluateRow?(bot.id)
+        BotRow(bot: bot, status: model.status(of: bot), summary: model.botRowSummary(of: bot),
+               selected: model.visibleBotID == bot.id)
+    }
+}
+
+private struct SidebarWorkspaceRow: View {
+    @Environment(AppModel.self) private var model
+    let destination: LibraryDestination
+
+    var body: some View {
+        // What isn't Done, read or not (#189); the Dock counts what is unread.
+        let count = destination == .inbox ? model.inbox.unfinishedCount : 0
+        Label(destination.title, systemImage: destination.symbol)
+            .badge(count)
+            .accessibilityValue(count > 0 ? "\(count) not done" : "")
+    }
+}
+
+private struct SidebarSpecialistSummary: View {
+    @Environment(AppModel.self) private var model
+    let bots: [Bot]
+
+    var body: some View {
+        let summary = BotRowSummary(merging: bots.map { ($0.name, model.botRowSummary(of: $0)) })
+        if !summary.dots.isEmpty { BotRowDots(summary: summary) }
     }
 }
 

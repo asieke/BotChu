@@ -264,7 +264,7 @@ extension RenderingTests {
         }
     }
 
-    @Test func newSessionsLoadCurrentFilesWhileResumedTurnsKeepTheirContext() async throws {
+    @Test func newAndResumedSessionsLoadCurrentFiles() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-session-documents-\(UUID().uuidString)")
         let domain = "local.BotChu.documents.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: domain))
@@ -308,7 +308,14 @@ extension RenderingTests {
         }
         model.send("Resume", to: target)
         try await waitForDocumentTurn(model, target: target)
-        #expect(try String(contentsOf: captured, encoding: .utf8) == "Resume")
+        let resumed = try String(contentsOf: captured, encoding: .utf8)
+        #expect(resumed.contains("<personality>\nNow speak like a pirate.\n</personality>"))
+        #expect(resumed.contains("The owner likes tea."))
+        #expect(resumed.hasSuffix("Resume"))
+        #expect(model.bot(bot.id)?.resumableSessionID == "fixture-session")
+        model.send("Unchanged", to: target)
+        try await waitForDocumentTurn(model, target: target)
+        #expect(try String(contentsOf: captured, encoding: .utf8) == "Unchanged")
         model.newSession(target)
         model.send("Fresh session", to: target)
         try await waitForDocumentTurn(model, target: target)

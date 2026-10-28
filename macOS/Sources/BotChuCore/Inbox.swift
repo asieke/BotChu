@@ -458,11 +458,15 @@ public struct InboxState: Codable, Equatable, Sendable {
         public var done: Bool
         /// When the owner last replied from the Inbox.
         public var repliedAt: Date?
+        /// When the owner last moved it to Done, whether directly or by replying. Older records
+        /// have no stamp; their reply or delivery time supplies the archive cutoff.
+        public var doneAt: Date?
 
-        public init(read: Bool = false, done: Bool = false, repliedAt: Date? = nil) {
+        public init(read: Bool = false, done: Bool = false, repliedAt: Date? = nil, doneAt: Date? = nil) {
             self.read = read
             self.done = done
             self.repliedAt = repliedAt
+            self.doneAt = doneAt
         }
     }
 
@@ -517,6 +521,7 @@ public struct InboxState: Codable, Equatable, Sendable {
     public mutating func received(_ id: UUID, renewed: Bool, shown: Bool) {
         guard renewed else { return }
         self[id].done = false
+        self[id].doneAt = nil
         self[id].read = shown
     }
 
@@ -528,7 +533,21 @@ public struct InboxState: Codable, Equatable, Sendable {
     /// The owner's answer is saved in the queue of the conversation that sent the delivery: it is
     /// answered, read and Done. What the bot does with it shows in that conversation.
     public mutating func answer(_ id: UUID, at date: Date) {
-        self[id] = Entry(read: true, done: true, repliedAt: date)
+        self[id] = Entry(read: true, done: true, repliedAt: date, doneAt: date)
+    }
+
+    /// Reopening clears the cutoff, but keeps the answer. Repeated Done actions don't extend it.
+    public mutating func setDone(_ id: UUID, _ done: Bool, at date: Date) {
+        guard self[id].done != done else { return }
+        self[id].done = done
+        self[id].doneAt = done ? Delivery.stamp(date) : nil
+        if done { self[id].read = true }
+    }
+
+    public func doneDate(of delivery: Delivery) -> Date? {
+        let entry = self[delivery.id]
+        guard entry.done else { return nil }
+        return entry.doneAt ?? max(entry.repliedAt ?? delivery.updatedAt, delivery.updatedAt)
     }
 
     public func unreadCount(_ deliveries: [Delivery]) -> Int { deliveries.filter(isUnread).count }
@@ -560,6 +579,45 @@ public struct InboxState: Codable, Equatable, Sendable {
 /// The Inbox's list in groups: unresolved Needs input, Today, Yesterday, then each earlier day,
 /// newest first, with Done at the end.
 public enum InboxList {
+    public static let doneRetention: TimeInterval = 24 * 60 * 60
+
+    public static func archiveDate(of delivery: Delivery, state: InboxState) -> Date? {
+        state.doneDate(of: delivery)?.addingTimeInterval(doneRetention)
+    }
+
+    public static func isArchived(_ delivery: Delivery, state: InboxState, now: Date) -> Bool {
+        archiveDate(of: delivery, state: state).map { $0 <= now } ?? false
+    }
+
+    /// The ordinary list's candidates, maintained when deliveries arrive or change Done state.
+    /// Rendering, selection and expanding Done never sort or scan the growing archive. Searching
+    /// uses the complete delivery collection instead; no record or file is removed here.
+    public struct Index: Sendable {
+        public private(set) var deliveries: [UUID: Delivery] = [:]
+        public private(set) var latest: Delivery?
+
+        public init() {}
+
+        public init(_ deliveries: some Sequence<Delivery>, state: InboxState, now: Date) {
+            for delivery in deliveries { update(delivery, state: state, now: now) }
+        }
+
+        public mutating func update(_ delivery: Delivery, state: InboxState, now: Date) {
+            deliveries[delivery.id] = isArchived(delivery, state: state, now: now) ? nil : delivery
+            if latest.map({ ($0.updatedAt, $0.id.uuidString) <= (delivery.updatedAt, delivery.id.uuidString) }) ?? true {
+                latest = delivery
+            }
+        }
+
+        public mutating func expire(state: InboxState, now: Date) {
+            deliveries = deliveries.filter { !isArchived($0.value, state: state, now: now) }
+        }
+
+        public func nextExpiration(state: InboxState) -> Date? {
+            deliveries.values.compactMap { archiveDate(of: $0, state: state) }.min()
+        }
+    }
+
     public enum Section: Hashable, Sendable {
         case needsInput, today, yesterday
         /// An earlier day, by its start.
@@ -584,10 +642,16 @@ public enum InboxList {
 
     /// `pinned` keeps a delivery in the group it was in (the one being read), whatever it has
     /// become since, until the owner leaves it; only Done, or moving it out of Done, moves it at once.
-    public static func groups(_ deliveries: [Delivery], state: InboxState, now: Date, calendar: Calendar = .current,
-                              pinned: [UUID: Section] = [:]) -> [Group] {
+    /// Done leaves after 24 hours, except the selected delivery while it is read. A search includes
+    /// matching archived deliveries, still in Done, without changing their state.
+    public static func groups(_ deliveries: some Sequence<Delivery>, state: InboxState, now: Date, calendar: Calendar = .current,
+                              pinned: [UUID: Section] = [:], matching query: String = "", retaining selected: UUID? = nil) -> [Group] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var grouped: [Section: [Delivery]] = [:]
         for delivery in deliveries {
+            if query.isEmpty {
+                if delivery.id != selected, isArchived(delivery, state: state, now: now) { continue }
+            } else if !matches(delivery, query: query) { continue }
             var section = section(of: delivery, state: state, now: now, calendar: calendar)
             if section != .done, let pin = pinned[delivery.id], pin != .done { section = pin }
             grouped[section, default: []].append(delivery)
@@ -604,6 +668,18 @@ public enum InboxList {
         return grouped.keys.sorted { rank($0) < rank($1) }.map { section in
             Group(section: section, ids: grouped[section]!.sorted { ($0.updatedAt, $0.id.uuidString) > ($1.updatedAt, $1.id.uuidString) }.map(\.id))
         }
+    }
+
+    /// Search saved metadata, including archived notes, filenames, questions and GitHub links.
+    /// File contents stay on disk until the owner opens a delivery.
+    private static func matches(_ delivery: Delivery, query: String) -> Bool {
+        if [delivery.title, delivery.note, delivery.question?.text ?? ""].contains(where: { $0.localizedCaseInsensitiveContains(query) }) {
+            return true
+        }
+        return delivery.files.contains { $0.name.localizedCaseInsensitiveContains(query) }
+            || delivery.links.contains { "\($0.repo)#\($0.number)".localizedCaseInsensitiveContains(query) }
+            || delivery.credits.contains { $0.name.localizedCaseInsensitiveContains(query) }
+            || (delivery.question?.choices.contains { $0.localizedCaseInsensitiveContains(query) } ?? false)
     }
 
     /// The deliveries shown, in order: every group's, Done's only while it is open.
