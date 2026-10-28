@@ -606,6 +606,21 @@ on that pull request's branch to continue in instead). The same command run agai
     clicking it brings BotChu forward on the delivery in the Inbox. An answer from a banner that
     launched BotChu is sent once the deliveries are read. BotChu asks for notifications the first
     time a delivery arrives, not at launch. The Dock tile's badge shows the unread deliveries.
+  - **Secrets (#266):** a bot that needs a key, token or password asks for it with
+    `botchu-secret ask` (the same helper under a fifth name), never in the chat: a `--title`, an
+    optional `--note`, and where it goes, one or more of `--env-file <path>` with `--name <VAR>`
+    (set in a dotenv file, the file a link points to, made with mode 600 if missing, its other lines
+    and mode kept), `--file <path>` (written alone) and `--pipe "<command>"` (given on standard
+    input, such as `vercel env add NAME production` or `gh secret set NAME`). BotChu shows a popup
+    window of its own, over whatever the window has open, bouncing the Dock icon when it isn't
+    active: the asking bot (a sub-agent run's own bot) and conversation, the note, a secure field,
+    each destination, and Cancel and Save; closing it cancels, and several wait their turn. What is
+    pasted, without the spaces and line breaks around it, goes into the asking turn's mailbox; the
+    helper reads and deletes it at once, puts it in place, and prints only where (a command's output
+    with the value replaced by `[secret]`), or that the owner cancelled, so it never enters the
+    conversation, its transcript or BotChu's files. BotChu keeps no copy, and deletes an answer its
+    helper hasn't taken within 30 seconds. The helper waits 10 minutes by default (`--wait`, 10–3600
+    seconds); then, or when it is stopped (its tool's timeout) or its turn ends, the popup closes.
   - **Inbox:** first under Workspace (⇧⌘I), with how many deliveries aren't Done, read or not (none
     shown at zero). A 392-point list
     (320 in a narrower window) in the tasks column's idiom: **Needs input** (Needs input deliveries
@@ -1392,6 +1407,9 @@ on that pull request's branch to continue in instead). The same command run agai
     it too: `Inbox.swift` reads and checks the request, keeps deliveries and their copies in a bot's
     folder, what the owner did with them (`InboxState`), the list's groups (`InboxList`) and a reply's
     prompt (`InboxReply`); the app's `InboxModel` takes them in and sends the replies, one at a time.
+    A secret asked for with `botchu-secret ask` (#266) goes through it as well: `Secrets.swift` reads and
+    checks the request and its destinations and makes the answer, which never prints its value; the
+    app's `SecretPrompts` keeps the popups waiting and writes each answer, and `SecretPanel` shows them.
     `DeliveryBanner.swift` makes a delivery's banner (its text, buttons and category, the newest 20
     categories kept registered) and reads a click back into a reply or "show it"; the app's
     `InboxNotifications.swift` (`InboxNotifier`) posts banners, answers clicks and keeps the Dock

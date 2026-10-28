@@ -112,6 +112,8 @@ final class AppModel {
     var inbox: InboxModel!
     /// The Inbox's banners and Dock badge; their system only in BotChu.app.
     var notifier: InboxNotifier?
+    /// The keys and passwords bots ask for with `botchu-secret ask`, in a popup (#266).
+    var secrets: SecretPrompts!
     /// Each bot's tasks, open and closed, oldest first.
     var tasks: [UUID: [BotTask]] = [:]
     /// Every conversation (each bot's Home, and each task), observed one by one: see
@@ -362,6 +364,7 @@ final class AppModel {
                 }
             }
         }
+        secrets = SecretPrompts(model: self)
         delegation = SubagentRuntime(model: self, root: (store != nil || DevHooks.dataDir != nil)
             ? self.store.root.appendingPathComponent("subagents") : SubagentIPC.defaultRoot, archive: SubagentArchive(storage: storage))
         remoteQueue = RemoteQueueBridge(model: self)

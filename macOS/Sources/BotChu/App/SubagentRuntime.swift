@@ -284,6 +284,18 @@ final class SubagentRuntime {
             await receiveMessage(data, id: fileID, filename: filename, from: caller)
             return
         }
+        // A key or password the turn asks the owner for, in a popup (#266), or the helper giving up on one.
+        if SecretRequest.isRequest(data) {
+            await receiveSecret(data, id: fileID, filename: filename, from: caller)
+            return
+        }
+        if SecretWithdrawal.isWithdrawal(data) {
+            if let withdrawal = try? SecretWithdrawal.parse(data), withdrawal.invocationID == caller.id {
+                model?.secrets.withdraw(withdrawal.request)
+            }
+            try? await caller.transport.acknowledge(filename: filename)
+            return
+        }
         // The asking bot's own open Tasks, as its Tasks column shows them (#262).
         if TaskListRequest.isRequest(data) {
             await receiveTaskList(data, id: fileID, filename: filename, from: caller)
@@ -450,6 +462,33 @@ final class SubagentRuntime {
             try await caller.transport.writeResult(id: id, data: SubagentIPC.encode(result))
             try await caller.transport.acknowledge(filename: filename)
         } catch { if isWatching(caller.id) { report("Couldn't answer a message: \(error.localizedDescription)") } }
+    }
+
+    // MARK: Secrets (#266)
+
+    /// Takes a `botchu-secret ask` request: a popup asks the owner for it, in the name of the bot
+    /// whose turn asks (a sub-agent run's own bot), and its answer is written back when they save or
+    /// cancel (`SecretPrompts`). A request that can't be asked is answered at once with why.
+    private func receiveSecret(_ data: Data, id: UUID, filename: String, from caller: Caller) async {
+        do {
+            guard let model else { throw InboxRequest.Problem("BotChu is shutting down") }
+            let request = try SecretRequest.parse(data)
+            guard request.id == id else { throw InboxRequest.Problem("the request's ID doesn't match its file") }
+            try request.validate(SubagentCallerContext(invocationID: caller.id, botID: caller.target.botID, taskID: caller.target.taskID,
+                                                       parentSubagentID: caller.parent, depth: caller.depth,
+                                                       workingDirectory: caller.directory, hostID: caller.hostID))
+            guard contexts[caller.id] != nil else { throw InboxRequest.Problem("the asking turn has ended") }
+            let botID = caller.parent.flatMap { run($0) }?.targetBotID ?? caller.target.botID
+            guard let bot = model.bot(botID) else { throw InboxRequest.Problem("the asking bot is no longer in BotChu") }
+            model.secrets.ask(request, bot: bot, conversation: model.task(caller.target)?.title ?? "Home",
+                              caller: caller.id, transport: caller.transport)
+        } catch {
+            let result = SecretResult(id: id, errorMessage: (error as? InboxRequest.Problem)?.message ?? error.localizedDescription)
+            do { try await caller.transport.writeResult(id: id, data: SubagentIPC.encode(result)) }
+            catch { if isWatching(caller.id) { report("Couldn't answer a secret request: \(error.localizedDescription)") } }
+        }
+        do { try await caller.transport.acknowledge(filename: filename) }
+        catch { if isWatching(caller.id) { report("Couldn't take a secret request: \(error.localizedDescription)") } }
     }
 
     // MARK: The asking bot's Tasks (#262)
@@ -725,6 +764,7 @@ final class SubagentRuntime {
         watchers.removeValue(forKey: id)?.cancel()
         rejections[id] = nil
         receiving[id] = nil
+        model?.secrets.endCaller(id)
         for record in root(caller.target).runs where record.callerInvocationID == id && record.phase.isActive { stop(record.id) }
         Task { try? await caller.transport.close() }
     }

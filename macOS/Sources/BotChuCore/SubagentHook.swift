@@ -5,8 +5,9 @@ import Foundation
 public enum SubagentHookInstaller {
     /// The helper's commands, each a copy of `script`, which acts by the name it is run as:
     /// `botchu-subagent` starts sub-agent runs, `botchu-task` creates Tasks (#111), and
-    /// `botchu-inbox` delivers to the owner's Inbox, and `botchu-message` messages remote queue bots.
-    public static let commands = ["botchu-subagent", "botchu-task", "botchu-inbox", "botchu-message"]
+    /// `botchu-inbox` delivers to the owner's Inbox, `botchu-message` messages remote queue bots, and
+    /// `botchu-secret` asks the owner for a key it puts in place without printing it (#266).
+    public static let commands = ["botchu-subagent", "botchu-task", "botchu-inbox", "botchu-message", "botchu-secret"]
 
     @discardableResult public static func install(binDirectory: URL = SubagentIPC.defaultBinDirectory) throws -> URL {
         try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true,
@@ -581,7 +582,221 @@ def message_main():
         fail("--wait must be between 0 and 600 seconds.")
     return message_send(args)
 
+SECRET_NOTE_CHARACTERS = 2000
+
+def secret_destinations(args):
+    destinations = []
+    if args.env_file and not args.name:
+        fail("Say which variable --env-file sets with --name.")
+    if args.name and not args.env_file:
+        fail("--name is the variable an --env-file sets: add --env-file.")
+    if args.name:
+        import re
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", args.name):
+            fail("--name must be a variable name such as STRIPE_SECRET_KEY.")
+    for kind, paths in (("env", args.env_file or []), ("file", args.file or [])):
+        for path in paths:
+            # The file a link points to, which is what is written (a worktree's .env is often a link).
+            real = pathlib.Path(os.path.realpath(os.path.expanduser(path)))
+            if not real.parent.is_dir():
+                fail("No folder for " + path + ": " + str(real.parent))
+            if real.exists() and not real.is_file():
+                fail("Not a file: " + path)
+            destination = {"type": kind, "path": str(real)}
+            if kind == "env":
+                destination["name"] = args.name
+            destinations.append(destination)
+    for command in args.pipe or []:
+        if not command.strip() or len(command) > 2000:
+            fail("A --pipe command must have 1-2000 characters.")
+        destinations.append({"type": "pipe", "command": command.strip()})
+    if not destinations:
+        fail("Say where it goes: --env-file with --name, --file, or --pipe.")
+    if len(destinations) > 8:
+        fail("Give at most 8 places to put it.")
+    return destinations
+
+def secret_label(destination):
+    if destination["type"] == "env":
+        return destination["name"] + " in " + destination["path"]
+    if destination["type"] == "pipe":
+        return "the standard input of `" + destination["command"] + "`"
+    return destination["path"]
+
+def secret_write(path, text):
+    real = pathlib.Path(os.path.realpath(path))
+    mode = (real.stat().st_mode & 0o777) if real.exists() else 0o600
+    descriptor, temporary = tempfile.mkstemp(prefix="." + real.name + ".", suffix=".tmp", dir=str(real.parent))
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, real)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+def dotenv_value(value):
+    import re
+    if re.fullmatch(r"[A-Za-z0-9_\-./:+=@,%^~]*", value):
+        return value
+    if "'" not in value and "\n" not in value:
+        return "'" + value + "'"
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("\n", "\\n") + '"'
+
+def secret_env(path, name, value):
+    import re
+    real = pathlib.Path(os.path.realpath(path))
+    lines = real.read_text(encoding="utf-8").splitlines(keepends=True) if real.exists() else []
+    pattern = re.compile(r"^(\s*(?:export\s+)?)" + re.escape(name) + r"\s*=")
+    line = name + "=" + dotenv_value(value) + "\n"
+    kept, replaced = [], False
+    for existing in lines:
+        match = pattern.match(existing)
+        if not match:
+            kept.append(existing)
+        elif not replaced:
+            kept.append(match.group(1) + line)
+            replaced = True
+    if not replaced:
+        if kept and not kept[-1].endswith("\n"):
+            kept[-1] += "\n"
+        kept.append(line)
+    secret_write(real, "".join(kept))
+
+def secret_pipe(command, value):
+    import subprocess
+    try:
+        finished = subprocess.run(["/bin/sh", "-c", command], input=value, text=True, capture_output=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        fail("it didn't finish in 5 minutes")
+    # What it printed, without the secret should it echo it.
+    output = (finished.stdout + finished.stderr).replace(value, "[secret]").strip()
+    if finished.returncode != 0:
+        fail("it exited with " + str(finished.returncode) + (": " + output[-1000:] if output else ""))
+    return output[-1000:]
+
+def secret_ask(args):
+    import signal
+    live()
+    title = args.title.strip()
+    if not title or len(title) > 200:
+        fail("Say what you ask for in 1-200 characters (--title), such as \"Stripe sandbox key\".")
+    note = (args.note or "").strip()
+    if len(note) > SECRET_NOTE_CHARACTERS:
+        fail("The note must be at most 2000 characters.")
+    if not 10 <= args.wait <= 3600:
+        fail("--wait must be between 10 and 3600 seconds.")
+    destinations = secret_destinations(args)
+    request_id = str(uuid.uuid4())
+    invocation = caller_uuid("BOTCHU_INVOCATION_ID", True)
+    request = {
+        "kind": "secret",
+        "id": request_id,
+        "invocationID": invocation,
+        "callerBotID": caller_uuid("BOTCHU_CALLER_BOT_ID", True),
+        "callerTaskID": caller_uuid("BOTCHU_CALLER_TASK_ID"),
+        "parentSubagentID": caller_uuid("BOTCHU_CALLER_SUBAGENT_ID"),
+        "createdAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "title": title,
+        "destinations": destinations,
+        "wait": args.wait,
+    }
+    if note:
+        request["note"] = note
+    path = ROOT / "results" / (request_id + ".result.json")
+
+    def withdraw():
+        try:
+            atomic_json(ROOT / "requests" / (str(uuid.uuid4()) + ".json"),
+                        {"kind": "secretWithdrawal", "id": str(uuid.uuid4()), "request": request_id, "invocationID": invocation})
+        except OSError:
+            pass
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+    def stopped(number, frame):
+        # The popup closes with it, so nothing pasted later is written anywhere.
+        withdraw()
+        print("botchu-secret: stopped waiting; the popup is closed.", file=sys.stderr, flush=True)
+        os._exit(128 + number)
+
+    for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(number, stopped)
+    atomic_json(ROOT / "requests" / (request_id + ".json"), request)
+    print("Waiting for your owner to paste " + title + " into BotChu's popup...", file=sys.stderr, flush=True)
+    started = time.monotonic()
+    while not path.exists():
+        if time.monotonic() - started > args.wait + 15:
+            withdraw()
+            fail("Your owner didn't answer in " + str(int(args.wait)) + " seconds; the popup is closed. "
+                 "Ask in your reply instead, or again later.")
+        live()
+        time.sleep(0.2)
+    result = read_json(path)
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    if result.get("kind") != "secret" or canonical(result.get("id")) != request_id:
+        fail("Mismatched answer: " + request_id)
+    if result.get("errorMessage"):
+        fail("No popup: " + str(result["errorMessage"]))
+    if result.get("cancelled"):
+        fail("Your owner cancelled: nothing was saved for " + title + ".")
+    value = result.get("value")
+    if not isinstance(value, str) or not value:
+        fail("BotChu's answer has no value.")
+    saved, failed = [], []
+    for destination in destinations:
+        label = secret_label(destination)
+        try:
+            if destination["type"] == "env":
+                secret_env(destination["path"], destination["name"], value)
+            elif destination["type"] == "file":
+                secret_write(destination["path"], value)
+            else:
+                output = secret_pipe(destination["command"], value)
+                if output:
+                    label += ", which printed: " + output
+            saved.append(label)
+        except (RuntimeError, OSError, UnicodeError) as error:
+            failed.append(label + ": " + str(error).replace(value, "[secret]"))
+    value = None
+    if saved:
+        print("Your owner pasted " + title + "; it was saved without being shown here, to:", flush=True)
+        for label in saved:
+            print("- " + label, flush=True)
+    if failed:
+        print("botchu-secret: couldn't save it to:", file=sys.stderr, flush=True)
+        for label in failed:
+            print("- " + label, file=sys.stderr, flush=True)
+        return 1
+    return 0
+
+def secret_main():
+    parser = argparse.ArgumentParser(prog="botchu-secret", description="Ask your owner for a key, token or password: BotChu "
+        "shows them a secure field, and what they paste is put where you say without being printed, so it never enters "
+        "the conversation. It waits for their answer.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    ask = commands.add_parser("ask", help="Ask for one secret and put it in place")
+    ask.add_argument("--title", required=True, help="What you ask for, such as \"Stripe sandbox key\"")
+    ask.add_argument("--note", help="Why you need it, or where your owner finds it")
+    ask.add_argument("--name", help="The variable --env-file sets, such as STRIPE_SECRET_KEY")
+    ask.add_argument("--env-file", action="append", help="A dotenv file to set --name in, made if missing (repeatable)")
+    ask.add_argument("--file", action="append", help="A file to write it to alone, replacing what it holds (repeatable)")
+    ask.add_argument("--pipe", action="append", help="A shell command to give it on standard input, such as "
+                     "\"vercel env add NAME production\" (repeatable)")
+    ask.add_argument("--wait", type=float, default=600, help="Seconds to wait for your owner (10-3600, default 600)")
+    return secret_ask(parser.parse_args())
+
 def main():
+    if os.path.basename(sys.argv[0]) == "botchu-secret":
+        return secret_main()
     if os.path.basename(sys.argv[0]) == "botchu-message":
         return message_main()
     if os.path.basename(sys.argv[0]) == "botchu-task":

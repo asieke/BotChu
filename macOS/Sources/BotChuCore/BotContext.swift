@@ -333,17 +333,17 @@ public enum BotContext {
     }
 
     /// Included again on resumed turns so an existing CLI session learns about newly available bots,
-    /// with how to deliver to the owner's Inbox (`inboxSection`).
+    /// with how to deliver to the owner's Inbox (`inboxSection`) and ask them for a secret (`secretSection`).
     public static func subagentsSection(availableBots: [BotRosterEntry], depth: Int = 0) -> String {
         let remotes = availableBots.filter(\.isRemote)
         let messaging = remotes.isEmpty ? "" : "\n\n" + messageSection(remoteBots: remotes, subagent: depth > 0)
         guard depth < SubagentLimits.maxDepth else {
             return "Maximum sub-agent recursion depth (\(SubagentLimits.maxDepth)) has been reached. Complete this brief yourself; further delegation is unavailable."
-                + "\n\n" + inboxSection(subagent: true) + messaging
+                + "\n\n" + inboxSection(subagent: true) + "\n\n" + secretSection + messaging
         }
         let local = availableBots.filter { !$0.isRemote }
-        guard !local.isEmpty else { return remotes.isEmpty ? "" : inboxSection(subagent: depth > 0) + messaging }
-        return delegationSection(availableBots: local) + "\n\n" + inboxSection(subagent: depth > 0) + messaging
+        guard !local.isEmpty else { return remotes.isEmpty ? "" : inboxSection(subagent: depth > 0) + "\n\n" + secretSection + messaging }
+        return delegationSection(availableBots: local) + "\n\n" + inboxSection(subagent: depth > 0) + "\n\n" + secretSection + messaging
     }
 
     /// How to message a remote queue bot, which runs on its own computer: `botchu-message send`.
@@ -405,6 +405,24 @@ public enum BotContext {
             </inbox>
             """
     }
+
+    /// How to ask the owner for a key or password without it entering the conversation (#266):
+    /// `botchu-secret ask`, which BotChu answers with a popup.
+    public static let secretSection = """
+        <secrets>
+        ## Keys and passwords: `botchu-secret ask`
+        When you need a key, token or password from your owner, never ask them to paste it into the chat: ask with \
+        `botchu-secret ask`. BotChu shows them a secure field, and what they paste is put where you say without \
+        being printed, so it never enters the conversation.
+        `botchu-secret ask --title "<what it is>" [--note "<why, or where they find it>"] [--name <VAR> --env-file <path>]… [--file <path>]… [--pipe "<command>"]…`
+        - `--env-file` sets `--name` in a dotenv file (the file a link points to, made if missing); `--file` writes \
+        it alone to a file; `--pipe` gives it to a command on standard input, such as `vercel env add NAME production` \
+        or `gh secret set NAME`. Give several to put it in several places at once.
+        - It waits up to 10 minutes for your owner (`--wait <seconds>`, up to 3600), so give your shell tool a \
+        timeout that long. It prints where it was saved, or that they cancelled.
+        - Never print, echo or read the secret back afterwards; check that it works by using it.
+        </secrets>
+        """
 
     private static func delegationSection(availableBots: [BotRosterEntry]) -> String {
         let roster = availableBots.map {

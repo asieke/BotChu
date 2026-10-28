@@ -118,6 +118,15 @@ public struct SubagentTransport: Sendable {
         try await write(data, relativePath: "results/\(id.uuidString.lowercased()).result.json")
     }
 
+    /// Deletes a result its helper never read: a secret's (#266), which mustn't stay in the mailbox.
+    public func removeResult(id: UUID) async throws {
+        let name = "\(id.uuidString.lowercased()).result.json"
+        if machine.isRemote { _ = try await remote("unresult", [name]); return }
+        try Task.checkCancellation()
+        do { try FileManager.default.removeItem(at: URL(fileURLWithPath: directory).appendingPathComponent("results").appendingPathComponent(name)) }
+        catch CocoaError.fileNoSuchFile { }
+    }
+
     public func writeStatus(id: UUID, data: Data) async throws {
         try await write(data, relativePath: "status/\(id.uuidString.lowercased()).status.json")
     }
@@ -223,7 +232,7 @@ if operation == 'prepare':
         folder = root / part
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(folder, 0o700)
-    for command in ['botchu-subagent', 'botchu-task', 'botchu-inbox']:
+    for command in ['botchu-subagent', 'botchu-task', 'botchu-inbox', 'botchu-message', 'botchu-secret']:
         helper = root / 'bin' / command
         atomic(helper, base64.b64decode(parameters[0]))
         os.chmod(helper, 0o755)
@@ -274,6 +283,11 @@ elif operation == 'read':
         data = stream.read(limit + 1)
         if len(data) > limit: raise ValueError('Staged file grew past the limit')
         sys.stdout.write(base64.b64encode(data).decode())
+elif operation == 'unresult':
+    name = parameters[0]
+    if not valid(name) or not name.endswith('.result.json'): raise ValueError('Invalid result filename')
+    try: os.unlink(root / 'results' / name)
+    except FileNotFoundError: pass
 elif operation == 'drop':
     name = parameters[0]
     if not name or '/' in name or name.startswith('.'): raise ValueError('Invalid staged request')
