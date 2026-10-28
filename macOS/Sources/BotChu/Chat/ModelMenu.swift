@@ -32,7 +32,7 @@ struct ModelMenu: View {
                         native: app.nativeModels(for: settings), resolved: settings.resolvedModel, provider: settings.resolvedProvider)
     }
     private var efforts: [ReasoningEffort] {
-        GenerationOptions.efforts(for: settings.account.kind, model: data.effectiveID, catalog: app.nativeModels(for: settings))
+        GenerationOptions.efforts(for: settings.account.kind, model: data.effectiveID, catalog: app.nativeModels(for: settings), providerID: settings.providerID)
     }
 
     /// Whether the Fast switch shows: a Codex model with the Fast tier (#249).
@@ -110,8 +110,8 @@ struct ModelMenu: View {
             let providers = Array(Set(discovered + [settings.resolvedProvider].compactMap { $0 })).sorted()
             ForEach(providers, id: \.self) { provider in
                 Button { onProvider?(provider) } label: {
-                    if provider == settings.resolvedProvider { Label(provider, systemImage: "checkmark") }
-                    else { Text(provider) }
+                    if provider == settings.resolvedProvider { Label(ModelProvider(id: provider).name, systemImage: "checkmark") }
+                    else { Text(ModelProvider(id: provider).name) }
                 }
             }
             if discovered.isEmpty { Text("No authenticated providers found") }
@@ -120,7 +120,7 @@ struct ModelMenu: View {
                 Button("Refresh providers and models") { Task { await app.modelCatalog.refresh(scope, force: true) } }
             }
         } label: {
-            Text(settings.resolvedProvider ?? "Provider").font(.system(size: 12, weight: .medium))
+            Text(settings.modelProvider?.name ?? "Provider").font(.system(size: 12, weight: .medium))
         }
         .menuStyle(.borderlessButton)
         .fixedSize()

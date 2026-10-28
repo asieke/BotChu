@@ -337,6 +337,15 @@ private struct AccountsSettings: View {
                 } label: {
                     ProviderLabel(account)
                 }
+                if account.kind == .pi {
+                    LabeledContent("Pi login") {
+                        Button("Copy Login Command") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(account.loginCommand(command: settings.command(for: account)), forType: .string)
+                        }
+                        .help("Run in Terminal, then use /login in Pi")
+                    }
+                }
             }
         } header: {
             // The shell is in the tooltip; that prompts are bypassed stays in view (#232).

@@ -18,10 +18,13 @@ match alternatives (OR); different dimensions intersect (AND). Breakdown rows ad
 filters; its chevrons expand a second level, and every column, including Name, sorts in either
 direction. Colors belong to fixed dimension entries, so filtering or sorting never recolors them.
 Only the first breakdown level uses those colors. Actual costs are solid, estimates hatched, and
-unpriced usage has a dashed swatch and a count. An all-unpriced selection shows `—`, never `$0`.
+unpriced usage has a dashed swatch and a count. Unavailable usage has its own count and filter,
+so older unmeasured turns remain distinct from measured tokens lacking a price. An all-unpriced
+selection shows `—`, never `$0`. Changing the date range removes a card’s old record selection.
 
 The six efficiency cards are computed from the date range before chips are applied and ranked by
-their dollar impact. **Filter to these** selects the exact contributing records. Spend remains spend;
+their dollar impact. **Filter to these** selects the exact contributing records, replacing existing chips; its accessible label and title
+state this when other chips are present. Spend remains spend;
 for a savings or fan-out card, a separate impact beside the chips shows the selected records'
 potential savings or excess cost, using the same calculation as the card. Removing its chip clears
 that impact; adding other dimensions narrows it. The cards cover retried failed/stopped runs, the

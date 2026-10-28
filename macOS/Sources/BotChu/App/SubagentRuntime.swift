@@ -731,11 +731,13 @@ final class SubagentRuntime {
                                                  machine: machine, hostID: record.hostID)
             guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
             let account = record.account
+            await model.preparePiModels(for: record)
+            guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
             let key = record.usesLegacyOpenRouterKey(remote: machine.isRemote) ? model.openRouterKey() : nil
             let command = record.runtimeAdapter.command(local: model.settings.command(for: account),
                 host: model.settings.host(record.hostID)?.command(for: account), remote: machine.isRemote)
             let readinessProblem = await record.runtimeAdapter.readiness(command: command, provider: record.provider, model: chosenModel,
-                machine: machine, folder: record.workingDirectory, environment: key.map { ["OPENROUTER_API_KEY": $0] } ?? [:])
+                machine: machine, folder: record.workingDirectory, environment: machine.isRemote ? [:] : account.runtimeEnvironment.merging(key.map { ["OPENROUTER_API_KEY": $0] } ?? [:]) { _, value in value })
             guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
             if let problem = readinessProblem { throw DelegationFailure(problem) }
             let sailKey = account.kind == .sail && !machine.isRemote ? Keychain.get(Keychain.sailAccount) : nil
@@ -760,7 +762,7 @@ final class SubagentRuntime {
                 instructions: snapshot.instructions, team: snapshot.team, availableBots: roster, skills: snapshot.skills,
                 tools: machine.isRemote ? nil : model.tools.instructions())
             var invocation = record.invocation(prompt: prompt, model: chosenModel, sessionID: nil, remote: machine.isRemote,
-                openRouterKey: key, sailKey: sailKey)
+                openRouterKey: key, sailKey: sailKey, catalog: model.nativeModels(for: record))
             invocation.environment.merge(context.environment) { _, new in new }
             invocation.toolProfile = prepared.toolProfile
             let runner = machine.isRemote
@@ -799,7 +801,7 @@ final class SubagentRuntime {
                     }
                 }
                 if state != live.state { live.state = state }
-                for session in sessions { self.modify(id) { $0.sessionID = session } }
+                for session in sessions { self.modify(id) { $0.sessionID = session; $0.sessionAccountID = account.id; $0.sessionScope = record.executionScope } }
                 if let reported, self.run(id)?.resolvedModel != reported {
                     self.modify(id) { $0.recordReportedModel(reported, requested: $0.model) }
                 }

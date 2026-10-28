@@ -158,3 +158,68 @@ extension RenderingTests {
         #expect(restored.task(taskTarget)?.accountID == "claude-work")
     }
 }
+
+extension RenderingTests {
+    @Test func piProviderChangesPersistIndependentlyAndRejectLateSessionReports() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-provider-selection-\(UUID().uuidString)")
+        let domain = "BotChu.ProviderSelection.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: domain)
+        }
+        let original = Bot(name: "Same bot", accountID: "openrouter", model: "anthropic/claude-sonnet-4.5",
+                           reasoningEffort: .high, workspace: root.appendingPathComponent("bot").path,
+                           sessionID: "openrouter-session", sessionAccountID: "openrouter")
+        let home = BotHome(workspace: original.workspace)
+        try home.save(original)
+        let task = BotTask(for: original, repo: "test/repo", checkout: root.path, work: nil, brief: "Independent task")
+        try home.save(task)
+        let store = Store(root: root.appendingPathComponent("index"))
+        try store.saveIndex([Store.Entry(id: original.id, workspace: original.workspace)])
+        let app = AppModel(store: store, settings: AppSettings(defaults: defaults),
+                           usage: UsageCache { _, _ in throw UsageFailure("No network in this test") }, openRouterKey: { nil })
+        let target = ChatTarget.home(original.id)
+        app.runStates[target] = RunState()
+        defer { app.runStates.removeAll() }
+        // Providers wait for the current turn; late reports are still rejected after a switch.
+        app.setProvider("radius", ofBot: original.id)
+        #expect(app.bot(original.id)?.effectiveProviderID == "openrouter")
+        app.runStates[target] = nil
+        app.setProvider("radius", ofBot: original.id)
+        app.recordSession("late-session", accountID: "openrouter", scope: original.executionScope, for: target)
+        app.recordReportedModel("late-model", requested: original.model, accountID: "openrouter", scope: original.executionScope, for: target)
+        let changed = try #require(app.bot(original.id))
+        #expect(changed.id == original.id && changed.name == original.name && changed.workspace == original.workspace)
+        #expect(changed.providerID == "radius" && changed.model.isEmpty && changed.reasoningEffort == nil)
+        #expect(changed.resumableSessionID == nil && changed.reportedModel == nil)
+        #expect(app.task(.task(task.id, of: original.id))?.effectiveProviderID == "openrouter")
+        #expect(!app.usageRequest(for: changed).usesLegacyOpenRouterKey)
+        app.runStates[target] = nil
+        let scope = try #require(app.modelCatalogScope(for: changed))
+        app.modelCatalog.listModels = { _ in [
+            ModelOption(id: "same", name: "Radius model", efforts: [.high], providerID: "radius"),
+            ModelOption(id: "same", name: "Meta model", efforts: [], providerID: "meta")
+        ] }
+        await app.modelCatalog.refresh(scope, force: true)
+        #expect(app.nativeModels(for: changed)?.map(\.name) == ["Radius model"])
+        app.setModel("same", for: target)
+        app.setReasoningEffort(.max, for: target)
+        #expect(app.bot(original.id)?.reasoningEffort == nil)
+        app.setReasoningEffort(.high, for: target)
+        #expect(app.bot(original.id)?.reasoningEffort == .high)
+        // An editor opened before the live turn reports its session must not restore stale IDs.
+        var editor = try #require(app.bot(original.id))
+        app.recordSession("radius-session", accountID: "openrouter", scope: changed.executionScope, for: target)
+        app.recordReportedModel("resolved-model", requested: "same", accountID: "openrouter", scope: changed.executionScope, for: target)
+        editor.name = "Edited while session reported"
+        app.update(editor)
+        #expect(app.bot(original.id)?.resumableSessionID == "radius-session")
+        #expect(app.bot(original.id)?.sessionScope == changed.executionScope)
+        #expect(app.bot(original.id)?.resolvedModel == "resolved-model")
+        await app.storage.settle()
+        #expect(home.loadBot()?.providerID == "radius")
+        #expect(home.loadBot()?.resumableSessionID == "radius-session")
+        app.modelCatalog.flush()
+    }
+}

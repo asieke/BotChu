@@ -266,16 +266,9 @@ public enum AnalyticsDashboard {
     public static let script = #"""
     (function (root) {
       "use strict";
-      var OUTCOMES = ["finished", "failed", "stopped", "interrupted", "inProgress"];
       var LABELS = { finished: "Finished", failed: "Failed", stopped: "Stopped", interrupted: "Interrupted",
         inProgress: "In progress", skipped: "Skipped" };
       var KINDS = [["home", "Home turns"], ["task", "Task turns"], ["job", "Job runs"], ["subagent", "Sub-agent runs"]];
-      /* What the daily chart stacks, bottom up: a job run a quit cut short is charted with the stopped ones. */
-      var SERIES = [["finished", "Finished"], ["failed", "Failed"], ["stopped", "Stopped or interrupted"], ["inProgress", "In progress"]];
-      function seriesCount(summary, series) {
-        return (summary.outcomes[series] || 0) + (series === "stopped" ? summary.outcomes.interrupted || 0 : 0);
-      }
-
       function pad(n) { return (n < 10 ? "0" : "") + n; }
       function dayNumber(day) { var p = day.split("-"); return Math.round(Date.UTC(+p[0], +p[1] - 1, +p[2]) / 86400000); }
       function dayString(n) { var d = new Date(n * 86400000); return d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate()); }
@@ -377,7 +370,17 @@ public enum AnalyticsDashboard {
         outcome: "Outcome"
       };
       function money(value, estimated) {
-        return typeof value !== "number" ? "—" : (estimated ? "≈$" : "$") + value.toFixed(2);
+        var measure = measureText({metric: "cost", value: value, provenance: estimated ? "estimated" : "actual"});
+        return measure.unavailable ? "—" : measure.value.replace("≈ ", "≈");
+      }
+      function dollarTick(value, step) {
+        var precision = 0;
+        while (precision < 12) {
+          var scaled = step * Math.pow(10, precision);
+          if (Math.abs(scaled - Math.round(scaled)) <= Math.max(1, Math.abs(scaled)) * 1e-10) break;
+          precision += 1;
+        }
+        return "$" + value.toFixed(precision);
       }
       function compact(value) {
         return typeof value !== "number"
@@ -393,7 +396,8 @@ public enum AnalyticsDashboard {
           prices = snapshot.prices || [],
           dimensions = {},
           taskMap = {},
-          resolved = new Map();
+          resolved = new Map(), recordIndex = new Map(), selectionSets = new WeakMap();
+        records.forEach(function(r,index) { recordIndex.set(r,index); });
         (snapshot.tasks || []).forEach(function (t) {
           if (t.id) taskMap[t.id] = t;
         });
@@ -439,16 +443,18 @@ public enum AnalyticsDashboard {
           return null;
         }
         function dimension(r, k) {
-          if (k === "provider") return r.provider || (snapshot.accounts[r.account] || {}).family || "unknown";
-          if (k === "model")
-            return (
-              r.model ||
-              ((r.models || []).length === 1
-                ? r.models[0].model
-                : (r.models || []).length > 1
-                  ? "mixed"
-                  : "unknown")
-            );
+          if (k === "provider") {
+            if (r.provider === "pi") return "pi:" + (r.providerID || "unknown");
+            if (r.provider) return r.provider;
+            var family = (snapshot.accounts[r.account] || {}).family;
+            return ({"Claude Code": "claude", Codex: "codex", Antigravity: "antigravity", Muse: "muse", Sail: "sail", Pi: "pi:unknown", OpenRouter: "pi:openrouter"})[family] || family || "unknown";
+          }
+          if (k === "model") {
+            var models = Array.from(new Set((r.models || []).map(function(usage) { return usage.model; })));
+            // A whole-invocation bill cannot be assigned to its primary model when others also ran.
+            if (models.length > 1) return "mixed";
+            return r.model || models[0] || "unknown";
+          }
           return r[k] == null ? "unknown" : String(r[k]);
         }
         function label(k, v) {
@@ -460,7 +466,8 @@ public enum AnalyticsDashboard {
             var record = records.find(function (r) {
                 return dimension(r, "model") === v;
               }),
-              price = record && resolve(v, record);
+              price = (record && resolve(v, record)) || prices.find(function(p) { return p.model === v; });
+            // Display names are metadata; matching one never makes an unknown backend priceable.
             // An unknown ID stays recognizable, without presenting it as a priced model.
             return price
               ? price.displayName
@@ -476,6 +483,10 @@ public enum AnalyticsDashboard {
               return x[0] === v;
             }) || [v, v])[1];
           if (k === "outcome") return LABELS[v] || v;
+          if (k === "provider" && v.indexOf("pi:") === 0) {
+            var backend = v.slice(3);
+            return ({openrouter: "OpenRouter", anthropic: "Anthropic", openai: "OpenAI", google: "Google", unknown: "Pi · unknown provider"})[backend] || backend.replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+          }
           if (k === "provider")
             return (
               {
@@ -545,8 +556,11 @@ public enum AnalyticsDashboard {
           });
           return Object.keys(by).every(function (k) {
             return by[k].some(function (f) {
-              if (k === "records") return f.ids.indexOf(records.indexOf(r)) >= 0;
-              if (k === "price") return f.v === "unpriced" ? r.cost == null : r.costProvenance === f.v;
+              if (k === "records") {
+                  if (!selectionSets.has(f)) selectionSets.set(f,new Set(f.ids));
+                  return selectionSets.get(f).has(recordIndex.get(r));
+                }
+              if (k === "price") return (r.costProvenance || "unavailable") === f.v;
               if (k === "taskID") return r.taskID === f.v;
               return dimension(r, k) === f.v;
             });
@@ -701,7 +715,7 @@ public enum AnalyticsDashboard {
                   k: "records",
                   v: id,
                   ids: selected.map(function (r) {
-                    return records.indexOf(r);
+                    return recordIndex.get(r);
                   }),
                   label: title
                 }
@@ -821,7 +835,8 @@ public enum AnalyticsDashboard {
             return comparison(r, "swap") != null;
           });
           var short = eligible.filter(function (r) {
-            return r.tokens.output != null && r.tokens.output < 2000;
+            return r.tokens.output != null && r.tokens.output < 2000 &&
+              r.models.every(function(usage) { return typeof usage.output === "number"; });
           });
           card(
             "short",
@@ -904,7 +919,8 @@ public enum AnalyticsDashboard {
         formatPercent: formatPercent,
         measureText: measureText,
         createExplorer: createExplorer,
-        money: money
+        money: money,
+        dollarTick: dollarTick
       };
       root.BotChuAnalytics = api;
       if (typeof document === "undefined") return;
@@ -1001,7 +1017,7 @@ public enum AnalyticsDashboard {
         render();
       }
       function swatch(color, provenance) {
-        var n = el("i", "sw " + (provenance === "unpriced" ? "unp" : provenance === "estimated" ? "est" : "act"));
+        var n = el("i", "sw " + (provenance === "unpriced" || provenance === "unavailable" ? "unp" : provenance === "estimated" ? "est" : "act"));
         n.style.setProperty("--c", color);
         return n;
       }
@@ -1055,6 +1071,10 @@ public enum AnalyticsDashboard {
         });
         return bar;
       }
+      function clearRangeSelection() {
+        S.insight = null;
+        S.filters = S.filters.filter(function(f) { return f.k !== "records"; });
+      }
       function toolbar(rows) {
         var bar = el("div", "bar"),
           row = el("div", "row"),
@@ -1076,7 +1096,7 @@ public enum AnalyticsDashboard {
                       return r.day < d ? r.day : d;
                     }, data.today)
                   : addDays(data.today, 1 - Number(p[0]));
-              S.insight = null;
+              clearRangeSelection();
               render();
             },
             "preset"
@@ -1099,7 +1119,7 @@ public enum AnalyticsDashboard {
               S.through = old;
             }
             S.preset = "custom";
-            S.insight = null;
+            clearRangeSelection();
             render();
           };
           add(row, add(el("label", "dates", label + " "), input));
@@ -1110,23 +1130,12 @@ public enum AnalyticsDashboard {
           add(el("span", "pv"), swatch("var(--text-2)", "actual"), el("span", null, "Actual")),
           add(el("span", "pv"), swatch("var(--text-2)", "estimated"), el("span", null, "Estimated"))
         );
-        var unknown = rows.filter(function (r) {
-          return r.cost == null;
-        }).length;
-        add(
-          row,
-          add(
-            button(
-              "",
-              function () {
-                addFilters([{ k: "price", v: "unpriced" }]);
-              },
-              "pv"
-            ),
-            swatch("var(--other)", "unpriced"),
-            el("span", null, "— Unpriced · " + unknown)
-          )
-        );
+        ["unpriced", "unavailable"].forEach(function(provenance) {
+          var count = rows.filter(function(r) { return (r.costProvenance || "unavailable") === provenance; }).length;
+          var label = provenance === "unpriced" ? "Unpriced" : "Unavailable";
+          add(row, add(button("", function() { addFilters([{k: "price", v: provenance}]); }, "pv"),
+            swatch("var(--other)", "unpriced"), el("span", null, "— " + label + " · " + count)));
+        });
         var chips = el("div", "row");
         S.filters.forEach(function (f, index) {
           var name =
@@ -1134,7 +1143,7 @@ public enum AnalyticsDashboard {
             (DIMENSIONS[f.k]
               ? DIMENSIONS[f.k] + " " + E.label(f.k, f.v)
               : f.k === "price"
-                ? "Unpriced"
+                ? f.v === "unpriced" ? "Unpriced" : "Unavailable"
                 : E.label(f.k, f.v));
           var chip = el("span", "chip", name);
           var remove = button("×", function () {
@@ -1182,7 +1191,7 @@ public enum AnalyticsDashboard {
               "span",
               "impact",
               S.insight.title +
-                ": " +
+                " · filtered impact: " +
                 money(E.metric(rows, S.insight.spec), S.insight.estimated) +
                 " " +
                 S.insight.unit
@@ -1235,7 +1244,8 @@ public enum AnalyticsDashboard {
             " est."
         );
         add(cost, split(a, a.cost, "var(--text-2)"));
-        if (a.unpriced + a.unavailable) add(cost, el("div", "d", a.unpriced + a.unavailable + " unpriced"));
+        if (a.unpriced) add(cost, el("div", "d", a.unpriced + " unpriced"));
+        if (a.unavailable) add(cost, el("div", "d", a.unavailable + " unavailable"));
         tile("Tokens", compact(a.totalTokens), delta(a.totalTokens, prior.totalTokens, false, false));
         tile(
           "Cache hit rate",
@@ -1276,7 +1286,10 @@ public enum AnalyticsDashboard {
                 );
               });
               render();
-            } else addFilters(wf);
+            } else {
+              S.filters = S.filters.filter(function(f) { return f.k !== "outcome"; });
+              addFilters(wf);
+            }
           }
         );
         waste.setAttribute(
@@ -1345,14 +1358,15 @@ public enum AnalyticsDashboard {
           iw = W - L - 4;
         var max = Math.max.apply(
             null,
-            [1].concat(
+            [0].concat(
               by.map(function (d) {
                 return d.a.cost || 0;
               })
             )
           ),
-          power = Math.pow(10, Math.floor(Math.log10(max))),
-          top = Math.ceil(max / power) * power;
+          positiveMax = max > 0 ? max : 1,
+          power = Math.pow(10, Math.floor(Math.log10(positiveMax))),
+          top = Math.ceil(positiveMax / power) * power;
         var box = el("div", "chart"),
           root = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Spend a day" }),
           defs = svg("defs"),
@@ -1383,7 +1397,7 @@ public enum AnalyticsDashboard {
           var y = T + ih - (ih * i) / 4;
           add(root, svg("line", { x1: L, x2: W - 4, y1: y, y2: y, class: i ? "gl" : "base" }));
           var text = svg("text", { x: L - 7, y: y + 4, "text-anchor": "end", class: "axis" });
-          text.textContent = "$" + ((top * i) / 4).toFixed(top < 4 ? 2 : 0);
+          text.textContent = dollarTick((top * i) / 4, top / 4);
           add(root, text);
         }
         var band = iw / list.length,
@@ -1461,13 +1475,13 @@ public enum AnalyticsDashboard {
         add(
           details,
           table(
-            ["Day", "Turns & runs", "Spend", "Unpriced"],
+            ["Day", "Turns & runs", "Spend", "Unpriced", "Unavailable"],
             by
               .filter(function (d) {
                 return d.rows.length;
               })
               .map(function (d) {
-                return [d.day, d.a.runs, spend(d.a), d.a.unpriced + d.a.unavailable];
+                return [d.day, d.a.runs, spend(d.a), d.a.unpriced, d.a.unavailable];
               })
           )
         );
@@ -1556,6 +1570,8 @@ public enum AnalyticsDashboard {
             "go"
           );
           b.setAttribute("aria-pressed", String(same(c.filters)));
+          b.title = S.filters.length && !same(c.filters) ? "Filter to these records (replaces current filters)" : "Filter to these records";
+          b.setAttribute("aria-label", b.title + ": " + c.title);
           b.disabled = !c.filters[0].ids.length;
           add(grid, add(n, b));
         });
@@ -1763,7 +1779,7 @@ public enum AnalyticsDashboard {
             "Spend",
             "Actual is provider-reported billing. Estimated uses list prices dated " +
               data.priceSnapshotDate +
-              ". Missing prices show —; known subtotals can coexist with unpriced runs. Subscription charges and allowances are separate."
+              ". Missing prices show —; known subtotals can coexist with unpriced runs. Subscription charges and allowances are separate. Invocations reporting multiple models keep their whole cost in Multiple models."
           ],
           [
             "Tokens",

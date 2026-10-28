@@ -120,10 +120,14 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
         : nil
     let kind = bot.account.kind
     let fullPrompt = BotContext.prompt(for: prompt, preamble: preamble)
+    let scope = ModelCatalogScope(accountID: bot.accountID, command: command(for: bot.account), kind: kind,
+        configurationDirectory: bot.account.configurationDirectory, legacyOpenRouterCredential: bot.usesLegacyOpenRouterKey)
+    let catalog = kind == .pi ? try? await NativeModelList.list(scope,
+        openRouterKey: bot.usesLegacyOpenRouterKey ? ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] : nil) : nil
     var invocation = bot.invocation(
         prompt: fullPrompt, model: bot.effectiveModel(openRouterDefault: ""), sessionID: resume,
         openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], sailKey: ProcessInfo.processInfo.environment[Sail.keyVariable],
-        liveInput: CommandBuilder.takesInputMidTurn(kind))
+        liveInput: CommandBuilder.takesInputMidTurn(kind), catalog: catalog)
     if let problem = await bot.runtimeAdapter.readiness(command: command(for: bot.account), provider: bot.provider,
         model: bot.effectiveModel(openRouterDefault: ""), machine: .thisMac, folder: bot.workspace, environment: invocation.environment) {
         return Turn(messages: [ChatMessage(role: .error, text: problem)], status: -1)
@@ -407,6 +411,7 @@ Task {
         }
         bot.sessionID = session
         bot.sessionAccountID = bot.accountID
+        bot.sessionScope = bot.executionScope
         precondition(bot.resumableSessionID == session, "The second smoke turn must resume its profile’s session")
         let second = await runTurn(bot, prompt: "What is the code word? Reply with the word." + imageRequest, history: first.messages)
         show(second.messages)
