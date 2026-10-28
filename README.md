@@ -1688,13 +1688,27 @@ on that pull request's branch to continue in instead). The same command run agai
   Rendering suites still need the shared window-test gate.
 - Before a push, `scripts/test.sh --fast` checks shell syntax and renderer checksums, builds debug
   tests, and runs every Core test. It does not need window focus or the gate.
+- For a pull request, `scripts/test.sh --changed` runs the fast tier, then only the window tests
+  the change can reach, through the shared gate. `scripts/test-select.py` reads the diff against the
+  merge base with `origin/main` (and uncommitted and untracked files), finds the declarations it
+  touches (not comments or lone brackets), and follows each up the references in the app and the
+  window tests' helpers, up to ten steps, until window tests name it: those nearest tests run, and
+  changed window tests run themselves. Core is left to its own tests, and a name that more than 25
+  window tests use (`AppModel`, `send`) leads nowhere, so a change reached only through it runs no
+  window test. Changes to the test scripts, the package or the renderer's assets run every window
+  test; the native-click test runs in its own process when selected. The Release tests run only
+  when a changed declaration uses a task group. `--explain` prints why each test was chosen, and
+  `BOTCHU_TEST_BASE=<commit>` compares against another base. Over the 30 pull requests before it,
+  this chose every window test a pull request's source change made it edit but two (reached only
+  through `send`), and an average of about two minutes of window tests instead of six.
 - Each step prints elapsed time and the load average before and after. xUnit reports and logs stay
   in `macOS/.build/test-results/`; a run prints its 20 slowest tests and a failed run prints a command
   selecting only the failed tests with `--skip-build`. If an unrelated test fails, rerun only that
   test a few times; if it passes, name it and the load average in the PR instead of rerunning the
   full suite. A changed test still needs a demonstrated fix.
 - `scripts/test.sh` runs everything: shell syntax for every script, `macOS/test.sh` (the unit and
-  rendering tests) and `macOS/build.sh` into a temporary folder. There is no CI: the tests need a Mac
+  rendering tests) and `macOS/build.sh` into a temporary folder. Deploy runs it (unless the tree
+  already passed), so whatever `--changed` leaves out is still tested before an install. There is no CI: the tests need a Mac
   with full Xcode. Debug/release test builds and the app build finish before any gate request. Core
   and release tests run outside the gate; only the prebuilt window tests and isolated native-click
   test acquire it. Run the script directly: do not wrap a full run in another gate request.
@@ -1702,6 +1716,12 @@ on that pull request's branch to continue in instead). The same command run agai
   preserving its lock and run folders. Other repositories retain the same `start`, `wait`, `status`
   interface. BotChu's windowless wrapper is recognized by ancestry; unwrapped window tests and
   other repositories' tests still block the gate.
+- Window tests never show their windows: every window they order in is fully transparent and
+  ignores the real mouse (`QuietWindows`, in the window tests' suite), so a run neither covers nor
+  takes clicks from what is on screen. They lay out, draw with `cacheDisplay` and take events sent
+  to the window as before, and under the test runner WebKit counts every window as hidden either
+  way. The screenshot test shows its window behind every other one, since the window server's
+  picture needs it drawn. `BOTCHU_SHOW_TEST_WINDOWS=1` shows them all again, to watch a test.
 - Debug tests use `macOS/.build/`, release tests with testability use `macOS/.build/release-tests/`,
   and the app uses `macOS/.build/app/`. Each keeps its own build manifest: on Xcode's build system,
   even a debug test build can invalidate optimized Core when it shares the app's scratch directory.

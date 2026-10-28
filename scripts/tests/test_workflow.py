@@ -1,4 +1,4 @@
-"""Protect the shared gate, failed-test selection, and shared pass receipts."""
+"""Protect the shared gate, failed-test selection, changed-test selection and shared pass receipts."""
 import importlib.util
 import json
 import os
@@ -12,6 +12,62 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("busy", ROOT / "scripts/coord/busy.py")
 busy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(busy)
+spec = importlib.util.spec_from_file_location("select", ROOT / "scripts/test-select.py")
+select = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(select)
+
+APP = "macOS/Sources/BotChu/"
+CORE = "macOS/Sources/BotChuCore/"
+TESTS = "macOS/Tests/BotChuRenderingTests/"
+SOURCES = {
+    APP + "Sidebar.swift": """struct SidebarView: View {
+    let model: AppModel
+    var body: some View { BotRow(title: model.title) }
+}
+
+struct BotRow: View {
+    let title: String
+    var body: some View {
+        // A row's dots.
+        Text(title)
+    }
+}
+""",
+    APP + "AppModel.swift": """final class AppModel {
+    var title = ""
+    func send(_ text: String) { launchTurn(text) }
+    func launchTurn(_ text: String) { Store.save(text) }
+}
+""",
+    CORE + "Store.swift": """public enum Store {
+    public static func save(_ text: String) { Codec.encode(text) }
+}
+
+enum Codec {
+    static func encode(_ text: String) {}
+}
+""",
+    TESTS + "SidebarTests.swift": """extension RenderingTests {
+    @Test func sidebarShowsRows() {
+        let view = SidebarView(model: AppModel())
+    }
+
+    @Test func storeSaves() {
+        Store.save("x")
+    }
+}
+""",
+}
+HUB_TESTS = "extension RenderingTests {\n" + "".join(
+    f"    @Test func sends{n}() {{\n        AppModel().send(\"{n}\")\n    }}\n" for n in range(select.HUB + 1)) + "}\n"
+
+
+def choose(changes, new, old=None, diffs=None):
+    """Runs the selector on files in memory: new and old map paths to their text."""
+    old = SOURCES | {TESTS + "HubTests.swift": HUB_TESTS} if old is None else old
+    files = {path: select.parse(path, text) for path, text in new.items()}
+    return select.select(changes, files, lambda p: old.get(p, ""), lambda p: new.get(p, ""),
+                         lambda p: (diffs or {}).get(p, ""))
 
 
 class WorkflowTests(unittest.TestCase):
@@ -96,6 +152,110 @@ class WorkflowTests(unittest.TestCase):
             self.assertNotEqual(shell("test_tree_passed").returncode, 0)
             shell("test_capture_tree; printf changed > source; test_record_pass")
             self.assertEqual(len(receipts.read_text().splitlines()), 1)
+
+    def test_a_view_change_runs_the_tests_hosting_the_view_that_shows_it(self):
+        new = SOURCES | {TESTS + "HubTests.swift": HUB_TESTS}
+        new[APP + "Sidebar.swift"] = new[APP + "Sidebar.swift"].replace("Text(title)", "Text(title).bold()")
+        selection, reasons, release = choose([("M", APP + "Sidebar.swift")], new,
+                                             diffs={APP + "Sidebar.swift": "@@ -10 +10 @@\n"})
+        self.assertEqual(selection, {"sidebarShowsRows"})
+        self.assertFalse(release)
+        self.assertIn("BotRow -> SidebarView -> 1 tests", reasons[-1])
+
+    def test_comments_and_brackets_alone_select_nothing(self):
+        new = SOURCES | {TESTS + "HubTests.swift": HUB_TESTS}
+        selection, _, _ = choose([("M", APP + "Sidebar.swift")], new,
+                                 diffs={APP + "Sidebar.swift": "@@ -9 +9 @@\n@@ -12 +12 @@\n"})
+        self.assertEqual(selection, set())
+
+    def test_core_is_left_to_its_own_tests_and_names_most_tests_use_lead_nowhere(self):
+        new = SOURCES | {TESTS + "HubTests.swift": HUB_TESTS}
+        # Codec reaches the window tests only through Core (Store) and then AppModel.send.
+        selection, reasons, _ = choose([("M", CORE + "Store.swift")], new,
+                                       diffs={CORE + "Store.swift": "@@ -6 +6 @@\n"})
+        self.assertEqual(selection, set())
+        self.assertIn("no window test uses it", reasons[-1])
+        selection, reasons, _ = choose([("M", APP + "AppModel.swift")], new,
+                                       diffs={APP + "AppModel.swift": "@@ -4 +4 @@\n"})
+        self.assertEqual(selection, set())
+        self.assertIn("reaches only names most window tests use", reasons[-1])
+        # A Core declaration that window tests name directly still selects them.
+        selection, _, _ = choose([("M", CORE + "Store.swift")], new,
+                                 diffs={CORE + "Store.swift": "@@ -2 +2 @@\n"})
+        self.assertEqual(selection, {"storeSaves"})
+
+    def test_changed_tests_run_but_deleted_ones_do_not_and_infrastructure_runs_everything(self):
+        new = SOURCES | {TESTS + "HubTests.swift": HUB_TESTS}
+        old = dict(new)
+        new[TESTS + "SidebarTests.swift"] = new[TESTS + "SidebarTests.swift"].replace(
+            '        Store.save("x")\n', '        Store.save("y")\n')
+        old[TESTS + "Gone.swift"] = "extension RenderingTests {\n    @Test func gone() {}\n}\n"
+        selection, _, _ = choose([("M", TESTS + "SidebarTests.swift"), ("D", TESTS + "Gone.swift")], new, old,
+                                 {TESTS + "SidebarTests.swift": "@@ -7 +7 @@\n"})
+        self.assertEqual(selection, {"storeSaves"})
+        for path in ("macOS/Package.swift", "scripts/coord/gate.sh", APP + "Resources/ChatRenderer/chat.js"):
+            self.assertEqual(choose([("M", path)], new)[0], "all")
+        self.assertEqual(choose([("M", "README.md"), ("A", "macOS/Tests/BotChuCoreTests/New.swift")], new)[0], set())
+
+    def test_a_shared_member_name_is_traced_by_whichever_of_it_and_its_type_is_rarer(self):
+        source = """struct Bot {
+    var fastMode: Bool
+}
+
+struct Job {
+    var fastMode: Bool
+}
+"""
+        tests = "extension RenderingTests {\n    @Test func fast() {\n        _ = bot.fastMode\n    }\n" + "".join(
+            f"    @Test func bot{n}() {{\n        _ = Bot()\n    }}\n" for n in range(3)) + "}\n"
+        new = {CORE + "Models.swift": source, TESTS + "BotTests.swift": tests}
+        selection, _, _ = choose([("M", CORE + "Models.swift")], new, new, {CORE + "Models.swift": "@@ -2 +2 @@\n"})
+        self.assertEqual(selection, {"fast"})
+
+    def test_new_files_and_task_groups(self):
+        new = SOURCES | {TESTS + "HubTests.swift": HUB_TESTS}
+        new[APP + "Extra.swift"] = """extension AppModel {
+    func refresh() async {
+        await withTaskGroup(of: Void.self) { _ in }
+    }
+}
+"""
+        new[APP + "Sidebar.swift"] = new[APP + "Sidebar.swift"].replace(
+            "BotRow(title: model.title)", "BotRow(title: model.title).task { await model.refresh() }")
+        selection, reasons, release = choose([("A", APP + "Extra.swift"), ("M", APP + "Sidebar.swift")], new,
+                                             diffs={APP + "Sidebar.swift": "@@ -3 +3 @@\n"})
+        self.assertTrue(release)
+        self.assertEqual(selection, {"sidebarShowsRows"})
+        self.assertFalse(any(": AppModel" in reason for reason in reasons))
+        self.assertEqual(select.report(selection, release, "sidebarShowsRows"), ["none", "alone", "release"])
+        self.assertEqual(select.report("all", False, "x"), ["all", "alone"])
+        self.assertEqual(select.report({"a", "b"}, False, "x"),
+                         [r"BotChuRenderingTests\.RenderingTests/(a|b)\("])
+
+    def test_selection_reads_the_working_tree_against_its_base(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=folder, text=True, stderr=subprocess.DEVNULL).strip()
+            git("init", "-q")
+            git("config", "user.name", "Test")
+            git("config", "user.email", "test@example.invalid")
+            for path, text in SOURCES.items():
+                (folder / path).parent.mkdir(parents=True, exist_ok=True)
+                (folder / path).write_text(text)
+            git("add", ".")
+            git("commit", "-qm", "initial")
+            def run():
+                return subprocess.check_output(["python3", str(ROOT / "scripts/test-select.py"), "--base", "HEAD"],
+                                               cwd=folder, text=True).splitlines()
+            self.assertEqual(run(), ["none"])
+            sidebar = folder / APP / "Sidebar.swift"
+            sidebar.write_text(sidebar.read_text().replace("Text(title)", "Text(title).bold()"))
+            self.assertEqual(run(), [r"BotChuRenderingTests\.RenderingTests/(sidebarShowsRows)\("])
+            git("checkout", "--", ".")
+            (folder / TESTS / "NewTests.swift").write_text(
+                "extension RenderingTests {\n    @Test func brandNew() {}\n}\n")
+            self.assertEqual(run(), [r"BotChuRenderingTests\.RenderingTests/(brandNew)\("])
 
     def test_gate_install_restores_missing_files_without_touching_live_state(self):
         with tempfile.TemporaryDirectory() as temporary:
