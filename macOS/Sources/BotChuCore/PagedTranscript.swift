@@ -233,6 +233,7 @@ public enum PagedTranscript {
         }
         if snapshot.base != nil, rebuilt, index.digest.count > 0 {
             let disk = try read(url, index: index, range: 0..<index.digest.count).messages
+            try keepConflicts(disk, base: snapshot.base ?? [], incoming: snapshot.messages, at: url)
             let merged = reconcile(disk, base: snapshot.base ?? [], incoming: snapshot.messages)
             return try save(Snapshot(merged), to: url)
         }
@@ -241,9 +242,11 @@ public enum PagedTranscript {
         // A prior save can shift this suffix after an external insertion; locate its stable ID.
         if let base = snapshot.base, let first = base.first, let held = old.first, held.id != first.id {
             let disk = try read(url, index: index, range: 0..<index.digest.count).messages
+            try keepConflicts(disk, base: base, incoming: snapshot.messages, at: url)
             return try save(Snapshot(reconcile(disk, base: base, incoming: snapshot.messages)), to: url)
         }
         if let base = snapshot.base, !old.elementsEqual(base, by: equivalent) {
+            try keepConflicts(old, base: base, incoming: snapshot.messages, at: url)
             return try save(Snapshot(reconcile(old, base: base, incoming: snapshot.messages), start: snapshot.start), to: url)
         }
         var same = 0
@@ -331,6 +334,7 @@ public enum PagedTranscript {
         guard !pending.isEmpty, let index = validIndex(url), let pages = index.pages else { return }
         var changes: [Int: Data] = [:]
         var shellChanges: [(position: Int, delta: Int)] = []
+        var keptConflict = false
         func locate(_ update: Pending) throws -> (page: Int, local: Int, lines: [Data], message: ChatMessage) {
             let expected = pages.firstIndex { $0.start <= update.position && update.position < $0.start + $0.count }
             let candidates = expected.map { [$0] } ?? []
@@ -358,6 +362,9 @@ public enum PagedTranscript {
             guard original.role == .tool, update.message.role == .tool else { throw Failure.changedDuringRead }
             let message = mergeTool(original, base: update.base, incoming: update.message)
             if equivalent(original, message) { continue }
+            if !keptConflict {
+                keptConflict = try keepConflicts([original], base: [update.base], incoming: [update.message], at: url)
+            }
             shellChanges.append((page.start + found.local, ToolCounts(messages: [message]).shell - ToolCounts(messages: [original]).shell))
             lines[found.local] = try Store.lineEncoder.encode(message)
             HistoryCounters.shared.record(url) { $0.encoded += 1 }
@@ -513,6 +520,22 @@ public enum PagedTranscript {
         var rhs = rhs
         rhs.date = lhs.date
         return lhs == rhs
+    }
+
+    /// Both writers changed the same ID. The app's current stream can continue, while the exact
+    /// external version remains recoverable beside it. Ordinary unchanged-base saves never copy.
+    @discardableResult
+    static func keepConflicts(_ disk: [ChatMessage], base: [ChatMessage], incoming: [ChatMessage], at url: URL) throws -> Bool {
+        let originals = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        let saved = Dictionary(disk.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        guard incoming.contains(where: { edit in
+            guard let original = originals[edit.id], let message = saved[edit.id] else { return false }
+            return !equivalent(edit, original) && !equivalent(message, original) && !equivalent(edit, message)
+        }) else { return false }
+        let kept = url.deletingPathExtension().appendingPathExtension("conflict-\(UUID().uuidString).jsonl")
+        try FileManager.default.copyItem(at: url, to: kept)
+        HistoryCounters.shared.record(url) { $0.copies += 1 }
+        return true
     }
 
     static func reconcile(_ disk: [ChatMessage], base: [ChatMessage], incoming: [ChatMessage], preserveMissing: Bool = false) -> [ChatMessage] {

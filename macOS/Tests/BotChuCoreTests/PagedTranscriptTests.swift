@@ -31,6 +31,7 @@ extension HistoryTests {
         #expect(fixture.counts.encoded - beforeSave.encoded == 1)
         #expect(fixture.counts.bytesWritten - beforeSave.bytesWritten < 1_000)
         #expect(fixture.counts.journalBytesWritten - beforeSave.journalBytesWritten < 2_000)
+        #expect(fixture.counts.bytesCopied == 0 && fixture.counts.copies == beforeSave.copies)
         // The ordinary path still holds complete ordered history, without rewriting its prefix.
         let saved = try Data(contentsOf: fixture.home.threadURL)
         let lastLine = try BotHome.encodeThread([messages.last!]).count
@@ -103,6 +104,26 @@ extension HistoryTests {
         let recovered = fixture.home.recover(transcript: loaded.messages, start: loaded.start, prefix: loaded.prefix)
         #expect(recovered.digest == expected)
         #expect(recovered.history?.start == loaded.start)
+    }
+
+    @Test func simultaneousEditsToOneMessageKeepTheExternalVersionRecoverable() throws {
+        let fixture = try Fixture()
+        var messages = Self.pagedFixture(1_000)
+        try fixture.home.saveThread(messages)
+        let tail = fixture.home.loadHistory()
+        messages[messages.count - 1].text = "Edited externally while the reply streamed"
+        try BotHome.writeThread(messages, to: fixture.home.threadURL)
+        _ = fixture.home.loadHistory()
+        var incoming = tail.messages
+        incoming[incoming.count - 1].text = "Continued streaming in BotChu"
+        try fixture.home.writeTranscript(.init(incoming, start: tail.start, base: tail.messages))
+        #expect(fixture.home.loadThread().last?.text == incoming.last?.text)
+        let kept = try FileManager.default.contentsOfDirectory(at: fixture.home.url, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("thread.conflict-") }
+        #expect(kept.count == 1)
+        let external = TranscriptRead.read(try #require(kept.first), keeping: false).messages
+        #expect(external == messages)
+        #expect(external.map(\.id) == fixture.home.loadThread().map(\.id))
     }
 
     @Test func recoveryRecognizesTakenAndQueuedIDsInCompletedPages() throws {
