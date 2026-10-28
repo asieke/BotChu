@@ -17,9 +17,12 @@ struct BotEditor: View {
     @State private var instructions: BotDocumentDraft?
     @State private var instructionsError: String?
     private let isNew: Bool
+    /// The bot as the sheet opened, so leaving for Settings never drops edits made since.
+    private let original: Bot
 
     init(request: EditorRequest) {
         _bot = State(initialValue: request.bot)
+        original = request.bot
         isNew = request.isNew
         if !request.isNew && !request.bot.isRemoteQueue {
             do {
@@ -149,10 +152,13 @@ struct BotEditor: View {
                             HStack {
                                 Text(model.settings.remoteQueueEnabled ? "Configured" : "Not configured")
                                     .foregroundStyle(.secondary)
+                                // Settings is behind the sheet, which closes to show it: only with nothing to lose.
                                 Button("Open Remote Queue Settings…") {
                                     dismiss()
                                     model.openSettings(.remoteQueue)
                                 }
+                                .disabled(isNew || bot != original)
+                                .help(isNew ? "Create the bot first" : bot != original ? "Save or cancel your changes first" : "")
                             }
                         }
                         if let problem = workspaceProblem { Text(problem).foregroundStyle(.red) }

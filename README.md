@@ -180,7 +180,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     conversation's **Model & Usage** shows the same readings, with the same refresh limits. It
     searches by name or family. **New Profile** adds a named profile of Claude Code, Codex,
     Antigravity, Muse or Pi, with an installed command or wrapper and **Test Command**; for Pi, it
-    shows whether the shared OpenRouter key is saved, or **Add Key in Settings…**. Sign in through that CLI in Terminal; BotChu does not create its
+    shows whether the shared OpenRouter key is saved, or **Add Key in Settings…** (which closes
+    the sheet, so only before anything is typed). Sign in through that CLI in Terminal; BotChu does not create its
     login. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
     Codex profiles can also draw pets. Bots and tasks retain a copy of their custom profile’s CLI
     family and command across relaunches. Command overrides remain editable in Settings. Pi profiles
@@ -1113,7 +1114,8 @@ on that pull request's branch to continue in instead). The same command run agai
     retains replies without truncation, and deduplicates retry acknowledgements. This bot has no
     local workspace, CLI, account/model controls, tasks, jobs or sub-agents; its editor shows its
     **Connection** (Configured while Settings serves the queue, else Not configured) with **Open
-    Remote Queue Settings…**, which closes the editor. Settings ▸ **Remote queue**
+    Remote Queue Settings…**, which closes the editor, so it is off for a new bot or
+    while there are unsaved changes. Settings ▸ **Remote queue**
     controls its address/port, generated Keychain token and connection status; the sidebar shows
     whether a poll arrived in the last two minutes and how many messages wait, or **Tailscale off**
     when the queue is served through Tailscale and Tailscale is disconnected on this Mac (BotChu

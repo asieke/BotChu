@@ -762,10 +762,13 @@ struct AddProviderSheet: View {
                         } else {
                             HStack {
                                 Label("Not saved", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Palette.warning)
+                                // Settings is behind the sheet, which closes to show it: only with nothing typed to lose.
                                 Button("Add Key in Settings…") {
                                     dismiss()
                                     model.openSettings(.openRouter)
                                 }
+                                .disabled(!name.isEmpty || !command.isEmpty)
+                                .help(name.isEmpty && command.isEmpty ? "" : "Add the profile or cancel first")
                             }
                         }
                     }
