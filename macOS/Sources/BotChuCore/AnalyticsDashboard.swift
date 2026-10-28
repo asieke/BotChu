@@ -828,7 +828,8 @@ public enum AnalyticsDashboard {
             return comparison(r, "swap") != null;
           });
           var short = eligible.filter(function (r) {
-            return r.tokens.output != null && r.tokens.output < 2000;
+            return r.tokens.output != null && r.tokens.output < 2000 &&
+              r.models.every(function(usage) { return typeof usage.output === "number"; });
           });
           card(
             "short",
@@ -1349,14 +1350,16 @@ public enum AnalyticsDashboard {
           iw = W - L - 4;
         var max = Math.max.apply(
             null,
-            [1].concat(
+            [0].concat(
               by.map(function (d) {
                 return d.a.cost || 0;
               })
             )
           ),
-          power = Math.pow(10, Math.floor(Math.log10(max))),
-          top = Math.ceil(max / power) * power;
+          positiveMax = max > 0 ? max : 1,
+          power = Math.pow(10, Math.floor(Math.log10(positiveMax))),
+          top = Math.ceil(positiveMax / power) * power,
+          tickPrecision = top < 1 ? Math.min(8, 2 - Math.floor(Math.log10(top))) : top < 4 ? 2 : 0;
         var box = el("div", "chart"),
           root = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Spend a day" }),
           defs = svg("defs"),
@@ -1387,7 +1390,7 @@ public enum AnalyticsDashboard {
           var y = T + ih - (ih * i) / 4;
           add(root, svg("line", { x1: L, x2: W - 4, y1: y, y2: y, class: i ? "gl" : "base" }));
           var text = svg("text", { x: L - 7, y: y + 4, "text-anchor": "end", class: "axis" });
-          text.textContent = "$" + ((top * i) / 4).toFixed(top < 4 ? 2 : 0);
+          text.textContent = "$" + ((top * i) / 4).toFixed(tickPrecision);
           add(root, text);
         }
         var band = iw / list.length,

@@ -78,6 +78,13 @@ struct AnalyticsExplorerTests {
         #expect(c.evaluateScript("E.insights(from,through).find(c=>c.id==='fanout').value===null").toBool() == true)
     }
 
+    @Test func reasoningOnlyLowerBoundCannotEstablishShortOutput() throws {
+        let c = try context()
+        c.evaluateScript("fixture.records[0].models[0].output=null;fixture.records[0].models[0].reasoning=100;fixture.records[0].tokens.output=100;E=BotChuAnalytics.createExplorer(fixture)")
+        #expect(c.evaluateScript("E.insights(from,through).find(c=>c.id==='short').filters[0].ids.includes(0)").toBool() == false)
+        #expect(c.evaluateScript("E.insights(from,through).find(c=>c.id==='short').filters[0].ids.length").toInt32() == 4)
+    }
+
     @Test func providerBackendsAndMissingUsageRemainDistinct() throws {
         let c = try context()
         c.evaluateScript("fixture.records[0].provider='pi';fixture.records[0].providerID='openrouter';fixture.records[1].provider='pi';fixture.records[1].providerID='radius';fixture.records[0].cost=null;fixture.records[0].costProvenance='unpriced';fixture.records[1].cost=null;fixture.records[1].costProvenance='unavailable';E=BotChuAnalytics.createExplorer(fixture)")

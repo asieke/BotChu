@@ -19,12 +19,12 @@ extension RenderingTests {
         }
         builder.add(turns: [turn(150, 10, .finished), turn(8, 120, .finished), turn(1, 60, .finished), turn(1, 30, .failed)], bot: bot, task: nil)
         var snapshot = builder.snapshot()
-        let usage = ModelUsage(model: "claude-opus-5-5", uncachedInput: 1000, cacheRead: 0, output: 100)
+        let usage = ModelUsage(model: "claude-opus-5-5", uncachedInput: 100, cacheRead: 0, output: 30)
         snapshot.records[2].model = usage.model
         snapshot.records[2].provider = .claude
         snapshot.records[2].models = [usage]
         snapshot.records[2].tokens = AnalyticsTokens([usage])
-        snapshot.records[2].cost = 0.006
+        snapshot.records[2].cost = 0.001
         snapshot.records[2].costProvenance = .estimated
         snapshot.records[2].canReprice = true
         return snapshot
@@ -55,10 +55,17 @@ extension RenderingTests {
             """)
         #expect(first["runs"] as? String == "3")
         #expect(first["waste"] as? String == "—")
-        #expect(first["tokens"] as? String == "1,100")
+        #expect(first["tokens"] as? String == "130")
         #expect(first["error"] as? Bool == false)
         #expect(first["pressed"] as? String == "30 days")
         #expect(first["bots"] as? Bool == true)
+
+        let tinySpend = try await read("""
+            return { height: Math.max(...[...document.querySelectorAll('.chart rect[fill^="var("]')].map(r => Number(r.getAttribute('height')))),
+                     axis: [...document.querySelectorAll('.chart .axis')].map(n => n.textContent) };
+            """)
+        #expect((tinySpend["height"] as? Double ?? 0) > 200)
+        #expect((tinySpend["axis"] as? [String])?.contains("$0.00100") == true)
 
         // A preset, then a custom range of one day.
         let all = try await read("""
