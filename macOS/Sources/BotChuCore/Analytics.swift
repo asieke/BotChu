@@ -11,7 +11,7 @@ import Foundation
 
 /// Everything the dashboard shows, as it was when it was made.
 public struct AnalyticsSnapshot: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public var version: Int
     public var generatedAt: Date
@@ -31,11 +31,14 @@ public struct AnalyticsSnapshot: Codable, Equatable, Sendable {
     /// Token use and cost, each only as reliable as its source (`AnalyticsMeasure.Provenance`).
     public var measures: [AnalyticsMeasure]
     public var coverage: AnalyticsCoverage
+    public var priceSnapshotDate: String
+    public var unpricedModelIDs: [String]
+    public var prices: [AnalyticsModelPrice]
 
     public init(version: Int = Self.currentVersion, generatedAt: Date, timeZone: String, today: String, bots: [String] = [],
                 accounts: [AnalyticsAccount] = [], projects: [String] = [], records: [AnalyticsRecord] = [], tasks: [AnalyticsTask] = [],
                 allowance: [AnalyticsAllowance] = [], measures: [AnalyticsMeasure] = AnalyticsMeasure.unrecorded,
-                coverage: AnalyticsCoverage = AnalyticsCoverage()) {
+                coverage: AnalyticsCoverage = AnalyticsCoverage(), unpricedModelIDs: [String] = []) {
         self.version = version
         self.generatedAt = generatedAt
         self.timeZone = timeZone
@@ -48,6 +51,9 @@ public struct AnalyticsSnapshot: Codable, Equatable, Sendable {
         self.allowance = allowance
         self.measures = measures
         self.coverage = coverage
+        self.priceSnapshotDate = ModelPricing.snapshotDate
+        self.unpricedModelIDs = unpricedModelIDs
+        self.prices = ModelPricing.catalog
     }
 
     /// The snapshot as JSON, dates in ISO 8601, keys sorted.
@@ -116,7 +122,23 @@ public struct AnalyticsRecord: Codable, Equatable, Sendable {
     /// Index into `projects`; nil for work outside a repository (Home, job runs).
     public var project: Int?
 
-    public init(kind: Kind, day: String, outcome: AnalyticsOutcome, seconds: Double?, bot: Int, account: Int?, project: Int?) {
+    public var taskID: UUID?
+    public var startedAt: Date?
+    public var model: String?
+    public var modelSource: UsageLedger.ModelSource?
+    public var provider: AgentKind?
+    public var providerID: String?
+    /// Per-model counts, after cumulative differencing, for exact alternative-model estimates.
+    public var models: [ModelUsage] = []
+    /// False for cumulative deltas with an unknown baseline bucket; do not reprice a partial delta.
+    public var canReprice = false
+    public var tokens = AnalyticsTokens()
+    public var cost: Double?
+    public var costProvenance: AnalyticsMeasure.Provenance = .unavailable
+
+    public init(kind: Kind, day: String, outcome: AnalyticsOutcome, seconds: Double?, bot: Int, account: Int?, project: Int?, taskID: UUID? = nil, startedAt: Date? = nil) {
+        self.taskID = taskID
+        self.startedAt = startedAt
         self.kind = kind
         self.day = day
         self.outcome = outcome
@@ -148,9 +170,11 @@ public struct AnalyticsTask: Codable, Equatable, Sendable {
     public var turns: Int
     /// How its latest turn ended; nil before its first turn.
     public var latest: AnalyticsOutcome?
+    public var id: UUID?
+    public var workNumber: Int?
 
     public init(day: String, bot: Int, account: Int?, project: Int?, work: Work, origin: BotTask.Origin, open: Bool, turns: Int,
-                latest: AnalyticsOutcome?) {
+                latest: AnalyticsOutcome?, id: UUID? = nil, workNumber: Int? = nil) {
         self.day = day
         self.bot = bot
         self.account = account
@@ -159,6 +183,8 @@ public struct AnalyticsTask: Codable, Equatable, Sendable {
         self.origin = origin
         self.open = open
         self.turns = turns
+        self.id = id
+        self.workNumber = workNumber
         self.latest = latest
     }
 }
@@ -205,11 +231,54 @@ public struct AnalyticsAllowance: Codable, Equatable, Sendable {
     }
 }
 
+/// Sums of reported buckets only. Nil means none was measured; subset buckets are never counted twice.
+public struct AnalyticsTokens: Codable, Equatable, Sendable {
+    public var uncachedInput: Int?
+    public var cacheRead: Int?
+    public var cacheWrite: Int?
+    public var cacheWrite1h: Int?
+    public var output: Int?
+    public var reasoning: Int?
+
+    public init(_ models: [ModelUsage] = []) {
+        uncachedInput = Self.sum(models.map(\.uncachedInput))
+        cacheRead = Self.sum(models.map(\.cacheRead))
+        cacheWrite = Self.sum(models.map { $0.cacheWrite ?? $0.cacheWrite1h })
+        cacheWrite1h = Self.sum(models.map(\.cacheWrite1h))
+        output = Self.sum(models.map { $0.output ?? $0.reasoning })
+        reasoning = Self.sum(models.map(\.reasoning))
+    }
+
+    public var total: Int? { Self.sum([uncachedInput, cacheRead, cacheWrite, output]) }
+    public var allInput: Int? { Self.sum([uncachedInput, cacheRead, cacheWrite]) }
+    public var cacheHitRate: Double? {
+        guard let read = cacheRead, let input = allInput, input > 0 else { return nil }
+        return Double(read) / Double(input)
+    }
+
+    static func sum(_ values: [Int?]) -> Int? {
+        let known = values.compactMap { $0 }
+        guard !known.isEmpty, known.allSatisfy({ $0 >= 0 }) else { return nil }
+        var total = 0
+        for value in known {
+            let (next, overflow) = total.addingReportingOverflow(value)
+            guard !overflow else { return nil }
+            total = next
+        }
+        return total
+    }
+
+    var modelUsage: ModelUsage {
+        ModelUsage(model: "", uncachedInput: uncachedInput, cacheRead: cacheRead, cacheWrite: cacheWrite,
+                   cacheWrite1h: cacheWrite1h, output: output, reasoning: reasoning)
+    }
+}
+
 /// A usage figure and how far it can be trusted: provider-reported (actual), worked out (estimated),
 /// or not recorded at all (unavailable, which is never shown as zero).
 public struct AnalyticsMeasure: Codable, Equatable, Sendable {
     public enum Provenance: String, Codable, Sendable {
-        case actual, estimated, unavailable
+        case actual, estimated, unpriced, unavailable
     }
 
     /// "tokens" or "cost".
@@ -226,13 +295,12 @@ public struct AnalyticsMeasure: Codable, Equatable, Sendable {
         self.note = note
     }
 
-    /// BotChu keeps no token counts or costs per turn or run: the CLIs' own figures aren't saved, and
-    /// allowance readings are per profile, not per bot.
+    /// No matched, separately measured ledger usage in this selection.
     public static let unrecorded = [
         AnalyticsMeasure(metric: "tokens", provenance: .unavailable,
-                         note: "BotChu doesn't record the tokens a turn or run used, so none are shown rather than a guess."),
+                         note: "No token counts were recorded for these turns or runs."),
         AnalyticsMeasure(metric: "cost", provenance: .unavailable,
-                         note: "BotChu doesn't record what a turn or run cost; provider allowance is shown separately, per profile."),
+                         note: "No cost was recorded for these turns or runs; provider allowance is separate."),
     ]
 }
 
@@ -257,6 +325,8 @@ public struct AnalyticsCoverage: Codable, Equatable, Sendable {
     public var jobRunsFromTasks = 0
     /// The usage readings file couldn't be read.
     public var allowanceUnreadable = false
+    public var unreadableUsageLines = 0
+    public var unreadableUsageFiles = 0
     /// What the dashboard warns about (`described`), set as the snapshot is made.
     public var problems: [String] = []
 
@@ -274,6 +344,9 @@ public struct AnalyticsCoverage: Codable, Equatable, Sendable {
         }
         if unreadableRecords > 0 {
             problems.append("\(count(unreadableRecords, "task, job or sub-agent record", "task, job or sub-agent records")) couldn't be read and \(unreadableRecords == 1 ? "is" : "are") left out.")
+        }
+        if unreadableUsageLines > 0 || unreadableUsageFiles > 0 {
+            problems.append("Usage ledger: \(unreadableUsageLines) unreadable lines and \(unreadableUsageFiles) unreadable files; readable usage still counts.")
         }
         if allowanceUnreadable {
             problems.append("The saved allowance readings couldn't be read.")
@@ -316,6 +389,18 @@ public enum Analytics {
         let loaded = Store(root: input.root).loadBots()
         builder.coverage.missingBots = loaded.missing.count
         for bot in loaded.bots where !bot.isRemoteQueue { builder.bot(bot.id, name: bot.name) }
+        var ledgerEntries: [UsageLedger.Entry] = []
+        var amendments: [UsageLedger.Amendment] = []
+        for bot in loaded.bots where !bot.isRemoteQueue {
+            do {
+                let ledger = try UsageLedger.read(in: BotHome(workspace: bot.persistencePath))
+                ledgerEntries += ledger.entries
+                amendments += ledger.amendments
+                builder.coverage.unreadableUsageLines += ledger.unreadableLines
+                builder.coverage.unreadableUsageFiles += ledger.unreadableFiles
+            } catch { builder.coverage.unreadableUsageFiles += 1 }
+        }
+        builder.addLedger(entries: ledgerEntries, amendments: amendments)
         for bot in loaded.bots {
             guard !bot.isRemoteQueue else {
                 builder.coverage.remoteQueueBots += 1
@@ -398,7 +483,7 @@ public enum Analytics {
             let work = segment.filter { $0.role == .assistant || $0.role == .tool || $0.role == .error }
             let stop = segment.last { $0.role == .note && ($0.stopped == true || $0.text == "Stopped") }
             if last && running && opened {
-                turns.append(AnalyticsTurn(start: max(messages[start].date, previousEnd ?? .distantPast), end: nil, outcome: .inProgress))
+                turns.append(AnalyticsTurn(start: max(messages[start].date, previousEnd ?? .distantPast), end: nil, outcome: .inProgress, messageID: messages[start].id))
                 break
             }
             guard !work.isEmpty || stop != nil else { continue }
@@ -416,7 +501,7 @@ public enum Analytics {
             } else {
                 outcome = .finished
             }
-            turns.append(AnalyticsTurn(start: begin, end: finish, outcome: outcome))
+            turns.append(AnalyticsTurn(start: begin, end: finish, outcome: outcome, messageID: opened ? messages[start].id : nil))
             previousEnd = max(previousEnd ?? finish, finish)
         }
         return turns
@@ -465,7 +550,10 @@ public struct AnalyticsTurn: Equatable, Sendable {
     public var end: Date?
     public var outcome: AnalyticsOutcome
 
-    public init(start: Date, end: Date?, outcome: AnalyticsOutcome) {
+    public var messageID: UUID?
+
+    public init(start: Date, end: Date?, outcome: AnalyticsOutcome, messageID: UUID? = nil) {
+        self.messageID = messageID
         self.start = start
         self.end = end
         self.outcome = outcome
@@ -490,6 +578,11 @@ public struct AnalyticsBuilder {
     private var records: [AnalyticsRecord] = []
     private var tasks: [AnalyticsTask] = []
     private var allowance: [AnalyticsAllowance] = []
+    private var ledger: [UsageLedger.Entry] = []
+    private var usage: [UUID: TurnUsage] = [:]
+    private var actualCosts: [UUID: Double] = [:]
+    private var charged: Set<UUID> = []
+    private var uncertainDeltas: Set<UUID> = []
 
     public init(zone: TimeZone, now: Date, accounts: [Account] = Accounts.all) {
         self.zone = zone
@@ -501,8 +594,18 @@ public struct AnalyticsBuilder {
     public func snapshot() -> AnalyticsSnapshot {
         var coverage = coverage
         coverage.problems = coverage.described
+        let summary = AnalyticsSummary(records, from: "", through: "9999", tasks: tasks)
+        let measures = [
+            AnalyticsMeasure(metric: "tokens", provenance: summary.tokens.total == nil ? .unavailable : .actual,
+                             value: summary.tokens.total.map(Double.init), note: AnalyticsMeasure.unrecorded[0].note),
+            AnalyticsMeasure(metric: "cost", provenance: summary.costProvenance, value: summary.cost,
+                             note: AnalyticsMeasure.unrecorded[1].note),
+        ]
+        let unpriced = Set(records.filter { $0.costProvenance == .unpriced }.flatMap { record in
+            record.models.isEmpty ? [record.model ?? "Unknown"] : record.models.map { $0.model.isEmpty ? "Unknown" : $0.model }
+        }).sorted()
         return AnalyticsSnapshot(generatedAt: now, timeZone: zone.identifier, today: day(now), bots: bots, accounts: accounts,
-                                 projects: projects, records: records, tasks: tasks, allowance: allowance, coverage: coverage)
+                                 projects: projects, records: records, tasks: tasks, allowance: allowance, measures: measures, coverage: coverage, unpricedModelIDs: unpriced)
     }
 
     func day(_ date: Date) -> String { formatter.string(from: date) }
@@ -553,6 +656,7 @@ public struct AnalyticsBuilder {
         records.append(AnalyticsRecord(kind: .job, day: day(start), outcome: outcome,
                                        seconds: outcome.ended ? Analytics.seconds(from: run.startedAt, to: run.finishedAt) : nil,
                                        bot: agent, account: account(run.accountID, recordedName: run.accountName), project: nil))
+        applyUsage(to: records.count - 1, botID: botID, start: start, jobRunID: run.id)
     }
 
     /// A sub-agent run, as the bot it ran as (named as it was when delegated, if that bot is gone),
@@ -568,6 +672,8 @@ public struct AnalyticsBuilder {
         records.append(AnalyticsRecord(kind: .subagent, day: day(run.startedAt ?? run.createdAt), outcome: outcome,
                                        seconds: outcome.ended ? Analytics.seconds(from: run.startedAt, to: run.finishedAt) : nil,
                                        bot: ranAs, account: account(run.accountID, profile: run.accountProfile), project: project(repo)))
+        records[records.count - 1].taskID = run.rootTaskID
+        applyUsage(to: records.count - 1, botID: run.targetBotID, start: run.startedAt ?? run.createdAt, subagentRunID: run.id)
     }
 
     /// A conversation's turns (`Analytics.turns`), read from its transcript as far as it can be read.
@@ -598,11 +704,14 @@ public struct AnalyticsBuilder {
                 coverage.jobRunsFromTasks += 1
                 records.append(AnalyticsRecord(kind: .job, day: day(run.start), outcome: run.outcome, seconds: run.seconds, bot: owner,
                                                account: onAccount, project: nil))
+                applyUsage(to: records.count - 1, botID: bot.id, taskID: task?.id, messageID: run.messageID, start: run.start, jobRunID: task?.jobRun?.runID)
             }
         }
         for turn in turns {
             records.append(AnalyticsRecord(kind: task == nil ? .home : .task, day: day(turn.start), outcome: turn.outcome, seconds: turn.seconds,
                                            bot: owner, account: onAccount, project: inProject))
+            records[records.count - 1].taskID = task?.id
+            applyUsage(to: records.count - 1, botID: bot.id, taskID: task?.id, messageID: turn.messageID, start: turn.start)
         }
         guard let task, task.jobRun == nil else { return }
         let work: AnalyticsTask.Work
@@ -615,6 +724,115 @@ public struct AnalyticsBuilder {
         }
         tasks.append(AnalyticsTask(day: day(task.createdAt), bot: owner, account: onAccount, project: inProject, work: work, origin: task.origin,
                                    open: !task.isArchived, turns: turns.count, latest: turns.last?.outcome))
+        tasks[tasks.count - 1].id = task.id
+        tasks[tasks.count - 1].workNumber = task.work?.number
+    }
+
+    /// Prepare the complete ledger before joining retained transcripts. Even unmatched entries are
+    /// needed as cumulative baselines; pruning a task must not charge its tokens to the next turn.
+    public mutating func addLedger(entries: [UsageLedger.Entry], amendments: [UsageLedger.Amendment] = []) {
+        var seen: Set<UUID> = []
+        ledger = entries.enumerated().filter { seen.insert($0.element.id).inserted }
+            .sorted { ($0.element.startedAt, $0.element.at, $0.offset) < ($1.element.startedAt, $1.element.at, $1.offset) }.map(\.element)
+        usage = [:]; actualCosts = [:]; charged = []; uncertainDeltas = []
+        for amendment in amendments where amendment.actualCostUSD.isFinite && amendment.actualCostUSD >= 0 {
+            actualCosts[amendment.amends] = amendment.actualCostUSD
+        }
+        struct Session: Hashable { var account: String; var provider: AgentKind; var backend: String?; var id: UUID }
+        var baselines: [Session: TurnUsage] = [:]
+        for entry in ledger {
+            guard var value = entry.usage else { continue }
+            if value.cumulative {
+                guard let raw = entry.sessionID, let id = UUID(uuidString: raw) else { continue }
+                let key = Session(account: entry.accountID, provider: entry.provider, backend: entry.providerID, id: id)
+                let previous = baselines.updateValue(value, forKey: key)
+                if let previous {
+                    guard let delta = Self.delta(value, from: previous) else { continue }
+                    value = delta.usage
+                    if !delta.complete { uncertainDeltas.insert(entry.id) }
+                } else if entry.resumed { continue }
+            }
+            guard value.models.allSatisfy({ model in Self.tokenKeys.allSatisfy { (model[keyPath: $0] ?? 0) >= 0 } }) else { continue }
+            // Anonymous buckets are differenced before the invocation's requested-model fallback.
+            for i in value.models.indices where value.models[i].model.isEmpty { value.models[i].model = entry.model ?? "" }
+            usage[entry.id] = value
+        }
+    }
+
+    private static let tokenKeys: [WritableKeyPath<ModelUsage, Int?>] = [\.uncachedInput, \.cacheRead, \.cacheWrite, \.cacheWrite1h, \.output, \.reasoning]
+
+    private static func delta(_ current: TurnUsage, from previous: TurnUsage) -> (usage: TurnUsage, complete: Bool)? {
+        var value = current
+        var complete = true
+        for i in value.models.indices {
+            let older = previous.models.first { $0.model == value.models[i].model }
+            for key in tokenKeys {
+                guard let count = value.models[i][keyPath: key] else {
+                    if older?[keyPath: key] != nil { complete = false }
+                    continue
+                }
+                guard count >= 0 else { return nil }
+                guard let before = older?[keyPath: key] else { value.models[i][keyPath: key] = nil; complete = false; continue }
+                guard before >= 0, count >= before else { return nil }
+                value.models[i][keyPath: key] = count - before
+            }
+        }
+        if let cost = current.reportedCostUSD, let old = previous.reportedCostUSD {
+            guard cost.isFinite, old.isFinite, old >= 0, cost >= old else { return nil }
+            value.reportedCostUSD = cost - old
+        } else { value.reportedCostUSD = nil }
+        value.cumulative = false
+        if previous.models.contains(where: { old in !current.models.contains(where: { $0.model == old.model }) }) { complete = false }
+        return (value, complete)
+    }
+
+    private mutating func applyUsage(to index: Int, botID: UUID, taskID: UUID? = nil, messageID: UUID? = nil,
+                                     start: Date, jobRunID: UUID? = nil, subagentRunID: UUID? = nil) {
+        records[index].startedAt = start
+        let candidates: [UsageLedger.Entry]
+        if let subagentRunID {
+            candidates = ledger.filter { $0.subagentRunID == subagentRunID }
+        } else if let jobRunID {
+            candidates = ledger.filter { $0.jobRunID == jobRunID && $0.kind == .job }
+        } else {
+            let conversation = ledger.filter { $0.botID == botID && $0.taskID == taskID && $0.subagentRunID == nil
+                && ($0.kind == .home || $0.kind == .task || $0.kind == .job) }
+            let exact = messageID.map { id in conversation.filter { $0.messageID == id || $0.messageIDs.contains(id) } } ?? []
+            // ISO8601 ledger times have second precision. Never use a nearby timestamp to override
+            // a recorded prompt identity, nor pick arbitrarily when legacy candidates are ambiguous.
+            candidates = exact.isEmpty ? conversation.filter { $0.messageID == nil && $0.messageIDs.isEmpty
+                && abs($0.startedAt.timeIntervalSince(start)) < 1 } : exact
+        }
+        guard candidates.count == 1, let entry = candidates.first else { return }
+        records[index].account = account(entry.accountID)
+        records[index].model = entry.model
+        records[index].modelSource = entry.modelSource
+        records[index].provider = entry.provider
+        records[index].providerID = entry.providerID
+        if let messageID, let owner = entry.messageID, messageID != owner { return }
+        guard charged.insert(entry.id).inserted else { return }
+        let value = usage[entry.id]
+        records[index].models = value?.models ?? []
+        records[index].canReprice = value != nil && !uncertainDeltas.contains(entry.id)
+        records[index].tokens = AnalyticsTokens(value?.models ?? [])
+        if let actual = actualCosts[entry.id] {
+            records[index].cost = actual
+            records[index].costProvenance = .actual
+        } else if let value {
+            let prices = value.models.map { ModelPricing.price($0, provider: entry.provider,
+                                                               backend: entry.providerID ?? (entry.provider == .pi ? "unknown" : nil)) }
+            if !uncertainDeltas.contains(entry.id), !prices.isEmpty, prices.allSatisfy({ $0 != nil }) {
+                let total = prices.compactMap { $0?.usd }.reduce(0, +)
+                if total.isFinite { records[index].cost = total; records[index].costProvenance = .estimated }
+            }
+            if records[index].cost == nil, let reported = value.reportedCostUSD, reported.isFinite, reported >= 0 {
+                records[index].cost = reported
+                records[index].costProvenance = .estimated
+            }
+            if records[index].cost == nil, value.models.contains(where: \.hasReportedTokens) {
+                records[index].costProvenance = .unpriced
+            }
+        }
     }
 
     /// Each profile's latest reading in `usage.json`, without its command or any text it came with.
@@ -675,9 +893,43 @@ public struct AnalyticsSummary: Equatable, Sendable {
     /// The known durations added up; unknown ones add nothing.
     public var totalSeconds: Double = 0
 
+    public var tokens = AnalyticsTokens()
+    public var cacheHitRate: Double?
+    public var actualCost: Double?
+    public var estimatedCost: Double?
+    /// Known spend only. Coverage counts keep unpriced/unavailable records visible alongside it.
+    public var cost: Double?
+    public var costProvenance: AnalyticsMeasure.Provenance = .unavailable
+    public var unpriced = 0
+    public var unavailable = 0
+    public var finishedTasks = 0
+    public var costPerFinishedTask: Double?
+    public var wastedCost: Double?
+
     public init(_ records: [AnalyticsRecord], from: String, through: String,
-                kinds: Set<AnalyticsRecord.Kind> = Set(AnalyticsRecord.Kind.allCases), where include: (AnalyticsRecord) -> Bool = { _ in true }) {
+                kinds: Set<AnalyticsRecord.Kind> = Set(AnalyticsRecord.Kind.allCases), tasks: [AnalyticsTask] = [], where include: (AnalyticsRecord) -> Bool = { _ in true }) {
         var durations: [Double] = []
+        let selected = records.filter { $0.day >= from && $0.day <= through && kinds.contains($0.kind) && include($0) && $0.outcome != .skipped }
+        tokens = AnalyticsTokens(selected.map { $0.tokens.modelUsage })
+        cacheHitRate = tokens.cacheHitRate
+        func sum(_ values: [Double?]) -> Double? {
+            let known = values.compactMap { $0 }.filter { $0.isFinite && $0 >= 0 }
+            guard !known.isEmpty else { return nil }
+            let total = known.reduce(0, +)
+            return total.isFinite ? total : nil
+        }
+        actualCost = sum(selected.filter { $0.costProvenance == .actual }.map(\.cost))
+        estimatedCost = sum(selected.filter { $0.costProvenance == .estimated }.map(\.cost))
+        cost = sum([actualCost, estimatedCost])
+        unpriced = selected.filter { $0.costProvenance == .unpriced }.count
+        unavailable = selected.filter { $0.costProvenance == .unavailable }.count
+        costProvenance = estimatedCost != nil ? .estimated : actualCost != nil ? .actual : unpriced > 0 ? .unpriced : .unavailable
+        wastedCost = sum(selected.filter { [.failed, .stopped, .interrupted].contains($0.outcome) }.map(\.cost))
+        let representedTasks = Set(selected.filter { $0.kind == .task || $0.kind == .subagent }.compactMap(\.taskID))
+        let finished = Set(tasks.filter { $0.latest == .finished }.compactMap(\.id)).intersection(representedTasks)
+        finishedTasks = finished.count
+        let finishedSpend = sum(selected.filter { $0.taskID.map { finished.contains($0) } == true && ($0.kind == .task || $0.kind == .subagent) }.map(\.cost))
+        costPerFinishedTask = finishedTasks > 0 ? finishedSpend.map { $0 / Double(finishedTasks) } : nil
         for record in records where record.day >= from && record.day <= through && kinds.contains(record.kind) && include(record) {
             guard record.outcome != .skipped else {
                 skipped += 1

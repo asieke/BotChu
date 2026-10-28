@@ -52,7 +52,7 @@ import JavaScriptCore
         #expect(turns[1].start == base.addingTimeInterval(60))
         // The tool call's own duration ends its turn when it is the last thing done.
         let tool = Analytics.turns([message(.user, at: 0), message(.tool, at: 5, tool: 40)], running: false)
-        #expect(tool == [AnalyticsTurn(start: base, end: base.addingTimeInterval(45), outcome: .finished)])
+        #expect(tool == [AnalyticsTurn(start: base, end: base.addingTimeInterval(45), outcome: .finished, messageID: tool.first?.messageID)])
         #expect(Analytics.turns([], running: true).isEmpty)
     }
 
@@ -112,8 +112,8 @@ import JavaScriptCore
         #expect(snapshot.projects == ["asieke/BotChu"])
         #expect(snapshot.accounts == [AnalyticsAccount(name: "Codex Work", family: "Codex")])
         #expect(snapshot.tasks == [
-            AnalyticsTask(day: "2026-10-26", bot: 0, account: 0, project: 0, work: .issue, origin: .home, open: true, turns: 2, latest: .finished),
-            AnalyticsTask(day: "2026-10-26", bot: 0, account: 0, project: 0, work: .review, origin: .owner, open: false, turns: 0, latest: nil),
+            AnalyticsTask(day: "2026-10-26", bot: 0, account: 0, project: 0, work: .issue, origin: .home, open: true, turns: 2, latest: .finished, id: task.id, workNumber: 48),
+            AnalyticsTask(day: "2026-10-26", bot: 0, account: 0, project: 0, work: .review, origin: .owner, open: false, turns: 0, latest: nil, id: review.id, workNumber: 50),
         ])
         let summary = AnalyticsSummary(snapshot.records, from: "2026-10-26", through: "2026-10-26")
         #expect(summary.runs == 2 && summary.ended == 2 && summary.outcomes[.failed] == 1)
@@ -190,7 +190,7 @@ import JavaScriptCore
         withTask.add(turns: transcript, bot: agent, task: task, runRecorded: true)
         let added = withTask.snapshot()
         #expect(added.records.count == snapshot.records.count + 1)
-        #expect(added.records.last == AnalyticsRecord(kind: .task, day: "2026-10-26", outcome: .finished, seconds: 60, bot: 0, account: 2, project: nil))
+        #expect(added.records.last == AnalyticsRecord(kind: .task, day: "2026-10-26", outcome: .finished, seconds: 60, bot: 0, account: 2, project: nil, taskID: task.id, startedAt: base.addingTimeInterval(4_000)))
         #expect(added.tasks.isEmpty)
         #expect(added.coverage.jobRunsFromTasks == 0)
         // Once its job is gone, the run is read from its task.
@@ -547,7 +547,7 @@ import JavaScriptCore
         decoder.dateDecodingStrategy = .iso8601
         #expect(try decoder.decode(AnalyticsSnapshot.self, from: Data(block.utf8)) == snapshot)
         // The page reads data of its own version only.
-        #expect(AnalyticsSnapshot.currentVersion == 1 && AnalyticsDashboard.script.contains("data.version !== 1"))
+        #expect(AnalyticsSnapshot.currentVersion == 2 && AnalyticsDashboard.script.contains("data.version !== 2"))
     }
 
     @Test func thePageIsWrittenForThisUserOnly() throws {
@@ -673,19 +673,44 @@ import JavaScriptCore
     #if canImport(JavaScriptCore)
     /// The page's script works out the numbers `AnalyticsSummary` does, from the same records.
     @Test func thePagesScriptWorksOutTheSameNumbers() throws {
-        let sample = Self.sample()
+        var sample = Self.sample()
+        for i in sample.records.indices {
+            sample.records[i].costProvenance = [.actual, .estimated, .unpriced, .unavailable][i % 4]
+            if i % 4 < 2 { sample.records[i].cost = Double(i % 11) / 100 }
+            if i % 4 != 3 {
+                sample.records[i].tokens = AnalyticsTokens([ModelUsage(model: "test", uncachedInput: i, cacheRead: i * 2,
+                                                                      cacheWrite: 0, cacheWrite1h: 0, output: i * 3, reasoning: i)])
+            }
+        }
         let context: JSContext = JSContext()
         context.evaluateScript(AnalyticsDashboard.script)
         #expect(context.exception == nil)
         let api = try #require(context.objectForKeyedSubscript("BotChuAnalytics"))
         let records = try JSONSerialization.jsonObject(with: JSONEncoder().encode(sample.records))
+        let tasks = try JSONSerialization.jsonObject(with: JSONEncoder().encode(sample.tasks))
         let ranges = [("2026-01-01", sample.today), ("2026-10-01", "2026-10-15"), ("2026-10-28", "2026-10-28"), ("2027-01-01", "2027-01-31")]
         let kindSets: [Set<AnalyticsRecord.Kind>] = [Set(AnalyticsRecord.Kind.allCases), [.home, .task], [.job], [.subagent]]
         for (from, through) in ranges {
             for kinds in kindSets {
-                let swift = AnalyticsSummary(sample.records, from: from, through: through, kinds: kinds)
+                let swift = AnalyticsSummary(sample.records, from: from, through: through, kinds: kinds, tasks: sample.tasks)
                 let flags = Dictionary(uniqueKeysWithValues: AnalyticsRecord.Kind.allCases.map { ($0.rawValue, kinds.contains($0)) })
-                let script = try #require(api.invokeMethod("summarize", withArguments: [records, from, through, flags]))
+                let script = try #require(api.invokeMethod("summarize", withArguments: [records, from, through, flags, NSNull(), tasks]))
+                for (key, expected) in [("actualCost", swift.actualCost), ("estimatedCost", swift.estimatedCost),
+                                        ("cost", swift.cost), ("wastedCost", swift.wastedCost),
+                                        ("cacheHitRate", swift.cacheHitRate), ("costPerFinishedTask", swift.costPerFinishedTask)] {
+                    let value = script.forProperty(key)
+                    #expect(value?.isNull == true ? expected == nil : abs((value?.toDouble() ?? -1) - (expected ?? -2)) < 0.000_001)
+                }
+                #expect(script.forProperty("costProvenance").toString() == swift.costProvenance.rawValue)
+                #expect(script.forProperty("finishedTasks").toInt32() == Int32(swift.finishedTasks))
+                #expect(script.forProperty("unpriced").toInt32() == Int32(swift.unpriced))
+                #expect(script.forProperty("unavailable").toInt32() == Int32(swift.unavailable))
+                for (key, expected) in [("uncachedInput", swift.tokens.uncachedInput), ("cacheRead", swift.tokens.cacheRead),
+                                        ("cacheWrite", swift.tokens.cacheWrite), ("cacheWrite1h", swift.tokens.cacheWrite1h),
+                                        ("output", swift.tokens.output), ("reasoning", swift.tokens.reasoning)] {
+                    let value = script.forProperty("tokens").forProperty(key)
+                    #expect(value?.isNull == true ? expected == nil : value?.toDouble() == expected.map(Double.init))
+                }
                 #expect(script.forProperty("runs").toInt32() == Int32(swift.runs))
                 #expect(script.forProperty("skipped").toInt32() == Int32(swift.skipped))
                 #expect(script.forProperty("ended").toInt32() == Int32(swift.ended))
@@ -710,4 +735,157 @@ import JavaScriptCore
         #expect(api.invokeMethod("formatDuration", withArguments: [NSNull()])?.toString() == "Unknown")
     }
     #endif
+}
+
+extension AnalyticsTests {
+    func ledgerEntry(_ bot: Bot, prompt: ChatMessage, provider: AgentKind = .claude, model: String? = "claude-sonnet-4-5",
+                     usage: TurnUsage? = nil, session: String? = nil, resumed: Bool = false) -> UsageLedger.Entry {
+        UsageLedger.Entry(at: prompt.date.addingTimeInterval(10), startedAt: prompt.date, kind: .home, botID: bot.id,
+                          messageID: prompt.id, accountID: provider == .claude ? "claude-personal" : "codex-work", provider: provider,
+                          model: model, modelSource: .requested, outcome: .finished, usage: usage, sessionID: session, resumed: resumed)
+    }
+
+    @Test func ledgerOverridesSwitchedAccountsAndGroupsAcknowledgedPromptsWithoutDoubleCharging() throws {
+        var folder = try Folder()
+        let (bot, home) = try folder.add("Switched", accountID: "codex-work")
+        let prompts = (0..<5).map { message(.user, "PRIVATE-PROMPT", at: Double($0 * 100)) }
+        try home.saveThread(prompts.flatMap { [$0, ChatMessage(role: .assistant, text: "PRIVATE-REPLY", date: $0.date.addingTimeInterval(10))] })
+        let session = UUID().uuidString
+        var claude = ledgerEntry(bot, prompt: prompts[1], usage: TurnUsage(models: [ModelUsage(model: "claude-sonnet-4-5", uncachedInput: 100, cacheRead: 20, output: 10)]))
+        claude.messageIDs.append(prompts[2].id)
+        // Execution began well after the queued prompt; stable message identity must win.
+        claude.startedAt = prompts[1].date.addingTimeInterval(27)
+        let codex = ledgerEntry(bot, prompt: prompts[3], provider: .codex, model: "gpt-5", usage: TurnUsage(models: [ModelUsage(model: "", uncachedInput: 200, output: 30)], cumulative: true), session: session)
+        let unknown = ledgerEntry(bot, prompt: prompts[4], provider: .muse, model: "unknown-model", usage: TurnUsage(models: [ModelUsage(model: "unknown-model", uncachedInput: 50, output: 5)]))
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let directory = UsageLedger.directory(in: home)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var data = Data()
+        for entry in [claude, codex, unknown] { data += try encoder.encode(entry); data.append(10) }
+        data += try encoder.encode(UsageLedger.Amendment(amends: claude.id, actualCostUSD: 0.23)); data.append(10)
+        data += Data("torn line\n".utf8)
+        try data.write(to: directory.appendingPathComponent("2026-10.jsonl"))
+        let before = folder.files()
+        let snapshot = Analytics.collect(AnalyticsInput(root: folder.root, now: base, zone: Self.newYork))
+        #expect(folder.files() == before)
+        #expect(snapshot.records.count == 5)
+        let rows = snapshot.records
+        #expect(rows[0].cost == nil && rows[0].costProvenance == .unavailable && rows[0].tokens.total == nil)
+        #expect(snapshot.accounts[rows[1].account!].family == "Claude Code")
+        #expect(snapshot.accounts[rows[3].account!].family == "Codex")
+        #expect(rows[1].model == "claude-sonnet-4-5" && rows[1].cost == 0.23 && rows[1].costProvenance == .actual)
+        #expect(rows[2].account == rows[1].account && rows[2].model == rows[1].model)
+        #expect(rows[2].cost == nil && rows[2].tokens.total == nil && rows[2].costProvenance == .unavailable)
+        #expect(rows[3].tokens.uncachedInput == 200 && rows[3].costProvenance == .estimated)
+        #expect(rows[4].tokens.total == 55 && rows[4].cost == nil && rows[4].costProvenance == .unpriced)
+        #expect(snapshot.unpricedModelIDs == ["unknown-model"] && snapshot.priceSnapshotDate == ModelPricing.snapshotDate)
+        let summary = AnalyticsSummary(rows, from: "", through: "9999")
+        #expect(summary.actualCost == 0.23 && summary.estimatedCost == rows[3].cost && summary.costProvenance == .estimated)
+        #expect(summary.unpriced == 1 && summary.unavailable == 2 && summary.tokens.total == 415)
+        #expect(snapshot.coverage.unreadableUsageLines == 1 && snapshot.coverage.problems.count == 1)
+        let encoded = String(decoding: try snapshot.encoded(), as: UTF8.self)
+        for secret in ["PRIVATE-PROMPT", "PRIVATE-REPLY", session, prompts[1].id.uuidString, bot.workspace] { #expect(!encoded.contains(secret)) }
+    }
+
+    @Test(arguments: [AgentKind.codex, .antigravity])
+    func cumulativeUsageDeltasRespectResumesMissingBucketsResetsAndModelSwitches(provider: AgentKind) {
+        let bot = Bot(name: "Cumulative", accountID: "codex-work", workspace: "/tmp/cumulative")
+        let prompts = (0..<7).map { message(.user, at: Double($0 * 100)) }
+        let session = UUID().uuidString
+        let counts = [100, 130, 180, 10, 25, 40, 60]
+        var entries = prompts.enumerated().map { i, prompt in
+            ledgerEntry(bot, prompt: prompt, provider: provider, model: i < 2 ? "gpt-5" : "gpt-5-mini",
+                        usage: TurnUsage(models: [ModelUsage(model: "", uncachedInput: counts[i], cacheRead: i < 2 ? nil : counts[i], output: counts[i])], cumulative: true),
+                        session: session, resumed: true)
+        }
+        entries[5].sessionID = nil
+        entries[6].sessionID = "not-a-uuid"
+        var builder = builder(); builder.bot(bot.id, name: bot.name)
+        builder.addLedger(entries: entries.reversed())
+        builder.add(turns: prompts.map { AnalyticsTurn(start: $0.date, end: $0.date.addingTimeInterval(10), outcome: .finished, messageID: $0.id) }, bot: bot, task: nil)
+        let rows = builder.snapshot().records
+        #expect(rows.map { $0.tokens.uncachedInput } == [nil, 30, 50, nil, 15, nil, nil])
+        #expect(rows[2].models.first?.model == "gpt-5-mini")
+        #expect(rows[2].tokens.cacheRead == nil && rows[4].tokens.cacheRead == 15)
+        #expect(rows[0].costProvenance == .unavailable && rows[3].costProvenance == .unavailable)
+    }
+
+    @Test func ledgerPricingPrecedenceAndBackendIsolationKeepZeroDistinctFromMissing() {
+        let bot = Bot(name: "Pricing", accountID: "claude-personal", workspace: "/tmp/pricing")
+        let prompts = (0..<5).map { message(.user, at: Double($0 * 100)) }
+        let models = ["claude-sonnet-4-5", "anthropic/claude-sonnet-4.5", "private-model", "private-model", "claude-sonnet-4-5"]
+        var entries = prompts.enumerated().map { i, prompt in
+            ledgerEntry(bot, prompt: prompt, provider: i == 1 ? .pi : .claude, model: models[i],
+                        usage: TurnUsage(models: [ModelUsage(model: models[i], uncachedInput: 100, output: 10)], reportedCostUSD: i == 2 ? 0 : 4))
+        }
+        entries[1].providerID = "private-backend"
+        entries[3].usage?.reportedCostUSD = nil
+        entries[4].usage = nil
+        var builder = builder(); builder.bot(bot.id, name: bot.name)
+        builder.addLedger(entries: entries, amendments: [.init(amends: entries[4].id, actualCostUSD: 0)])
+        builder.add(turns: prompts.map { AnalyticsTurn(start: $0.date, end: $0.date, outcome: .finished, messageID: $0.id) }, bot: bot, task: nil)
+        let rows = builder.snapshot().records
+        #expect(rows[0].cost != 4 && rows[0].costProvenance == .estimated)
+        #expect(rows[1].cost == 4 && rows[1].costProvenance == .estimated)
+        #expect(rows[2].cost == 0 && rows[2].costProvenance == .estimated)
+        #expect(rows[3].cost == nil && rows[3].costProvenance == .unpriced)
+        #expect(rows[4].cost == 0 && rows[4].costProvenance == .actual && rows[4].tokens.total == nil)
+        #expect(ModelPricing.price(ModelUsage(model: "anthropic/claude-sonnet-4.5", uncachedInput: 100), provider: .pi, backend: "private-backend") == nil)
+        #expect(ModelPricing.price(ModelUsage(model: "claude-sonnet-4-5", uncachedInput: 100), provider: .pi, backend: "anthropic") != nil)
+        #expect(!ModelPricing.catalog.isEmpty && ModelPricing.catalog.allSatisfy { !$0.model.isEmpty && !$0.source.isEmpty })
+    }
+}
+
+extension AnalyticsTests {
+    @Test func runIDsJoinRootOwnedSubagentsAndJobsAndFinishedTaskSpendIncludesDelegation() {
+        let bot = Bot(name: "Caller", accountID: "claude-personal", workspace: "/tmp/caller")
+        let target = Bot(name: "Target", accountID: "codex-work", workspace: "/tmp/target")
+        let task = BotTask(repo: "asieke/BotChu", checkout: "/tmp/checkout", createdAt: base)
+        let prompts = [message(.user, at: 0), message(.user, at: 100)]
+        var turns = prompts.enumerated().map { index, prompt in
+            var entry = ledgerEntry(bot, prompt: prompt)
+            entry.kind = .task; entry.taskID = task.id; entry.outcome = index == 0 ? .failed : .finished
+            return entry
+        }
+        var delegated = SubagentRun(rootBotID: bot.id, rootTaskID: task.id, depth: 1, targetBot: target,
+                                    title: "SECRET", brief: "SECRET", workingDirectory: "/tmp/SECRET", phase: .completed, createdAt: base)
+        delegated.startedAt = base; delegated.finishedAt = base.addingTimeInterval(20)
+        let sub = UsageLedger.Entry(startedAt: base, kind: .subagent, botID: target.id, taskID: task.id,
+                                    subagentRunID: delegated.id, accountID: "codex-dev", provider: .codex, model: "gpt-5", outcome: .finished)
+        var job = JobRun(trigger: .manual, scheduledFor: nil, timeZone: "America/New_York", reservedAt: base, outcome: .succeeded)
+        job.startedAt = base; job.finishedAt = base.addingTimeInterval(40)
+        let jobEntry = UsageLedger.Entry(startedAt: base, kind: .job, botID: bot.id, jobRunID: job.id,
+                                         accountID: "claude-dev", provider: .claude, model: "claude-sonnet-4-5", outcome: .finished)
+        turns += [sub, jobEntry]
+        var builder = builder(); builder.bot(bot.id, name: bot.name)
+        builder.addLedger(entries: turns, amendments: turns.enumerated().map { .init(amends: $0.element.id, actualCostUSD: Double($0.offset + 1)) })
+        builder.add(turns: prompts.enumerated().map { i, prompt in AnalyticsTurn(start: prompt.date, end: prompt.date.addingTimeInterval(10), outcome: i == 0 ? .failed : .finished, messageID: prompt.id) }, bot: bot, task: task)
+        builder.add(delegated, project: task.repo)
+        builder.add(job, of: bot.id)
+        let snapshot = builder.snapshot()
+        #expect(snapshot.records.map(\.cost) == [1, 2, 3, 4])
+        #expect(snapshot.accounts[snapshot.records[2].account!].name == "Codex Dev")
+        #expect(snapshot.records[2].taskID == task.id && snapshot.records[2].bot != snapshot.records[0].bot)
+        let summary = AnalyticsSummary(snapshot.records, from: "", through: "9999", tasks: snapshot.tasks)
+        #expect(summary.cost == 10 && summary.finishedTasks == 1 && summary.costPerFinishedTask == 6 && summary.wastedCost == 1)
+        let homeOnly = AnalyticsSummary(snapshot.records, from: "", through: "9999", kinds: [.home], tasks: snapshot.tasks)
+        #expect(homeOnly.cost == nil && homeOnly.costPerFinishedTask == nil && homeOnly.wastedCost == nil)
+    }
+
+    @Test func anonymousLegacyTimeJoinIsUniqueAndNeverStealsAnIdentifiedPrompt() {
+        let bot = Bot(name: "Legacy", accountID: "claude-personal", workspace: "/tmp/legacy")
+        let prompt = message(.user, at: 0)
+        var entry = ledgerEntry(bot, prompt: prompt, usage: TurnUsage(models: [ModelUsage(model: "claude-sonnet-4-5", output: 0)]))
+        let turn = AnalyticsTurn(start: base.addingTimeInterval(0.7), end: base.addingTimeInterval(10), outcome: .finished)
+        func build(_ entries: [UsageLedger.Entry]) -> AnalyticsRecord {
+            var b = builder(); b.bot(bot.id, name: bot.name); b.addLedger(entries: entries)
+            b.add(turns: [turn], bot: bot, task: nil)
+            return b.snapshot().records[0]
+        }
+        #expect(build([entry]).cost == nil)
+        entry.messageID = nil; entry.messageIDs = []
+        #expect(build([entry]).cost == 0)
+        var duplicate = entry; duplicate.id = UUID()
+        #expect(build([entry, duplicate]).cost == nil)
+    }
 }
