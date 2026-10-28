@@ -220,7 +220,8 @@ struct RunsOnCard: View {
             InspectorRow("Agent", value: settings.account.kind.displayName)
             ModelMenu(settings: settings, disabled: model.isRunning(target),
                       onModel: { model.setModel($0, for: target) },
-                      onEffort: { model.setReasoningEffort($0, for: target) }, inInspector: true)
+                      onEffort: { model.setReasoningEffort($0, for: target) },
+                      onFast: { model.setFastMode($0, for: target) }, inInspector: true)
                 .id(target)
         }
     }

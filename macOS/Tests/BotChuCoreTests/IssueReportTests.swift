@@ -287,7 +287,7 @@ private actor Filed {
         let conversation = IssueSnapshot.Conversation(settings: bot, task: nil, status: status, openTasks: 2, now: start.addingTimeInterval(151))
         #expect(conversation.lines == [
             "Conversation: Home with 2 open tasks; 1 message, 0 tool calls",
-            "Provider: Codex, an added profile; model: a custom ID (left out); effort: auto",
+            "Provider: Codex, an added profile; model: a custom ID (left out); effort: auto; fast: off",
             "State: working (coding) for 2:31; its next message continues its CLI session",
         ])
         #expect(!conversation.lines.joined().contains("Secret"))

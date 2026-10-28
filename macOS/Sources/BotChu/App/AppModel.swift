@@ -631,6 +631,13 @@ final class AppModel {
         change(target) { $0.reasoningEffort = effort }
     }
 
+    /// Turns Codex's Fast tier on or off for this conversation's next turns (#249).
+    func setFastMode(_ on: Bool, for target: ChatTarget) {
+        guard !isRunning(target), let current = runSettings(of: target) else { return }
+        if on, !GenerationOptions.offersFast(for: current.account.kind, model: current.model, catalog: nativeModels(for: current)) { return }
+        change(target) { $0.fastMode = on ? true : nil }
+    }
+
     /// Changes this Home or task conversation's account; its next message starts a session there.
     func setAccount(_ accountID: String, for target: ChatTarget) {
         guard !isRunning(target) else { return }
@@ -1710,6 +1717,7 @@ final class AppModel {
                     model: model,
                     sessionID: resume,
                     reasoningEffort: current.reasoningEffort,
+                    fast: current.fastMode == true,
                     openRouterKey: account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil,
                     sailKey: sailKey,
                     liveInput: liveInput)

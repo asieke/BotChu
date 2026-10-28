@@ -1,13 +1,15 @@
 import SwiftUI
 import BotChuCore
 
-/// Two visible controls, scoped to this conversation's (or job's) account. Neither changes its provider.
+/// The model and effort, and Codex's Fast switch where `onFast` is given, scoped to this
+/// conversation's (or job's) account. None changes its provider.
 struct ModelMenu: View {
     @Environment(AppModel.self) private var app
     let settings: any RunSettings
     let disabled: Bool
     let onModel: (String) -> Void
     let onEffort: (ReasoningEffort?) -> Void
+    var onFast: ((Bool) -> Void)? = nil
     var inInspector = false
     /// As rows of a form, such as the job editor's.
     var inForm = false
@@ -31,6 +33,13 @@ struct ModelMenu: View {
         GenerationOptions.efforts(for: settings.account.kind, model: data.effectiveID, catalog: app.modelCatalog.models(for: scope))
     }
 
+    /// Whether the Fast switch shows: a Codex model with the Fast tier (#249).
+    private var offersFast: Bool {
+        onFast != nil && GenerationOptions.offersFast(for: settings.account.kind, model: data.effectiveID,
+                                                      catalog: app.modelCatalog.models(for: scope))
+    }
+    private var fast: Bool { settings.fastMode == true }
+
     var body: some View {
         Group {
             if let tableCell {
@@ -46,7 +55,14 @@ struct ModelMenu: View {
                 }
             } else if inInspector {
                 InspectorRow("Model") { modelButton }
-                InspectorRow("Reasoning", last: true) { effortButton }
+                InspectorRow("Reasoning", last: !offersFast) { effortButton }
+                if offersFast {
+                    InspectorRow("Fast", last: true) {
+                        Toggle("Fast", isOn: Binding(get: { fast }, set: { onFast?($0) }))
+                            .toggleStyle(.switch).controlSize(.mini).labelsHidden()
+                            .help(fastHelp)
+                    }
+                }
             } else if inForm {
                 LabeledContent("Model") { modelButton }
                 LabeledContent("Reasoning") { effortButton }
@@ -54,6 +70,7 @@ struct ModelMenu: View {
                 HStack(spacing: 6) {
                     modelButton
                     effortButton
+                    if offersFast { fastButton }
                 }
             }
         }
@@ -141,6 +158,27 @@ struct ModelMenu: View {
         .popover(isPresented: $showsEffort, arrowEdge: .top) {
             EffortPicker(efforts: efforts, selected: settings.reasoningEffort, disabled: disabled, select: onEffort)
         }
+    }
+
+    /// A lightning bolt, filled and tinted while Fast is on.
+    private var fastButton: some View {
+        Button { onFast?(!fast) } label: {
+            Image(systemName: fast ? "bolt.fill" : "bolt")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(fast ? Palette.violet : Palette.secondaryText)
+                .frame(width: 12)
+        }
+        .buttonStyle(GenerationButtonStyle(active: fast))
+        .fixedSize()
+        .accessibilityLabel("Fast mode")
+        .accessibilityValue(fast ? "On" : "Off")
+        .accessibilityAddTraits(fast ? .isSelected : [])
+        .help(fastHelp)
+    }
+
+    private var fastHelp: String {
+        disabled ? "Fast can change when this turn ends"
+            : fast ? "Fast is on: quicker replies that use more of the allowance" : "Turn on Fast: quicker replies that use more of the allowance"
     }
 
     private var chevron: some View {
