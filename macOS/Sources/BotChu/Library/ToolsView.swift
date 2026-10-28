@@ -39,7 +39,7 @@ struct ToolRow: Identifiable, Hashable {
     static func sshID(_ destination: SSHDestination) -> String { "ssh:" + destination.id.uuidString }
 
     /// The commands of BotChu's own helpers, which every turn has.
-    static let helpers = ["botchu-subagent", "botchu-task", "botchu-inbox", "botchu-message"]
+    static let helpers = SubagentHookInstaller.commands
 
     @MainActor static func groups(board: ToolsBoard, inventory: ToolInventory, matching query: String) -> [(title: String, rows: [ToolRow])] {
         let tools = board.policy.tools.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.map { tool in
@@ -51,7 +51,7 @@ struct ToolRow: Identifiable, Hashable {
             ToolRow(id: sshID(destination), kind: .destination(destination), name: destination.alias, title: "SSH destination",
                     status: .target(destination.target), skills: [], enabled: destination.included, blocked: false)
         }
-        let helpers = [ToolRow(id: "botchu", kind: .botchu, name: "botchu-*", title: "subagent · task · inbox · message",
+        let helpers = [ToolRow(id: "botchu", kind: .botchu, name: "botchu-*", title: "subagent · task · inbox · message · secret",
                                status: .builtIn, skills: [], enabled: true, blocked: false)]
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let matches: (ToolRow) -> Bool = { query.isEmpty || "\($0.name) \($0.title)".localizedCaseInsensitiveContains(query) }
