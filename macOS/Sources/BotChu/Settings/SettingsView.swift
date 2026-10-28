@@ -285,6 +285,8 @@ private struct GeneralSettings: View {
                 }
             }
             .help("New bots get a folder here by default.")
+            Toggle("Check on bots that stop mid-work", isOn: $settings.heartbeat)
+                .help("When a turn ends saying its work is still going and nothing is running, BotChu sends a heartbeat asking the bot to check on it: up to \(Heartbeat.maxPulses) in a row, 2, 10 and 30 minutes after.")
         }
         Section("Shared by every bot") {
             ForEach(SharedDocument.allCases) { document in

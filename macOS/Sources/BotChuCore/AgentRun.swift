@@ -38,6 +38,8 @@ public final class AgentRun: @unchecked Sendable {
     /// Whether BotChu ended the CLI because it was still running `lingerLimit` after its turn
     /// ended. It wasn't stopped: its turn ended as it said, though its exit status is a signal's.
     public private(set) var lingered = false
+    /// Whether it lingered while its background tasks still ran, so they ended unfinished with it.
+    public private(set) var endedBackgroundTasks = false
     /// Whether the CLI said its turn ended (`.finished`) and hasn't carried on since, how many
     /// background tasks it has running, which wait for its exit is the current one and how long
     /// that wait is; guarded by `lock`.
@@ -337,6 +339,7 @@ public final class AgentRun: @unchecked Sendable {
                 && self.process.isRunning
             if lingering {
                 self.lingered = true
+                self.endedBackgroundTasks = self.backgroundTasks > 0
                 self.exitWait = wait
             }
             let pid = self.remotePID

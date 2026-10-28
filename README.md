@@ -332,6 +332,17 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     the same CLI session; quitting mid-turn saves what the turn printed so far. A CLI's output is
     parsed off the main thread and reaches the window a few times a second, and each conversation
     is observed on its own, so turns running elsewhere don't slow the one shown.
+  - **Heartbeat (#261):** a turn of Home or a task that ends saying its work is still going ("the
+    tests are still running, I'll report back") while nothing runs there any more, or whose CLI
+    BotChu ended while its background tasks still ran, hears BotChu's heartbeat: a message asking it
+    to check the real state of that work and carry it on, or reply just `HEARTBEAT_OK` when nothing
+    is left (as OpenClaw's heartbeat). It goes out 2 minutes after the turn, then 10 and 30 minutes
+    after each reply that still says so, at most 3 in a row, and a Home waits while its tasks run.
+    Any other message to the conversation drops the heartbeat it waited to send. The conversation
+    shows it as a one-line note with the full message on hover; an acknowledgement shows as a note
+    instead of a reply, with no news dot nor a receipt in Home, and after the third BotChu says it
+    stopped checking in. Settings ▸ General ▸ **Check on bots that stop mid-work** turns it off.
+    The rule is `Heartbeat` in `Heartbeat.swift`, the timing `Heartbeats.swift`.
   - **Agent activity:** tool calls, of every CLI, are folded by what they are for. Consecutive
     read-only calls (reading, listing, searching, fetching, and shell commands known only to read,
     such as `cat`, `tail`, `sed -n`, `rg`, `find`, `ls` or `git status`) form one **Explored** group
