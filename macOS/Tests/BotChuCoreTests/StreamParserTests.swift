@@ -581,3 +581,14 @@ enum TokenUsageSamples {
         try results.write(toFile: path, atomically: true, encoding: .utf8)
     }
 }
+
+// Captured agy 1.4.9 on 2026-10-28 after a shell call. Its input_tokens already
+// excludes cache_read_tokens: the second step reports 2261 input and 5520 cached.
+// Final usage adds each step; total_tokens here is input + output, also excluding cache.
+extension TokenUsageSamples {
+    static let antigravityCached = [
+        #"{"event":"step_update","step_update":{"step_index":1,"step_type":"agent_response","usage":{"input_tokens":7574,"output_tokens":105,"thinking_tokens":63,"cache_read_tokens":0,"total_tokens":7679}}}"#,
+        #"{"event":"step_update","step_update":{"step_index":3,"step_type":"agent_response","usage":{"input_tokens":2261,"output_tokens":861,"thinking_tokens":855,"cache_read_tokens":5520,"total_tokens":3122}}}"#,
+        #"{"event":"result","result":{"status":"SUCCESS","usage":{"input_tokens":9835,"output_tokens":966,"thinking_tokens":918,"cache_read_tokens":5520,"total_tokens":10801}}}"#,
+    ]
+}
