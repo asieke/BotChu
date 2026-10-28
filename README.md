@@ -753,6 +753,17 @@ on that pull request's branch to continue in instead). The same command run agai
     including custom CLI profiles; the next message starts a session on that account. Other tasks
     keep their accounts. Switching CLI families resets model and effort choices. For known
     Antigravity models, effort also selects the matching model-ID suffix.
+  - **Fast (Codex):** a lightning bolt beside the effort button, and a **Fast** switch under
+    Reasoning in the **Runs on** card, turn Codex's Fast tier on or off for the shown Home or task
+    conversation (#249): quicker replies that use more of the allowance. The bolt is filled and
+    tinted while it is on. It shows for a Codex model whose profile's list gives it the Fast tier
+    (`model/list`'s `serviceTiers`), for the starters, which all have it, and for the default and
+    custom IDs, which Codex judges itself. Every Codex turn says which tier to use,
+    `-c service_tier="fast"` or `"default"` (standard), so the profile's own `service_tier` (Codex's
+    `/fast`) never decides it; a bot saved before #249 has it off. A task and a sub-agent start with
+    their bot's choice, and a scheduled job's runs use their agent's. Choosing a model without the
+    tier, or another CLI family, turns it off, and it waits until the conversation's turn ends, as
+    the other controls do.
   - **The bot's folder is the bot:** BotChu keeps each bot's settings (`bot.json`), its whole
     conversation (`thread.jsonl`, one message per line, with its index beside it,
     `thread.index.json`: see **Loading**), its tasks (`tasks/<id>/`: `task.json` with
@@ -1677,6 +1688,7 @@ on that pull request's branch to continue in instead). The same command run agai
   binary itself, and each turn can wait in Sail's Flex queue). To exercise explicit generation
   settings, prefix the command with `BOTCHU_SMOKE_EFFORT=low` and optionally
   `BOTCHU_SMOKE_MODEL=<model id>`; both settings apply to the new and resumed turns.
+  `BOTCHU_SMOKE_FAST=1` runs both Codex turns on the Fast tier.
   To test image delivery, set `BOTCHU_SMOKE_IMAGE=/absolute/path/to/fixture.png` and optionally
   `BOTCHU_SMOKE_IMAGE_EXPECT=<word visible in the image>`; both turns attach the fixture and must
   read that word as well as recall the session's code word.
@@ -1741,7 +1753,8 @@ on that pull request's branch to continue in instead). The same command run agai
   are ignored outside throwaway data runs. `BOTCHU_PROFILE="<name>|<family>|<command>"` (several
   separated by `;`, `family` one of `claude`, `codex`, `antigravity`, `muse`, `pi`) adds CLI
   profiles to the run, such as one with a long name or a command that isn't installed.
-  `BOTCHU_ACCOUNT`, `BOTCHU_MODEL` and `BOTCHU_EFFORT` set the first demo bot's generation choices;
+  `BOTCHU_ACCOUNT`, `BOTCHU_MODEL` and `BOTCHU_EFFORT` set the first demo bot's generation choices,
+  and `BOTCHU_FAST=1` turns its Fast on;
   `BOTCHU_DEFAULT_MODEL` supplies an isolated OpenRouter default. `BOTCHU_OPEN=model` or `effort`
   opens the composer's picker, and `inspector-model` or `inspector-effort` opens the sidebar's.
   `BOTCHU_INSPECTOR=activity`, `subagents`, `model`, `session` or `memory` selects a status sidebar tab;

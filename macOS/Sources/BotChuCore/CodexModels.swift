@@ -64,7 +64,10 @@ public enum CodexModelList {
                 } else {
                     efforts = GenerationOptions.efforts(for: .codex, model: id)
                 }
-                models.append(ModelOption(id: id, name: name, efforts: efforts))
+                // `priority` is the Fast tier's ID; older Codex lists it as an extra speed tier, `fast`.
+                let tiers = (row["serviceTiers"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
+                    + (row["additionalSpeedTiers"] as? [String] ?? [])
+                models.append(ModelOption(id: id, name: name, efforts: efforts, fast: tiers.contains("priority") || tiers.contains("fast")))
             }
         }
         guard !models.isEmpty else { throw CodexModelFailure.unrecognized }
@@ -259,12 +262,14 @@ public enum NativeCatalogFile {
         var name: String
         /// As the CLI names them, so an effort this BotChu doesn't know is skipped, not fatal.
         var efforts: [String]
+        /// Whether it has the Fast tier; nil in lists saved before #249, which offer it until read again.
+        var fast: Bool?
     }
 
     public static func encode(_ catalogs: [String: NativeCatalog]) -> Data? {
         let file = File(version: version, catalogs: catalogs.sorted { $0.key < $1.key }.map { key, catalog in
             Catalog(key: key, checkedAt: catalog.checkedAt,
-                    models: catalog.models.map { Model(id: $0.id, name: $0.name, efforts: $0.efforts.map(\.rawValue)) })
+                    models: catalog.models.map { Model(id: $0.id, name: $0.name, efforts: $0.efforts.map(\.rawValue), fast: $0.fast) })
         })
         return try? JSONEncoder().encode(file)
     }
@@ -274,7 +279,7 @@ public enum NativeCatalogFile {
         guard let file = try? JSONDecoder().decode(File.self, from: data), file.version == version else { return [:] }
         return Dictionary(file.catalogs.compactMap { catalog -> (String, NativeCatalog)? in
             let models = catalog.models.filter { !$0.id.isEmpty }.map {
-                ModelOption(id: $0.id, name: $0.name, efforts: $0.efforts.compactMap(ReasoningEffort.init))
+                ModelOption(id: $0.id, name: $0.name, efforts: $0.efforts.compactMap(ReasoningEffort.init), fast: $0.fast ?? true)
             }
             return models.isEmpty ? nil : (catalog.key, NativeCatalog(models: models, checkedAt: catalog.checkedAt))
         }) { $1 }

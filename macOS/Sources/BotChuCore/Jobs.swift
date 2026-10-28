@@ -841,7 +841,7 @@ public enum JobLaunch {
         return CommandBuilder.invocation(kind: account.kind, prompt: prompt,
                                          model: GenerationOptions.effectiveModel(agent.model, kind: account.kind, openRouterDefault: openRouterDefault,
                                                                                  sailDefault: sailDefault),
-                                         sessionID: nil, reasoningEffort: agent.reasoningEffort,
+                                         sessionID: nil, reasoningEffort: agent.reasoningEffort, fast: agent.fastMode == true,
                                          openRouterKey: account.kind == .pi ? openRouterKey : nil,
                                          sailKey: account.kind == .sail ? sailKey : nil, liveInput: false)
     }

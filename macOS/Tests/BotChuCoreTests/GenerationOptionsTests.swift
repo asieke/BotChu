@@ -24,6 +24,26 @@ import Testing
         }
     }
 
+    /// Codex always gets a tier (#249): Fast, or its standard one, so a profile's own `service_tier`
+    /// never decides it; no other CLI gets one.
+    @Test(arguments: AgentKind.allCases)
+    func fastIsPassedOnNewAndResumedCodexTurns(kind: AgentKind) {
+        for session in [nil, "saved-session"] {
+            for fast in [false, true] {
+                let args = CommandBuilder.invocation(kind: kind, prompt: "hello", model: "custom-model", sessionID: session,
+                                                     reasoningEffort: .high, fast: fast).arguments
+                let tiers = args.filter { $0.hasPrefix("service_tier=") }
+                if kind == .codex {
+                    #expect(tiers == [fast ? #"service_tier="fast""# : #"service_tier="default""#])
+                    if let index = args.firstIndex(of: tiers[0]) { #expect(args[index - 1] == "-c") }
+                    #expect(args.last == "hello")
+                } else {
+                    #expect(tiers.isEmpty)
+                }
+            }
+        }
+    }
+
     @Test(arguments: [ReasoningEffort.low, .medium, .high])
     func antigravityModelVariantMatchesEffort(effort: ReasoningEffort) {
         for session in [nil, "saved-session"] {

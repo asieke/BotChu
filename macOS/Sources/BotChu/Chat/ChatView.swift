@@ -153,7 +153,8 @@ struct ChatView: View {
                         if !bot.isRemoteQueue {
                         ModelMenu(settings: current, disabled: running,
                                   onModel: { model.setModel($0, for: target) },
-                                  onEffort: { model.setReasoningEffort($0, for: target) })
+                                  onEffort: { model.setReasoningEffort($0, for: target) },
+                                  onFast: { model.setFastMode($0, for: target) })
                             .layoutPriority(1)
                             .id(target)
                         Spacer(minLength: 0)

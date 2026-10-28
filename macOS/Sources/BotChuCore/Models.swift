@@ -9,6 +9,8 @@ public protocol RunSettings {
     var model: String { get set }
     /// Nil leaves reasoning effort to the CLI.
     var reasoningEffort: ReasoningEffort? { get set }
+    /// Codex's Fast tier (#249): faster turns that use more of the allowance. Nil is off.
+    var fastMode: Bool? { get set }
     /// The CLI session the conversation continues, and the account it belongs to.
     var sessionID: String? { get set }
     var sessionAccountID: String? { get set }
@@ -67,6 +69,8 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var model: String
     /// Nil leaves reasoning effort to the CLI. Optional for compatibility with saved bots.
     public var reasoningEffort: ReasoningEffort?
+    /// Codex's Fast tier; nil is off, as in bots saved before it (#249).
+    public var fastMode: Bool?
     /// Absolute path of the bot's workspace folder.
     public var workspace: String
     /// How the bot looks, in the owner's words: what its pet is drawn from. Optional for

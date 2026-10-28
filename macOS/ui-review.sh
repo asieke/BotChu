@@ -221,6 +221,8 @@ bots = json.loads(path.read_text())
 for env, key in [('BOTCHU_ACCOUNT', 'accountID'), ('BOTCHU_MODEL', 'model'), ('BOTCHU_EFFORT', 'reasoningEffort')]:
     if env in os.environ:
         bots[0][key] = os.environ[env]
+if os.environ.get('BOTCHU_FAST') == '1':
+    bots[0]['fastMode'] = True
 path.write_text(json.dumps(bots))
 PY
 "$dir/build.sh" "$data" >/dev/null

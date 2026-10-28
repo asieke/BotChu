@@ -95,7 +95,7 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
     let fullPrompt = BotContext.prompt(for: prompt, preamble: preamble)
     var invocation = CommandBuilder.invocation(
         kind: bot.account.kind, prompt: fullPrompt, model: bot.model, sessionID: resume, reasoningEffort: bot.reasoningEffort,
-        openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], sailKey: ProcessInfo.processInfo.environment[Sail.keyVariable],
+        fast: bot.fastMode == true, openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], sailKey: ProcessInfo.processInfo.environment[Sail.keyVariable],
         liveInput: CommandBuilder.takesInputMidTurn(kind))
     // A stand-in for Sail's API, when one is named; the app never sets it.
     if kind == .sail, let base = ProcessInfo.processInfo.environment[Sail.baseVariable] { invocation.environment[Sail.baseVariable] = base }
@@ -312,6 +312,7 @@ Task {
         }
         bot.selectModel(ProcessInfo.processInfo.environment["BOTCHU_SMOKE_MODEL"] ?? "")
         bot.reasoningEffort = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_EFFORT"].flatMap(ReasoningEffort.init(rawValue:))
+        if ProcessInfo.processInfo.environment["BOTCHU_SMOKE_FAST"] == "1" { bot.fastMode = true }
         try? Workspace.prepare(bot: bot, sharedMemoryPath: root.appendingPathComponent("MEMORY.md").path)
         print("== \(account.name)")
         let started = Date()

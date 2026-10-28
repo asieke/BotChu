@@ -558,7 +558,7 @@ final class SubagentRuntime {
             var invocation = CommandBuilder.invocation(kind: account.kind, prompt: prompt,
                 model: GenerationOptions.effectiveModel(record.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
                                                         sailDefault: model.settings.sailModel),
-                sessionID: nil, reasoningEffort: record.reasoningEffort, openRouterKey: key, sailKey: sailKey)
+                sessionID: nil, reasoningEffort: record.reasoningEffort, fast: record.fastMode == true, openRouterKey: key, sailKey: sailKey)
             invocation.environment.merge(context.environment) { _, new in new }
             let command = model.settings.host(record.hostID)?.command(for: account) ?? model.settings.command(for: account)
             let runner = machine.isRemote

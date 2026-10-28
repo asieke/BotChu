@@ -336,7 +336,8 @@ public struct IssueSnapshot: Equatable, Sendable {
                 : GenerationOptions.models(for: kind).contains { $0.id == model } ? model : "a custom ID (left out)"
 
             lines = ["Conversation: " + ([what] + counts).joined(separator: "; "),
-                     "Provider: \(family); model: \(modelText); effort: \(settings.reasoningEffort?.rawValue ?? "auto")",
+                     "Provider: \(family); model: \(modelText); effort: \(settings.reasoningEffort?.rawValue ?? "auto")"
+                        + (kind == .codex ? "; fast: \(settings.fastMode == true ? "on" : "off")" : ""),
                      "State: " + (status.map { Self.state($0, now: now) } ?? "unknown")]
         }
 
