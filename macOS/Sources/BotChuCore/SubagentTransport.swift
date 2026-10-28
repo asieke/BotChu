@@ -251,7 +251,7 @@ if operation == 'prepare':
         folder = root / part
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(folder, 0o700)
-    for command in ['botchu-subagent', 'botchu-task', 'botchu-inbox']:
+    for command in ['botchu-subagent', 'botchu-task', 'botchu-inbox', 'botchu-secret']:
         helper = root / 'bin' / command
         atomic(helper, base64.b64decode(parameters[0]))
         os.chmod(helper, 0o755)
