@@ -30,6 +30,8 @@ public enum BotActivity: String, CaseIterable, Codable, Sendable {
         switch event {
         case .textDelta, .text, .toolFinished: .thinking
         case let .toolStarted(_, name, input, _): classify(toolName: name, input: input)
+        // A CLI waiting on its background tasks after its turn shows what they do (#255).
+        case .backgroundTasks(let tasks): tasks.isEmpty ? nil : mostTelling(Set(tasks))
         case .session, .model, .textEnd, .failed, .finished, .inputTaken, .connectors: nil
         }
     }
@@ -59,11 +61,12 @@ public enum BotActivity: String, CaseIterable, Codable, Sendable {
         let parts = command.components(separatedBy: separators)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty && !$0.hasPrefix("cd ") && $0 != "cd" }
-        let found = Set(parts.map(classifyOne))
-        for activity in [BotActivity.testing, .coding, .browsing, .working, .researching] where found.contains(activity) {
-            return activity
-        }
-        return .working
+        return mostTelling(Set(parts.map(classifyOne)))
+    }
+
+    /// The most telling of several things being done at once.
+    static func mostTelling(_ found: Set<BotActivity>) -> BotActivity {
+        [BotActivity.testing, .coding, .browsing, .working, .researching].first(where: found.contains) ?? .working
     }
 
     static let readCommands: Set<String> = [

@@ -324,7 +324,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     A turn can be stopped: its CLI is interrupted, terminated 3 seconds later and killed, with
     what it started, 5 seconds after that. A CLI still running 30 seconds after it said its turn
     ended (Antigravity once printed its result and never exited, #145) is terminated, then killed
-    5 seconds later; the turn stands as it said, with a note in its conversation. The
+    5 seconds later; the turn stands as it said, with a note in its conversation. One whose
+    background tasks still run (Claude Code waiting on a test run it started, #255) is left to wait
+    for them, up to 2 hours, and its conversation stays running, showing what they do, until it
+    carries on with their results. The
     thread and the CLI's session id are saved, so the next message (also after a relaunch) resumes
     the same CLI session; quitting mid-turn saves what the turn printed so far. A CLI's output is
     parsed off the main thread and reaches the window a few times a second, and each conversation
@@ -1443,7 +1446,8 @@ on that pull request's branch to continue in instead). The same command run agai
     chosen model's estimate; reports: their titles (typed, or from the first line), who sees them, app state, the size of their window's screenshot, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, a CLI's end (#145: one still
     running after it said its turn ended is ended with its turn standing, one that takes input only
-    once its input is closed, one that carries on is left alone, and Stop kills one that ignores
+    once its input is closed, one that carries on is left alone, one waiting for its background
+    tasks is left until they end or 2 hours pass (#255), and Stop kills one that ignores
     SIGINT and SIGTERM, with a process it started), thread summaries, the Markdown cache
     within its budget (ten 128 KB replies written in revisions, then memory pressure), replies being
     written parsed off the main thread (100 rapid deltas coalesced, the worker's limit shared, a slow
