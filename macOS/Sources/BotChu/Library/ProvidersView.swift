@@ -354,7 +354,7 @@ private struct ProviderProblemDetails: View {
                     if status == .missingCommand {
                         Button("Change Command…", action: changeCommand).buttonStyle(.borderedProminent)
                     } else if request.usesLegacyOpenRouterKey {
-                        // Pi's usage is the shared OpenRouter key's, set in Settings (#232).
+                        // Profiles saved before provider support retain their legacy OpenRouter key.
                         Button("Open Settings") {
                             dismiss()
                             model.openSettings(.openRouter)
@@ -690,6 +690,18 @@ private struct ProviderInspector: View {
                         }
                         .buttonStyle(InspectorButtonStyle(fill: true))
                     }
+                    if account.kind == .pi {
+                        InspectorSection("Authentication", preferenceKey: "provider.authentication") {
+                            InspectorCard(padded: true) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(account.configurationDirectory ?? "Pi command’s own config folder")
+                                        .font(.caption.monospaced()).textSelection(.enabled)
+                                    Button("Copy Pi Login Command") { copy(account.loginCommand(command: request.command)) }
+                                        .help("Run in Terminal, then use /login in Pi")
+                                }
+                            }
+                        }
+                    }
                     if model.settings.customAccounts.contains(where: { $0.id == account.id }) {
                         Button(role: .destructive, action: remove) { Text("Remove Profile…").foregroundStyle(GitHubColors.danger) }
                             .buttonStyle(InspectorButtonStyle(fill: true))
@@ -739,6 +751,7 @@ struct AddProviderSheet: View {
     @State private var command = ""
     @State private var testing = false
     @State private var found: Bool?
+    @State private var profileID = "custom-" + UUID().uuidString.lowercased()
     private var valid: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !command.contains(where: \.isNewline)
@@ -748,13 +761,15 @@ struct AddProviderSheet: View {
             Text("New CLI Profile").font(.headline).padding(20)
             Form {
                 TextField("Profile name", text: $name, prompt: Text("Claude Research"))
-                Picker("CLI family", selection: $kind) { ForEach(AgentKind.profileFamilies, id: \.self) { ProviderMenuLabel(title: $0.displayName, kind: $0).tag($0) } }
+                Picker("Runtime", selection: $kind) { ForEach(AgentKind.profileFamilies, id: \.self) { ProviderMenuLabel(title: $0.displayName, kind: $0).tag($0) } }
                 TextField("Command", text: $command, prompt: Text("~/.local/bin/claude-research"))
                     .font(.system(.body, design: .monospaced))
                     .onChange(of: command) { found = nil }
-                if RuntimeAdapters.adapter(for: kind).offersProviders {
-                    Text("This profile uses Pi’s own sign-in and environment credentials. Its providers and models appear after it is added.")
-                        .font(.caption).foregroundStyle(.secondary)
+                if kind == .pi {
+                    LabeledContent("Authentication", value: "Pi profile login")
+                    LabeledContent("Config folder") {
+                        Text(piDirectory).font(.caption.monospaced()).textSelection(.enabled)
+                    }
                 }
                 HStack {
                     Button(testing ? "Testing…" : "Test Command") {
@@ -779,11 +794,14 @@ struct AddProviderSheet: View {
             }.padding(20)
         }.frame(width: 540, height: 410).background(Color(nsColor: .windowBackgroundColor))
     }
+    private var piDirectory: String { "~/.pi/botchu-profiles/" + profileID }
+
     private func save() {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let command = command.trimmingCharacters(in: .whitespacesAndNewlines)
         let symbol = model.settings.accounts.first { $0.kind == kind }?.symbol ?? "terminal"
-        model.settings.customAccounts.append(Account(id: "custom-" + UUID().uuidString.lowercased(), name: name, kind: kind, defaultCommand: command, symbol: symbol))
+        model.settings.customAccounts.append(Account(id: profileID, name: name, kind: kind, defaultCommand: command, symbol: symbol,
+                                                     configurationDirectory: kind == .pi ? piDirectory : nil))
         dismiss()
     }
 }

@@ -864,8 +864,8 @@ extension AnalyticsTests {
         #expect(rows[2].cost == 0 && rows[2].costProvenance == .estimated)
         #expect(rows[3].cost == nil && rows[3].costProvenance == .unpriced)
         #expect(rows[4].cost == 0 && rows[4].costProvenance == .actual && rows[4].tokens.total == nil)
-        #expect(ModelPricing.price(ModelUsage(model: "anthropic/claude-sonnet-4.5", uncachedInput: 100), provider: .pi, backend: "private-backend") == nil)
-        #expect(ModelPricing.price(ModelUsage(model: "claude-sonnet-4-5", uncachedInput: 100), provider: .pi, backend: "anthropic") != nil)
+        #expect(ModelPricing.price(ModelUsage(model: "anthropic/claude-sonnet-4.5", uncachedInput: 100), provider: .pi, providerID: "private-backend") == nil)
+        #expect(ModelPricing.price(ModelUsage(model: "claude-sonnet-4-5", uncachedInput: 100), provider: .pi, providerID: "anthropic") != nil)
         #expect(!ModelPricing.catalog.isEmpty && ModelPricing.catalog.allSatisfy { !$0.model.isEmpty && !$0.source.isEmpty })
     }
 }

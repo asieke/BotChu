@@ -1080,13 +1080,15 @@ private struct SubagentRunFacts: View {
 
     var body: some View {
         let label = ModelPickerData(kind: run.account.kind, model: run.model, openRouterDefault: model.settings.openRouterModel,
-                                    sailDefault: model.settings.sailModel, catalog: model.modelCatalog.models(for: run.account.kind),
-                                    resolved: run.resolvedModel)
+                                    sailDefault: model.settings.sailModel, catalog: model.catalogModels(for: run), native: model.nativeModels(for: run),
+                                    resolved: run.resolvedModel, providerID: run.providerID)
         SubagentDisclosure("Run", expanded: $expanded) {
             InspectorCard {
                 SubagentFact("Account") {
                     ProviderLabel(title: run.account.name, kind: run.account.kind, size: 12)
                 }
+                SubagentFact("Runtime") { Text(run.account.kind.displayName) }
+                if let provider = run.modelProvider { SubagentFact("Provider") { Text(provider.name) } }
                 SubagentFact("Model") { Text(label.title).help(label.detail) }
                 SubagentFact("Workspace") {
                     Text(run.workspaceMode == .sharedCallerWorkspace ? "Shared workspace" : "\(run.targetBotName)'s workspace")

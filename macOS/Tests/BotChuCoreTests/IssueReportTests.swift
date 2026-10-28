@@ -311,11 +311,11 @@ private actor Filed {
         #expect(IssueSnapshot.Conversation(settings: continuing, task: continuing, status: starting).lines.first
                 == "Conversation: task on this Mac, continuing a pull request; 0 messages, 0 tool calls")
         #expect(IssueSnapshot.Conversation(settings: continuing, task: continuing, status: starting).lines[1]
-                == "Provider: Pi (OpenRouter), a built-in account; model: the account's default; effort: auto")
+                == "Provider: Pi, a built-in account; model: the account's default; effort: auto")
         let idle = BotStatus.make(task: brief, messages: [], run: nil)
         #expect(IssueSnapshot.Conversation(settings: brief, task: brief, status: idle).lines
                 == ["Conversation: task on this Mac, new work from a brief; 0 messages, 0 tool calls",
-                    "Provider: Pi (OpenRouter), a built-in account; model: the account's default; effort: auto",
+                    "Provider: Pi, a built-in account; model: the account's default; effort: auto",
                     "State: idle; its next message starts a new CLI session (account changed)"])
         #expect(IssueSnapshot.Conversation.state(preparing, now: Date()).hasPrefix("preparing its turn for 0:0"))
         #expect(IssueSnapshot.Conversation.state(starting, now: Date()).hasPrefix("turn started, no output yet for 0:0"))

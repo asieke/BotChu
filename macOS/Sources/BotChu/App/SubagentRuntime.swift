@@ -29,6 +29,7 @@ final class SubagentRuntime {
     /// when a turn ends without ever delegating (and therefore without changing any run).
     private var contexts: [UUID: Caller] = [:]
     @ObservationIgnored private var runners: [UUID: AgentRun] = [:]
+    @ObservationIgnored private var usageCaptures: [UUID: (capture: UsageLedger.Capture, home: BotHome)] = [:]
     @ObservationIgnored private var preparations: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var watchers: [UUID: MailboxTasks] = [:]
     @ObservationIgnored private var deliveries: [UUID: SubagentTransport] = [:]
@@ -710,6 +711,15 @@ final class SubagentRuntime {
 
     private func launch(_ id: UUID, targetBot: Bot, caller: Caller) async {
         guard var record = run(id), record.phase.isActive, let model else { return }
+        let chosenModel = record.effectiveModel(openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel)
+        if let owner = model.bot(record.rootBotID) {
+            usageCaptures[id] = (UsageLedger.Capture(.init(startedAt: record.startedAt ?? record.createdAt, kind: .subagent,
+                botID: record.targetBotID, taskID: record.rootTaskID, subagentRunID: id,
+                accountID: record.accountID, provider: record.account.kind, providerID: record.resolvedProvider,
+                remote: record.hostID != nil, usesLegacyOpenRouterKey: record.usesLegacyOpenRouterKey(remote: record.hostID != nil),
+                model: chosenModel.isEmpty ? nil : chosenModel, modelSource: chosenModel.isEmpty ? .unreported : .requested,
+                outcome: .failed)), BotHome(workspace: owner.persistencePath))
+        }
         do {
             let machine: Machine
             if let hostID = record.hostID {
@@ -721,12 +731,13 @@ final class SubagentRuntime {
                                                  machine: machine, hostID: record.hostID)
             guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
             let account = record.account
+            await model.preparePiModels(for: record)
+            guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
             let key = record.usesLegacyOpenRouterKey(remote: machine.isRemote) ? model.openRouterKey() : nil
             let command = record.runtimeAdapter.command(local: model.settings.command(for: account),
                 host: model.settings.host(record.hostID)?.command(for: account), remote: machine.isRemote)
-            let chosenModel = record.effectiveModel(openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel)
             let readinessProblem = await record.runtimeAdapter.readiness(command: command, provider: record.provider, model: chosenModel,
-                machine: machine, folder: record.workingDirectory, environment: key.map { ["OPENROUTER_API_KEY": $0] } ?? [:])
+                machine: machine, folder: record.workingDirectory, environment: machine.isRemote ? [:] : account.runtimeEnvironment.merging(key.map { ["OPENROUTER_API_KEY": $0] } ?? [:]) { _, value in value })
             guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
             if let problem = readinessProblem { throw DelegationFailure(problem) }
             let sailKey = account.kind == .sail && !machine.isRemote ? Keychain.get(Keychain.sailAccount) : nil
@@ -735,6 +746,7 @@ final class SubagentRuntime {
             }
             record.phase = .running
             record.startedAt = Date()
+            usageCaptures[id]?.capture.started(at: record.startedAt!)
             try await archive.save(snapshot(record, messages: live(id).messages))
             // Stopped while its start was being saved: its end is saved instead.
             guard run(id)?.phase.isActive == true, !finalizing.contains(id), !Task.isCancelled else { endCaller(context.id); return }
@@ -750,7 +762,7 @@ final class SubagentRuntime {
                 instructions: snapshot.instructions, team: snapshot.team, availableBots: roster, skills: snapshot.skills,
                 tools: machine.isRemote ? nil : model.tools.instructions())
             var invocation = record.invocation(prompt: prompt, model: chosenModel, sessionID: nil, remote: machine.isRemote,
-                openRouterKey: key, sailKey: sailKey)
+                openRouterKey: key, sailKey: sailKey, catalog: model.nativeModels(for: record))
             invocation.environment.merge(context.environment) { _, new in new }
             invocation.toolProfile = prepared.toolProfile
             let runner = machine.isRemote
@@ -774,6 +786,7 @@ final class SubagentRuntime {
                 var reported: String?
                 live.update { messages in
                     for event in events {
+                        self.usageCaptures[id]?.capture.record(event)
                         switch event {
                         case .session(let session):
                             sessions.append(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: session))
@@ -788,7 +801,7 @@ final class SubagentRuntime {
                     }
                 }
                 if state != live.state { live.state = state }
-                for session in sessions { self.modify(id) { $0.sessionID = session } }
+                for session in sessions { self.modify(id) { $0.sessionID = session; $0.sessionAccountID = account.id; $0.sessionScope = record.executionScope } }
                 if let reported, self.run(id)?.resolvedModel != reported {
                     self.modify(id) { $0.recordReportedModel(reported, requested: $0.model) }
                 }
@@ -914,6 +927,9 @@ final class SubagentRuntime {
     /// through the app's storage, quitting waits for it there (`AppModel.stopAll`).
     func stopAll() {
         for runner in Array(runners.values) { runner.flushOutput() }
+        for pending in usageCaptures.values { pending.capture.finish(.stopped, in: pending.home, queue: archive.storage) }
+        // Keep finished capture identities until each terminal callback consumes them; a run
+        // cancelled before launch needs a fallback, but a flushed run must never get it twice.
         for record in all where record.phase.isActive { stop(record.id) }
         for id in Array(contexts.keys) { endCaller(id) }
         archive.flush(timeout: archive.storage === model?.storage ? 0 : model?.quitTimeout ?? AppModel.saveTimeout)
@@ -938,6 +954,20 @@ final class SubagentRuntime {
         }
         pendingFinishes[id] = nil
         finalizing.insert(id)
+        if let pending = usageCaptures.removeValue(forKey: id) {
+            pending.capture.finish(phase == .completed ? .finished : phase == .stopped ? .stopped : .failed,
+                                   in: pending.home, queue: archive.storage)
+        } else if !restored.contains(id), let owner = model?.bot(record.rootBotID) {
+            // Reserved runs can be stopped while admission is being saved, before launch creates
+            // its capture. Their frozen profile still owns one explicitly unmeasured outcome.
+            UsageLedger.append(.init(startedAt: record.startedAt ?? record.createdAt, kind: .subagent,
+                botID: record.targetBotID, taskID: record.rootTaskID, subagentRunID: id,
+                accountID: record.accountID, provider: record.account.kind, providerID: record.resolvedProvider,
+                remote: record.hostID != nil, usesLegacyOpenRouterKey: record.usesLegacyOpenRouterKey(remote: record.hostID != nil),
+                model: record.model.isEmpty ? nil : record.model, modelSource: record.model.isEmpty ? .unreported : .requested,
+                outcome: phase == .stopped ? .stopped : phase == .completed ? .finished : .failed),
+                in: BotHome(workspace: owner.persistencePath), queue: archive.storage)
+        }
         record.phase = phase
         record.finishedAt = Date()
         record.errorMessage = error

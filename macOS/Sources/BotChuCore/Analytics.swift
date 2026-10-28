@@ -610,7 +610,7 @@ public struct AnalyticsBuilder {
         let unpriced = Set(records.filter { $0.costProvenance == .unpriced }.flatMap { record in
             record.models.filter { model in
                 guard let provider = record.provider else { return true }
-                return ModelPricing.price(model, provider: provider, backend: record.providerID ?? (provider == .pi ? "unknown" : nil)) == nil
+                return ModelPricing.price(model, provider: provider, providerID: record.providerID ?? (provider == .pi ? "unknown" : nil)) == nil
             }.map { $0.model.isEmpty ? "Unknown" : $0.model }
         }).sorted()
         return AnalyticsSnapshot(generatedAt: now, timeZone: zone.identifier, today: day(now), bots: bots, accounts: accounts,
@@ -846,7 +846,7 @@ public struct AnalyticsBuilder {
             records[index].costProvenance = .actual
         } else if let value {
             let prices = value.models.map { ModelPricing.price($0, provider: entry.provider,
-                                                               backend: entry.providerID ?? (entry.provider == .pi ? "unknown" : nil)) }
+                                                               providerID: entry.providerID ?? (entry.provider == .pi ? "unknown" : nil)) }
             if !uncertainDeltas.contains(entry.id), !prices.isEmpty, prices.allSatisfy({ $0 != nil }) {
                 let total = prices.compactMap { $0?.usd }.reduce(0, +)
                 if total.isFinite { records[index].cost = total; records[index].costProvenance = .estimated }

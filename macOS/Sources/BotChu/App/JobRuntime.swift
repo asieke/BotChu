@@ -47,6 +47,7 @@ final class JobRuntime {
     /// Finished runs' transcripts until their last save is written, so their history shows them.
     @ObservationIgnored private var saving: [UUID: [ChatMessage]] = [:]
     @ObservationIgnored private var runners: [UUID: AgentRun] = [:]
+    @ObservationIgnored private var usageCaptures: [UUID: (capture: UsageLedger.Capture, home: BotHome)] = [:]
     /// Runs whose helpers and mailbox are being prepared, before their CLI starts.
     @ObservationIgnored private var preparing: [UUID: Task<Void, Never>] = [:]
     /// Runs whose report is being saved in the Inbox, and those whose report couldn't be, as noted.
@@ -260,6 +261,8 @@ final class JobRuntime {
             }
             runner.stop()
         }
+        for pending in usageCaptures.values { pending.capture.finish(.stopped, in: pending.home, queue: model?.storage ?? .shared) }
+        usageCaptures.removeAll()
     }
 
     // MARK: Running
@@ -305,21 +308,28 @@ final class JobRuntime {
         let account = agent.account
         let startedAt = launch.run.startedAt ?? Date()
         let task = JobTasks.task(for: agent, job: job, run: launch.run, startedAt: startedAt)
+        let modelChoice = agent.effectiveModel(openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel)
+        let promptMessage = ChatMessage(role: .user, text: job.prompt)
+        usageCaptures[runID] = (UsageLedger.Capture(.init(startedAt: startedAt, kind: .job, botID: bot.id,
+            taskID: task.id, jobRunID: runID, messageID: promptMessage.id, accountID: account.id, provider: account.kind,
+            providerID: agent.resolvedProvider, remote: false, usesLegacyOpenRouterKey: agent.usesLegacyOpenRouterKey(remote: false),
+            model: modelChoice.isEmpty ? nil : modelChoice, modelSource: modelChoice.isEmpty ? .unreported : .requested,
+            outcome: .failed)), BotHome(workspace: bot.persistencePath))
         guard let target = model.startJobTask(task, for: bot.id) else {
             return finish(runID, outcome: .failed, summary: "The agent is gone, so the run didn't start.")
         }
         targets[runID] = target
-        let modelChoice = agent.effectiveModel(openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel)
         engine.amend(runID) {
             $0.taskID = task.id
             $0.accountID = account.id
             $0.accountName = account.name
+            $0.providerID = agent.resolvedProvider
             $0.model = modelChoice
             $0.reasoningEffort = agent.reasoningEffort
         }
         let conversation = model.conversation(target)
         conversation.append(ChatMessage(role: .note, text: JobLaunch.startNote(account: account, agent: bot.name, unavailable: unavailable)))
-        conversation.append(ChatMessage(role: .user, text: job.prompt))
+        conversation.append(promptMessage)
         conversation.run = RunState(startedAt: startedAt)
         model.saveThread(target)
         refresh()
@@ -333,9 +343,10 @@ final class JobRuntime {
         preparing[runID] = Task { [weak self] in
             let caller: SubagentRuntime.Caller
             do {
+                await model.preparePiModels(for: agent)
                 if let problem = await agent.runtimeAdapter.readiness(command: model.settings.command(for: account), provider: agent.provider,
                     model: modelChoice, machine: .thisMac, folder: bot.workspace,
-                    environment: key.map { ["OPENROUTER_API_KEY": $0] } ?? [:]) { throw ModelListFailure(problem) }
+                    environment: account.runtimeEnvironment.merging(key.map { ["OPENROUTER_API_KEY": $0] } ?? [:]) { _, value in value }) { throw ModelListFailure(problem) }
                 caller = try await model.delegation.prepareCaller(target: target, directory: bot.workspace, machine: .thisMac, hostID: nil)
             } catch {
                 guard let self, !Task.isCancelled, self.preparing.removeValue(forKey: runID) != nil else { return }
@@ -357,7 +368,7 @@ final class JobRuntime {
                     availableBots: model.delegation.roster, tools: model.tools.instructions(), locale: .current)
                 let prompt = BotContext.prompt(for: job.prompt, preamble: preamble)
                 var invocation = JobLaunch.invocation(for: agent, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key,
-                                                      sailDefault: model.settings.sailModel, sailKey: sailKey)
+                                                      sailDefault: model.settings.sailModel, sailKey: sailKey, catalog: model.nativeModels(for: agent))
                 invocation.environment.merge(caller.environment) { _, new in new }
                 invocation.toolProfile = prepared.toolProfile
                 self.run(launch, prompt: prompt, invocation: invocation, caller: caller, account: account, agent: agent, target: target)
@@ -397,6 +408,7 @@ final class JobRuntime {
             conversation.stream { messages in
                 for event in events {
                     outcome.record(event)
+                    self.usageCaptures[runID]?.capture.record(event)
                     switch event {
                     case .session(let id): session = CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: id)
                     case .model(let id): reported = id
@@ -423,8 +435,8 @@ final class JobRuntime {
                 }
                 self.refresh()
                 // The task resumes the run's session when the owner writes in it.
-                if let session { model.recordSession(session, accountID: account.id, for: target) }
-                if let reported { model.recordReportedModel(reported, requested: agent.model, accountID: account.id, for: target) }
+                if let session { model.recordSession(session, accountID: account.id, scope: agent.executionScope, for: target) }
+                if let reported { model.recordReportedModel(reported, requested: agent.model, accountID: account.id, scope: agent.executionScope, for: target) }
             }
             // A crash loses at most a few seconds of the transcript.
             if Date().timeIntervalSince(lastSave) > 5 {
@@ -496,6 +508,10 @@ final class JobRuntime {
     /// Records how a run ended, saves its transcript (its task's conversation, which is idle again),
     /// delivers its `report` to the Inbox, tells Home when it should hear, and starts what waited for it.
     private func finish(_ runID: UUID, outcome: JobOutcome, quiet: Bool = false, summary: String, report: String? = nil) {
+        if let pending = usageCaptures.removeValue(forKey: runID) {
+            pending.capture.finish(outcome == .succeeded ? .finished : outcome == .stopped || outcome == .interrupted ? .stopped : .failed,
+                                   in: pending.home, queue: model?.storage ?? .shared)
+        }
         // Its task is idle before the engine looks for what to start next, so a run waiting for the
         // agent isn't held up by it.
         let target = targets.removeValue(forKey: runID)
