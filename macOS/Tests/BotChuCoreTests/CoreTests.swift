@@ -37,11 +37,12 @@ import Testing
 
     @Test func codexResumesItsThread() {
         let first = CommandBuilder.invocation(kind: .codex, prompt: "hi", model: " ", sessionID: nil)
-        #expect(first.arguments == ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "hi"])
+        #expect(first.arguments == ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox",
+                                    "-c", #"service_tier="default""#, "hi"])
         #expect(first.sessionID == nil)
         let next = CommandBuilder.invocation(kind: .codex, prompt: "again", model: "gpt-5.5", sessionID: "t1")
         #expect(next.arguments == ["exec", "resume", "t1", "--json", "--skip-git-repo-check",
-                                   "--dangerously-bypass-approvals-and-sandbox", "-m", "gpt-5.5", "again"])
+                                   "--dangerously-bypass-approvals-and-sandbox", "-m", "gpt-5.5", "-c", #"service_tier="default""#, "again"])
     }
 
     @Test func antigravityContinuesItsConversation() {

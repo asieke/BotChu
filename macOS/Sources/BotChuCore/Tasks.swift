@@ -94,6 +94,7 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var accountProfile: Account?
     public var model: String
     public var reasoningEffort: ReasoningEffort?
+    public var fastMode: Bool?
     public var sessionID: String?
     public var sessionAccountID: String?
     public var reportedModel: ReportedModel?
@@ -145,7 +146,7 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
         self.pullRequest = pullRequest ?? (work?.isPullRequest == true ? work?.number : nil)
     }
 
-    /// A new task for `bot`, on the bot's account, model and effort, in the repository's checkout on
+    /// A new task for `bot`, on the bot's account, model, effort and speed, in the repository's checkout on
     /// this Mac or a host.
     public init(for bot: Bot, repo: String, checkout: String, work: Work?, brief: String, branch: String = "",
                 title: String? = nil, origin: Origin = .owner, host: SSHHost? = nil, review: Review? = nil) {
@@ -153,6 +154,7 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
                   accountID: bot.accountID, model: bot.model, reasoningEffort: bot.reasoningEffort,
                   hostID: host?.id, hostName: host?.nickname, review: review)
         self.accountProfile = bot.accountProfile
+        self.fastMode = bot.fastMode
     }
 
     public var isRemote: Bool { hostID != nil }

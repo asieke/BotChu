@@ -19,6 +19,61 @@ import Testing
         #expect(terra.efforts == [.low, .medium, .high, .xhigh, .max, .ultra])
         #expect(models.first { $0.id == "gpt-6-luna" }?.efforts == [.low, .medium, .high, .xhigh, .max])
         #expect(models.allSatisfy { !$0.moving })
+        // Every row listed the Fast tier (`priority`) on 2026-10-28.
+        #expect(models.allSatisfy { $0.fast })
+    }
+
+    @Test func fastFollowsTheListedTiers() throws {
+        let catalog = try CodexModelList.parse([page(#"""
+            {"data":[{"model":"tiered","serviceTiers":[{"id":"priority","name":"Fast"}],"additionalSpeedTiers":[]},
+                     {"model":"older","additionalSpeedTiers":["fast"]},
+                     {"model":"flex-only","serviceTiers":[{"id":"flex","name":"Flex"}],"additionalSpeedTiers":[]},
+                     {"model":"plain"}]}
+            """#)])
+        #expect(catalog.map { $0.fast } == [true, true, false, false])
+        #expect(GenerationOptions.offersFast(for: .codex, model: "tiered", catalog: catalog))
+        #expect(!GenerationOptions.offersFast(for: .codex, model: "plain", catalog: catalog))
+        // The default and a model the list doesn't have are Codex's to judge; the starters have Fast.
+        #expect(GenerationOptions.offersFast(for: .codex, model: "", catalog: catalog))
+        #expect(GenerationOptions.offersFast(for: .codex, model: "my-fine-tune", catalog: catalog))
+        #expect(GenerationOptions.models(for: .codex).allSatisfy { $0.fast })
+        #expect(GenerationOptions.offersFast(for: .codex, model: "gpt-6-astra"))
+        for kind in AgentKind.allCases where kind != .codex {
+            #expect(!GenerationOptions.offersFast(for: kind, model: "", catalog: catalog))
+        }
+
+        // Choosing a model without Fast turns it off; one with it, or another effort, keeps it.
+        var bot = Bot(name: "B", accountID: "codex-work", model: "tiered", workspace: "/tmp/b")
+        bot.fastMode = true
+        bot.selectModel("older", catalog: catalog)
+        #expect(bot.fastMode == true)
+        bot.selectModel("plain", catalog: catalog)
+        #expect(bot.fastMode == nil)
+        // Another CLI family turns it off with the model and effort; another Codex profile keeps it.
+        bot.selectModel("tiered", catalog: catalog)
+        bot.fastMode = true
+        bot.selectAccount("codex-dev")
+        #expect(bot.fastMode == true)
+        bot.selectAccount("claude-dev")
+        #expect(bot.fastMode == nil)
+    }
+
+    @Test func fastTravelsToTasksSubagentsAndJobsAndSurvivesSaving() throws {
+        var bot = Bot(name: "B", accountID: "codex-work", model: "gpt-6-astra", workspace: "/tmp/b")
+        bot.fastMode = true
+        let restored = try JSONDecoder().decode(Bot.self, from: JSONEncoder().encode(bot))
+        #expect(restored.fastMode == true)
+        // A bot saved before #249 has it off.
+        var old = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(bot)) as? [String: Any])
+        old["fastMode"] = nil
+        let saved = try JSONSerialization.data(withJSONObject: old)
+        #expect(try JSONDecoder().decode(Bot.self, from: saved).fastMode == nil)
+
+        #expect(BotTask(for: bot, repo: "o/r", checkout: "/tmp/r", work: nil, brief: "b").fastMode == true)
+        let run = SubagentRun(rootBotID: UUID(), depth: 1, targetBot: bot, title: "t", brief: "b", workingDirectory: "/tmp/b")
+        #expect(run.fastMode == true)
+        let job = JobLaunch.invocation(for: bot, prompt: "p", openRouterDefault: "", openRouterKey: nil)
+        #expect(job.arguments.contains(#"service_tier="fast""#))
     }
 
     @Test func everyPageCountsAndOddRowsAreReadSafely() throws {
@@ -177,6 +232,20 @@ import Testing
         #expect(NativeCatalogFile.decode(Data(later.utf8))[scope.key]?.models.first?.efforts == [.low])
         #expect(NativeCatalogFile.decode(Data(text.replacingOccurrences(of: #""version":1"#, with: #""version":2"#).utf8)).isEmpty)
         #expect(NativeCatalogFile.decode(Data("{".utf8)).isEmpty)
+
+        // Whether a model has Fast is kept; a list saved before #249 offers it until read again.
+        let slow = NativeCatalog(models: [ModelOption(id: "plain", name: "Plain", efforts: [])], checkedAt: checkedAt)
+        let slowData = try #require(NativeCatalogFile.encode([scope.key: slow]))
+        #expect(NativeCatalogFile.decode(slowData)[scope.key]?.models.first?.fast == false)
+        // The same file without the key, whatever order the encoder wrote it in.
+        var file = try #require(JSONSerialization.jsonObject(with: slowData) as? [String: Any])
+        var catalogs = try #require(file["catalogs"] as? [[String: Any]])
+        var models = try #require(catalogs[0]["models"] as? [[String: Any]])
+        #expect(models[0].removeValue(forKey: "fast") != nil)
+        catalogs[0]["models"] = models
+        file["catalogs"] = catalogs
+        let older = try JSONSerialization.data(withJSONObject: file)
+        #expect(NativeCatalogFile.decode(older)[scope.key]?.models.first?.fast == true)
     }
 
     @Test func thePickerSaysHowTheListStands() {

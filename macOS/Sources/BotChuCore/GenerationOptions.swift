@@ -18,12 +18,15 @@ public struct ModelOption: Identifiable, Equatable, Sendable {
     public let efforts: [ReasoningEffort]
     /// A CLI alias that moves to newer versions, such as Claude Code's `opus`, not a pinned version.
     public var moving = false
+    /// Whether it has Codex's Fast tier (#249).
+    public var fast = false
 
-    public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false) {
+    public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false, fast: Bool = false) {
         self.id = id
         self.name = name
         self.efforts = efforts
         self.moving = moving
+        self.fast = fast
     }
 }
 
@@ -63,11 +66,12 @@ public enum GenerationOptions {
                     ModelOption(id: "haiku", name: "Claude Haiku", efforts: [], moving: true),
                     ModelOption(id: "claude-haiku-5-5", name: "Claude Haiku 5.5", efforts: [])]
         case .codex:
-            return [ModelOption(id: "gpt-6.1-sol", name: "GPT-6.1 Sol", efforts: extended + [.ultra]),
-                    ModelOption(id: "gpt-6-astra", name: "GPT-6 Astra", efforts: extended + [.ultra]),
-                    ModelOption(id: "gpt-6-sol", name: "GPT-6 Sol", efforts: extended + [.ultra]),
-                    ModelOption(id: "gpt-6-luna", name: "GPT-6 Luna", efforts: extended),
-                    ModelOption(id: "gpt-5.6-sol", name: "GPT-5.6 Sol", efforts: extended + [.ultra])]
+            // Each lists the Fast tier (2026-10-28).
+            return [ModelOption(id: "gpt-6.1-sol", name: "GPT-6.1 Sol", efforts: extended + [.ultra], fast: true),
+                    ModelOption(id: "gpt-6-astra", name: "GPT-6 Astra", efforts: extended + [.ultra], fast: true),
+                    ModelOption(id: "gpt-6-sol", name: "GPT-6 Sol", efforts: extended + [.ultra], fast: true),
+                    ModelOption(id: "gpt-6-luna", name: "GPT-6 Luna", efforts: extended, fast: true),
+                    ModelOption(id: "gpt-5.6-sol", name: "GPT-5.6 Sol", efforts: extended + [.ultra], fast: true)]
         case .antigravity:
             return [ModelOption(id: "gemini-4-argon-medium", name: "Gemini 4 Argon", efforts: common),
                     ModelOption(id: "gemini-3.8-flash-medium", name: "Gemini 3.8 Flash", efforts: common),
@@ -93,6 +97,13 @@ public enum GenerationOptions {
         case .pi: return [.off, .minimal, .low, .medium, .high, .xhigh, .max]
         case .sail: return [.low, .medium, .high]
         }
+    }
+
+    /// Whether Fast can be turned on (#249): on Codex, for a model its list gives the Fast tier, and
+    /// for the default or a model it doesn't list, which Codex judges itself when the turn starts.
+    public static func offersFast(for kind: AgentKind, model: String, catalog: [ModelOption]? = nil) -> Bool {
+        guard kind == .codex else { return false }
+        return option(for: model.trimmingCharacters(in: .whitespacesAndNewlines), kind: kind, catalog: catalog)?.fast ?? true
     }
 
     private static func option(for model: String, kind: AgentKind, catalog: [ModelOption]? = nil) -> ModelOption? {
@@ -217,6 +228,9 @@ extension RunSettings {
         if let reasoningEffort, !GenerationOptions.efforts(for: account.kind, model: self.model, catalog: catalog).contains(reasoningEffort) {
             self.reasoningEffort = nil
         }
+        if fastMode == true, !GenerationOptions.offersFast(for: account.kind, model: self.model, catalog: catalog) {
+            fastMode = nil
+        }
     }
 
     public mutating func selectAccount(_ accountID: String) {
@@ -230,6 +244,7 @@ extension RunSettings {
         if account.kind != oldKind {
             model = ""
             reasoningEffort = nil
+            fastMode = nil
         }
     }
 }
