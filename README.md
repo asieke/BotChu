@@ -1439,6 +1439,9 @@ on that pull request's branch to continue in instead). The same command run agai
     it too: `Inbox.swift` reads and checks the request, keeps deliveries and their copies in a bot's
     folder, what the owner did with them (`InboxState`), the list's groups (`InboxList`) and a reply's
     prompt (`InboxReply`); the app's `InboxModel` takes them in and sends the replies, one at a time.
+    `InboxStatus.swift` derives the counts and pending questions once per Inbox mutation, from all
+    deliveries. Tabs observe their own questions; each sidebar row observes its own conversations,
+    so an activity update doesn't rederive every other bot's status (#271).
     `DeliveryBanner.swift` makes a delivery's banner (its text, buttons and category, the newest 20
     categories kept registered) and reads a click back into a reply or "show it"; the app's
     `InboxNotifications.swift` (`InboxNotifier`) posts banners, answers clicks and keeps the Dock
@@ -1942,6 +1945,15 @@ on that pull request's branch to continue in instead). The same command run agai
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.
+- Sidebar status: `BOTCHU_INBOX_BENCHMARK=<file> swift test --package-path macOS --filter
+  inboxStatusBenchmark` compares uncached and cached status reads for 20 bots, 80 tasks and 2,000
+  deliveries. `BOTCHU_SIDEBAR_BENCHMARK=<file> swift test --package-path macOS --filter
+  sidebarStatusBenchmark` measures conversation switching, an activity update and typing until
+  drawn, with those same counts and four active tasks; run it through the shared window-test gate.
+  For a before/after pair, copy only `InboxStatusFixture.swift` and `SidebarBenchmarkTests.swift`
+  into a separate checkout of the earlier revision and run the same command and build configuration
+  in each. Both benchmarks report timing without asserting load-sensitive limits. The runtime
+  regression tests count whole-Inbox derivations and actual sidebar row bodies independently.
 - Launching: `BOTCHU_LAUNCH_BENCHMARK=<file> swift test --configuration release --package-path macOS
   --filter launchBenchmark` builds eight bots, forty open tasks, sixteen closed ones and a hundred
   finished sub-agents (101 MB), opens each Home and open task once and reads the process's memory,
