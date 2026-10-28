@@ -1722,9 +1722,9 @@ on that pull request's branch to continue in instead). The same command run agai
   whose CLI has no tool-free mode are skipped. It spends a little of each account's allowance and
   isn't part of `check`; run it after changing how reviews run a CLI.
 - Task summaries (Quick tasks) without tools: `swift run --package-path macOS botchu-smoke --summary
-  [account id …]` names a sample task on each account the way a new task's summary is asked for, on
-  its family's smallest model (or `BOTCHU_SMOKE_MODEL`), and passes when the reply is a label of
-  three or four words. It spends a little of each account's allowance; run it after changing how
+  [account id …]` names a sample task on each account the way a new task's summary is asked for,
+  then again from a short conversation as Regenerate Title asks (#236), on its family's smallest
+  model (or `BOTCHU_SMOKE_MODEL`), and passes when both replies are labels of three or four words. It spends a little of each account's allowance; run it after changing how
   summaries are asked for.
 - Telegram end to end: the gateway's tests use stand-ins for Telegram, so a real exchange is
   checked by hand, with your own Telegram bot: see

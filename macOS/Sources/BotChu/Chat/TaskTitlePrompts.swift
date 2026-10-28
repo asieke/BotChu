@@ -21,13 +21,15 @@ struct TaskTitleItems: View {
 /// Where a task of the bot beside its chat is renamed, in an alert that starts from the title its
 /// tab shows (an empty name changes nothing), and where a title that couldn't be made again says
 /// why, with what to do about it: open Quick tasks' settings, or try again. Cancel changes nothing.
+/// A window shows one alert at a time, so a notice that comes while a rename is asked for waits
+/// until that alert closes.
 struct TaskTitlePrompts: ViewModifier {
     @Environment(AppModel.self) private var model
     let botID: UUID
 
     func body(content: Content) -> some View {
         let renaming = model.renamingTask?.botID == botID ? model.renamingTask : nil
-        let notice = model.titleNotice?.botID == botID ? model.titleNotice : nil
+        let notice = model.titleNotice?.botID == botID && model.renamingTask == nil ? model.titleNotice : nil
         content
             .alert("Rename Task", isPresented: Binding(
                 get: { model.renamingTask?.botID == botID }, set: { if !$0 { model.renamingTask = nil } }),
@@ -37,13 +39,13 @@ struct TaskTitlePrompts: ViewModifier {
                 Button("Cancel", role: .cancel) {}
             }
             .alert(notice?.title ?? "", isPresented: Binding(
-                get: { model.titleNotice?.botID == botID },
+                get: { model.titleNotice?.botID == botID && model.renamingTask == nil },
                 set: { if !$0, model.titleNotice?.id == notice?.id { model.titleNotice = nil } }),
                 presenting: notice) { notice in
                 Button(notice.action) { act(on: notice) }
                 Button("Cancel", role: .cancel) {}
             } message: { notice in
-                Text(notice.message)
+                if let message = notice.message { Text(message) }
             }
     }
 

@@ -90,7 +90,7 @@ extension AppModel {
     func regenerateTitle(_ target: ChatTarget) {
         guard let id = target.taskID, let task = task(target), !task.isArchived, !terminating else { return }
         guard let quick = settings.quickTasks else {
-            titleNotice = TaskTitleNotice(botID: target.botID, taskID: id, kind: .notConfigured, label: TaskSummary.displayedLabel(of: task))
+            titleNotice = TaskTitleNotice(botID: target.botID, taskID: id, kind: .notConfigured)
             return
         }
         guard let ticket = titleRequests.begin(id) else { return }
@@ -136,8 +136,7 @@ extension AppModel {
             tasks[target.botID]?[i].summary = label
             saveTask(tasks[target.botID]![i], of: target.botID)
         case .failed(let reason):
-            titleNotice = TaskTitleNotice(botID: target.botID, taskID: ticket.taskID, kind: .failed(reason),
-                                          label: TaskSummary.displayedLabel(of: task))
+            titleNotice = TaskTitleNotice(botID: target.botID, taskID: ticket.taskID, kind: .failed(reason))
         }
     }
 }

@@ -770,13 +770,12 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
     }
 
     @Test func aTitleThatCantBeMadeSaysWhatToDo() {
-        let off = TaskTitleNotice(botID: UUID(), taskID: UUID(), kind: .notConfigured, label: "Add a filter bar")
-        #expect(off.action == "Open Quick Tasks Settings")
-        #expect(off.message.contains("Settings ▸ General") && off.message.contains("doesn’t ask another account"))
-        #expect(off.message.hasSuffix("The task keeps “Add a filter bar”."))
-        let failed = TaskTitleNotice(botID: UUID(), taskID: UUID(), kind: .failed("API Error: 429 rate limit"), label: "Add a filter bar")
+        // Its title and button say what to do, with no prose beside them; a failure says only why.
+        let off = TaskTitleNotice(botID: UUID(), taskID: UUID(), kind: .notConfigured)
+        #expect(off.title == "Choose a Quick Tasks Profile" && off.action == "Open Quick Tasks Settings" && off.message == nil)
+        let failed = TaskTitleNotice(botID: UUID(), taskID: UUID(), kind: .failed("API Error: 429 rate limit"))
         #expect(failed.action == "Try Again" && failed.title == "Couldn’t Regenerate the Title")
-        #expect(failed.message == "API Error: 429 rate limit. The task keeps “Add a filter bar”: try again, or rename it from its menu.")
+        #expect(failed.message == "API Error: 429 rate limit")
         #expect(TaskSummary.reason("") == "No reply came")
         #expect(TaskSummary.reason("Failed.\nInvalid API key · token: sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789").contains("sk-ant") == false)
     }
@@ -786,7 +785,8 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
         defer { try? FileManager.default.removeItem(at: root) }
         let home = BotHome(workspace: root.path)
         var task = BotTask(repo: "asieke/GitChu", checkout: "/w/GitChu", work: issue, createdAt: Date(timeIntervalSince1970: 1_800_000_000))
-        task.summary = try #require(TaskSummary.manualLabel("  Filter bar, then the sort order by stars "))
+        let label = try #require(TaskSummary.manualLabel("  Filter bar, then the sort order by stars "))
+        task.summary = label
         try home.save(task)
         let loaded = try #require(home.loadTasks().first)
         #expect(loaded.summary == "Filter bar, then the sort order by stars")

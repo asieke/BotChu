@@ -595,7 +595,7 @@ extension RenderingTests {
         await model.titleRuns[ids[0]]?.value
         #expect(model.task(targets[0])?.summary == "Status filter chips")
         #expect(model.titleNotice?.kind == .failed("Its reply wasn’t a title of three or four words"))
-        #expect(model.titleNotice?.action == "Try Again" && model.titleNotice?.label == "Status filter chips")
+        #expect(model.titleNotice?.action == "Try Again")
 
         // Renamed while a title is being made: the rename wins, and Cancel's empty name changes nothing.
         model.summaryRunner = { job in
@@ -629,6 +629,66 @@ extension RenderingTests {
         #expect(again.task(targets[0])?.summary == "Chips for the status filter, then sorting")
         #expect(again.conversationTab(of: targets[0])?.label == "Chips for the status filter, then sorting")
         #expect(again.task(targets[1])?.summary == nil)
+    }
+
+    /// #236 in the window: Rename… opens an alert starting from the label the tab shows, and Rename
+    /// saves what was typed. A window shows one alert at a time, so a notice that comes while it is
+    /// open waits, then shows once it closes, saying only why; Try Again with Quick tasks off offers
+    /// their settings instead, and opens them.
+    @Test func aTitleNoticeWaitsForTheRenameAlertToClose() async throws {
+        _ = NSApplication.shared
+        let fixture = try TabsFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot
+        let first = ChatTarget.task(fixture.tasks[0].id, of: bot.id)
+        model.settings.settingsPage = .accounts
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let host = NSHostingView(rootView: ConversationSplit(botID: bot.id) { Color.clear }
+            .environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(300))
+        func until(_ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+            for _ in 0..<100 where !condition() { try await Task.sleep(for: .milliseconds(50)) }
+            #expect(condition(), sourceLocation: sourceLocation)
+        }
+
+        let menu = try tabMenu(at: NSPoint(x: 120, y: 124), in: host)
+        menu.performActionForItem(at: menu.indexOfItem(withTitle: "Rename…"))
+        try await until { window.attachedSheet != nil }
+        let rename = try #require(window.attachedSheet)
+        #expect(alertTexts(in: rename).contains("Rename Task"))
+        let field = try #require(rename.firstResponder as? NSTextView)
+        #expect(field.string == "Fix the typo")
+
+        // Another task's title fails meanwhile: its notice waits behind the rename.
+        model.titleNotice = TaskTitleNotice(botID: bot.id, taskID: fixture.tasks[1].id, kind: .failed("API Error: 429 rate limit"))
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(window.attachedSheet === rename && window.sheets.count == 1)
+        field.selectAll(nil)
+        field.insertText("Typo in the README", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await Task.sleep(for: .milliseconds(100))
+        try #require(alertButtons(in: rename).first { $0.title == "Rename" }).performClick(nil)
+        try await until { model.task(first)?.summary == "Typo in the README" }
+
+        try await until { window.attachedSheet.map { $0 !== rename } == true }
+        let notice = try #require(window.attachedSheet)
+        #expect(alertTexts(in: notice).contains("Couldn’t Regenerate the Title"))
+        #expect(alertTexts(in: notice).contains("API Error: 429 rate limit"))
+        #expect(alertButtons(in: notice).map(\.title).sorted() == ["Cancel", "Try Again"])
+        try #require(alertButtons(in: notice).first { $0.title == "Try Again" }).performClick(nil)
+
+        // Quick tasks are off: Try Again asks no account, and offers their settings.
+        try await until { model.titleNotice?.kind == .notConfigured && window.attachedSheet.map { $0 !== notice } == true }
+        let off = try #require(window.attachedSheet)
+        #expect(alertTexts(in: off).contains("Choose a Quick Tasks Profile"))
+        #expect(alertButtons(in: off).map(\.title).sorted() == ["Cancel", "Open Quick Tasks Settings"])
+        try #require(alertButtons(in: off).first { $0.title == "Open Quick Tasks Settings" }).performClick(nil)
+        try await until { window.attachedSheet == nil }
+        #expect(model.titleNotice == nil && model.destination == .settings && model.settings.settingsPage == .general)
+        #expect(model.titleRuns.isEmpty && model.task(.task(fixture.tasks[1].id, of: bot.id))?.summary == nil)
     }
 
     /// Home's status sidebar lists only closed tasks, to open again: none while none is closed.
@@ -678,6 +738,17 @@ extension RenderingTests {
             view = current.superview
         }
         return try #require(menu)
+    }
+
+    /// The buttons and the texts of an alert's window.
+    private func alertButtons(in window: NSWindow) -> [NSButton] {
+        func buttons(_ view: NSView) -> [NSButton] { ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(buttons) }
+        return window.contentView.map(buttons) ?? []
+    }
+
+    private func alertTexts(in window: NSWindow) -> [String] {
+        func texts(_ view: NSView) -> [String] { ((view as? NSTextField).map { [$0.stringValue] } ?? []) + view.subviews.flatMap(texts) }
+        return window.contentView.map(texts) ?? []
     }
 
     /// The same colour, within what antialiasing leaves of a flat fill.

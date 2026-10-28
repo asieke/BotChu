@@ -298,7 +298,7 @@ public struct TaskTitleRequests: Equatable, Sendable {
 
 /// What the owner is told when a task's title can't be made again (#236), with what to do about it:
 /// choose the Quick tasks profile and model in Settings ▸ General, which BotChu never stands in for
-/// with another account, or try again. The task keeps its title (`label`).
+/// with another account, or try again. The task keeps its title either way.
 public struct TaskTitleNotice: Identifiable, Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
         /// No Quick tasks profile and model are chosen, or the profile chosen can't run without tools.
@@ -311,14 +311,11 @@ public struct TaskTitleNotice: Identifiable, Equatable, Sendable {
     public var botID: UUID
     public var taskID: UUID
     public var kind: Kind
-    /// The title the task keeps.
-    public var label: String
 
-    public init(botID: UUID, taskID: UUID, kind: Kind, label: String) {
+    public init(botID: UUID, taskID: UUID, kind: Kind) {
         self.botID = botID
         self.taskID = taskID
         self.kind = kind
-        self.label = label
     }
 
     public var title: String {
@@ -328,13 +325,11 @@ public struct TaskTitleNotice: Identifiable, Equatable, Sendable {
         }
     }
 
-    public var message: String {
+    /// Why no title came; nil when the title and its button say it all.
+    public var message: String? {
         switch kind {
-        case .notConfigured:
-            "Regenerate Title asks the Quick tasks profile and model of Settings ▸ General, and none that can run without "
-                + "tools is chosen. BotChu doesn’t ask another account instead. The task keeps “\(label)”."
-        case .failed(let reason):
-            "\(reason). The task keeps “\(label)”: try again, or rename it from its menu."
+        case .notConfigured: nil
+        case .failed(let reason): reason
         }
     }
 
