@@ -353,8 +353,15 @@ final class JobRuntime {
             }
             do {
                 await model.preparePiModels(for: agent)
+                let authProblem = await account.runtime.adapter.authenticationProblem(account: account,
+                    providerID: agent.providerID, command: model.settings.command(for: account), folder: bot.workspace, openRouterKey: key)
                 guard !Task.isCancelled, self.preparing[runID] != nil, !self.quitting else {
                     return model.delegation.endCaller(caller.id)
+                }
+                if let authProblem {
+                    model.delegation.endCaller(caller.id)
+                    self.preparing[runID] = nil
+                    return self.finish(runID, outcome: .failed, summary: authProblem)
                 }
                 let prepared = try await model.prepareSessionForLaunch(of: bot.id, kind: account.kind, remote: false,
                     current: { self.preparing[runID] != nil && !self.quitting })

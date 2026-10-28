@@ -183,7 +183,8 @@ final class UsageProcess: @unchecked Sendable {
     var museAnswered = false
     var museEnded: String?
 
-    init(command: String, arguments: [String], directory: URL, environment: [String: String] = [:], unsetEnvironment: [String] = [], timeout: TimeInterval,
+    init(command: String, arguments: [String], directory: URL, environment: [String: String] = [:], unsetEnvironment: [String] = [],
+         machine: Machine = .thisMac, remoteFolder: String? = nil, timeout: TimeInterval,
          frameLimit: Int = 2 << 20) throws {
         deadline = Date().addingTimeInterval(timeout)
         self.frameLimit = frameLimit
@@ -192,6 +193,14 @@ final class UsageProcess: @unchecked Sendable {
         process.currentDirectoryURL = directory
         process.environment = AgentRun.childEnvironment(ProcessInfo.processInfo.environment)
             .merging(["NO_COLOR": "1", "TERM": "dumb"]) { $1 }.merging(AgentRun.profileEnvironment(environment)) { $1 }
+        if let destination = machine.destination {
+            process.executableURL = URL(fileURLWithPath: Machine.ssh)
+            process.arguments = Machine.sshOptions + [destination, Machine.remoteCommand(
+                script: CommandBuilder.shellScript(command: command), arguments: arguments, in: remoteFolder ?? directory.path)]
+            process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+            // A remote readiness check uses only the host's own configuration and credentials.
+            process.environment = AgentRun.childEnvironment(ProcessInfo.processInfo.environment)
+        }
         process.standardInput = input
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice

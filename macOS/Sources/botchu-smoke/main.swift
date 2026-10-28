@@ -125,6 +125,10 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
     if let problem = PiLaunch.problem(settings: bot, effectiveModel: effectiveModel) {
         return Turn(messages: [ChatMessage(role: .error, text: problem)], status: -1)
     }
+    if let problem = await kind.adapter.authenticationProblem(account: bot.account, providerID: bot.providerID,
+        command: command(for: bot.account), folder: bot.workspace, openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]) {
+        return Turn(messages: [ChatMessage(role: .error, text: problem)], status: -1)
+    }
     var invocation = CommandBuilder.invocation(for: bot, prompt: fullPrompt, sessionID: resume,
         openRouterDefault: CommandBuilder.defaultOpenRouterModel, catalog: catalog,
         openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], sailKey: ProcessInfo.processInfo.environment[Sail.keyVariable],

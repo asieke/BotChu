@@ -286,7 +286,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     no unverified new effort choices. Provider IDs come from the signed-in profile, including
     `radius` and `kimi-coding` when configured (there is no built-in `kimi` ID). See Pi's
     [provider documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/providers.md).
-    `RuntimeAdapter` owns provider/catalog capabilities, tool modes, invocation, stream parsing
+    Before a Pi turn, `auth check --provider <id> --json --no-refresh` checks the selected profile
+    without requesting credentials or refreshing OAuth. A missing login names the provider before
+    starting a model turn. On SSH this check runs on the host without local keys or config paths.
+    Older wrappers without this command still handle authentication through their normal turn.
+    `RuntimeAdapter` owns provider/catalog capabilities, authentication readiness, tool modes, invocation, stream parsing
     and session compatibility. OpenCode can be added as a separate runtime with its own protocol;
     implementing that runtime is future scope.
   - **Existing Pi data:** the built-in profile now displays **Pi**, while its saved ID and Keychain

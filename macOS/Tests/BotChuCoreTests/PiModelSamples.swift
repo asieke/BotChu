@@ -1,6 +1,11 @@
 // Pi 1.4.0 get_available_models on 2026-10-28. Only non-secret model metadata is retained.
 // Includes the runtime-reported effort maps; no auth files were read or copied.
 enum PiModelSamples {
+    // Real `pi auth check --provider <id> --json --no-refresh` replies, 2026-10-28.
+    // The credentials-output option is never requested.
+    static let authReady = #"{"status":"ready","provider":"radius","authType":"oauth"}"#
+    static let authMissing = #"{"status":"not_ready","provider":"kimi-coding","reason":"credentials_not_configured"}"#
+
     static let available = #"""
     {
       "id": "botchu-catalog",

@@ -12,6 +12,28 @@ public struct RuntimeAdapter: Sendable {
     public var takesInputMidTurn: Bool { kind == .claude }
     public var runsToolFree: Bool { kind == .claude || kind == .codex || kind == .muse }
 
+    public func authenticationProblem(account: Account, providerID: String?, command: String,
+                                      machine: Machine = .thisMac, folder: String = NSHomeDirectory(),
+                                      openRouterKey: String? = nil) async -> String? {
+        guard kind == .pi else { return nil }
+        return await PiAuthentication.problem(account: account, providerID: providerID, command: command,
+            machine: machine, folder: folder, openRouterKey: openRouterKey)
+    }
+
+    func profileEnvironment(account: Account, providerID: String?, openRouterKey: String?) -> [String: String] {
+        var environment = account.runtimeEnvironment
+        if account.usesLegacyOpenRouterKey(providerID: providerID), let openRouterKey, !openRouterKey.isEmpty {
+            environment["OPENROUTER_API_KEY"] = openRouterKey
+        }
+        return environment
+    }
+
+    func unsetEnvironment(account: Account, providerID: String?) -> [String] {
+        guard hasProviderSelection else { return [] }
+        return account.configurationDirectory != nil ? AgentRun.modelCredentialNames.sorted()
+            : account.usesLegacyOpenRouterKey(providerID: providerID) ? [] : ["OPENROUTER_API_KEY"]
+    }
+
     public func parser() -> any StreamParser { StreamParsers.make(for: kind) }
 
     public func resumeID(invocation: Invocation, reported: String) -> String {
@@ -34,12 +56,9 @@ public struct RuntimeAdapter: Sendable {
             sessionID: sessionID, reasoningEffort: settings.reasoningEffort, fast: settings.fastMode == true,
             openRouterKey: settings.usesLegacyOpenRouterKey ? openRouterKey : nil, sailKey: sailKey,
             liveInput: liveInput, providerID: settings.effectiveProviderID, catalog: catalog, newID: newID)
-        invocation.environment.merge(settings.account.runtimeEnvironment) { _, new in new }
-        if hasProviderSelection {
-            invocation.unsetEnvironment = settings.account.configurationDirectory != nil
-                ? AgentRun.modelCredentialNames.sorted()
-                : settings.usesLegacyOpenRouterKey ? [] : ["OPENROUTER_API_KEY"]
-        }
+        invocation.environment.merge(profileEnvironment(account: settings.account, providerID: settings.providerID,
+                                                        openRouterKey: openRouterKey)) { _, new in new }
+        invocation.unsetEnvironment = unsetEnvironment(account: settings.account, providerID: settings.providerID)
         return invocation
     }
 }

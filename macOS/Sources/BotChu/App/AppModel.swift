@@ -1826,6 +1826,17 @@ final class AppModel {
 
                 // On a host, its own command for the account when it has one.
                 let command = effectiveCommand(for: account, task: task)
+                let authProblem = await account.runtime.adapter.authenticationProblem(account: account,
+                    providerID: current.providerID, command: command, machine: machine, folder: directory, openRouterKey: key)
+                guard !Task.isCancelled, waiting[target] == ticket else { delegation.endCaller(context.id); return }
+                if let authProblem {
+                    delegation.endCaller(context.id)
+                    runStates[target] = nil
+                    pauseQueue(target)
+                    append(ChatMessage(role: .error, text: authProblem), to: target)
+                    saveThread(target)
+                    return
+                }
                 let connectorScope = ConnectorScope(accountID: account.id, command: command, folder: directory, hostID: task?.hostID)
                 let run = machine.isRemote
                     ? AgentRun(command: command, invocation: invocation, on: machine, folder: directory)

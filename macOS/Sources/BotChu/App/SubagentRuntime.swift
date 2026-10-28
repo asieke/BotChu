@@ -704,6 +704,10 @@ final class SubagentRuntime {
             invocation.environment.merge(context.environment) { _, new in new }
             invocation.toolProfile = prepared.toolProfile
             let command = model.settings.host(record.hostID)?.command(for: account) ?? model.settings.command(for: account)
+            let authProblem = await account.runtime.adapter.authenticationProblem(account: account,
+                providerID: record.providerID, command: command, machine: machine, folder: record.workingDirectory, openRouterKey: key)
+            guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
+            if let authProblem { throw DelegationFailure(authProblem) }
             let runner = machine.isRemote
                 ? AgentRun(command: command, invocation: invocation, on: machine, folder: record.workingDirectory)
                 : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: record.workingDirectory))
