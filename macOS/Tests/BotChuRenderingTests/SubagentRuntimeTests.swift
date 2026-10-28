@@ -166,7 +166,9 @@ extension RenderingTests {
         let command = fixture.root.appendingPathComponent("gh")
         try "#!/bin/sh\necho UNBLOCKED\n".write(to: command, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: command.path)
-        app.tools.locate = { _ in (catalog: ["gh": [ToolLocation(path: command.path, realPath: command.path)]], declared: [:]) }
+        // Match the real locator: the temporary directory can contain /var -> /private/var.
+        let location = ToolLocation(path: command.path, realPath: try #require(ToolLocator.realPath(command.path)))
+        app.tools.locate = { _ in (catalog: ["gh": [location]], declared: [:]) }
         _ = await app.loadedThread(fixture.target)
         app.drafts[fixture.target] = "POLICY_CHECK"
         app.send("POLICY_CHECK", to: fixture.target)

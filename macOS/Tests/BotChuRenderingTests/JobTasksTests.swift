@@ -32,6 +32,7 @@ extension RenderingTests {
         defer { gate.release(); app.stopAll() }
         app.jobs.newJob(for: bot.id)
         var job = try #require(app.jobs.editor?.job)
+        job.title = "Check session preparation"
         job.enabled = false
         job.prompt = "Check preparation"
         try app.jobs.save(job)
