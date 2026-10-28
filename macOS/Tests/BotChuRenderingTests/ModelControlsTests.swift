@@ -208,8 +208,15 @@ extension RenderingTests {
         #expect(app.bot(original.id)?.reasoningEffort == nil)
         app.setReasoningEffort(.high, for: target)
         #expect(app.bot(original.id)?.reasoningEffort == .high)
+        // An editor opened before the live turn reports its session must not restore stale IDs.
+        var editor = try #require(app.bot(original.id))
         app.recordSession("radius-session", accountID: "openrouter", scope: changed.executionScope, for: target)
+        app.recordReportedModel("resolved-model", requested: "same", accountID: "openrouter", scope: changed.executionScope, for: target)
+        editor.name = "Edited while session reported"
+        app.update(editor)
         #expect(app.bot(original.id)?.resumableSessionID == "radius-session")
+        #expect(app.bot(original.id)?.sessionScope == changed.executionScope)
+        #expect(app.bot(original.id)?.resolvedModel == "resolved-model")
         await app.storage.settle()
         #expect(home.loadBot()?.providerID == "radius")
         #expect(home.loadBot()?.resumableSessionID == "radius-session")
