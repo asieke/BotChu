@@ -236,6 +236,8 @@ final class AppModel {
     private(set) var indexFailure: SaveFailure?
     @ObservationIgnored private var delegationSessions: [ChatTarget: Set<String>] = [:]
     @ObservationIgnored private var runs: [ChatTarget: AgentRun] = [:]
+    /// The heartbeat each conversation waits to send (`Heartbeats.swift`), dropped by any message to it.
+    @ObservationIgnored var pendingHeartbeats: [ChatTarget: PendingHeartbeat] = [:]
     /// What each running CLI that takes input mid-turn has been given and has taken back.
     @ObservationIgnored private var inputs: [ChatTarget: (kind: AgentKind, ledger: InputLedger)] = [:]
     /// BotChu is quitting: the turns it stops weren't stopped by the owner, so queues stay unpaused.
@@ -1321,8 +1323,10 @@ final class AppModel {
     @discardableResult
     func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [], files: [FileAttachment] = [],
               id: UUID = UUID(), references: [MessageReference] = [], delivery: UUID? = nil, fromAgent: AgentLink? = nil,
-              accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
+              heartbeat: Int? = nil, accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
         let (text, references) = MessageReference.trimming(text, references: references)
+        // Anything sent to the conversation answers the heartbeat it waited to send.
+        pendingHeartbeats[target] = nil
         if bot(target.botID)?.isRemoteQueue == true {
             guard visible, target.taskID == nil, !text.isEmpty || !files.isEmpty, images.isEmpty,
                   files.count <= FileAttachment.maximumCount else { return false }
@@ -1337,7 +1341,7 @@ final class AppModel {
             return beginTurn(text, for: target, message: nil)
         }
         // A job's run the owner writes in is theirs from now on (#146).
-        if let i = taskIndex(target), tasks[target.botID]?[i].jobRun?.continued == false {
+        if heartbeat == nil, let i = taskIndex(target), tasks[target.botID]?[i].jobRun?.continued == false {
             tasks[target.botID]?[i].jobRun?.continued = true
             saveTask(tasks[target.botID]![i], of: target.botID)
         }
@@ -1351,25 +1355,26 @@ final class AppModel {
         // The queue changes once it is recovered after the launch, so what was saved in it isn't lost.
         if later(target, needs: .recovery, { [weak self] in self?.enqueue(text, to: target, images: images, files: files, id: id,
                                                                          references: references, delivery: delivery, fromAgent: fromAgent,
-                                                                         reserved: ticket, accepted: accepted) },
+                                                                         heartbeat: heartbeat, reserved: ticket, accepted: accepted) },
                  cancel: { accepted?(false) }) {
             return true
         }
         enqueue(text, to: target, images: images, files: files, id: id, references: references, delivery: delivery, fromAgent: fromAgent,
-                reserved: ticket, accepted: accepted)
+                heartbeat: heartbeat, reserved: ticket, accepted: accepted)
         return true
     }
 
     /// Queues a message being sent, saves the queue, then sends it (`send`); `reserved` is the
     /// ticket that keeps the conversation busy meanwhile.
     private func enqueue(_ text: String, to target: ChatTarget, images: [ImageAttachment], files: [FileAttachment] = [], id: UUID,
-                         references: [MessageReference], delivery: UUID? = nil, fromAgent: AgentLink? = nil, reserved ticket: UUID?,
-                         accepted: (@MainActor @Sendable (Bool) -> Void)?) {
+                         references: [MessageReference], delivery: UUID? = nil, fromAgent: AgentLink? = nil, heartbeat: Int? = nil,
+                         reserved ticket: UUID?, accepted: (@MainActor @Sendable (Bool) -> Void)?) {
         var queue = messageQueues[target] ?? MessageQueue()
         var message = ChatMessage(id: id, role: .user, text: text, images: images, references: references)
         message.delivery = delivery
         message.files = files.isEmpty ? nil : files
         message.fromAgent = fromAgent
+        message.heartbeat = heartbeat
         queue.enqueue(message, unsaved: true)
         messageQueues[target] = queue
         saveQueue(for: target) { [weak self] saved in
@@ -1866,6 +1871,9 @@ final class AppModel {
                     let interrupted = self.messageQueues[target]?.isInterrupting == true
                     // What the turn delivered to the Inbox shows after its reply.
                     let cards = self.inbox.takeCards(for: target)
+                    // The heartbeat this turn answered, if it did; its bare acknowledgement leaves a note instead.
+                    let pulse = self.thread(target).last(where: { $0.role == .user })?.heartbeat
+                    var acknowledged = false
                     self.conversation(target).stream { messages in
                         assembler.apply(.textEnd, to: &messages)
                         ThreadAssembler.closeRunningTools(&messages)
@@ -1885,6 +1893,12 @@ final class AppModel {
                                 ? "\(account.name) exited with status \(status) without replying."
                                 : "\(account.name) exited with status \(status):\n\(detail)"))
                         }
+                        if pulse != nil, !stopped, let i = messages.indices.last(where: { messages[$0].role == .assistant }), i >= turnStart,
+                           Heartbeat.isAck(messages[i].text) {
+                            messages.remove(at: i)
+                            messages.append(ChatMessage(role: .note, text: Heartbeat.acknowledged))
+                            acknowledged = true
+                        }
                     }
                     let messages = self.thread(target)
                     let failure = outcome.failure(stopped: stopped, exitError: messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil })
@@ -1901,8 +1915,11 @@ final class AppModel {
                             guard let self, self.runSettings(of: target) != nil else { return }
                             self.runStates[target] = nil
                             if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
-                            if self.visibleBotID != id || self.tab(of: id) != target { self.unread.insert(target) }
-                            if target.taskID != nil { self.finishTaskTurn(target, stopped: stopped, failure: failure) }
+                            if !acknowledged, self.visibleBotID != id || self.tab(of: id) != target { self.unread.insert(target) }
+                            if target.taskID != nil { self.finishTaskTurn(target, stopped: stopped, failure: failure, reported: !acknowledged) }
+                            self.scheduleHeartbeat(after: Heartbeat.Turn(reply: turn.last(where: { $0.role == .assistant })?.text, pulse: pulse,
+                                                                         stopped: stopped, failed: failure != nil,
+                                                                         endedBackgroundTasks: run.endedBackgroundTasks), in: target)
                             // Home's turns and tasks' join the work their bot's next run review covers.
                             self.reviewTurn(target, thread: messages, turnStart: turnStart, accountID: account.id)
                             // Only Stop and real failures pause the queue (not quitting BotChu, nor Interrupt &
@@ -1960,8 +1977,8 @@ final class AppModel {
     }
 
     /// After a task's turn: notes the pull request its conversation linked to, and tells its bot's
-    /// Home how the turn went (not when the owner stopped it).
-    private func finishTaskTurn(_ target: ChatTarget, stopped: Bool, failure: String?) {
+    /// Home how the turn went (not when the owner stopped it, nor for a heartbeat acknowledged).
+    private func finishTaskTurn(_ target: ChatTarget, stopped: Bool, failure: String?, reported: Bool = true) {
         guard let i = taskIndex(target), var task = tasks[target.botID]?[i] else { return }
         let pullRequest = TaskNaming.pullRequest(in: thread(target), task: task)
         if pullRequest != task.pullRequest {
@@ -1969,7 +1986,7 @@ final class AppModel {
             tasks[target.botID]?[i] = task
             saveTask(task, of: target.botID)
         }
-        guard !stopped else { return }
+        guard !stopped, reported else { return }
         postReceipt(failure.map { TaskReceipt.failed(task, error: $0) } ?? TaskReceipt.finished(task),
                     task: task.id, for: target.botID)
     }

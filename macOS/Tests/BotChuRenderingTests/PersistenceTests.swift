@@ -310,7 +310,7 @@ final class StorageControl: @unchecked Sendable {
     var fourth: ChatTarget { .task(tasks[3].id, of: bot.id) }
     var taskID: UUID { tasks[0].id }
 
-    init(control: StorageControl) throws {
+    init(control: StorageControl, script scriptText: String = PersistenceFixture.script) throws {
         store = Store(root: root.appendingPathComponent("index"))
         defaults = UserDefaults(suiteName: domain)!
         settings = AppSettings(defaults: defaults)
@@ -320,7 +320,7 @@ final class StorageControl: @unchecked Sendable {
         home = BotHome(workspace: bot.workspace)
         try home.save(bot)
         let script = root.appendingPathComponent("cli.py")
-        try Self.script.write(to: script, atomically: true, encoding: .utf8)
+        try scriptText.write(to: script, atomically: true, encoding: .utf8)
         settings.commands[bot.accountID] = "/usr/bin/python3 \(Shell.quote(script.path))"
         var made: [BotTask] = []
         for n in 0..<4 {

@@ -20,6 +20,15 @@ struct MessageRow: View, Equatable {
 
     var body: some View {
         switch message.role {
+        case .user where message.heartbeat != nil:
+            // BotChu's words, not the owner's: a line like its notes, with the full message on hover.
+            Label(Heartbeat.label(number: message.heartbeat!), systemImage: "heart.text.square")
+                .labelStyle(TightLabel())
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 2)
+                .help(message.text)
         case .user:
             VStack(alignment: .trailing, spacing: 6) {
             if let delivery = message.delivery { InboxReplyLine(delivery: delivery) }

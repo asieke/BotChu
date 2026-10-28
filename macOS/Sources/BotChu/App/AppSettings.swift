@@ -39,6 +39,8 @@ final class AppSettings {
     /// Whether each bot's work is reviewed in the background once a day (`RunEvaluator`), and when,
     /// in the Mac's time zone.
     var evaluateRuns: Bool { didSet { defaults.set(evaluateRuns, forKey: "evaluateRuns") } }
+    /// Whether a conversation whose turn left its work unfinished hears BotChu's heartbeat (`Heartbeat`).
+    var heartbeat: Bool { didSet { defaults.set(heartbeat, forKey: "heartbeat") } }
     var reviewTime: ReviewTime {
         didSet {
             defaults.set(reviewTime.hour, forKey: "reviewHour")
@@ -85,6 +87,7 @@ final class AppSettings {
         petAccountID = defaults.string(forKey: "petAccountID") ?? "codex-personal"
         petModelID = defaults.string(forKey: "petModelID") ?? PetVideo.defaultModel.id
         evaluateRuns = defaults.object(forKey: "evaluateRuns") as? Bool ?? true
+        heartbeat = defaults.object(forKey: "heartbeat") as? Bool ?? true
         reviewTime = (defaults.object(forKey: "reviewHour") as? Int).map { ReviewTime(hour: $0, minute: defaults.integer(forKey: "reviewMinute")) }
             ?? .standard
         remoteQueueEnabled = defaults.bool(forKey: "remoteQueueEnabled")
