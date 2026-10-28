@@ -16,22 +16,35 @@ public struct ThreadDigest: Codable, Equatable, Sendable {
     /// The last reply, trimmed, up to `replyKept` characters, and whether it goes on.
     public var lastReply: String?
     public var lastReplyCut: Bool
+    public var shellCount: Int
 
     /// More than a report shows (`BotContext.maxReportReply`).
     public static let replyKept = 1_000
 
     public init(_ messages: [ChatMessage]) {
         self.init(summary: ThreadSummary(messages), count: messages.count,
-                  lastReply: messages.last(where: { $0.role == .assistant })?.text)
+                  lastReply: messages.last(where: { $0.role == .assistant })?.text, shellCount: ToolCounts(messages: messages).shell)
     }
 
     /// From a summary kept as the thread changed, and its last reply.
-    public init(summary: ThreadSummary, count: Int, lastReply: String?) {
+    public init(summary: ThreadSummary, count: Int, lastReply: String?, shellCount: Int = 0) {
         self.summary = summary
         self.count = count
+        self.shellCount = shellCount
         let reply = lastReply?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.lastReply = reply.map { String($0.prefix(Self.replyKept)) }
         lastReplyCut = (reply?.count ?? 0) > Self.replyKept
+    }
+
+    private enum CodingKeys: String, CodingKey { case summary, count, lastReply, lastReplyCut, shellCount }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        summary = try values.decode(ThreadSummary.self, forKey: .summary)
+        count = try values.decode(Int.self, forKey: .count)
+        lastReply = try values.decodeIfPresent(String.self, forKey: .lastReply)
+        lastReplyCut = try values.decode(Bool.self, forKey: .lastReplyCut)
+        shellCount = try values.decodeIfPresent(Int.self, forKey: .shellCount) ?? 0
     }
 }
 
@@ -96,7 +109,7 @@ public enum ContentHash {
 /// hash of all of it and of its end). Missing, of another version, unreadable, or not matching the
 /// transcript, it is made again from the transcript; it is never taken over the transcript.
 public struct TranscriptIndex: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
     public static let tailLength = 4_096
     public static let fileName = "thread.index.json"
 
@@ -105,6 +118,7 @@ public struct TranscriptIndex: Codable, Equatable, Sendable {
     public var hash: String
     public var tail: String
     public var digest: ThreadDigest
+    public var pages: [PagedTranscript.Page]?
 
     public init(stamp: FileStamp, data: Data, digest: ThreadDigest) {
         version = Self.currentVersion
@@ -124,12 +138,16 @@ public struct HistoryLoad: Sendable {
     /// The index didn't describe the transcript read (missing, stale, or changed outside BotChu),
     /// and was made again.
     public var reindexed: Bool
+    public var start: Int
+    public var prefix: ThreadDigest
 
-    public init(messages: [ChatMessage], digest: ThreadDigest, bytes: Int, reindexed: Bool) {
+    public init(messages: [ChatMessage], digest: ThreadDigest, bytes: Int, reindexed: Bool, start: Int = 0, prefix: ThreadDigest = ThreadDigest([])) {
         self.messages = messages
         self.digest = digest
         self.bytes = bytes
         self.reindexed = reindexed
+        self.start = start
+        self.prefix = prefix
     }
 }
 
@@ -159,15 +177,11 @@ extension BotHome {
     /// Saves the index of a transcript just written as `data` from `messages`. It is a cache: when it
     /// can't be saved, the transcript is read the next time.
     func writeIndex(for data: Data, messages: [ChatMessage], task id: UUID?) {
-        let file = indexURL(task: id)
-        guard let stamp = FileStamp.of(transcriptURL(task: id)),
-              let encoded = try? JSONEncoder().encode(TranscriptIndex(stamp: stamp, data: data, digest: ThreadDigest(messages))) else {
-            try? FileManager.default.removeItem(at: file)
-            return
-        }
-        if (try? encoded.write(to: file, options: .atomic)) != nil {
-            HistoryCounters.shared.record(file) { $0.indexWrites += 1 }
-        }
+        let transcript = transcriptURL(task: id)
+        guard let stamp = FileStamp.of(transcript) else { return }
+        // A background digest does not migrate payload. Leave it unpaged so the first real load
+        // or write preserves the legacy original and normalizes legal blank lines before indexing.
+        try? PagedTranscript.writeIndex(TranscriptIndex(stamp: stamp, data: data, digest: ThreadDigest(messages)), at: transcript)
     }
 
     private func readIndex(task id: UUID?) -> TranscriptIndex? {
@@ -186,7 +200,7 @@ extension BotHome {
         guard let stamp = FileStamp.of(transcript) else {
             return FileManager.default.fileExists(atPath: transcript.path) ? nil : ThreadDigest([])
         }
-        guard let index = readIndex(task: id), index.stamp == stamp, Self.tailHash(of: transcript, size: stamp.size) == index.tail else { return nil }
+        guard let index = PagedTranscript.validIndex(transcript), index.stamp == stamp else { return nil }
         return index.digest
     }
 
@@ -201,7 +215,20 @@ extension BotHome {
     /// Reads the conversation's transcript to show it, keeping what can't be read as
     /// `TranscriptRead` does, and makes its index again when it doesn't describe what was read: a
     /// transcript changed outside BotChu, also with the same size and dates, has another hash.
-    public func loadHistory(task id: UUID? = nil) -> HistoryLoad {
+    public func loadHistory(task id: UUID? = nil, before: Int? = nil, limit: Int = PagedTranscript.residentLimit) -> HistoryLoad {
+        do { return try PagedTranscript.load(transcriptURL(task: id), before: before, limit: limit) }
+        catch {
+            let whole = loadWholeHistory(task: id)
+            let end = max(0, min(before ?? whole.messages.count, whole.messages.count))
+            let start = max(0, end - max(1, limit))
+            return HistoryLoad(messages: Array(whole.messages[start..<end]), digest: whole.digest,
+                               bytes: whole.bytes, reindexed: whole.reindexed, start: start,
+                               prefix: ThreadDigest(Array(whole.messages.prefix(start))))
+        }
+    }
+
+    public func loadWholeHistory(task id: UUID? = nil) -> HistoryLoad {
+
         let transcript = transcriptURL(task: id)
         let before = FileStamp.of(transcript)
         var content = Data()
@@ -219,7 +246,7 @@ extension BotHome {
         let digest = ThreadDigest(messages)
         guard let before else { return HistoryLoad(messages: messages, digest: digest, bytes: 0, reindexed: false) }
         let index = readIndex(task: id)
-        let current = index.map { $0.stamp == before && $0.hash == ContentHash.of(content) } ?? false
+        let current = index.map { $0.stamp == before && ($0.pages != nil || $0.hash == ContentHash.of(content)) } ?? false
         // Only a transcript that didn't change while it was read gets an index made from it.
         if !current, FileStamp.of(transcript) == before {
             writeIndex(for: content, messages: messages, task: id)
@@ -252,21 +279,30 @@ extension BotHome {
     /// recovers it. The transcript is read only when recovery needs it (messages waiting or taken,
     /// or a queue file that couldn't be read) or `load` asks for it; `transcript` is the one in
     /// memory, when it is.
-    public func recover(task id: UUID? = nil, transcript given: [ChatMessage]? = nil, load: Bool = false) -> HistoryRecovery {
+    public func recover(task id: UUID? = nil, transcript given: [ChatMessage]? = nil, load: Bool = false, start: Int = 0, prefix: ThreadDigest = ThreadDigest([])) -> HistoryRecovery {
         let queued = readQueuedMessages(task: id), taken = readTakenMessages(task: id)
         let notes = [taken.note(for: .taken), queued.note(for: .queue)].compactMap { $0 }
         let waiting = !queued.messages.isEmpty || !taken.messages.isEmpty || !notes.isEmpty
         guard waiting || load || given != nil else {
             return HistoryRecovery(queue: MessageQueue(), failures: [], history: nil, digest: readDigest(task: id))
         }
-        var history = given.map { HistoryLoad(messages: $0, digest: ThreadDigest($0), bytes: 0, reindexed: false) } ?? loadHistory(task: id)
-        var queue = MessageQueue(saved: queued.messages, taken: taken.messages, delivered: history.messages, paused: loadQueuePaused(task: id))
+        var history = given.map { HistoryLoad(messages: $0, digest: ThreadDigest($0), bytes: 0, reindexed: false, start: start, prefix: prefix) } ?? loadHistory(task: id)
+        let ids = Set((queued.messages + taken.messages).map(\.id)).subtracting(history.messages.map(\.id))
+        let earlier = history.start > 0 ? (try? PagedTranscript.matching(ids, in: transcriptURL(task: id))) ?? [] : []
+        var queue = MessageQueue(saved: queued.messages, taken: taken.messages, delivered: history.messages + earlier, paused: loadQueuePaused(task: id))
         var failures: [SaveFailure] = []
         if !queue.taken.isEmpty || !notes.isEmpty {
+            let base = history.messages
             history.messages = queue.restoringTaken(into: history.messages) + notes
-            history.digest = ThreadDigest(history.messages)
-            failures = checkpoint(history.messages, queue: &queue, task: id).failures
+            failures = checkpoint(PagedTranscript.Snapshot(history.messages, start: history.start, base: base), queue: &queue, task: id).failures
         }
+        var summary = history.prefix.summary
+        summary.extend(with: history.messages, from: 0)
+        let reply = history.messages.last(where: { $0.role == .assistant })?.text
+        history.digest = ThreadDigest(summary: summary, count: history.start + history.messages.count,
+                                      lastReply: reply ?? history.prefix.lastReply,
+                                      shellCount: history.prefix.shellCount + ToolCounts(messages: history.messages).shell)
+        if reply == nil { history.digest.lastReplyCut = history.prefix.lastReplyCut }
         return HistoryRecovery(queue: queue, failures: failures, history: history, digest: history.digest)
     }
 }

@@ -149,7 +149,8 @@ extension RenderingTests {
         // Back down by hand: pinned again, following what comes.
         for _ in 0..<40 where chat.below > 0.5 { Self.wheel(chat.scroll, by: -60) }
         try await chat.settle()
-        #expect(chat.transcript.isPinned)
+        let pinnedAfterReturning = chat.transcript.isPinned
+        #expect(pinnedAfterReturning)
         #expect(chat.jumpButton == nil)
         conversation.append(ChatMessage(role: .assistant, text: "A new reply\n\nwith a second paragraph."))
         try await chat.settle()

@@ -134,13 +134,13 @@ final class TelegramBridge {
         let target = ChatTarget.home(botID)
         // A repeated message is recognized in Home's whole history and recovered queue, read first
         // when Home isn't in memory (#109).
-        _ = await model?.loadedThread(target)
+        let history = await model?.loadedThread(target)
         // No suspension between the final authorization check and AppModel.send. Settings may
         // have changed before observation has had a chance to cancel/restart this gateway.
         guard case .allowed = authorization(for: chat, botID: mapped, generation: generation) else { return .discarded }
         guard let model, let bot = model.bot(botID) else { return .unavailable }
         let queued = { model.messageQueues[target]?.messages.contains { $0.id == id } == true }
-        if queued() || model.thread(target).contains(where: { $0.id == id }) { return .duplicate }
+        if queued() || history?.contains(where: { $0.id == id }) == true { return .duplicate }
         guard await model.sendAccepted(text, to: target, id: id, references: references) else {
             return .failed("it couldn't be saved in \(bot.name)'s queue.")
         }

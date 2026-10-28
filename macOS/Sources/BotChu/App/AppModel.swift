@@ -1137,12 +1137,9 @@ final class AppModel {
     private func report(on task: BotTask, of botID: UUID, replyLimit: Int = BotContext.maxReportReply) -> String {
         let conversation = conversation(.task(task.id, of: botID))
         let status = BotStatus.make(settings: task, summary: conversation.summary, run: conversation.run)
-        if conversation.isLoaded {
-            return BotContext.taskReport(task, status: status, pullRequest: task.pullRequest,
-                                         lastReply: conversation.messages.last(where: { $0.role == .assistant })?.text, replyLimit: replyLimit)
-        }
-        return BotContext.taskReport(task, status: status, pullRequest: task.pullRequest, lastReply: conversation.digest?.lastReply,
-                                     replyCut: conversation.digest?.lastReplyCut ?? false, replyLimit: replyLimit)
+        let digest = conversation.reportDigest
+        return BotContext.taskReport(task, status: status, pullRequest: task.pullRequest, lastReply: digest.lastReply,
+                                     replyCut: digest.lastReplyCut, replyLimit: replyLimit)
     }
 
     /// Whether a task on this Mac has its worktree to run in. A task on a host is asked there.
@@ -1562,7 +1559,7 @@ final class AppModel {
         var added: [ChatMessage] = []
         var replacedNote: ChatMessage?
         if let message {
-            if current.resumableSessionID == nil, history.contains(where: { $0.role == .assistant }) {
+            if current.resumableSessionID == nil, (history.contains(where: { $0.role == .assistant }) || conversation(target).digest?.lastReply != nil) {
                 // Name the account on the note New Session left, or add one (an account switch).
                 if let last = history.last, last.role == .note, last.text.hasPrefix("New session") {
                     replacedNote = last
@@ -1696,9 +1693,15 @@ final class AppModel {
         let ticket = UUID()
         waiting[target] = ticket
         runStates[target] = RunState(preparing: true)
+        let historyLast = history.last?.id
         Task { [self] in
             defer { if waiting[target] == ticket { waiting[target] = nil } }
-            // Load only the conversation data this turn needs before preparing its latest context.
+            // Read the requested recap/receipt history before taking the latest preparation snapshot.
+            let historyHome = BotHome(workspace: bot.persistencePath)
+            let history = (try? await storage.perform(historyHome.conversationLane(task: target.taskID), label: "resume context") {
+                historyLast == nil ? [] : try PagedTranscript.context(historyHome.transcriptURL(task: target.taskID), through: historyLast)
+            }) ?? history
+            guard waiting[target] == ticket else { return }
             let home = task?.isRemote == true && resume == nil ? await loadedThread(.home(id)) ?? [] : []
             if task == nil {
                 await digests(of: (resume == nil ? openTasks(of: id).map(\.id) : []) + reportedTasks(of: id, in: history), of: id)
@@ -1803,7 +1806,9 @@ final class AppModel {
                 let home = BotHome(workspace: bot.persistencePath)
                 let what = task.map { "\($0.title) turn" } ?? "turn"
                 let startedAt = Date()
-                let turnStart = thread(target).count
+                let turnStart = conversation(target).historyStart + thread(target).count
+                let turnPrompt = thread(target).last(where: { $0.role == .user })
+                var lastCheckpoint = Date()
                 var assembler = ThreadAssembler()
                 var outcome = TurnOutcome()
                 let accountID = account.id
@@ -1884,7 +1889,8 @@ final class AppModel {
                     if let connectors {
                         self.connectorBoard.record(connectors, scope: connectorScope, sessionID: sessions.last ?? self.runSettings(of: target)?.resumableSessionID, for: target)
                     }
-                    if delivered {
+                    if delivered || (conversation.messages.count > PagedTranscript.residentLimit && Date().timeIntervalSince(lastCheckpoint) >= 1) {
+                        lastCheckpoint = Date()
                         // The taken message leaves the saved queue only once the saved transcript holds it.
                         self.saveThread(target)
                     }
@@ -1908,7 +1914,8 @@ final class AppModel {
                     // What the turn delivered to the Inbox shows after its reply.
                     let cards = self.inbox.takeCards(for: target)
                     // The heartbeat this turn answered, if it did; its bare acknowledgement leaves a note instead.
-                    let pulse = self.thread(target).last(where: { $0.role == .user })?.heartbeat
+                    let pulse = self.thread(target).last(where: { $0.role == .user })?.heartbeat ?? turnPrompt?.heartbeat
+                    let localTurnStart = max(0, turnStart - self.conversation(target).historyStart)
                     var acknowledged = false
                     self.conversation(target).stream { messages in
                         assembler.apply(.textEnd, to: &messages)
@@ -1929,7 +1936,7 @@ final class AppModel {
                                 ? "\(account.name) exited with status \(status) without replying."
                                 : "\(account.name) exited with status \(status):\n\(detail)"))
                         }
-                        if pulse != nil, !stopped, let i = messages.indices.last(where: { messages[$0].role == .assistant }), i >= turnStart,
+                        if pulse != nil, !stopped, let i = messages.indices.last(where: { messages[$0].role == .assistant }), i >= localTurnStart,
                            Heartbeat.isAck(messages[i].text) {
                             messages.remove(at: i)
                             messages.append(ChatMessage(role: .note, text: Heartbeat.acknowledged))
@@ -1938,34 +1945,38 @@ final class AppModel {
                     }
                     let messages = self.thread(target)
                     let failure = outcome.failure(stopped: stopped, exitError: messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil })
-                    let turn = Array(messages.suffix(from: min(turnStart, messages.count)))
+                    let fallback = Array(messages.suffix(from: min(localTurnStart, messages.count)))
                     self.inbox.turnEnded(target)
-                    self.log(TurnLog.ended(
-                        at: Date(), startedAt: startedAt, status: status, stopped: stopped,
-                        toolCalls: turn.filter { $0.role == .tool }.count,
-                        error: turn.last(where: { $0.role == .error })?.text, stderr: stderr, what: what), in: home)
                     // The turn's end is saved off the main thread, then what it asked to remember;
                     // until both are done the conversation stays busy, so nothing else starts in it.
                     self.saveThread(target) { [weak self] saved in
-                        self?.saveMemory(from: turn, for: target) { [weak self] in
-                            guard let self, self.runSettings(of: target) != nil else { return }
-                            self.runStates[target] = nil
-                            if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
-                            if !acknowledged, self.visibleBotID != id || self.tab(of: id) != target { self.unread.insert(target) }
-                            if target.taskID != nil { self.finishTaskTurn(target, stopped: stopped, failure: failure, reported: !acknowledged) }
-                            self.scheduleHeartbeat(after: Heartbeat.Turn(reply: turn.last(where: { $0.role == .assistant })?.text, pulse: pulse,
-                                                                         stopped: stopped, failed: failure != nil,
-                                                                         endedBackgroundTasks: run.endedBackgroundTasks), in: target)
-                            // Home's turns and tasks' join the work their bot's next run review covers.
-                            self.reviewTurn(target, thread: messages, turnStart: turnStart, accountID: account.id)
-                            // Only Stop and real failures pause the queue (not quitting BotChu, nor Interrupt &
-                            // send); messages the CLI never took go out as the next turn.
-                            self.messageQueues[target]?.finishTurn(stopped: stopped && !self.terminating,
-                                                                   failed: !self.terminating && (!saved || failure != nil))
-                            self.saveQueue(for: target)
-                            self.sendNextQueued(to: target)
-                            // The account may be idle now, for a review waiting for it.
-                            self.evaluator.pump()
+                        guard let self else { return }
+                        self.readTurn(target, from: turnStart, fallback: fallback) { [weak self] turn in
+                            guard let self else { return }
+                            self.log(TurnLog.ended(
+                                at: Date(), startedAt: startedAt, status: status, stopped: stopped,
+                                toolCalls: turn.filter { $0.role == .tool }.count,
+                                error: turn.last(where: { $0.role == .error })?.text, stderr: stderr, what: what), in: home)
+                            self.saveMemory(from: turn, for: target) { [weak self] in
+                                guard let self, self.runSettings(of: target) != nil else { return }
+                                self.runStates[target] = nil
+                                if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
+                                if !acknowledged, self.visibleBotID != id || self.tab(of: id) != target { self.unread.insert(target) }
+                                if target.taskID != nil { self.finishTaskTurn(target, messages: turn, stopped: stopped, failure: failure, reported: !acknowledged) }
+                                self.scheduleHeartbeat(after: Heartbeat.Turn(reply: turn.last(where: { $0.role == .assistant })?.text, pulse: pulse,
+                                                                             stopped: stopped, failed: failure != nil,
+                                                                             endedBackgroundTasks: run.endedBackgroundTasks), in: target)
+                                // Home's turns and tasks' join the work their bot's next run review covers.
+                                self.reviewTurn(target, thread: (turnPrompt.map { [$0] } ?? []) + turn, turnStart: turnPrompt == nil ? 0 : 1, accountID: account.id)
+                                // Only Stop and real failures pause the queue (not quitting BotChu, nor Interrupt &
+                                // send); messages the CLI never took go out as the next turn.
+                                self.messageQueues[target]?.finishTurn(stopped: stopped && !self.terminating,
+                                                                       failed: !self.terminating && (!saved || failure != nil))
+                                self.saveQueue(for: target)
+                                self.sendNextQueued(to: target)
+                                // The account may be idle now, for a review waiting for it.
+                                self.evaluator.pump()
+                            }
                         }
                     }
                 }
@@ -2018,9 +2029,9 @@ final class AppModel {
 
     /// After a task's turn: notes the pull request its conversation linked to, and tells its bot's
     /// Home how the turn went (not when the owner stopped it, nor for a heartbeat acknowledged).
-    private func finishTaskTurn(_ target: ChatTarget, stopped: Bool, failure: String?, reported: Bool = true) {
+    private func finishTaskTurn(_ target: ChatTarget, messages: [ChatMessage], stopped: Bool, failure: String?, reported: Bool = true) {
         guard let i = taskIndex(target), var task = tasks[target.botID]?[i] else { return }
-        let pullRequest = TaskNaming.pullRequest(in: thread(target), task: task)
+        let pullRequest = TaskNaming.pullRequest(in: messages, task: task)
         if pullRequest != task.pullRequest {
             task.pullRequest = pullRequest
             tasks[target.botID]?[i] = task
@@ -2032,6 +2043,20 @@ final class AppModel {
     }
 
     // MARK: Memory
+
+    /// A turn consumer (memory, log, review) explicitly requests its complete content after the
+    /// checkpoint. It does not put those old pages back in the active conversation.
+    private func readTurn(_ target: ChatTarget, from start: Int, fallback: [ChatMessage],
+                          done: @escaping @MainActor @Sendable ([ChatMessage]) -> Void) {
+        guard let files = files(target) else { done(fallback); return }
+        let snapshot = conversation(target).snapshot, home = files.home, task = target.taskID
+        storage.submit(files.lane, label: "finished turn", work: {
+            let prefix = start < snapshot.start
+                ? home.loadHistory(task: task, before: snapshot.start, limit: snapshot.start - start).messages : []
+            let held = Dictionary(snapshot.pending.map { ($0.message.id, $0.message) }, uniquingKeysWith: { _, last in last })
+            return prefix.map { held[$0.id] ?? $0 } + snapshot.messages.dropFirst(max(0, start - snapshot.start))
+        }) { result in done((try? result.get()) ?? fallback) }
+    }
 
     /// After a turn of Home or a task, on this Mac or a host (or on Retry): saves what its replies
     /// asked to remember, and any notes still waiting, off the main thread, says how it went in the
@@ -2176,8 +2201,15 @@ final class AppModel {
         guard let bot = bot(target.botID), runSettings(of: target) != nil else { return }
         var closed = thread(target)
         ThreadAssembler.closeRunningTools(&closed)
-        let home = BotHome(workspace: bot.persistencePath), taskID = target.taskID, messages = closed
-        storage.submit(home.conversationLane(task: taskID), label: "unfinished", work: { try home.writeTranscript(messages, task: taskID) })
+        let home = BotHome(workspace: bot.persistencePath), taskID = target.taskID
+        let current = conversation(target).snapshot
+        let pending = current.pending.map { update in
+            var update = update
+            if update.message.toolState == .running { update.message.toolState = .interrupted }
+            return update
+        }
+        let snapshot = PagedTranscript.Snapshot(closed, start: current.start, base: current.base, pending: pending)
+        storage.submit(home.conversationLane(task: taskID), label: "unfinished", work: { try home.writeTranscript(snapshot, task: taskID) })
     }
 
     /// The model the CLI said it ran, for the model choice the turn ran with. Changes no choice.
@@ -2284,13 +2316,57 @@ final class AppModel {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             hydrate(target, then: { continuation.resume() }, cancel: { continuation.resume() })
         }
-        return files(target) == nil ? nil : thread(target)
+        guard let files = files(target) else { return nil }
+        let state = conversation(target)
+        guard state.historyStart > 0 else { return state.messages }
+        let home = files.home, task = target.taskID, snapshot = state.snapshot
+        return try? await storage.perform(files.lane, label: "requested history") {
+            let prefix = home.loadHistory(task: task, before: snapshot.start, limit: Int.max).messages
+            let held = Dictionary(snapshot.pending.map { ($0.message.id, $0.message) }, uniquingKeysWith: { _, last in last })
+            return prefix.map { held[$0.id] ?? $0 } + snapshot.messages
+        }
     }
 
     /// Waits until no read or recovery of the conversation is under way.
     private func settled(_ target: ChatTarget) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             if !later(target, needs: .idle, { continuation.resume() }, cancel: { continuation.resume() }) { continuation.resume() }
+        }
+    }
+
+    /// An earlier window uses the same lane and stable message IDs as the active tail. Its
+    /// payload is capped separately, so a reader can stay here while the run keeps checkpointing.
+    func pageEarlier(_ target: ChatTarget, done: @escaping @MainActor () -> Void) {
+        let state = conversation(target)
+        guard !state.isPaging, state.displayStart > 0, let files = files(target) else { return }
+        state.isPaging = true
+        let end = state.displayStart, home = files.home, task = target.taskID
+        storage.submit(files.lane, label: "page", work: { home.loadHistory(task: task, before: end, limit: PagedTranscript.pageSize) }) { [weak self, weak state] result in
+            guard let self, let state, self.conversations[target] === state else { return }
+            state.isPaging = false
+            guard state.displayStart == end, case .success(let page) = result else { return }
+            state.browse(page)
+            done()
+        }
+    }
+
+    func pageLater(_ target: ChatTarget, done: @escaping @MainActor () -> Void = {}) {
+        let state = conversation(target)
+        guard !state.isPaging, state.hasLaterPage, let page = state.browsing, let files = files(target) else { return }
+        let end = page.start + page.messages.count, home = files.home, task = target.taskID
+        if end >= state.historyStart {
+            let messages = Array(state.messages.dropFirst(end - state.historyStart).prefix(PagedTranscript.pageSize))
+            state.browseLater(HistoryLoad(messages: messages, digest: state.reportDigest, bytes: 0, reindexed: false, start: end))
+            done()
+            return
+        }
+        state.isPaging = true
+        storage.submit(files.lane, label: "page", work: { home.loadHistory(task: task, before: end + PagedTranscript.pageSize, limit: PagedTranscript.pageSize) }) { [weak self, weak state] result in
+            guard let self, let state, self.conversations[target] === state else { return }
+            state.isPaging = false
+            guard state.browsing?.start == page.start, case .success(let later) = result else { return }
+            state.browseLater(later)
+            done()
         }
     }
 
@@ -2325,7 +2401,7 @@ final class AppModel {
     }
 
     private func took(_ history: HistoryLoad, into conversation: ConversationState, _ target: ChatTarget) {
-        conversation.load(history.messages, summary: history.digest.summary)
+        conversation.load(history)
         historyBudget.use(target, bytes: HistoryBudget<ChatTarget>.estimate(history.messages))
         if target == shownTarget { warmMarkdown(target) }
     }
@@ -2338,12 +2414,13 @@ final class AppModel {
         guard let files = files(target) else { return }
         let conversation = conversation(target)
         let given = conversation.isLoaded ? conversation.messages : nil
+        let start = conversation.historyStart, prefix = conversation.prefixDigest
         guard let ticket = conversation.history.begin(load: load, recover: true) else {
             later(target, needs: .idle, { [weak self] in self?.recover(target, load: load) })
             return
         }
         let home = files.home, task = target.taskID, lane = files.lane
-        storage.submit(lane, label: "recover", work: { home.recover(task: task, transcript: given, load: load) }) { [weak self, weak conversation] result in
+        storage.submit(lane, label: "recover", work: { home.recover(task: task, transcript: given, load: load, start: start, prefix: prefix) }) { [weak self, weak conversation] result in
             guard let self, let conversation else { return }
             self.recovered(target, conversation, ticket: ticket, lane: lane, inMemory: given != nil, load: load, result: result)
         }
@@ -2362,7 +2439,7 @@ final class AppModel {
             if !inMemory {
                 took(history, into: conversation, target)
             } else if history.messages.count != conversation.messages.count {
-                conversation.replace(history.messages)
+                conversation.load(history)
             }
         } else if let digest = recovery.digest {
             conversation.know(digest)
@@ -2382,10 +2459,11 @@ final class AppModel {
         let home = files.home, task = target.taskID
         if conversation.history.recovery == .recovering {
             let given = conversation.isLoaded ? conversation.messages : nil
-            let recovery = storage.sync(files.lane, label: "recover") { home.recover(task: task, transcript: given, load: true) }
+            let start = conversation.historyStart, prefix = conversation.prefixDigest
+            let recovery = storage.sync(files.lane, label: "recover") { home.recover(task: task, transcript: given, load: true, start: start, prefix: prefix) }
             conversation.history.took(loaded: true, recovered: true)
             if let history = recovery.history {
-                if given == nil { took(history, into: conversation, target) } else { conversation.replace(history.messages) }
+                if given == nil { took(history, into: conversation, target) } else { conversation.load(history) }
             }
             messageQueues[target] = recovery.queue
             show(recovery.failures, in: target)
@@ -2663,9 +2741,10 @@ final class AppModel {
         let conversation = conversation(target)
         if skippingUnchanged, conversation.isSaved, storage.isIdle(under: files.lane) { done?(true); return }
         let revision = conversation.revision
-        files.saveTranscript(conversation.messages, version: conversation.version, queue: queueAccess(target),
+        let snapshot = conversation.snapshot
+        files.saveTranscript(snapshot, version: conversation.version, queue: queueAccess(target),
                              failed: { [weak self] failures in self?.show(failures, in: target) }) { [weak conversation] saved in
-            if saved { conversation?.saved(revision) }
+            if saved { conversation?.saved(revision, snapshot: snapshot) }
             done?(saved)
         }
     }

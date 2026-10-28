@@ -35,9 +35,12 @@ import BotChuCore
     @ObservationIgnored var saveToken: (String) -> Bool = { value in
         Keychain.setChecked(value, for: Keychain.remoteQueueAccount)
     }
+    /// Full history for journal recovery, including messages evicted from the live tail.
+    @ObservationIgnored var readHistory: (ChatTarget) async -> [ChatMessage]?
 
     init(model: AppModel) {
         self.model = model
+        readHistory = { [weak model] target in await model?.loadedThread(target) }
         reloadBot()
         observeSettings()
         clock = Task { [weak self] in
@@ -213,22 +216,37 @@ import BotChuCore
     func reconcile() async {
         guard let id = botID, let queue, let model else { return }
         let target = ChatTarget.home(id)
-        _ = await model.loadedThread(target)
         let snapshot = await queue.snapshot()
-        guard botID == id, model.bot(id) != nil, snapshot.messages.count >= appliedRevision else { return }
-        appliedRevision = snapshot.messages.count
+        guard self.queue === queue, botID == id, model.bot(id) != nil, snapshot.messages.count >= appliedRevision else { return }
+        var added: [ChatMessage] = []
+        if snapshot.messages.count > appliedRevision {
+            // The first reconciliation includes evicted history. Another reconciliation can
+            // apply and even checkpoint/evict messages while this read is suspended.
+            var history: [ChatMessage] = []
+            if appliedRevision < 0 {
+                guard let loaded = await readHistory(target), self.queue === queue,
+                      botID == id, model.bot(id) != nil, snapshot.messages.count >= appliedRevision else { return }
+                history = loaded
+            }
+            // Once validated, the cursor covers the complete saved prefix. Ordinary new
+            // requests and replies only need the appended journal entries and the live tail.
+            let existing = Set(history.map(\.id)).union(model.thread(target).map(\.id))
+            // Journal order is append-only. Revalidate its cursor after every suspension so
+            // messages another call applied are skipped even if they have left the live tail.
+            added = snapshot.messages.dropFirst(max(0, appliedRevision)).filter { !existing.contains($0.id) }
+            for message in added { model.append(message, to: target) }
+            appliedRevision = snapshot.messages.count
+            if !added.isEmpty { model.saveThread(target) }
+        }
+        // Polls/forwarding can change without adding a message to the journal.
         pending = snapshot.pending
         if let poll = snapshot.lastPoll, poll > (lastPoll ?? .distantPast) { lastPoll = poll }
         now = Date()
-        let existing = Set(model.thread(target).map(\.id))
-        let added = snapshot.messages.filter { !existing.contains($0.id) }
-        for message in added { model.append(message, to: target) }
         if added.contains(where: { $0.role == .assistant || $0.role == .error }), !model.isShown(target) { model.unread.insert(target) }
         model.runStates[target] = snapshot.firstPending.map { RunState(startedAt: $0.date, hasOutput: true) }
         for entry in snapshot.entries where entry.awaitsForwarding { await forward(entry, from: id) }
         // Its pet thinks while a message waits, and is pleased when the last reply lands.
         if added.contains(where: { $0.role == .assistant }) { model.react(.done, for: target, seconds: 3) }
-        if !added.isEmpty { model.saveThread(target) }
     }
 
     /// Hands a remote bot's answer to a bot's message back to the conversation that sent it, as a
@@ -246,9 +264,9 @@ import BotChuCore
             model.note("\(sender.name)'s conversation is gone, so this reply stays here.", in: .home(remoteID))
             return
         }
-        _ = await model.loadedThread(target)
+        let history = await model.loadedThread(target)
         if model.messageQueues[target]?.messages.contains(where: { $0.id == reply.id }) == true
-            || model.thread(target).contains(where: { $0.id == reply.id }) {
+            || history?.contains(where: { $0.id == reply.id }) == true {
             try? await queue.markForwarded(messageID)
             forwarding.remove(messageID)
             return

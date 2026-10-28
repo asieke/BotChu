@@ -728,7 +728,7 @@ private struct SubagentDetailContent: View {
                 .id(SubagentAnchor.block("sub-agents"))
                 .modifier(Placed(anchor: .block("sub-agents"), tab: tab))
             }
-            SubagentTranscript(run: run, messages: messages, tab: tab)
+            SubagentTranscript(run: run, messages: model.delegation.live(run.id).displayMessages, tab: tab)
                 .id(SubagentAnchor.block("transcript"))
                 .modifier(Placed(anchor: .block("transcript"), tab: tab))
             SubagentBrief(run: run, tab: tab)
@@ -870,6 +870,7 @@ private struct SubagentText: View {
 /// leaves it), showing its last items with the earlier ones a click away.
 private struct SubagentTranscript: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.inspectorArea) private var area
     let run: SubagentRun
     let messages: [ChatMessage]
     let tab: SubagentTabState
@@ -886,21 +887,47 @@ private struct SubagentTranscript: View {
                     Text(run.phase.isActive ? "Nothing yet" : "Nothing recorded")
                         .font(.system(size: 12)).foregroundStyle(Palette.secondaryText).padding(10)
                 }
-                if start > 0 {
-                    let earlier = min(start, 100)
-                    Button("Show \(earlier) earlier") { tab.transcriptStart[run.id] = start - earlier }
+                if start > 0 || model.delegation.live(run.id).displayStart > 0 {
+                    let earlier = min(start + model.delegation.live(run.id).displayStart, 100)
+                    Button("Show \(earlier) earlier") {
+                        if start > 0 { tab.transcriptStart[run.id] = max(0, start - earlier) }
+                        else { model.delegation.pageEarlier(run.id) { tab.transcriptStart[run.id] = 0 } }
+                    }
                         .buttonStyle(.link).font(.system(size: 12)).foregroundStyle(Palette.accent)
                         .padding(EdgeInsets(top: 8, leading: 10, bottom: 4, trailing: 10))
                 }
                 ForEach(items[start...]) { message in
                     SubagentTranscriptItem(message: message, run: run, tab: tab)
+                        .id(SubagentAnchor.block("message-" + message.id.uuidString))
+                        .modifier(Placed(anchor: .block("message-" + message.id.uuidString), tab: tab))
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(InspectorScrollArea.space)) } action: { frame in
+                            if message.id == items.last?.id { loadLater(near: frame) }
+                        }
                 }
             }
         }
         .onAppear {
+            model.delegation.live(run.id).pinDisplay()
             // The window's start stays put once shown, so new items add below and nothing moves.
             if tab.transcriptStart[run.id] == nil { tab.transcriptStart[run.id] = start }
             if tab.transcriptOpen[run.id] == nil { tab.transcriptOpen[run.id] = run.phase.isActive }
+        }
+        .onDisappear { model.delegation.live(run.id).showLatest() }
+        .onChange(of: messages.isEmpty) { _, empty in
+            if !empty { model.delegation.live(run.id).pinDisplay() }
+        }
+        .onChange(of: model.delegation.live(run.id).hasLaterPage) { _, later in
+            guard later, let id = items.last?.id, let frame = tab.frames[.block("message-" + id.uuidString)] else { return }
+            loadLater(near: frame)
+        }
+    }
+
+    private func loadLater(near frame: CGRect) {
+        guard frame.maxY > 0, frame.minY < (area?.viewport.height ?? 0) + 100,
+              model.delegation.live(run.id).hasLaterPage else { return }
+        model.delegation.pageLater(run.id) {
+            tab.transcriptStart[run.id] = 0
+            tab.keepPlace()
         }
     }
 }

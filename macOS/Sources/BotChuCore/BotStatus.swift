@@ -175,6 +175,9 @@ public struct ThreadSummary: Codable, Equatable, Sendable {
     /// Messages from the owner and the bot.
     public private(set) var messageCount = 0
     public private(set) var toolCallCount = 0
+    /// The preceding message's role at a page boundary, so a continued bot turn does not gain
+    /// an avatar (and change height) merely because earlier payload has left memory.
+    public private(set) var lastRole: ChatMessage.Role?
     /// When the last message that isn't a note was written.
     public private(set) var lastActivity: Date?
     /// That message's text, when it is an error.
@@ -194,6 +197,7 @@ public struct ThreadSummary: Codable, Equatable, Sendable {
     /// not removed, reordered or given another role; otherwise make a new summary.
     public mutating func extend(with messages: [ChatMessage], from start: Int) {
         let start = max(0, min(start, messages.count))
+        if start < messages.count { lastRole = messages.last?.role }
         for index in start..<messages.count {
             switch messages[index].role {
             case .user, .assistant: messageCount += 1

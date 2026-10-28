@@ -53,23 +53,25 @@ public struct BotHome: Sendable {
         Self.readThread(threadURL)
     }
 
-    /// Rewrites the whole thread, atomically (a temporary file, then a rename), so a crash never
-    /// leaves it half written.
+    /// Saves a complete snapshot using the paged transcript's recoverable suffix commit.
     public func saveThread(_ messages: [ChatMessage]) throws {
         try writeTranscript(messages)
     }
 
-    /// Rewrites a conversation's transcript, Home's or a task's, as `saveThread` does, and returns
-    /// its size in bytes.
-    /// Its index (`TranscriptIndex`) is saved after it, from the same bytes.
+    /// Saves a conversation's changed suffix, Home's or a task's, and returns bytes written.
+    /// The redo record precedes the payload; its index is published once that payload is durable.
     @discardableResult
     public func writeTranscript(_ messages: [ChatMessage], task id: UUID? = nil) throws -> Int {
         try prepare()
         if let id { try FileManager.default.createDirectory(at: taskURL(id), withIntermediateDirectories: true) }
-        let data = try Self.encodeThread(messages)
-        try Self.write(data, to: transcriptURL(task: id))
-        writeIndex(for: data, messages: messages, task: id)
-        return data.count
+        return try PagedTranscript.save(.init(messages), to: transcriptURL(task: id))
+    }
+
+    @discardableResult
+    public func writeTranscript(_ snapshot: PagedTranscript.Snapshot, task id: UUID? = nil) throws -> Int {
+        try prepare()
+        if let id { try FileManager.default.createDirectory(at: taskURL(id), withIntermediateDirectories: true) }
+        return try PagedTranscript.save(snapshot, to: transcriptURL(task: id))
     }
 
     /// The bot's tasks, open and closed, oldest first. A task whose `task.json` can't be read is left out.
@@ -167,12 +169,16 @@ public struct BotHome: Sendable {
     /// and the failure is returned for the conversation to show. `saved` says whether the
     /// transcript was saved.
     public func checkpoint(_ transcript: [ChatMessage], queue: inout MessageQueue, task id: UUID? = nil) -> (saved: Bool, failures: [SaveFailure]) {
+        checkpoint(PagedTranscript.Snapshot(transcript), queue: &queue, task: id)
+    }
+
+    public func checkpoint(_ snapshot: PagedTranscript.Snapshot, queue: inout MessageQueue, task id: UUID? = nil) -> (saved: Bool, failures: [SaveFailure]) {
         let holdsTaken = !queue.taken.isEmpty
         var failures: [SaveFailure] = []
         var saved = true
         do {
-            if let id { try saveThread(transcript, task: id) } else { try saveThread(transcript) }
-            queue.saved(transcript)
+            try writeTranscript(snapshot, task: id)
+            queue.saved(snapshot.messages)
         } catch {
             saved = false
             if holdsTaken {
@@ -232,13 +238,25 @@ public struct BotHome: Sendable {
         Self.readThread(subagentURL(id: id, taskID: taskID).appendingPathComponent("thread.jsonl"))
     }
 
-    /// Streaming uses complete snapshots so the open assistant message can be replaced atomically.
+    /// A complete snapshot for explicit consumers; streaming uses the bounded overload below.
     @discardableResult
     public func saveSubagentThread(_ messages: [ChatMessage], id: UUID, taskID: UUID? = nil) throws -> Int {
         try prepare()
         let folder = subagentURL(id: id, taskID: taskID)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        return try Self.writeThread(messages, to: folder.appendingPathComponent("thread.jsonl"))
+        return try PagedTranscript.save(.init(messages), to: folder.appendingPathComponent("thread.jsonl"))
+    }
+
+    @discardableResult
+    public func saveSubagentThread(_ snapshot: PagedTranscript.Snapshot, id: UUID, taskID: UUID? = nil) throws -> Int {
+        try prepare()
+        let folder = subagentURL(id: id, taskID: taskID)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return try PagedTranscript.save(snapshot, to: folder.appendingPathComponent("thread.jsonl"))
+    }
+
+    public func loadSubagentHistory(id: UUID, taskID: UUID? = nil, before: Int? = nil, limit: Int = PagedTranscript.residentLimit) throws -> HistoryLoad {
+        try PagedTranscript.load(subagentURL(id: id, taskID: taskID).appendingPathComponent("thread.jsonl"), before: before, limit: limit)
     }
 
     public func appendSubagentMessages(_ messages: [ChatMessage], id: UUID, taskID: UUID? = nil) throws {
@@ -294,6 +312,7 @@ public struct BotHome: Sendable {
     /// The messages that could be read, followed by a note on any that couldn't (`TranscriptRead`).
     /// Once the original is kept, the note is saved with them, so it stays in the conversation.
     static func readThread(_ url: URL) -> [ChatMessage] {
+        try? PagedTranscript.recoverCommit(url)
         let read = TranscriptRead.read(url)
         guard let note = read.note(for: .conversation) else { return read.messages }
         let messages = read.messages + [note]

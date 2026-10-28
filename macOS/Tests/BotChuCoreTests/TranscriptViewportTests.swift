@@ -89,6 +89,7 @@ private struct Layout {
     mutating func jump(to y: Double) {
         top = y
         viewport.scrolled(top: y, height: height)
+        viewport.readerMoved()
         settle()
     }
 
@@ -120,7 +121,9 @@ private struct Layout {
 
     mutating func scroll(by delta: Double) {
         top = min(max(-40, top + delta), max(0, viewport.plan.total - height))
-        if viewport.scrolled(top: top, height: height) { settle() }
+        let replan = viewport.scrolled(top: top, height: height)
+        viewport.readerMoved()
+        if replan { settle() }
     }
 
     /// Where a row is on the screen, if it is laid out.
@@ -135,6 +138,62 @@ private struct Layout {
 }
 
 @Suite struct TranscriptViewportTests {
+    @Test func aPartialGroupHeaderKeepsTheFollowingMessageInPlaceWhenEarlierCallsJoinIt() throws {
+        let calls = (0..<50).map { call($0) }
+        let reply = ChatMessage(role: .assistant, text: "The result below these calls.")
+        var layout = Layout(items(Array(calls.suffix(20)) + [reply]))
+        layout.pinned = false
+        layout.settle()
+        layout.jump(to: -20)
+        let row = TranscriptViewport.RowID(item: reply.id, part: 0)
+        let before = try #require(layout.onScreen(row))
+        let next = items(calls + [reply])
+        layout.viewport.relocateAnchor(from: layout.items, to: next)
+        layout.items = next
+        layout.epoch += 1
+        layout.settle()
+        #expect(layout.onScreen(row).map { abs($0 - before) < 0.5 } == true)
+        // Native rows can measure on separate frames. Reports after the first correction must
+        // not move the anchor back into the header that is still growing above this message.
+        for growth in [20.0, 10.0] {
+            let head = try #require(layout.viewport.plan.rows.first { $0.id.item != reply.id })
+            _ = layout.viewport.measured(head.id, signature: head.signature, height: head.height + growth)
+            let top = try #require(layout.viewport.correction)
+            layout.viewport.corrected(to: top)
+            _ = layout.viewport.scrolled(top: top, height: layout.height)
+            let message = try #require(layout.viewport.plan.rows.first { $0.id == row })
+            #expect(abs(message.top - top - before) < 0.5)
+        }
+        layout.jump(to: 0)
+        #expect(layout.viewport.anchorRow?.row.item == next.first?.id,
+                "A later reader scroll must choose its own anchor again")
+    }
+
+    @Test(arguments: [false, true]) func aCallKeepsItsPositionWhenPagingChangesItsGroupID(raw: Bool) throws {
+        let calls = (0..<1_000).map { call($0) }
+        var layout = Layout(items(Array(calls[256..<768])))
+        layout.raw = raw
+        layout.pinned = false
+        layout.opened = Set(layout.items.map(\.id))
+        layout.settle()
+        layout.jump(to: layout.viewport.plan.total * 0.5)
+        let row = try #require(layout.topRow)
+        let before = try #require(layout.onScreen(row))
+        let selected = calls[256 + row.part - (raw ? 0 : 1)].id
+        for range in [128..<640, 384..<896] {
+            let next = items(Array(calls[range]))
+            layout.viewport.relocateAnchor(from: layout.items, to: next)
+            layout.items = next
+            layout.opened = Set(next.map(\.id))
+            layout.epoch += 1
+            layout.settle()
+            let offset = try #require(calls[range].firstIndex { $0.id == selected }) - range.lowerBound
+            let moved = TranscriptViewport.RowID(item: try #require(next.first?.id), part: offset + (raw ? 0 : 1))
+            #expect(layout.onScreen(moved).map { abs($0 - before) < 0.5 } == true)
+            #expect(layout.viewport.plan.rows.count <= TranscriptViewport.rowLimit)
+        }
+    }
+
     /// #110's fixture: 5,000 messages, ten pages of earlier history opened, the reader paused at
     /// an old message, and 1,000 new items arriving: the rows laid out stay within the bound, the
     /// reader's row stays put, and the rows a delta lays out don't grow with what arrived.

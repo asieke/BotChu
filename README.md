@@ -878,12 +878,16 @@ on that pull request's branch to continue in instead). The same command run agai
     notes, sub-agents' and jobs' transcripts and run reviews' records are written off the main
     thread, so typing, switching conversations and Stop never wait for the disk, however long a
     conversation is. Each file's writes keep the order they were asked in, and different
-    conversations' go side by side. A file is written whole, and a newer state of it takes the place
-    of one not written yet (one already written isn't written again), so a late save never overwrites
-    a newer one and at most two states of a file are held at once, one being written and one waiting.
-    A conversation's change is on disk once the write under way and its own are done (about 10 ms for
-    1,500 messages, 35 to 40 ms for 5,000 or for 12 MB of tool output, on an M4 Max); a streaming
-    sub-agent's within a second, a job run's within five. A turn's end, what it asked to remember and
+    conversations' go side by side. A newer state takes the place of one not written yet (one
+    already written isn't written again), so a late save never overwrites a newer one. Home, task
+    and sub-agent transcripts keep completed pages as immutable byte ranges in `thread.jsonl`,
+    which remains the complete, ordered conversation for external tools. A checkpoint encodes and
+    writes only the changing suffix. A durable `thread.commit.json` redo record precedes that write;
+    relaunch replays an interrupted commit before reading it. A legacy original is preserved as
+    `thread.original.jsonl` before migration changes any bytes; conflicting external edits are kept
+    and reconciled by message ID. Settings and queue files are still replaced atomically. Long
+    active conversations checkpoint within a second of output, a streaming sub-agent's within a
+    second, a job run's within five. A turn's end, what it asked to remember and
     its review's hand-over happen off the main thread too; the conversation stays busy until its end
     is saved. Quitting waits up to five seconds for what is being written and lists any file it
     couldn't finish in the system log, leaving it as it was last saved, never taken as saved.
@@ -899,7 +903,20 @@ on that pull request's branch to continue in instead). The same command run agai
     conversation), while typing and switching go on. Sidebar rows and Home's reports on its tasks
     come from each conversation's index (`thread.index.json`): its counts, last activity and error,
     and the start of its last reply, with the size, dates and inode of the transcript it was made from
-    and a hash of its end and of all of it. A transcript changed since, by BotChu or anything else,
+    and hashes of its end and indexed pages. Opening decodes the latest 256 messages (plus at most
+    one boundary page), and **Show earlier** reads another 128. The browsing window keeps at most
+    512 messages, separately from the active tail; **Jump to Latest** returns to the live tail.
+    Scrolling down reads later pages in place. An exploration spanning pages keeps the call being
+    read and its opened details in place; reaching the newest page resumes following new output.
+    Completed saved payload leaves an active tail beyond 256 messages; unresolved tools are held
+    individually, so one slow tool cannot pin completed messages after it. A late result for an
+    evicted tool patches its original ID and position: only the affected page is decoded and the
+    changed message encoded; an atomic file replacement copies unchanged ranges through a 64 KB
+    buffer to preserve complete ordinary JSONL. That exceptional copy cost is counted separately;
+    ordinary tail checkpoints do not copy completed ranges. Unsaved output stays until committed.
+    Resume context, complete-history consumers,
+    memory notes and turn reviews request their content separately without pinning old pages in the
+    live conversation. A transcript changed since, by BotChu or anything else,
     even to the same size with its dates kept, is never described by an old index: it is read again,
     and its index made again; a missing one (a folder from before) is made in the background, one
     conversation at a time. What changes a conversation not read yet (a task's or job's receipt, a
@@ -1436,7 +1453,8 @@ on that pull request's branch to continue in instead). The same command run agai
     what a conversation not in memory is known by, its index and how it is checked against its
     transcript, reading one and recovering its queue after a launch, where its history is and which
     read is taken, and which inactive histories leave memory (`ConversationHistory.swift`), what was
-    read, decoded, written and copied, per file (`HistoryCounters.swift`),
+    indexed JSONL ranges, tail commits, migration and recovery (`PagedTranscript.swift`), and what was
+    read, decoded, encoded, written and copied, including index and journal bytes (`HistoryCounters.swift`),
     and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
@@ -2003,6 +2021,14 @@ on that pull request's branch to continue in instead). The same command run agai
   variable, the rendering test `typingAndSwitchingStayResponsiveWhileFourConversationsSave` writes
   typing and switching times while four conversations save beside it, as `<file>.responsiveness`.
   The benchmark asserts nothing about time and isn't part of `check`.
+- Paged history: `BOTCHU_HISTORY_BENCHMARK=/tmp/history-<mode>.txt
+  BOTCHU_HISTORY_BENCH_MODE=<mode> swift test --package-path macOS --filter pagedHistoryBenchmark`
+  with modes `seed`, then `legacy`, then `paged` in separate processes compares history opening,
+  checkpoint latency, retained payload and peak RSS for 5,000 and 50,000
+  messages. `BOTCHU_HISTORY_BENCH_FIXTURE` selects the shared fixture folder (default
+  `/tmp/botchu-history-benchmark.noindex`). The legacy mode runs the former whole-file reader and
+  encoder against the same fixture, excluding its old index rebuild; index and redo-journal byte
+  costs are reported separately. The launch benchmark above measures window and switching latency.
 - Projects loading: `BOTCHU_PROJECTS_BENCHMARK=<file> swift test --package-path macOS --filter
   projectsBenchmark` times, with your `gh` login (read-only) and a temporary catalog, a first sync
   (until the list shows, and until everything is read), a relaunch (until the saved catalog shows),

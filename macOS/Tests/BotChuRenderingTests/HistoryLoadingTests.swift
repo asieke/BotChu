@@ -9,6 +9,148 @@ import BotChuCore
 /// conversation is read when it is shown or something needs it; and what is asked of one meanwhile
 /// waits for it, in order, so nothing is lost, sent twice or written over a full transcript.
 extension RenderingTests {
+    @Test func pinningAnUnsavedExplorationKeepsTheSelectedCallInPlace() throws {
+        let state = ConversationState(), model = TranscriptModel()
+        let calls = (0..<600).map(BrowsingFixture.read)
+        state.replace(calls)
+        var items = model.items(for: state.displayMessages, root: nil, epoch: state.epoch)
+        model.scrolled(top: 0, height: 800, width: 640)
+        let inputs = TranscriptViewport.Inputs(width: 640, density: 2, dark: false, epoch: state.epoch)
+        _ = model.plan(items, from: 0, inputs: inputs) { _, _ in .init(split: .calls) }
+        model.follow(.openedCard)
+        model.scrolled(top: model.viewport.plan.total * 0.75, height: 800, width: 640)
+        _ = model.plan(items, from: 0, inputs: inputs) { _, _ in .init(split: .calls) }
+        let top = try #require(model.viewport.visibleTop)
+        let row = try #require(model.viewport.plan.rows.first { $0.top + $0.height > top })
+        let selected = calls[row.part].id, offset = row.top - top
+        model.toggleExpanded(selected)
+        // A burst can exceed the browsing limit before its first checkpoint. Pinning the view
+        // then changes a group's first resident call just as a disk page does.
+        state.pinDisplay()
+        items = model.items(for: state.displayMessages, root: nil, epoch: state.epoch)
+        _ = model.plan(items, from: 0, inputs: .init(width: 640, density: 2, dark: false, epoch: state.epoch)) { _, _ in .init(split: .calls) }
+        let moved = try #require(model.viewport.plan.rows.first { BrowsingFixture.messages(in: $0, items: items).contains(selected) })
+        let corrected = model.viewport.correction ?? top
+        #expect(abs(moved.top - corrected - offset) < 0.5)
+        #expect(model.isExpanded(selected))
+        #expect(state.displayMessages.count == PagedTranscript.browsingLimit)
+        #expect(state.messages.count == calls.count, "Unsaved output is still retained for its checkpoint")
+    }
+
+    @Test func aSubagentReaderKeepsItsPageWhenTheActiveTailIsTrimmed() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-subagent-page-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = BotHome(workspace: root.path)
+        let run = SubagentRun(rootBotID: UUID(), depth: 1, targetBot: Bot(name: "Worker", workspace: root.path),
+                              title: "Paged", brief: "Work", workingDirectory: root.path)
+        let live = SubagentLive()
+        live.messages = (0..<1_000).map { ChatMessage(role: .assistant, text: "Reply \($0)") }
+        let first = SubagentArchive.Snapshot(record: run, messages: live.messages, home: home)
+        try SubagentArchive.writeToDisk(first)
+        live.saved(first)
+        live.pinDisplay()
+        live.update { $0[0].text += " updated before its checkpoint" }
+        let selected = live.displayMessages
+        live.update { $0 += (0..<1_000).map { ChatMessage(role: .assistant, text: "More \($0)") } }
+        let next = SubagentArchive.Snapshot(record: run, messages: live.messages, home: home,
+                                            start: live.historyStart, base: live.base)
+        try SubagentArchive.writeToDisk(next)
+        live.saved(next)
+        #expect(live.messages.count == PagedTranscript.residentLimit)
+        #expect(live.displayMessages == selected)
+        #expect(live.hasLaterPage)
+        let end = live.displayStart + live.displayMessages.count
+        live.browseLater(try home.loadSubagentHistory(id: run.id, before: end + PagedTranscript.pageSize, limit: PagedTranscript.pageSize))
+        #expect(live.displayMessages.contains { $0.id == selected.last?.id })
+        #expect(live.displayMessages.count <= PagedTranscript.browsingLimit)
+        #expect(home.loadSubagentThread(id: run.id).count == 2_000)
+    }
+
+    @Test func anEarlyRunningToolDoesNotPinCompletedPayloadAndItsLateResultKeepsItsPlace() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-pending-page-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = BotHome(workspace: root.path)
+        let state = ConversationState()
+        state.start()
+        var assembler = ThreadAssembler()
+        state.stream { assembler.apply(.toolStarted(id: "slow", name: "Bash", input: "slow command", arguments: nil), to: &$0) }
+        let tool = try #require(state.messages.first)
+        for i in 0..<5_000 { state.append(ChatMessage(role: .assistant, text: "Completed \(i)")) }
+        let snapshot = state.snapshot
+        try home.writeTranscript(snapshot)
+        state.saved(state.revision, snapshot: snapshot)
+        #expect(state.messages.count == PagedTranscript.residentLimit)
+        #expect(state.snapshot.pending.map(\.message.id) == [tool.id])
+        #expect(state.summary.toolCallCount == 1)
+        let before = home.loadThread().map(\.id)
+        state.stream { assembler.apply(.toolFinished(id: "slow", name: "Bash", output: "late result", isError: false, exitCode: 0), to: &$0) }
+        let finished = state.snapshot
+        try home.writeTranscript(finished)
+        state.saved(state.revision, snapshot: finished)
+        #expect(state.snapshot.pending.isEmpty)
+        #expect(state.messages.count == PagedTranscript.residentLimit)
+        let saved = home.loadThread()
+        #expect(saved.map(\.id) == before)
+        #expect(saved.first?.id == tool.id)
+        #expect(saved.first?.toolOutput == "late result")
+        #expect(saved.first?.toolState == .done)
+    }
+
+    @Test func pagingKeepsActiveAndBrowsedPayloadBoundedWithStableMessageAnchors() async throws {
+        let fixture = try HistoryFixture(bots: 1, openTasks: 1, closedTasks: 0)
+        defer { fixture.cleanUp() }
+        let target = fixture.home(0), home = fixture.botHome(0)
+        let messages = (0..<5_000).map { ChatMessage(role: $0 % 2 == 0 ? .user : .assistant, text: "Message \($0): copy this complete text", date: Date(timeIntervalSince1970: 1_800_000_000)) }
+        try home.saveThread(messages)
+        let app = fixture.launch()
+        defer { app.stopAll() }
+        await app.storage.settle()
+        let state = app.conversation(target)
+        #expect(state.messages == Array(messages.suffix(PagedTranscript.residentLimit)))
+        #expect(state.summary.messageCount == 5_000)
+        let transcript = TranscriptModel()
+        var items = transcript.items(for: state.displayMessages, root: nil, epoch: state.epoch)
+        transcript.windowStart = 0
+        let anchor = try #require(items.first?.id)
+        await withCheckedContinuation { done in app.pageEarlier(target) { done.resume() } }
+        items = transcript.items(for: state.displayMessages, root: nil, epoch: state.epoch)
+        #expect(items.contains { $0.id == anchor })
+        #expect(items[transcript.windowStart ?? 0].id == anchor)
+        for _ in 0..<12 {
+            await withCheckedContinuation { done in app.pageEarlier(target) { done.resume() } }
+            #expect(state.displayMessages.count <= PagedTranscript.browsingLimit)
+            #expect(state.messages.count <= PagedTranscript.residentLimit)
+        }
+        // Forward scrolling requests the next page without jumping to the newest conversation.
+        let earlierEnd = state.displayStart + state.displayMessages.count
+        let forwardAnchor = state.displayMessages[state.displayMessages.count - 10].id
+        await withCheckedContinuation { done in app.pageLater(target) { done.resume() } }
+        #expect(state.displayStart + state.displayMessages.count == earlierEnd + PagedTranscript.pageSize)
+        #expect(state.displayMessages.contains { $0.id == forwardAnchor })
+        #expect(state.displayMessages.count <= PagedTranscript.browsingLimit)
+        let old = state.displayMessages
+        let displayEpoch = state.epoch
+        // Appending/saving while an old page is selected leaves its IDs and selectable text alone.
+        for i in 0..<1_000 { state.append(ChatMessage(role: .assistant, text: "Live \(i)")) }
+        app.saveThread(target)
+        await app.storage.settle()
+        #expect(state.messages.count <= PagedTranscript.residentLimit)
+        #expect(state.displayMessages == old)
+        #expect(state.epoch == displayEpoch, "Saving an unrelated tail must not invalidate the reader's measured page")
+        #expect(old.first?.text == messages[state.displayStart].text)
+        let requested = try #require(await app.loadedThread(target))
+        #expect(requested.count == 6_000)
+        #expect(Array(requested.prefix(5_000)) == messages)
+        #expect(state.messages.count <= PagedTranscript.residentLimit)
+        state.showLatest()
+        transcript.follow(.jumped)
+        let latest = transcript.items(for: state.displayMessages, root: nil, epoch: state.epoch)
+        #expect(transcript.windowStart == nil)
+        #expect(latest.last?.id == state.messages.last?.id)
+        #expect(state.displayMessages.last?.text == "Live 999")
+        #expect(home.loadThread().map(\.id) == requested.map(\.id))
+    }
+
     @Test func aLaunchReadsTheShownConversationAndRecoveryAloneAndNoArchivedHistory() async throws {
         let fixture = try HistoryFixture(closedTasks: 2, children: true)
         defer { fixture.cleanUp() }
@@ -29,7 +171,7 @@ extension RenderingTests {
         // The shown Home, and the run a relaunch interrupted, which is closed, once.
         #expect(read == [fixture.transcript(fixture.home(0)), fixture.interruptedThread.path])
         #expect(app.conversation(fixture.home(0)).isLoaded)
-        #expect(app.thread(fixture.home(0)).count == fixture.messages[fixture.home(0)])
+        #expect(app.thread(fixture.home(0)).count == min(fixture.messages[fixture.home(0)] ?? 0, PagedTranscript.residentLimit))
         #expect(app.delegation.run(fixture.interrupted)?.phase == .stopped)
         #expect(app.delegation.run(fixture.finished)?.phase == .completed)
         #expect(fixture.counts.repairs == 0)
@@ -171,7 +313,7 @@ extension RenderingTests {
         app.resumeQueuedMessages(to: target)
         try await fixture.wait { app.thread(target).last?.text == "reply:hold on" }
         #expect(try fixture.calls(target).count == 1)
-        #expect(app.thread(target).prefix(fixture.messages[target] ?? 0).map(\.id) == fixture.initial[target]?.map(\.id))
+        #expect(fixture.disk(target).prefix(fixture.messages[target] ?? 0).map(\.id) == fixture.initial[target]?.map(\.id))
     }
 
     @Test func queuedMessagesOfAnUnopenedTaskGoOutAfterItsOwnRecovery() async throws {
@@ -190,7 +332,7 @@ extension RenderingTests {
         fixture.gate.open(lane)
         try await fixture.wait { app.thread(target).last?.text == "reply:left queued" }
         #expect(try fixture.calls(target).count == 1)
-        #expect(app.thread(target).prefix(fixture.messages[target] ?? 0).map(\.id) == fixture.initial[target]?.map(\.id))
+        #expect(fixture.disk(target).prefix(fixture.messages[target] ?? 0).map(\.id) == fixture.initial[target]?.map(\.id))
     }
 
     @Test func aLateReadIsDroppedWhenItsBotIsDeletedAndReadAgainWhereItMoved() async throws {
