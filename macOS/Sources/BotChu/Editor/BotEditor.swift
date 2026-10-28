@@ -131,16 +131,11 @@ struct BotEditor: View {
                             ProviderMenuLabel(account).tag(account.id)
                         }
                     }
-                    LabeledContent("Model") {
-                        VStack(alignment: .trailing, spacing: 3) {
-                            TextField("Model", text: Binding(get: { bot.model }, set: { bot.selectModel($0) }), prompt: Text(modelPrompt))
-                                .labelsHidden()
-                            // What the ID stands for, with a version only when it is pinned or reported.
-                            Text(modelLabel.title).font(.caption.weight(.medium))
-                            Text(modelLabel.detail).font(.caption).foregroundStyle(.secondary)
-                                .lineLimit(1).truncationMode(.middle).help(modelLabel.detail)
-                        }
-                    }
+                    LabeledContent("Runtime", value: bot.account.kind.displayName)
+                    ModelMenu(settings: bot, disabled: false,
+                              onModel: { bot.selectModel($0, catalog: model.nativeModels(for: bot)) },
+                              onEffort: { bot.reasoningEffort = $0 },
+                              onProvider: { bot.selectProvider($0) }, inForm: true)
                     LabeledContent("Workspace") {
                         HStack {
                             TextField("Workspace", text: $bot.workspace, prompt: Text("~/BotChu/…"))
@@ -231,19 +226,6 @@ struct BotEditor: View {
             return model.bots.contains { $0.isRemoteQueue && $0.id != bot.id } ? "Only one remote queue bot is supported." : nil
         }
         return model.workspaceProblem(bot.workspace, for: bot.id)
-    }
-
-    private var modelLabel: ModelPickerData {
-        ModelPickerData(kind: bot.account.kind, model: bot.model, openRouterDefault: model.settings.openRouterModel,
-                        sailDefault: model.settings.sailModel, catalog: model.modelCatalog.models(for: bot.account.kind),
-                        native: model.nativeModels(for: bot), resolved: bot.resolvedModel)
-    }
-
-    private var modelPrompt: String {
-        if bot.account.kind == .sail {
-            return model.settings.sailModel.isEmpty ? "No default model" : "\(model.settings.sailModel) (Sail id)"
-        }
-        return bot.account.kind == .pi ? "\(model.settings.openRouterModel) (OpenRouter id)" : "CLI default"
     }
 
     private func chooseFolder() {

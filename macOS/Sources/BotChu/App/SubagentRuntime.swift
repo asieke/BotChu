@@ -721,8 +721,8 @@ final class SubagentRuntime {
                                                  machine: machine, hostID: record.hostID)
             guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
             let account = record.account
-            let key = account.kind == .pi && !machine.isRemote ? Keychain.get(Keychain.openRouterAccount) : nil
-            if account.kind == .pi && !machine.isRemote && (key?.isEmpty ?? true) {
+            let key = record.usesLegacyOpenRouterKey && !machine.isRemote ? model.openRouterKey() : nil
+            if record.usesLegacyOpenRouterKey && !machine.isRemote && (key?.isEmpty ?? true) {
                 throw DelegationFailure("Add your OpenRouter API key in BotChu Settings first.")
             }
             let sailKey = account.kind == .sail && !machine.isRemote ? Keychain.get(Keychain.sailAccount) : nil
@@ -745,13 +745,21 @@ final class SubagentRuntime {
                 memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, soul: snapshot.soul,
                 instructions: snapshot.instructions, team: snapshot.team, availableBots: roster, skills: snapshot.skills,
                 tools: machine.isRemote ? nil : model.tools.instructions())
-            var invocation = CommandBuilder.invocation(kind: account.kind, prompt: prompt,
-                model: GenerationOptions.effectiveModel(record.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
-                                                        sailDefault: model.settings.sailModel),
-                sessionID: nil, reasoningEffort: record.reasoningEffort, fast: record.fastMode == true, openRouterKey: key, sailKey: sailKey)
+            await model.preparePiModels(for: record)
+            guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
+            let selectedModel = GenerationOptions.effectiveModel(record.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
+                                                                 sailDefault: model.settings.sailModel, providerID: record.providerID)
+            if let problem = PiLaunch.problem(settings: record, effectiveModel: selectedModel) { throw DelegationFailure(problem) }
+            var invocation = CommandBuilder.invocation(for: record, prompt: prompt, sessionID: nil,
+                openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel,
+                catalog: model.nativeModels(for: record), openRouterKey: key, sailKey: sailKey)
             invocation.environment.merge(context.environment) { _, new in new }
             invocation.toolProfile = prepared.toolProfile
             let command = model.settings.host(record.hostID)?.command(for: account) ?? model.settings.command(for: account)
+            let authProblem = await account.runtime.adapter.authenticationProblem(account: account,
+                providerID: record.providerID, command: command, machine: machine, folder: record.workingDirectory, openRouterKey: key)
+            guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
+            if let authProblem { throw DelegationFailure(authProblem) }
             let runner = machine.isRemote
                 ? AgentRun(command: command, invocation: invocation, on: machine, folder: record.workingDirectory)
                 : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: record.workingDirectory))
@@ -760,7 +768,7 @@ final class SubagentRuntime {
             var failure: String?
             var persistenceFailure: String?
             // Parsed off the main thread, in batches; the transcript is checkpointed off it too.
-            runner.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak runner] events in
+            runner.deliverEvents(parsedBy: account.runtime.adapter.parser()) { [weak self, weak runner] events in
                 guard let self, let runner, self.runners[id] === runner, self.run(id)?.phase.isActive == true else { return }
                 let live = self.live(id)
                 var state = live.state
@@ -787,7 +795,7 @@ final class SubagentRuntime {
                     }
                 }
                 if state != live.state { live.state = state }
-                for session in sessions { self.modify(id) { $0.sessionID = session } }
+                for session in sessions { self.modify(id) { $0.sessionID = session; $0.sessionAccountID = account.id; $0.sessionScope = record.executionScope } }
                 if let reported, self.run(id)?.resolvedModel != reported {
                     self.modify(id) { $0.recordReportedModel(reported, requested: $0.model) }
                 }

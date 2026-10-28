@@ -118,9 +118,21 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
         : nil
     let kind = bot.account.kind
     let fullPrompt = BotContext.prompt(for: prompt, preamble: preamble)
-    var invocation = CommandBuilder.invocation(
-        kind: bot.account.kind, prompt: fullPrompt, model: bot.model, sessionID: resume, reasoningEffort: bot.reasoningEffort,
-        fast: bot.fastMode == true, openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], sailKey: ProcessInfo.processInfo.environment[Sail.keyVariable],
+    let catalog: [ModelOption]? = kind == .pi
+        ? try? await PiModelList.list(command: command(for: bot.account), configurationDirectory: bot.account.configurationDirectory,
+            openRouterKey: bot.account.usesLegacyOpenRouterKey(providerID: "openrouter") ? ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] : nil) : nil
+    let effectiveModel = GenerationOptions.effectiveModel(bot.model, kind: kind,
+        openRouterDefault: CommandBuilder.defaultOpenRouterModel, providerID: bot.providerID)
+    if let problem = PiLaunch.problem(settings: bot, effectiveModel: effectiveModel) {
+        return Turn(messages: [ChatMessage(role: .error, text: problem)], status: -1)
+    }
+    if let problem = await kind.adapter.authenticationProblem(account: bot.account, providerID: bot.providerID,
+        command: command(for: bot.account), folder: bot.workspace, openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]) {
+        return Turn(messages: [ChatMessage(role: .error, text: problem)], status: -1)
+    }
+    var invocation = CommandBuilder.invocation(for: bot, prompt: fullPrompt, sessionID: resume,
+        openRouterDefault: CommandBuilder.defaultOpenRouterModel, catalog: catalog,
+        openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], sailKey: ProcessInfo.processInfo.environment[Sail.keyVariable],
         liveInput: CommandBuilder.takesInputMidTurn(kind))
     // A stand-in for Sail's API, when one is named; the app never sets it.
     if kind == .sail, let base = ProcessInfo.processInfo.environment[Sail.baseVariable] { invocation.environment[Sail.baseVariable] = base }
@@ -136,7 +148,7 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
         var pending = followUp
         let run = AgentRun(command: command(for: bot.account), invocation: invocation, directory: URL(fileURLWithPath: bot.workspace))
         // As the app does: parsed off the main thread, delivered in batches.
-        run.deliverEvents(parsedBy: StreamParsers.make(for: kind)) { events in
+        run.deliverEvents(parsedBy: kind.adapter.parser()) { events in
             for event in events {
                 switch event {
                 case .session(let reported):
@@ -245,9 +257,10 @@ Task {
             }
             let started = Date()
             do {
-                let scope = ModelCatalogScope(accountID: account.id, command: account.defaultCommand, kind: account.kind)
-                for model in try await NativeModelList.list(scope) {
-                    print("    \(model.id) · \(model.name) · \(model.efforts.map(\.rawValue).joined(separator: " "))")
+                let scope = ModelCatalogScope(accountID: account.id, command: account.defaultCommand, kind: account.kind,
+                    legacyOpenRouterCredential: account.usesLegacyOpenRouterKey(providerID: "openrouter"))
+                for model in try await NativeModelList.list(scope, openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]) {
+                    print("    \(model.providerID.map { $0 + "/" } ?? "")\(model.id) · \(model.name) · \(model.efforts.map(\.rawValue).joined(separator: " "))")
                 }
                 print("    OK in \(Int(Date().timeIntervalSince(started)))s")
             } catch {
@@ -372,10 +385,11 @@ Task {
                       accountID: account.id, workspace: root.appendingPathComponent(account.id).path)
         if ProcessInfo.processInfo.environment["BOTCHU_SMOKE_CUSTOM_PROFILE"] == "1" {
             bot.selectAccount(Account(id: "custom-" + account.id, name: account.name + " profile", kind: account.kind,
-                                      defaultCommand: account.defaultCommand, symbol: account.symbol))
+                                      defaultCommand: account.defaultCommand, symbol: account.symbol, credentialSource: nil))
             // A custom profile must work after the same persistence round trip used by a bot.
             if let data = try? JSONEncoder().encode(bot), let restored = try? JSONDecoder().decode(Bot.self, from: data) { bot = restored }
         }
+        if let provider = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_PROVIDER"] { bot.selectProvider(provider) }
         bot.selectModel(ProcessInfo.processInfo.environment["BOTCHU_SMOKE_MODEL"] ?? "")
         bot.reasoningEffort = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_EFFORT"].flatMap(ReasoningEffort.init(rawValue:))
         if ProcessInfo.processInfo.environment["BOTCHU_SMOKE_FAST"] == "1" { bot.fastMode = true }
@@ -398,6 +412,7 @@ Task {
         }
         bot.sessionID = session
         bot.sessionAccountID = bot.accountID
+        bot.sessionScope = bot.executionScope
         precondition(bot.resumableSessionID == session, "The second smoke turn must resume its profile’s session")
         let second = await runTurn(bot, prompt: "What is the code word? Reply with the word." + imageRequest, history: first.messages)
         show(second.messages)

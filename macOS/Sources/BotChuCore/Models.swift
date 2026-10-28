@@ -7,6 +7,8 @@ public protocol RunSettings {
     var accountProfile: Account? { get set }
     /// Empty means the CLI's own default model.
     var model: String { get set }
+    /// Pi’s provider ID; nil migrates to OpenRouter. Other runtimes have no provider choice.
+    var providerID: String? { get set }
     /// Nil leaves reasoning effort to the CLI.
     var reasoningEffort: ReasoningEffort? { get set }
     /// Codex's Fast tier (#249): faster turns that use more of the allowance. Nil is off.
@@ -14,6 +16,7 @@ public protocol RunSettings {
     /// The CLI session the conversation continues, and the account it belongs to.
     var sessionID: String? { get set }
     var sessionAccountID: String? { get set }
+    var sessionScope: RunSessionScope? { get set }
     /// The model the CLI last said it ran, and for which account and choice.
     var reportedModel: ReportedModel? { get set }
 }
@@ -21,10 +24,16 @@ public protocol RunSettings {
 extension RunSettings {
     public var account: Account { accountProfile.flatMap { $0.id == accountID ? $0 : nil } ?? Accounts.account(id: accountID) }
 
+    public var effectiveProviderID: String? { ModelProvider.effectiveID(providerID, runtime: account.kind) }
+    public var modelProvider: ModelProvider? { effectiveProviderID.map(ModelProvider.init) }
+    public var executionScope: RunSessionScope { RunSessionScope(account: account, providerID: providerID) }
+    public var usesLegacyOpenRouterKey: Bool { account.usesLegacyOpenRouterKey(providerID: providerID) }
+
     /// The model ID the CLI reported for the current account and model choice, or nil when it
     /// hasn't reported one since either changed.
     public var resolvedModel: String? {
-        guard let reportedModel, reportedModel.accountID == accountID, reportedModel.requested == model else { return nil }
+        guard let reportedModel, reportedModel.accountID == accountID, reportedModel.requested == model,
+              ModelProvider.effectiveID(reportedModel.providerID, runtime: account.kind) == effectiveProviderID else { return nil }
         return reportedModel.id
     }
 
@@ -32,7 +41,7 @@ extension RunSettings {
     /// Returns whether anything changed. The choice itself (`model`) never changes here.
     @discardableResult
     public mutating func recordReportedModel(_ id: String, requested: String) -> Bool {
-        let reported = ReportedModel(id: id, accountID: accountID, requested: requested)
+        let reported = ReportedModel(id: id, accountID: accountID, requested: requested, providerID: providerID)
         guard !id.isEmpty, reportedModel != reported else { return false }
         reportedModel = reported
         return true
@@ -41,7 +50,11 @@ extension RunSettings {
     /// The session to resume for the next turn, or nil when the next turn starts a new one. A
     /// session only resumes on the account that made it.
     public var resumableSessionID: String? {
-        sessionAccountID == accountID ? sessionID : nil
+        guard sessionAccountID == accountID else { return nil }
+        if let sessionScope { return account.runtime.adapter.canResume(from: sessionScope, to: executionScope) ? sessionID : nil }
+        // Sessions saved before provider support belonged to OpenRouter on Pi.
+        guard account.kind != .pi || effectiveProviderID == ModelProvider.openRouter.id else { return nil }
+        return sessionID
     }
 }
 
@@ -82,6 +95,7 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var accountProfile: Account?
     /// Empty means the CLI's own default model.
     public var model: String
+    public var providerID: String?
     /// Nil leaves reasoning effort to the CLI. Optional for compatibility with saved bots.
     public var reasoningEffort: ReasoningEffort?
     /// Codex's Fast tier; nil is off, as in bots saved before it (#249).
@@ -97,6 +111,7 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     /// resumes on the account that made it.
     public var sessionID: String?
     public var sessionAccountID: String?
+    public var sessionScope: RunSessionScope?
     public var reportedModel: ReportedModel?
     public var createdAt: Date
 
@@ -256,11 +271,13 @@ public struct ReportedModel: Codable, Hashable, Sendable {
     public var id: String
     public var accountID: String
     public var requested: String
+    public var providerID: String?
 
-    public init(id: String, accountID: String, requested: String) {
+    public init(id: String, accountID: String, requested: String, providerID: String? = nil) {
         self.id = id
         self.accountID = accountID
         self.requested = requested
+        self.providerID = providerID
     }
 }
 

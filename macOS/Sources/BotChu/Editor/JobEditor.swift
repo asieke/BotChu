@@ -213,7 +213,8 @@ private struct RunsOnRows: View {
         .help("The account each run starts on")
         ModelMenu(settings: shown, disabled: false, onModel: { job.selectModel($0, agent: agent, catalog: model.nativeModels(for: shown)) },
                   onEffort: { job.selectReasoningEffort($0, agent: agent, openRouterDefault: model.settings.openRouterModel,
-                                                       catalog: model.nativeModels(for: shown)) }, inForm: true)
+                                                       catalog: model.nativeModels(for: shown)) },
+                  onProvider: { job.selectProvider($0, agent: agent) }, inForm: true)
             // There's no choosing a model for an account BotChu can't run.
             .disabled(unavailable?.isAccount ?? false)
         // Only why the runs can't use the choice: the Account picker's Same as row says the rest (#232).

@@ -5,19 +5,26 @@ public struct UsageRequest: Hashable, Sendable, Codable {
     public var account: Account
     public var command: String
     public var credentialRevision: Int
+    public var providerID: String?
+    public var remote: Bool?
 
-    public init(account: Account, command: String, credentialRevision: Int = 0) {
+    public init(account: Account, command: String, credentialRevision: Int = 0, providerID: String? = nil, remote: Bool = false) {
+        self.remote = remote ? true : nil
         self.account = account
         self.command = command
         self.credentialRevision = credentialRevision
+        let selected = ModelProvider.effectiveID(providerID, runtime: account.kind)
+        self.providerID = selected == "openrouter" ? nil : selected
     }
 
     /// A profile's request wherever its allowance shows, so Providers, the background checks and a
     /// conversation's Model & Usage share one reading. Only a Pi profile's reading depends on the
     /// OpenRouter key, so saving another key (`openRouterKeyRevision`) starts only its readings afresh.
-    public init(account: Account, command: String, openRouterKeyRevision: Int) {
-        self.init(account: account, command: command, credentialRevision: account.kind == .pi ? openRouterKeyRevision : 0)
+    public init(account: Account, command: String, openRouterKeyRevision: Int, providerID: String? = nil, remote: Bool = false) {
+        self.init(account: account, command: command, credentialRevision: !remote && account.usesLegacyOpenRouterKey(providerID: providerID) ? openRouterKeyRevision : 0, providerID: providerID, remote: remote)
     }
+
+    public var usesLegacyOpenRouterKey: Bool { remote != true && account.usesLegacyOpenRouterKey(providerID: providerID) }
 
     public var refreshInterval: TimeInterval { account.kind == .muse ? 3_600 : 300 }
     /// How often the app checks while Providers isn't showing, so it opens on current numbers;
@@ -48,7 +55,13 @@ public enum UsageCheck: Sendable {
 
 public enum ProviderUsageClient {
     public static func read(_ request: UsageRequest, openRouterKey: String? = nil) async throws -> ProviderUsage {
+        if request.remote == true {
+            throw UsageFailure("This conversation uses the host’s own login. Check its provider’s dashboard for allowance.")
+        }
         if request.account.kind == .pi {
+            guard request.usesLegacyOpenRouterKey else {
+                throw UsageFailure("Pi doesn’t report this profile’s provider allowance. Check the provider’s own dashboard.")
+            }
             guard let key = openRouterKey, !key.isEmpty else {
                 throw UsageFailure("Add an OpenRouter API key in Settings to see its allowance.")
             }
@@ -170,15 +183,24 @@ final class UsageProcess: @unchecked Sendable {
     var museAnswered = false
     var museEnded: String?
 
-    init(command: String, arguments: [String], directory: URL, environment: [String: String] = [:], timeout: TimeInterval,
+    init(command: String, arguments: [String], directory: URL, environment: [String: String] = [:], unsetEnvironment: [String] = [],
+         machine: Machine = .thisMac, remoteFolder: String? = nil, timeout: TimeInterval,
          frameLimit: Int = 2 << 20) throws {
         deadline = Date().addingTimeInterval(timeout)
         self.frameLimit = frameLimit
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-l", "-c", CommandBuilder.shellScript(command: command), "botchu-usage"] + arguments
+        process.arguments = ["-l", "-c", AgentRun.profileShellPrefix(environment, unset: unsetEnvironment) + CommandBuilder.shellScript(command: command), "botchu-usage"] + arguments
         process.currentDirectoryURL = directory
         process.environment = AgentRun.childEnvironment(ProcessInfo.processInfo.environment)
-            .merging(["NO_COLOR": "1", "TERM": "dumb"]) { $1 }.merging(environment) { $1 }
+            .merging(["NO_COLOR": "1", "TERM": "dumb"]) { $1 }.merging(AgentRun.profileEnvironment(environment)) { $1 }
+        if let destination = machine.destination {
+            process.executableURL = URL(fileURLWithPath: Machine.ssh)
+            process.arguments = Machine.sshOptions + [destination, Machine.remoteCommand(
+                script: CommandBuilder.shellScript(command: command), arguments: arguments, in: remoteFolder ?? directory.path)]
+            process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+            // A remote readiness check uses only the host's own configuration and credentials.
+            process.environment = AgentRun.childEnvironment(ProcessInfo.processInfo.environment)
+        }
         process.standardInput = input
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice

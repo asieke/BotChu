@@ -334,6 +334,7 @@ public struct JobRun: Identifiable, Codable, Hashable, Sendable {
     /// What it ran on, as it started: the agent's account, model and reasoning effort.
     public var accountID: String?
     public var accountName: String?
+    public var providerID: String?
     public var model: String?
     public var reasoningEffort: ReasoningEffort?
     /// The model the CLI said it ran.
@@ -469,13 +470,15 @@ public struct JobRunsOn: Codable, Hashable, Sendable {
     /// (and its CLI family) once the profile is gone; nil for the accounts BotChu comes with.
     public var accountProfile: Account?
     /// Empty means the account's default model.
+    public var providerID: String?
     public var model: String
     /// Nil leaves reasoning effort to the CLI.
     public var reasoningEffort: ReasoningEffort?
 
-    public init(accountID: String, accountProfile: Account? = nil, model: String = "", reasoningEffort: ReasoningEffort? = nil) {
+    public init(accountID: String, accountProfile: Account? = nil, model: String = "", reasoningEffort: ReasoningEffort? = nil, providerID: String? = nil) {
         self.accountID = accountID
         self.accountProfile = accountProfile
+        self.providerID = providerID
         self.model = model
         self.reasoningEffort = reasoningEffort
     }
@@ -483,7 +486,7 @@ public struct JobRunsOn: Codable, Hashable, Sendable {
     /// A conversation's account, model and effort, as a job's choice.
     public init(_ settings: any RunSettings) {
         self.init(accountID: settings.accountID, accountProfile: settings.accountProfile.flatMap { $0.id == settings.accountID ? $0 : nil },
-                  model: settings.model, reasoningEffort: settings.reasoningEffort)
+                  model: settings.model, reasoningEffort: settings.reasoningEffort, providerID: settings.providerID)
     }
 
     /// Why BotChu can't run the choice, so the job's runs use its agent's.
@@ -508,7 +511,7 @@ public struct JobRunsOn: Codable, Hashable, Sendable {
     public func unavailable(accounts: [Account], catalog: [CatalogModel] = []) -> Unavailable? {
         guard let account = accounts.first(where: { $0.id == accountID }) else { return .account(name: accountProfile?.name ?? accountID) }
         let model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        if account.kind == .pi, !model.isEmpty, !catalog.isEmpty, !catalog.contains(where: { $0.id == model }) { return .model(model) }
+        if account.kind == .pi, ModelProvider.effectiveID(providerID, runtime: .pi) == "openrouter", !model.isEmpty, !catalog.isEmpty, !catalog.contains(where: { $0.id == model }) { return .model(model) }
         return nil
     }
 
@@ -517,6 +520,8 @@ public struct JobRunsOn: Codable, Hashable, Sendable {
         var bot = agent
         bot.accountID = accountID
         bot.accountProfile = Accounts.all.contains { $0.id == accountID } ? nil : accounts.first { $0.id == accountID } ?? accountProfile
+        bot.providerID = providerID
+        bot.clearSession()
         bot.model = model
         bot.reasoningEffort = reasoningEffort
         return bot
@@ -544,6 +549,12 @@ extension Job {
         runsOn = JobRunsOn(settings)
     }
 
+    public mutating func selectProvider(_ id: String, agent: Bot) {
+        var settings = runsOn?.applied(to: agent) ?? agent
+        settings.selectProvider(id)
+        runsOn = JobRunsOn(settings)
+    }
+
     /// Chooses the model its runs use, on the account they use; an effort the model doesn't take goes.
     public mutating func selectModel(_ model: String, agent: Bot, catalog: [ModelOption]? = nil) {
         var settings = runsOn?.applied(to: agent) ?? agent
@@ -554,8 +565,8 @@ extension Job {
     /// Chooses the effort its runs use, only one their account and model take.
     public mutating func selectReasoningEffort(_ effort: ReasoningEffort?, agent: Bot, openRouterDefault: String, catalog: [ModelOption]? = nil) {
         var settings = runsOn?.applied(to: agent) ?? agent
-        let model = GenerationOptions.effectiveModel(settings.model, kind: settings.account.kind, openRouterDefault: openRouterDefault)
-        if let effort, !GenerationOptions.efforts(for: settings.account.kind, model: model, catalog: catalog).contains(effort) { return }
+        let model = GenerationOptions.effectiveModel(settings.model, kind: settings.account.kind, openRouterDefault: openRouterDefault, providerID: settings.providerID)
+        if let effort, !GenerationOptions.efforts(for: settings.account.kind, model: model, catalog: catalog, providerID: settings.providerID).contains(effort) { return }
         settings.reasoningEffort = effort
         runsOn = JobRunsOn(settings)
     }
@@ -836,14 +847,9 @@ extension BotHome {
 /// as the prompt, and its stdin closed, so nothing is written into it while it runs.
 public enum JobLaunch {
     public static func invocation(for agent: any RunSettings, prompt: String, openRouterDefault: String, openRouterKey: String?,
-                                  sailDefault: String = "", sailKey: String? = nil) -> Invocation {
-        let account = agent.account
-        return CommandBuilder.invocation(kind: account.kind, prompt: prompt,
-                                         model: GenerationOptions.effectiveModel(agent.model, kind: account.kind, openRouterDefault: openRouterDefault,
-                                                                                 sailDefault: sailDefault),
-                                         sessionID: nil, reasoningEffort: agent.reasoningEffort, fast: agent.fastMode == true,
-                                         openRouterKey: account.kind == .pi ? openRouterKey : nil,
-                                         sailKey: account.kind == .sail ? sailKey : nil, liveInput: false)
+                                  sailDefault: String = "", sailKey: String? = nil, catalog: [ModelOption]? = nil) -> Invocation {
+        CommandBuilder.invocation(for: agent, prompt: prompt, sessionID: nil, openRouterDefault: openRouterDefault,
+                                  sailDefault: sailDefault, catalog: catalog, openRouterKey: openRouterKey, sailKey: sailKey)
     }
 
     /// The first line of a run's transcript: the account it started on, and why, when the job's own

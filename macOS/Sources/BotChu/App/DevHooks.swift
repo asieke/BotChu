@@ -154,6 +154,10 @@ enum DevHooks {
             try await Task.sleep(for: .seconds(1))
             if fixture == "unavailable" { throw ModelListFailure("\(scope.kind.displayName) didn’t list its models within 20 seconds.") }
             if scope.kind == .muse { return GenerationOptions.models(for: .muse) }
+            if scope.kind == .pi {
+                return [ModelOption(id: "muse-spark-1.1", name: "Muse Spark 1.1", efforts: [.off, .minimal, .low, .medium, .high], providerID: "meta"),
+                        ModelOption(id: "kimi-k3", name: "Kimi K3", efforts: [.off, .minimal, .low, .medium, .high], providerID: "radius")]
+            }
             let all: [ReasoningEffort] = [.low, .medium, .high, .xhigh, .max, .ultra]
             return [("gpt-6.1-sol", "GPT-6.1-Sol"), ("gpt-6-astra", "GPT-6-Astra"), ("gpt-6.1-terra", "GPT-6.1 Terra"), ("gpt-6-sol", "GPT-6-Sol"),
                     ("gpt-6-luna", "GPT-6-Luna"), ("gpt-5.6-sol", "GPT-5.6-Sol"), ("gpt-5.6-terra", "GPT-5.6-Terra"), ("gpt-5.6-luna", "GPT-5.6-Luna")]
