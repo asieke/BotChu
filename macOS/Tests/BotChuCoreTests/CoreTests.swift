@@ -52,7 +52,9 @@ import Testing
 
     @Test func museAndPiKeepTheirOwnIDs() {
         let muse = CommandBuilder.invocation(kind: .muse, prompt: "hi", model: nil, sessionID: nil, newID: id)
-        #expect(muse.arguments == ["exec", "--json", "--session-id", "fixed-id", "hi"])
+        #expect(muse.arguments == ["exec", "--json", "--yolo", "--session-id", "fixed-id", "hi"])
+        let resumed = CommandBuilder.invocation(kind: .muse, prompt: "again", model: nil, sessionID: "fixed-id")
+        #expect(resumed.arguments == ["exec", "--json", "--yolo", "--session-id", "fixed-id", "again"])
         let pi = CommandBuilder.invocation(kind: .pi, prompt: "hi", model: nil, sessionID: "p1", openRouterKey: "sk-or-x")
         #expect(pi.arguments == ["-p", "--mode", "json", "--session-id", "p1", "--provider", "openrouter",
                                  "--model", CommandBuilder.defaultOpenRouterModel, "hi"])

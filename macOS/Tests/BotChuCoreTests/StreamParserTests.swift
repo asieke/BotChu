@@ -256,6 +256,48 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
 }
 
 @Suite struct MuseParserTests {
+    @Test func capturedToolProgressPrecedesItsResult() {
+        var parser = MuseParser()
+        #expect(parser.parse(line: MuseSamples.toolTurn[0]) == [.session("id-2")])
+        let started = parser.parse(line: MuseSamples.toolTurn[1])
+        #expect(started == [.toolStarted(id: "id-6", name: "bash", input: "")])
+        var assembler = ThreadAssembler()
+        var messages: [ChatMessage] = []
+        started.forEach { assembler.apply($0, to: &messages) }
+        #expect(messages.count == 1 && messages[0].toolState == .running)
+        let result = parser.parse(line: MuseSamples.toolTurn[2])
+        #expect(result.last == .toolFinished(id: "id-6", name: "bash", output: "tool-ok", isError: false, exitCode: 0))
+        result.forEach { assembler.apply($0, to: &messages) }
+        #expect(messages.count == 1 && messages[0].toolState == .done)
+        #expect(messages[0].toolInput == "printf tool-ok")
+        #expect(messages[0].toolArguments?.contains("printf tool-ok") == true)
+        #expect(parser.parse(line: MuseSamples.toolTurn[3]) == [.textDelta("Done")])
+        #expect(parser.parse(line: MuseSamples.toolTurn[4]) == [.textEnd, .finished])
+        #expect(!parser.requiresTermination)
+    }
+
+    // These defensive records are synthetic: the real pending probe emitted neither on stdout.
+    @Test(arguments: ["approval.requested", "approval_wait.effect.started"])
+    func approvalFailsAndRequestsTermination(_ type: String) {
+        var parser = MuseParser()
+        #expect(parser.parse(line: "{\"payload_type\":\"\(type)\",\"payload\":{}}") == [
+            .failed("Muse is waiting for an approval BotChu can't show"),
+        ])
+        #expect(parser.requiresTermination)
+        #expect(parser.parse(line: MuseSamples.toolTurn[4]).isEmpty)
+    }
+
+    @Test func unrelatedLifecycleAndResolvedApprovalsAreIgnored() {
+        var parser = MuseParser()
+        for line in [
+            #"{"payload_type":"task.lifecycle.side_effect_intent","payload":{"event":{"operation":"model.meta.response","idempotency_key":"model:x"}}}"#,
+            #"{"payload_type":"task.lifecycle.side_effect_intent","payload":{"event":{"operation":"tool:bash"}}}"#,
+            #"{"payload_type":"approval.resolved","payload":{}}"#,
+            #"{"payload_type":"approval_wait.effect.terminal","payload":{}}"#,
+        ] { #expect(parser.parse(line: line).isEmpty) }
+        #expect(!parser.requiresTermination)
+    }
+
     let lines = [
         "muse: workspace root: /tmp/probe (cwd default)",
         #"{"schema_version":1,"stream":{"kind":"session","id":"0cb4a4fa-1730-4e14-b9f2-fa6a0a2b88ab"},"sequence":1,"record_type":"event","payload_type":"runtime.command.accepted","payload":{"kind":"command_accepted"}}"#,

@@ -163,7 +163,9 @@ public enum CommandBuilder {
         case .muse:
             let id = sessionID ?? newID()
             session = id
-            args = ["exec", "--json", "--session-id", id]
+            // Muse 1.4.14: --yolo disables approval and sandbox for this run, as the other
+            // headless CLIs do. BotChu cannot show an interactive approval prompt.
+            args = ["exec", "--json", "--yolo", "--session-id", id]
             if let model { args += ["--model", model] }
             if let effort { args += ["--reasoning-effort", effort] }
             args.append(prompt)

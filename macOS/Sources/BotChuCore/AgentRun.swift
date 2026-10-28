@@ -51,6 +51,8 @@ public final class AgentRun: @unchecked Sendable {
     public var deliveryInterval: TimeInterval = 0.04
     /// Parses stdout off the main thread, when set (`deliverEvents`); guarded by `parseLock`.
     private var parser: (any StreamParser)?
+    /// A parser can end an unanswerable interactive wait without marking the run user-stopped.
+    private var terminationRequested = false
     private let parseLock = NSLock()
     private var onEvents: (([AgentEvent]) -> Void)?
     /// Output not delivered yet, and whether a delivery is on its way; guarded by `lock`.
@@ -249,9 +251,22 @@ public final class AgentRun: @unchecked Sendable {
             events = []
             for line in lines { events! += parser!.parse(line: line) }
         }
+        let terminate = parser?.requiresTermination == true
         parseLock.unlock()
         lock.lock()
         defer { lock.unlock() }
+        if terminate, !terminationRequested {
+            terminationRequested = true
+            DispatchQueue.main.async { [self] in
+                // Preserve the diagnostic even for callers which ignore output after Stop.
+                flushOutput()
+                lock.lock()
+                let pid = remotePID
+                lock.unlock()
+                if let remote, let pid { signalHost(remote, pid, ["TERM", "KILL"]) }
+                self.terminate(after: 0)
+            }
+        }
         if let events {
             pendingEvents += events
             noteTurn(events)
