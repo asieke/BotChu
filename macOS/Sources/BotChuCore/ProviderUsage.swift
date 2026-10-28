@@ -447,7 +447,9 @@ public struct ProviderRow: Identifiable, Equatable, Sendable {
     public var id: String { account.id }
     public var name: String { account.name }
     /// The family, and the plan its CLI reports: "Codex · Pro", or "Claude Code" when it reports none.
-    public var family: String { [account.kind.displayName, plan].compactMap(\.self).joined(separator: " · ") }
+    public var family: String {
+        [account.usesLegacyOpenRouterKey(providerID: nil) ? "Pi · OpenRouter key" : account.kind.displayName, plan].compactMap(\.self).joined(separator: " · ")
+    }
 
     /// `newest` is when the page's newest reading was made; `found`, whether the login shell finds
     /// the command, when that has been checked.

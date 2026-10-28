@@ -15,12 +15,18 @@ public enum ModelPricing {
     /// Unknown models or a used bucket without a published rate remain unpriced. Missing counts
     /// contribute nothing; completely absent usage is not a measured zero. Reasoning is already
     /// included in output, and one-hour writes are already included in total cache writes.
-    public static func price(_ usage: ModelUsage, provider: AgentKind) -> PricedCost? {
-        guard let (model, entry) = resolve(usage.model, provider: provider) else { return nil }
-        return price(usage, provider: provider, model: model, entry: entry)
+    public static func price(_ usage: ModelUsage, provider: AgentKind, providerID: String? = nil) -> PricedCost? {
+        guard let (model, entry) = resolve(usage.model, provider: provider, providerID: providerID) else { return nil }
+        return price(usage, provider: provider, model: model, entry: entry, providerID: providerID)
     }
 
-    static func price(_ usage: ModelUsage, provider: AgentKind, model: String, entry: ModelPrice) -> PricedCost? {
+    /// Use a conversation's runtime and selected model service together. A Pi provider without
+    /// published rates remains unpriced instead of inheriting OpenRouter's rate for a matching ID.
+    public static func price(_ usage: ModelUsage, settings: any RunSettings) -> PricedCost? {
+        price(usage, provider: settings.account.runtime, providerID: settings.providerID)
+    }
+
+    static func price(_ usage: ModelUsage, provider: AgentKind, model: String, entry: ModelPrice, providerID: String? = nil) -> PricedCost? {
         let counts = [usage.uncachedInput, usage.cacheRead, usage.cacheWrite,
                       usage.cacheWrite1h, usage.output, usage.reasoning]
         guard counts.contains(where: { $0 != nil }), counts.allSatisfy({ ($0 ?? 0) >= 0 }) else { return nil }
@@ -44,14 +50,14 @@ public enum ModelPricing {
         }
         guard usd.isFinite else { return nil }
         return PricedCost(usd: usd, model: model,
-                          displayName: ModelPickerData(kind: provider, model: model, openRouterDefault: "").title,
+                          displayName: ModelPickerData(kind: provider, model: model, openRouterDefault: "", providerID: providerID).title,
                           snapshotDate: ModelPrices.snapshotDate)
     }
 
-    private static func resolve(_ raw: String, provider: AgentKind) -> (String, ModelPrice)? {
+    private static func resolve(_ raw: String, provider: AgentKind, providerID: String?) -> (String, ModelPrice)? {
         let sources: [String]
         switch provider {
-        case .pi: sources = ["openrouter"]
+        case .pi: sources = [ModelProvider.effectiveID(providerID, runtime: .pi)!]
         case .sail: sources = ["sail"]
         case .claude, .codex, .antigravity, .muse: sources = ["anthropic", "openai", "google"]
         }
