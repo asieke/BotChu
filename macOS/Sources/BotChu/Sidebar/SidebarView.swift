@@ -190,7 +190,9 @@ struct BotRow: View {
 }
 
 /// The small dots at the end of a bot's row, in its tabs' colours, the most urgent first (#218).
-/// On the selection's accent colour each sits on a white disc, so it keeps its colour.
+/// On the selection's accent colour each sits on a disc of the task column's background, as a rail
+/// tile's dot does, so it is drawn on the same ground as its tab's and looks the same (#237); on a
+/// white disc, dark mode's colours, made for a dark ground, read pale.
 struct BotRowDots: View {
     @Environment(\.backgroundProminence) private var prominence
     let summary: BotRowSummary
@@ -198,7 +200,7 @@ struct BotRowDots: View {
     var body: some View {
         HStack(spacing: 4) {
             ForEach(Array(summary.dots.enumerated()), id: \.offset) { _, kind in
-                StatusDot(kind: kind, size: 6, cutout: prominence == .increased ? .white : nil)
+                StatusDot(kind: kind, size: 6, cutout: prominence == .increased ? Palette.conversationColumn : nil)
             }
             if summary.more > 0 {
                 Text("+\(summary.more)")
