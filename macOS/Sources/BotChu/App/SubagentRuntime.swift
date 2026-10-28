@@ -12,6 +12,7 @@ import BotChuCore
 /// (`SubagentArchive`); a run's start and end are saved at once.
 @MainActor @Observable
 final class SubagentRuntime {
+    let sensitiveInput = SensitiveInputRuntime()
     var error: String?
     /// Bots with a run under way, as the bot of its root conversation or as the bot it calls.
     /// Reassigned only when that changes, as runs start and end.
@@ -362,6 +363,20 @@ final class SubagentRuntime {
             try? await caller.transport.acknowledge(filename: filename)
             return
         }
+        if SensitiveInputRequest.isRequest(data) {
+            await receiveSensitiveInput(data, id: fileID, filename: filename, from: caller)
+            return
+        }
+        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
+           object["kind"] == "secretCancel" {
+            if object["invocationID"].flatMap(UUID.init(uuidString:)) == caller.id,
+               object["id"].flatMap(UUID.init(uuidString:)) == fileID,
+               let requestID = object["requestID"].flatMap(UUID.init(uuidString:)) {
+                sensitiveInput.cancel(requestID, invocationID: caller.id)
+            }
+            try? await caller.transport.acknowledge(filename: filename)
+            return
+        }
         // A Task for a bot, not a run of this turn's (#111).
         if TaskHandoff.isHandoff(data) {
             await receiveHandoff(data, id: fileID, filename: filename, from: caller)
@@ -546,6 +561,43 @@ final class SubagentRuntime {
             try await caller.transport.writeResult(id: id, data: SubagentIPC.encode(result))
             try await caller.transport.acknowledge(filename: filename)
         } catch { if isWatching(caller.id) { report("Couldn't answer a message: \(error.localizedDescription)") } }
+    }
+
+    // MARK: Sensitive input (#266)
+
+    private func receiveSensitiveInput(_ data: Data, id: UUID, filename: String, from caller: Caller) async {
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let request = try decoder.decode(SensitiveInputRequest.self, from: data)
+            guard request.id == id, contexts[caller.id] != nil, !caller.transport.machine.isRemote,
+                  let model else { throw SensitiveInputError.invalidRequest }
+            try request.validate(caller: SubagentCallerContext(invocationID: caller.id, botID: caller.target.botID,
+                taskID: caller.target.taskID, parentSubagentID: caller.parent, depth: caller.depth,
+                workingDirectory: caller.directory, hostID: caller.hostID))
+            let excludedDirectory = root.path
+            try await Task.detached {
+                guard !SensitiveInputDestination.isWithin(request.destination, directory: excludedDirectory) else {
+                    throw SensitiveInputError.invalidDestination
+                }
+                try SensitiveInputDestination.check(request.destination)
+            }.value
+            let botID = caller.parent.flatMap { run($0) }?.targetBotID ?? caller.target.botID
+            guard let bot = model.bot(botID) else { throw SensitiveInputError.invalidRequest }
+            try await caller.transport.acknowledge(filename: filename)
+            guard contexts[caller.id] != nil else { throw SensitiveInputError.expired }
+            sensitiveInput.enqueue(request, botName: bot.name) { status in
+                Task {
+                    try? await caller.transport.writeResult(id: id,
+                        data: SubagentIPC.encode(SensitiveInputResult(id: id, status: status)))
+                }
+            }
+        } catch {
+            // Never serialize decoder or filesystem errors from sensitive-input handling.
+            try? await caller.transport.writeResult(id: id,
+                data: SubagentIPC.encode(SensitiveInputResult(id: id, status: .rejected)))
+            try? await caller.transport.acknowledge(filename: filename)
+        }
     }
 
     // MARK: The asking bot's Tasks (#262)
@@ -843,6 +895,7 @@ final class SubagentRuntime {
 
     func endCaller(_ id: UUID) {
         guard let caller = contexts.removeValue(forKey: id) else { return }
+        sensitiveInput.cancel(invocationID: id)
         let watcher = watchers.removeValue(forKey: id)
         watcher?.cancel()
         rejections[id] = nil

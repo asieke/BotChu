@@ -1806,6 +1806,26 @@ on that pull request's branch to continue in instead). The same command run agai
   pkill -x BotChu; macOS/build.sh && open macOS/build/BotChu.app
   ```
 
+## Sensitive input
+
+An agent running on this Mac can call `botchu-secret request --label "Service API key"
+--destination "/absolute/path/to/new/file"`. BotChu opens a floating popup naming the bot and the
+exact destination. The owner pastes into a secure field and chooses **Save to File** or **Cancel**.
+The app writes the exact text, without a newline, straight to that new file with mode `0600`.
+Only a status reaches the helper, conversation and logs; request and reply mailboxes never contain
+the entered value. The destination is a persistent file readable by programs running as the owner,
+so use a location outside source control, or ignore it before requesting it, and delete it when done.
+The agent's instructions say to configure the intended program to consume it without reading,
+printing or logging its contents.
+
+The folder must already exist. Existing files, symbolic links anywhere in the path, dot components,
+control characters, `.git` and `.botchu` paths, and BotChu's IPC directory are refused. Files aren't
+overwritten; dotenv updates, command interpolation and remote delivery aren't supported. Requests
+expire after five minutes, and cancelling the helper, stopping the turn or quitting BotChu dismisses
+the prompt. At most eight prompts wait at once. Secrets are held transiently by the secure field and
+the direct write; BotChu doesn't promise forensic erasure of process memory or protect the approved
+file from other programs running as the same user.
+
 ## Test
 - While editing, run the suites the change touches: `swift test --package-path macOS --filter <Suite>`.
   Rendering suites still need the shared window-test gate.

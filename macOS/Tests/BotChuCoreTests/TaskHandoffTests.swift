@@ -250,7 +250,7 @@ private final class HandoffFixture {
         let bot = Bot(name: "Fox", workspace: "/tmp/fox")
         let agents = BotContext.agentsFile(bot: bot, sharedMemoryPath: "/shared", availableBots: roster)
         #expect(agents.contains("`agent` (optional)") && agents.contains("botchu-task create"))
-        #expect(SubagentHookInstaller.commands == ["botchu-subagent", "botchu-task", "botchu-inbox", "botchu-message"])
+        #expect(SubagentHookInstaller.commands == ["botchu-subagent", "botchu-task", "botchu-inbox", "botchu-message", "botchu-secret"])
     }
 
     @Test func everyTurnsMailboxHasBothCommands() async throws {
