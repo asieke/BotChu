@@ -85,6 +85,7 @@ struct Turn {
     var followUpsTaken = 0
     /// The model the CLI said it ran, where it says.
     var model: String?
+    var usage: [TurnUsage] = []
     /// The connectors it reported as the turn started, where it does.
     var connectors: [Connector]?
 }
@@ -140,6 +141,8 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
                 switch event {
                 case .session(let reported):
                     turn.session = CommandBuilder.resumeID(kind: kind, invocation: invocation, reported: reported)
+                case .usage(let usage):
+                    turn.usage.append(usage)
                 case .model(let id):
                     turn.model = id
                 case .connectors(let list):
@@ -182,6 +185,12 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
 func showModel(_ turn: Turn, of bot: Bot) {
     let label = GenerationOptions.label(for: bot.model, kind: bot.account.kind, resolved: turn.model)
     print("    model: \(label.title) (\(label.detail))")
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    if turn.usage.isEmpty { print("    usage: not reported") }
+    for usage in turn.usage {
+        if let data = try? encoder.encode(usage) { print("    usage: \(String(decoding: data, as: UTF8.self))") }
+    }
 }
 
 func show(_ messages: [ChatMessage]) {
@@ -402,6 +411,7 @@ Task {
                                   history: first.messages + second.messages,
                                   followUp: "Also, after the command, add the code word to your reply.")
         show(third.messages)
+        showModel(third, of: bot)
         let steered = third.messages.filter { $0.role == .assistant }.map(\.text).joined()
         let steerOK = third.followUpsTaken == 1 && steered.contains(word) && !third.messages.contains(where: { $0.role == .error })
         print("    \(steerOK ? "OK: took the follow-up mid-turn" : "FAIL: follow-up taken \(third.followUpsTaken) times, reply \(steered.prefix(120)) (exit \(third.status)) \(third.stderr.suffix(300))")")

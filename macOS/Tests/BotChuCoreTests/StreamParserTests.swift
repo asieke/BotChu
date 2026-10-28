@@ -155,6 +155,7 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
             .toolStarted(id: "item_1", name: "Shell", input: "ls"),
             .toolFinished(id: "item_1", name: "Shell", output: "", isError: false, exitCode: 0),
             .text("Done"),
+            .usage(TurnUsage(models: [ModelUsage(model: "", uncachedInput: 42103, output: 71)], cumulative: true)),
             .finished,
         ])
     }
@@ -431,4 +432,152 @@ enum TokenUsageSamples {
         #"{"type":"message_end","message":{"role":"assistant","model":"deepseek/deepseek-v4.1-flash","usage":{"input":2417,"output":6,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2423,"cost":{"input":8.26614e-05,"output":8.208e-07,"cacheRead":0,"cacheWrite":0,"total":8.34822e-05}},"responseId":"gen-sample-2","stopReason":"stop"}}"#,
         #"{"type":"agent_end"}"#,
     ]
+}
+
+@Suite struct StreamParserTests {
+    private func usage(_ kind: AgentKind, _ lines: [String]) -> [TurnUsage] {
+        run(kind, lines).compactMap { if case .usage(let value) = $0 { value } else { nil } }
+    }
+
+    @Test func capturedClaudeBucketsAndCost() throws {
+        let value = try #require(usage(.claude, [ClaudeInputSamples.tokenUsage]).first)
+        #expect(value == TurnUsage(models: [ModelUsage(model: "claude-haiku-5-5", uncachedInput: 2,
+            cacheRead: 11382, cacheWrite: 9705, cacheWrite1h: 9705, output: 6, reasoning: 0)], reportedCostUSD: 0.00205802))
+        // Acceptance example from #280, in the captured wire shape.
+        let example = ClaudeInputSamples.tokenUsage.replacingOccurrences(of: "9705", with: "8673")
+            .replacingOccurrences(of: "0.00205802", with: "0.00185062")
+        let expected = try #require(usage(.claude, [example]).first)
+        #expect(expected.models.first?.cacheWrite == 8673)
+        #expect(expected.models.first?.cacheWrite1h == 8673)
+        #expect(expected.models.first?.cacheRead == 11382)
+        #expect(expected.reportedCostUSD == 0.00185062)
+    }
+
+    @Test func claudePrefersTurnMapAndFallsBackToLegacyMap() throws {
+        var object = try #require(decode(ClaudeInputSamples.tokenUsage))
+        object["modelUsage"] = ["old-model": ["inputTokens": 9999]]
+        let line = summarizeToolInput(object)
+        #expect(usage(.claude, [line]).first?.models.first?.model == "claude-haiku-5-5")
+        object.removeValue(forKey: "model_usage_since_last_result")
+        #expect(usage(.claude, [summarizeToolInput(object)]).first?.models == [ModelUsage(model: "old-model", uncachedInput: 9999)])
+        object["model_usage_since_last_result"] = [String: Int]()
+        #expect(usage(.claude, [summarizeToolInput(object)]).isEmpty)
+    }
+
+    @Test func codexCumulativeIncludesCachedInput() throws {
+        let captured = try #require(usage(.codex, [TokenUsageSamples.codex]).first)
+        #expect(captured.models == [ModelUsage(model: "", uncachedInput: 2450, cacheRead: 12160, cacheWrite: 0, output: 6, reasoning: 0)])
+        #expect(captured.cumulative)
+        let example = #"{"type":"turn.completed","usage":{"input_tokens":39555,"cached_input_tokens":31744}}"#
+        #expect(usage(.codex, [example]) == [TurnUsage(models: [ModelUsage(model: "", uncachedInput: 7811, cacheRead: 31744)], cumulative: true)])
+    }
+
+    @Test func antigravityAndMuseKeepReasoningInsideOutput() throws {
+        #expect(usage(.antigravity, [TokenUsageSamples.antigravity]) == [TurnUsage(models: [
+            ModelUsage(model: "", uncachedInput: 7578, cacheRead: 0, output: 42, reasoning: 36)])])
+        #expect(usage(.muse, [TokenUsageSamples.muse]) == [TurnUsage(models: [
+            ModelUsage(model: "muse-wonder-full-1.0", uncachedInput: 27363, cacheRead: 0, output: 61, reasoning: 50)])])
+        let cached = TokenUsageSamples.antigravity.replacingOccurrences(of: "\"cache_read_tokens\":0", with: "\"cache_read_tokens\":7000")
+        #expect(usage(.antigravity, [cached]).first?.models.first?.uncachedInput == 578)
+    }
+
+    @Test func piAggregatesAssistantRequestsOnceAndResets() throws {
+        var parser = PiParser()
+        for line in TokenUsageSamples.pi.dropLast() { #expect(parser.parse(line: line).isEmpty) }
+        let events = parser.parse(line: TokenUsageSamples.pi.last!)
+        let value = try #require(events.compactMap { if case .usage(let v) = $0 { v } else { nil } }.first)
+        #expect(events.count == 2)
+        #expect(value.models == [ModelUsage(model: "deepseek/deepseek-v4.1-flash", uncachedInput: 4760,
+            cacheRead: 0, cacheWrite: 0, output: 65, reasoning: 0)])
+        #expect(abs((value.reportedCostUSD ?? 0) - 0.000171684) < 1e-12)
+        #expect(value.generationIDs == ["gen-sample-1", "gen-sample-2"])
+        #expect(parser.parse(line: #"{"type":"agent_end"}"#) == [.finished])
+    }
+
+    @Test func piSeparatesModelsAndIgnoresUserUsage() {
+        let lines = [
+            #"{"type":"message_end","message":{"role":"user","usage":{"input":900}}}"#,
+            #"{"type":"message_end","message":{"role":"assistant","model":"a","usage":{"input":3}}}"#,
+            #"{"type":"message_end","message":{"role":"assistant","model":"b","usage":{"output":4}}}"#,
+            #"{"type":"agent_end"}"#,
+        ]
+        #expect(usage(.pi, lines) == [TurnUsage(models: [ModelUsage(model: "a", uncachedInput: 3), ModelUsage(model: "b", output: 4)])])
+    }
+
+    @Test func missingMalformedAndExplicitZeroStayDistinct() {
+        for (kind, line) in [(AgentKind.claude, #"{"type":"result"}"#), (.codex, #"{"type":"turn.completed","usage":{}}"#),
+            (.antigravity, #"{"event":"result","result":{"status":"SUCCESS"}}"#), (.muse, #"{"payload_type":"run.usage","payload":{"models":[]}}"#),
+            (.pi, #"{"type":"agent_end"}"#), (.sail, SailEvent.finished.line)] {
+            #expect(usage(kind, [line]).isEmpty)
+        }
+        #expect(usage(.codex, [#"{"type":"turn.completed","usage":{"input_tokens":true,"output_tokens":-2}}"#]).isEmpty)
+        #expect(usage(.codex, [#"{"type":"turn.completed","usage":{"input_tokens":0}}"#]).first?.models == [ModelUsage(model: "", uncachedInput: 0)])
+    }
+
+    @Test func usageDoesNotChangeTranscriptOrEndText() {
+        var assembler = ThreadAssembler()
+        var messages: [ChatMessage] = []
+        assembler.apply(.textDelta("hello"), to: &messages)
+        assembler.apply(.usage(TurnUsage(models: [])), to: &messages)
+        assembler.apply(.textDelta(" world"), to: &messages)
+        #expect(messages.count == 1)
+        #expect(messages.first?.text == "hello world")
+    }
+
+    @Test func aggregationDoesNotOverflowOrAddCumulativeReports() {
+        var accumulator = TurnUsageAccumulator()
+        let large = TurnUsage(models: [ModelUsage(model: "a", uncachedInput: Int.max / 2 + 1, output: 1)], reportedCostUSD: Double.greatestFiniteMagnitude)
+        accumulator.add(large)
+        accumulator.add(large)
+        accumulator.add(large)
+        #expect(accumulator.value?.models.first?.uncachedInput == nil)
+        #expect(accumulator.value?.models.first?.output == 3)
+        #expect(accumulator.value?.reportedCostUSD == nil)
+        let cumulative = TurnUsage(models: [ModelUsage(model: "a", uncachedInput: 100)], cumulative: true)
+        accumulator.add(cumulative)
+        accumulator.add(cumulative)
+        #expect(accumulator.value == cumulative)
+    }
+
+    @Test func usageBeforeFailureIsRetained() {
+        let claude = ClaudeInputSamples.tokenUsage.replacingOccurrences(of: "\"is_error\":false", with: "\"is_error\":true")
+        #expect(usage(.claude, [claude]).count == 1)
+        #expect(usage(.antigravity, [#"{"event":"error","message":"failed"}"#, TokenUsageSamples.antigravity]).count == 1)
+    }
+
+    /// Opt-in, no timing threshold: full parsing and isolated usage extraction from decoded JSON.
+    @Test func usageParserBenchmark() throws {
+        guard let path = ProcessInfo.processInfo.environment["BOTCHU_USAGE_PARSER_BENCHMARK"] else { return }
+        let samples: [(AgentKind, [String])] = [(.claude, [ClaudeInputSamples.tokenUsage]), (.codex, [TokenUsageSamples.codex]),
+            (.antigravity, [TokenUsageSamples.antigravity]), (.muse, [TokenUsageSamples.muse]), (.pi, TokenUsageSamples.pi)]
+        var results = "Parser: microseconds per complete turn (20000 iterations); JSON decoding included\n"
+        for (kind, lines) in samples {
+            let start = Date()
+            var count = 0
+            for _ in 0..<20_000 { count += run(kind, lines).count }
+            let full = Date().timeIntervalSince(start) * 1_000_000 / 20_000
+            let objects = lines.compactMap(decode)
+            let extraction = Date()
+            var usages = 0
+            for _ in 0..<20_000 {
+                var accumulator = TurnUsageAccumulator()
+                for object in objects {
+                    let value: TurnUsage?
+                    switch kind {
+                    case .claude: value = UsageParsing.claude(object)
+                    case .codex: value = UsageParsing.codex(object)
+                    case .antigravity: value = UsageParsing.antigravity(object["result"] as? JSON)
+                    case .muse: value = UsageParsing.muse(object["payload"] as? JSON ?? [:])
+                    case .pi: value = UsageParsing.pi(object["message"] as? JSON ?? [:])
+                    case .sail: value = nil
+                    }
+                    if let value { accumulator.add(value) }
+                }
+                usages += accumulator.value?.models.count ?? 0
+            }
+            let added = Date().timeIntervalSince(extraction) * 1_000_000 / 20_000
+            results += "\(kind.rawValue): full \(full) us; usage extraction/aggregation \(added) us; events \(count), models \(usages)\n"
+        }
+        try results.write(toFile: path, atomically: true, encoding: .utf8)
+    }
 }
