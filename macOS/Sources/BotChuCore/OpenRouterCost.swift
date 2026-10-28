@@ -92,6 +92,7 @@ public actor OpenRouterCostScheduler {
     private var nextRequest = Date.distantPast
     private var disabledAccounts = Set<String>()
     private var credentialRevisions: [String: Int] = [:]
+    private var missingCredentialUntil: [String: Date] = [:]
     private var costs: [UUID: [String: Double]] = [:]
     private var retryAt: [UUID: Date] = [:]
     private var completed = Set<UUID>()
@@ -106,6 +107,7 @@ public actor OpenRouterCostScheduler {
     /// Called when that account's permitted credential or profile changes, never every poll.
     public func reset(accountID: String) {
         disabledAccounts.remove(accountID)
+        missingCredentialUntil.removeValue(forKey: accountID)
         credentialRevisions[accountID, default: 0] += 1
     }
 
@@ -123,6 +125,7 @@ public actor OpenRouterCostScheduler {
                   date.timeIntervalSince(candidate.endedAt) >= 60,
                   date.timeIntervalSince(candidate.endedAt) <= 86_400,
                   retryAt[candidate.id, default: .distantPast] <= date,
+                  missingCredentialUntil[candidate.accountID, default: .distantPast] <= date,
                   !candidate.generationIDs.isEmpty,
                   candidate.generationIDs.allSatisfy(OpenRouterCost.supports),
                   !(await isActive(candidate)) else { continue }
@@ -131,7 +134,7 @@ public actor OpenRouterCostScheduler {
                 guard date >= nextRequest else { return }
                 let revision = credentialRevisions[candidate.accountID, default: 0]
                 guard let key = await credential(candidate.accountID), !key.isEmpty else {
-                    retryAt[candidate.id] = now().addingTimeInterval(300)
+                    missingCredentialUntil[candidate.accountID] = now().addingTimeInterval(300)
                     continue
                 }
                 // The credential lookup may have suspended while a turn began.

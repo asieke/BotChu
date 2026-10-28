@@ -129,6 +129,23 @@ import Testing
         #expect(fixture.requests.count == 1)
     }
 
+    @Test func missingCredentialBacksOffAcrossTheWholeAccount() async {
+        let fixture = Fixture()
+        let scheduler = fixture.scheduler()
+        fixture.advance(60)
+        fixture.keyAvailable = false
+        var second = fixture.candidate
+        second.id = UUID()
+        await scheduler.tick([fixture.candidate, second])
+        fixture.advance(1)
+        await scheduler.tick([fixture.candidate, second])
+        #expect(fixture.credentialReads == 1)
+        fixture.keyAvailable = true
+        await scheduler.reset(accountID: fixture.candidate.accountID)
+        await scheduler.tick([fixture.candidate, second])
+        #expect(fixture.requests.count == 1)
+    }
+
     @Test func partialSuccessIsKeptWithoutAmendingOrDoubleCounting() async {
         let fixture = Fixture()
         let scheduler = fixture.scheduler()
