@@ -6,6 +6,63 @@ import BotChuCore
 @testable import BotChu
 
 extension RenderingTests {
+    @Test func ledgerKeepsTheRunningAccountAfterSwitchAndRecordsStoppedTurns() async throws {
+        let script = ConversationFixture.script.replacingOccurrences(of: #"emit({"type":"turn.completed"})"#,
+            with: #"emit({"type":"turn.completed", "usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":7}})"#)
+        let fixture = try ConversationFixture(script: script)
+        defer { fixture.cleanUp() }
+        let app = fixture.app, target = ChatTarget.home(fixture.bot.id)
+        app.send("WAIT", to: target)
+        try await fixture.wait { app.runSettings(of: target)?.resumableSessionID != nil }
+        let prompt = try #require(app.thread(target).first { $0.role == .user })
+        app.setAccount("codex-work", ofBot: fixture.bot.id)
+        try fixture.release(target)
+        try await fixture.wait { !app.isRunning(target) }
+        await app.storage.settle()
+        let saved = try #require(UsageLedger.read(in: fixture.home).entries.first)
+        #expect(saved.accountID == "codex-dev" && saved.kind == .home && saved.taskID == nil)
+        #expect(saved.messageID == prompt.id && saved.messageIDs == [prompt.id])
+        #expect(saved.usage?.models.first?.uncachedInput == 100 && saved.usage?.models.first?.output == 7)
+        #expect(app.runSettings(of: target)?.accountID == "codex-work")
+
+        let stoppedTarget = fixture.taskTarget
+        app.send("WAIT", to: stoppedTarget)
+        try await fixture.wait { app.runSettings(of: stoppedTarget)?.resumableSessionID != nil }
+        app.stop(stoppedTarget)
+        try await fixture.wait { !app.isRunning(stoppedTarget) }
+        await app.storage.settle()
+        let stopped = try #require(UsageLedger.read(in: fixture.home).entries.last)
+        #expect(stopped.kind == .task && stopped.taskID == stoppedTarget.taskID && stopped.outcome == .stopped && stopped.usage == nil)
+        app.send("FAIL", to: stoppedTarget)
+        try await fixture.wait { !app.isRunning(stoppedTarget) }
+        await app.storage.settle()
+        let failed = try #require(UsageLedger.read(in: fixture.home).entries.last)
+        #expect(failed.outcome == .failed && failed.usage == nil)
+    }
+
+    @Test func ledgerAggregatesClaudeResultsWithoutGuessingLivePromptBoundaries() async throws {
+        let script = ConversationFixture.claudeScript
+            .replacingOccurrences(of: #""is_error":False, "result":"ok""#,
+                with: #""is_error":False, "result":"ok", "modelUsage":{"claude-test":{"inputTokens":10,"outputTokens":3}}"#)
+            .replacingOccurrences(of: "result()\nwhile True:", with: "result()\nresult()\nwhile True:")
+        let fixture = try ConversationFixture(accountID: "claude-dev", script: script)
+        defer { fixture.cleanUp() }
+        let app = fixture.app, target = fixture.taskTarget
+        app.send("WAIT", to: target)
+        try await fixture.wait { app.runStates[target]?.takesInput == true }
+        app.send("first follow-up", to: target)
+        app.send("second follow-up", to: target)
+        try await fixture.wait { (try? fixture.lines("stdin.jsonl", target).count) == 2 }
+        try fixture.release(target)
+        try await fixture.wait { !app.isRunning(target) }
+        await app.storage.settle()
+        let read = try UsageLedger.read(in: fixture.home), saved = try #require(read.entries.first)
+        #expect(read.entries.count == 1)
+        #expect(saved.messageIDs == app.thread(target).filter { $0.role == .user }.map(\.id))
+        #expect(saved.messageIDs.count == 3 && saved.messageID == saved.messageIDs.first)
+        #expect(saved.usage?.models == [ModelUsage(model: "claude-test", uncachedInput: 20, output: 6)])
+    }
+
     @Test func composerSendsWithReturnWhileRunningAndKeepsTaskQueuesSeparate() async throws {
         _ = NSApplication.shared
         let fixture = try ConversationFixture()
@@ -217,7 +274,12 @@ extension RenderingTests {
         try await fixture.wait { app.runSettings(of: target)?.resumableSessionID != nil }
         app.send("after relaunch", to: target)
         app.stopAll()
+        // Shutdown drains ledger writes before any later process-exit callback can run.
+        let atQuit = try UsageLedger.read(in: fixture.home).entries
+        #expect(atQuit.count == 1 && atQuit.first?.outcome == .stopped)
         try await fixture.wait { !app.isRunning(target) }
+        await app.storage.settle()
+        #expect(try UsageLedger.read(in: fixture.home).entries.count == 1)
         #expect(app.messageQueues[target]?.isPaused == false)
         #expect(!fixture.home.loadQueuePaused(task: target.taskID))
         #expect(try fixture.calls(target).count == 1)

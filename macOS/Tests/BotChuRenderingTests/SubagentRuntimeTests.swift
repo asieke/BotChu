@@ -5,6 +5,26 @@ import BotChuCore
 @testable import BotChu
 
 extension RenderingTests {
+    @Test func aReservedSubagentStoppedBeforeLaunchHasOneUnmeasuredLedgerEntry() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let runtime = fixture.app.delegation!
+        var record = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID,
+            depth: 1, targetBot: fixture.worker, title: "Reserved", brief: "Never launched",
+            workingDirectory: fixture.folder.path, phase: .queued, createdAt: Date(timeIntervalSince1970: 1_793_145_600))
+        record.model = "reserved-model"
+        runtime.records[fixture.target] = [record]
+        runtime.stop(record.id)
+        runtime.stop(record.id)
+        try await fixture.wait { runtime.all.first?.phase == .stopped }
+        await runtime.archive.storage.settle()
+        let ledger = try UsageLedger.read(in: BotHome(workspace: fixture.parent.persistencePath))
+        let saved = try #require(ledger.entries.first)
+        #expect(ledger.entries.count == 1 && saved.subagentRunID == record.id && saved.botID == fixture.worker.id)
+        #expect(saved.startedAt == record.createdAt && saved.outcome == .stopped && saved.usage == nil)
+        #expect(saved.accountID == record.accountID && saved.model == "reserved-model" && saved.modelSource == .requested)
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["BOTCHU_TEST_REAL_DELEGATION"] == "1"))
     func realCodexTurnReceivesAClaudeSubagentHandoff() async throws {
         let fixture = try SubagentFixture()
@@ -46,6 +66,13 @@ extension RenderingTests {
         // extended the work each bot's next review covers (#138), and added no review.
         #expect(fixture.app.thread(fixture.target).last(where: { $0.role == .assistant })?.text.contains("HANDOFF-REVIEWED") == true)
         #expect(fixture.app.delegation.all.map(\.phase) == [.completed])
+        await fixture.app.storage.settle()
+        let ledger = try UsageLedger.read(in: BotHome(workspace: fixture.parent.persistencePath))
+        let delegatedUsage = try #require(ledger.entries.first { $0.kind == .subagent })
+        #expect(delegatedUsage.botID == fixture.worker.id && delegatedUsage.taskID == fixture.target.taskID)
+        #expect(delegatedUsage.subagentRunID == fixture.app.delegation.all.first?.id)
+        #expect(delegatedUsage.accountID == "codex-work" && delegatedUsage.outcome == .finished)
+        #expect(ledger.entries.filter { $0.kind == .task }.count == 1)
         #expect(fixture.app.thread(.home(fixture.parent.id)).contains { $0.role == .receipt })
         #expect(fixture.app.evaluator.records.isEmpty)
         let conversation = ReviewConversation(botID: fixture.parent.id, taskID: fixture.target.taskID)

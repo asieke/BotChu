@@ -118,6 +118,10 @@ import Testing
             original.model = planted; original.providerID = planted
             let capture = UsageLedger.Capture(original)
             capture.record(.session(planted))
+            capture.record(.textDelta(planted))
+            capture.record(.text(planted))
+            capture.record(.toolStarted(id: planted, name: planted, input: planted, arguments: planted))
+            capture.record(.toolFinished(id: planted, name: planted, output: planted, isError: true))
             capture.record(.failed(planted))
             capture.finish(outcome, in: home, queue: queue)
         }

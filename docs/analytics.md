@@ -34,6 +34,8 @@ does no pricing or network work. Appending, encoding and combining usage reports
 serialized `StorageQueue` lane; turn completion only submits captured values. Files are partitioned
 by completion month in UTC, with a 0700 folder and 0600 files. A damaged or torn line does not hide
 later lines. Repeated entry IDs are read once (the first complete entry wins).
+Stopped or failed preparation, including a reserved sub-agent stopped before launch, retains an
+explicitly unmeasured outcome. Skipped jobs have no execution and do not add a ledger entry.
 
 Each entry holds `id`, `at`, `startedAt`, `kind`, `botID`, optional `taskID`, `jobRunID` and
 `subagentRunID`, captured `accountID`, `provider` (CLI family), `providerID` (backend), `model` and
