@@ -419,3 +419,16 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         #expect(messages.map(\.role) == [.assistant, .error, .assistant])
     }
 }
+
+// Captured 2026-10-28: Codex 0.165.0, Antigravity 1.4.9, Muse 1.4.14, Pi 1.4.0.
+// Unrelated fields omitted, generation IDs made up; token counts and costs unchanged.
+enum TokenUsageSamples {
+    static let codex = #"{"type":"turn.completed","usage":{"input_tokens":14610,"cached_input_tokens":12160,"cache_write_input_tokens":0,"output_tokens":6,"reasoning_output_tokens":0}}"#
+    static let antigravity = #"{"event":"result","result":{"status":"SUCCESS","usage":{"input_tokens":7578,"output_tokens":42,"thinking_tokens":36,"cache_read_tokens":0,"total_tokens":7620}}}"#
+    static let muse = #"{"payload_type":"run.usage","payload":{"models":[{"model":"muse-wonder-full-1.0","input_tokens":27363,"cached_tokens":0,"output_tokens":61,"reasoning_tokens":50,"calls":1}]}}"#
+    static let pi = [
+        #"{"type":"message_end","message":{"role":"assistant","model":"deepseek/deepseek-v4.1-flash","usage":{"input":2343,"output":59,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2402,"cost":{"input":8.013060000000001e-05,"output":8.0712e-06,"cacheRead":0,"cacheWrite":0,"total":8.82018e-05}},"responseId":"gen-sample-1","stopReason":"toolUse"}}"#,
+        #"{"type":"message_end","message":{"role":"assistant","model":"deepseek/deepseek-v4.1-flash","usage":{"input":2417,"output":6,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2423,"cost":{"input":8.26614e-05,"output":8.208e-07,"cacheRead":0,"cacheWrite":0,"total":8.34822e-05}},"responseId":"gen-sample-2","stopReason":"stop"}}"#,
+        #"{"type":"agent_end"}"#,
+    ]
+}
