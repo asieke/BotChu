@@ -110,7 +110,8 @@ public struct BotStatus: Equatable, Sendable {
         if let id = settings.resumableSessionID {
             session = .continuing(id: id)
         } else {
-            session = .startsNew(accountChanged: settings.sessionID != nil && settings.sessionAccountID != settings.accountID)
+            session = .startsNew(accountChanged: settings.sessionScope.map { $0 != settings.executionScope }
+                ?? (settings.sessionAccountID != nil && settings.sessionAccountID != settings.accountID))
         }
         return BotStatus(
             phase: phase,

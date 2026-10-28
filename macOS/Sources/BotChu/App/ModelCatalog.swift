@@ -128,17 +128,45 @@ extension AppModel {
     /// family that doesn't list its models, and for a task on a host, which a list read here says
     /// nothing about.
     func modelCatalogScope(for settings: any RunSettings) -> ModelCatalogScope? {
-        (settings as? BotTask)?.isRemote == true ? nil : modelCatalogScope(for: settings.account)
+        ((settings as? BotTask)?.isRemote == true || (settings as? SubagentRun)?.hostID != nil) ? nil : modelCatalogScope(for: settings.account)
     }
 
     func modelCatalogScope(for account: Account) -> ModelCatalogScope? {
         NativeModelList.lists(account.kind)
-            ? ModelCatalogScope(accountID: account.id, command: settings.command(for: account), kind: account.kind) : nil
+            ? ModelCatalogScope(accountID: account.id, command: settings.command(for: account), kind: account.kind, configurationDirectory: account.configurationDirectory) : nil
     }
 
     /// The list `settings`' pickers choose from in place of the starters, once read.
     func nativeModels(for settings: any RunSettings) -> [ModelOption]? {
-        modelCatalog.models(for: modelCatalogScope(for: settings))
+        let native = modelCatalog.models(for: modelCatalogScope(for: settings))
+        guard settings.account.kind == .pi else { return native }
+        let provider = settings.effectiveProviderID
+        var models = native?.filter { $0.providerID == provider } ?? []
+        if provider == "openrouter" {
+            var seen = Set(models.map(\.id))
+            models += modelCatalog.models.filter { seen.insert($0.id).inserted }.map {
+                ModelOption(id: $0.id, name: $0.title,
+                            efforts: $0.supportsReasoning == true ? [.off, .minimal, .low, .medium, .high] : [], providerID: "openrouter")
+            }
+            if models.isEmpty { return GenerationOptions.models(for: .pi) }
+        }
+        return models
+    }
+
+    /// A requested Pi effort needs metadata before launch, including a job that runs immediately
+    /// after launch before the background catalog check. Other runtimes keep their existing path.
+    func preparePiModels(for settings: any RunSettings) async {
+        guard settings.account.kind == .pi, settings.reasoningEffort != nil else { return }
+        if let scope = modelCatalogScope(for: settings) { await modelCatalog.refresh(scope) }
+        if settings.effectiveProviderID == "openrouter" { await modelCatalog.load() }
+    }
+
+    func providers(for settings: any RunSettings) -> [ModelProvider] {
+        ModelProvider.choices(models: modelCatalog.models(for: modelCatalogScope(for: settings)) ?? [], selected: settings.effectiveProviderID)
+    }
+
+    func catalogModels(for settings: any RunSettings) -> [CatalogModel] {
+        settings.account.kind == .pi && settings.effectiveProviderID != "openrouter" ? [] : modelCatalog.models(for: settings.account.kind)
     }
 
     /// Reads the saved lists and, in the real app or a review copy with sample lists, keeps them fresh.

@@ -191,11 +191,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     minutes); a row adds its age only when its reading is 10 minutes older than that. While all is
     well a row's second line is its family, and its plan when the CLI itself reports one (Codex's
     plan type: "Codex · Pro"; never worked out from allowance, prices or names, so Claude,
-    Antigravity, Muse and OpenRouter rows show none); otherwise, in the warning colour, **Stale · 2h ago**
+    Antigravity, Muse and Pi rows show none); otherwise, in the warning colour, **Stale · 2h ago**
     (older than the background's interval, or a later check failed; its bars and shares are
     dimmed), **Usage unavailable** or **Command not found**, a button that shows why, with **Try
     Again** (labelled with the time the profile's limit allows it) and, for a missing command,
-    **Change Command…**, or for Pi **Open Settings** (its OpenRouter key); a profile not read yet says Checking…, over empty tracks. Selecting a
+    **Change Command…**, or for the built-in Pi profile **Open Settings** (its OpenRouter key); a profile not read yet says Checking…, over empty tracks. Selecting a
     profile shows it on the right: its family and plan, its allowance as **Model & Usage** shows it, its
     **Connectors** (below), the agents set to
     it, each opening its Home, and its command, with Copy and Change… (Settings ▸ Accounts). A row's
@@ -210,13 +210,16 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     while Providers shows, so it opens on the last numbers and updates them in place; a
     conversation's **Model & Usage** shows the same readings, with the same refresh limits. It
     searches by name or family. **New Profile** adds a named profile of Claude Code, Codex,
-    Antigravity, Muse or Pi, with an installed command or wrapper and **Test Command**; for Pi, it
-    shows whether the shared OpenRouter key is saved, or **Add Key in Settings…** (which closes
-    the sheet, so only before anything is typed). Sign in through that CLI in Terminal; BotChu does not create its
-    login. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
+    Antigravity, Muse or Pi, with an installed command or wrapper and **Test Command**. Sign in
+    through that runtime in Terminal; BotChu does not read or copy its login. New Pi profiles own
+    a config folder under `~/.pi/botchu-profiles/<profile id>/`; **Copy Pi Login Command** in the
+    profile inspector (also Settings ▸ Accounts) copies the command with its `PI_CODING_AGENT_DIR`.
+    Run it in Terminal and use Pi's `/login`. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
     Codex profiles can also draw pets. Bots and tasks retain a copy of their custom profile’s CLI
-    family and command across relaunches. Command overrides remain editable in Settings. Pi profiles
-    use the shared OpenRouter key. Muse is checked with its existing brief request, at most
+    runtime, command and config folder across relaunches. Command overrides remain editable in Settings.
+    Only the built-in Pi profile on OpenRouter uses the legacy key in Settings; additional Pi
+    profiles use their own Pi login, including for OpenRouter; their config folder and credential
+    exclusions apply after the login shell starts. Muse is checked with its existing brief request, at most
     hourly by itself.
   - **Bots:** create, edit and delete bots. A bot has a name, an emoji, a one-line title, private
     instructions, an account, an optional model and a workspace folder (default `~/BotChu/<name>`).
@@ -261,12 +264,34 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   - **Accounts:** any bot can run on any account, switchable in **Edit Bot**:
     Claude Personal, Claude Dev and Claude Work (`claude-personal`, `claude-dev`, `claude-work`),
     Codex Personal, Codex Dev and Codex Work (`codex-personal`, `codex-dev`, `codex-work`), Google
-    (Antigravity, `agy`), Muse (`muse`), OpenRouter (the Pi agent, `pi`, with an OpenRouter key
-    and any OpenRouter model), and Sail Research (`sail`: BotChu's own agent, below, with a Sail key
+    (Antigravity, `agy`), Muse (`muse`), Pi (`pi`, with a separate provider and model selection), and Sail Research (`sail`: BotChu's own agent, below, with a Sail key
     and model of its own). Each account's command can be changed in Settings.
     Wherever an account or a CLI family is shown, so is the family's logo, as in GitChu: Claude's
     spark, OpenAI's knot for Codex, Google's G for Antigravity, Facebook's f for Muse, π for Pi, and a
     sailboat on a tile for Sail (not Sail's own mark).
+  - **Runtime, profile, provider and model:** the bot's name, instructions, memory and workspace
+    are its identity. Its profile selects the runtime (CLI protocol, tools and session handling)
+    and login. Pi then offers **Provider → Model → Reasoning**; fixed-provider runtimes show
+    their own models directly. Pi's available providers and models come from that profile's own
+    `get_available_models` RPC, without a model turn, extensions or MCP connections. Only model
+    metadata is retained. Custom/retired model IDs remain selectable; a newly selected provider
+    needs an explicit model before it can run. Provider changes clear the model and effort and
+    start a fresh CLI session, keeping the chat's history and bot identity. Same-runtime profile
+    changes retain model/provider choices but start a fresh session; runtime changes also reset
+    provider, model and effort. Compatible model/effort changes keep the session.
+    The same settings travel with tasks, sub-agents and scheduled jobs, including job history.
+    Reasoning choices are model-specific: Pi's reasoning models offer off through high; unknown
+    models stay on Auto, and unverified `xhigh`/`max` are never sent just because Pi accepts the
+    flag. No OpenCode runtime adapter is implemented; another runtime would need its own tools,
+    protocol, session and authentication integration.
+  - **Existing Pi data:** the built-in profile now displays **Pi**, while its saved ID and Keychain
+    account remain `openrouter`. Old bots/tasks/jobs/sub-agents without a provider still mean
+    OpenRouter. Existing compatible session IDs, model choices and effort values decode unchanged;
+    a saved effort not supported by the selected model is omitted at launch. The OpenRouter
+    Settings default remains the fallback only for that provider. Other providers use Pi's own
+    profile authentication, and BotChu does not query OpenRouter's balance for them. Remote tasks
+    use the host's own login; their usage view never substitutes this Mac's allowance. Old custom
+    profile commands retain their configuration; no login files or keys are migrated or copied.
   - **Sail Research:** for long-running agent work, on Sail's Flex completion window, which queues
     requests for a lower price. Flex is taken only by background Responses requests (`background:
     true`, `metadata.completion_window: "flex"`), which can't stream, so pointing Pi's streaming
@@ -1765,7 +1790,11 @@ on that pull request's branch to continue in instead). The same command run agai
   - Codex: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`, then `codex exec resume <thread id>`.
   - Antigravity: `agy -p … --output-format stream-json --dangerously-skip-permissions`, then `--conversation <id>`.
   - Muse: `muse exec --json --session-id <uuid>` (the same id resumes it).
-  - Pi: `pi -p --mode json --provider openrouter --model <id> --session-id <uuid>`, with `OPENROUTER_API_KEY` from the Keychain.
+  - Pi: `pi -p --mode json --provider <provider> --model <id> --session-id <uuid>`. The runtime owns
+    the provider login in its profile's config folder. Only the built-in `openrouter` profile,
+    when its provider is OpenRouter on This Mac, receives `OPENROUTER_API_KEY` from the existing
+    Keychain item. Credentials and local config folders are never forwarded over SSH; a remote
+    profile command owns the host's login.
   - Sail: `botchu-sail --session-id <uuid> --model <id>`, then with `--resume`, with `SAIL_API_KEY`
     from the Keychain; it prints its own JSON lines (`SailEvent`), on this Mac only.
 - A run review runs one of those CLIs on this Mac in a new session without tools, which nothing
@@ -1858,7 +1887,10 @@ on that pull request's branch to continue in instead). The same command run agai
   and Sail `SAIL_API_KEY` and `BOTCHU_SMOKE_MODEL=<a Sail model id>` (its helper runs from the smoke
   binary itself, and each turn can wait in Sail's Flex queue). To exercise explicit generation
   settings, prefix the command with `BOTCHU_SMOKE_EFFORT=low` and optionally
-  `BOTCHU_SMOKE_MODEL=<model id>`; both settings apply to the new and resumed turns.
+  `BOTCHU_SMOKE_MODEL=<model id>`; both settings apply to the new and resumed turns. For Pi,
+  `BOTCHU_SMOKE_PROVIDER=<provider id>` selects another provider using Pi's existing login,
+  with an explicit `BOTCHU_SMOKE_MODEL`. `--models openrouter` prints the Pi profile's real
+  provider/model list. The smoke test uses the same profile/provider credential selection as the app.
   `BOTCHU_SMOKE_FAST=1` runs both Codex turns on the Fast tier.
   `BOTCHU_SMOKE_BLOCK=gh` (catalog tools, comma-separated) runs both turns under the profile a turn gets with those
   tools off (#246); the first also runs each of them, which must fail, and `ssh -V`, which must run.

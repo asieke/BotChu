@@ -134,7 +134,8 @@ final class JobRuntime {
         guard runs, let model else { return }
         let accounts = model.settings.accounts
         guard jobs.contains(where: { job in
-            job.runsOn.map { runsOn in !runsOn.model.isEmpty && accounts.first { $0.id == runsOn.accountID }?.kind == .pi } ?? false
+            job.runsOn.map { runsOn in !runsOn.model.isEmpty && accounts.first { $0.id == runsOn.accountID }?.kind == .pi
+                && ModelProvider.effectiveID(runsOn.providerID, runtime: .pi) == "openrouter" } ?? false
         }) else { return }
         Task { await model.modelCatalog.load() }
     }
@@ -311,11 +312,12 @@ final class JobRuntime {
         }
         targets[runID] = target
         let modelChoice = GenerationOptions.effectiveModel(agent.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
-                                                           sailDefault: model.settings.sailModel)
+                                                           sailDefault: model.settings.sailModel, providerID: agent.providerID)
         engine.amend(runID) {
             $0.taskID = task.id
             $0.accountID = account.id
             $0.accountName = account.name
+            $0.providerID = agent.effectiveProviderID
             $0.model = modelChoice
             $0.reasoningEffort = agent.reasoningEffort
         }
@@ -325,9 +327,12 @@ final class JobRuntime {
         conversation.run = RunState(startedAt: startedAt)
         model.saveThread(target)
         refresh()
-        let key = account.kind == .pi ? model.openRouterKey() : nil
-        if account.kind == .pi, key?.isEmpty ?? true {
+        let key = agent.usesLegacyOpenRouterKey ? model.openRouterKey() : nil
+        if agent.usesLegacyOpenRouterKey, key?.isEmpty ?? true {
             return finish(runID, outcome: .failed, summary: "Add your OpenRouter API key in BotChu ▸ Settings first.")
+        }
+        if let problem = PiLaunch.problem(settings: agent, effectiveModel: modelChoice) {
+            return finish(runID, outcome: .failed, summary: problem)
         }
         let sailKey = account.kind == .sail ? Keychain.get(Keychain.sailAccount) : nil
         if account.kind == .sail, let problem = SailLaunch.problem(remote: false, key: sailKey) {
@@ -347,6 +352,10 @@ final class JobRuntime {
                 return model.delegation.endCaller(caller.id)
             }
             do {
+                await model.preparePiModels(for: agent)
+                guard !Task.isCancelled, self.preparing[runID] != nil, !self.quitting else {
+                    return model.delegation.endCaller(caller.id)
+                }
                 let prepared = try await model.prepareSessionForLaunch(of: bot.id, kind: account.kind, remote: false,
                     current: { self.preparing[runID] != nil && !self.quitting })
                 let snapshot = prepared.context
@@ -359,7 +368,7 @@ final class JobRuntime {
                     availableBots: model.delegation.roster, tools: model.tools.instructions(), locale: .current)
                 let prompt = BotContext.prompt(for: job.prompt, preamble: preamble)
                 var invocation = JobLaunch.invocation(for: agent, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key,
-                                                      sailDefault: model.settings.sailModel, sailKey: sailKey)
+                                                      sailDefault: model.settings.sailModel, sailKey: sailKey, catalog: model.nativeModels(for: agent))
                 invocation.environment.merge(caller.environment) { _, new in new }
                 invocation.toolProfile = prepared.toolProfile
                 self.run(launch, prompt: prompt, invocation: invocation, caller: caller, account: account, agent: agent, target: target)
@@ -425,8 +434,8 @@ final class JobRuntime {
                 }
                 self.refresh()
                 // The task resumes the run's session when the owner writes in it.
-                if let session { model.recordSession(session, accountID: account.id, for: target) }
-                if let reported { model.recordReportedModel(reported, requested: agent.model, accountID: account.id, for: target) }
+                if let session { model.recordSession(session, accountID: account.id, scope: agent.executionScope, for: target) }
+                if let reported { model.recordReportedModel(reported, requested: agent.model, accountID: account.id, scope: agent.executionScope, for: target) }
             }
             // A crash loses at most a few seconds of the transcript.
             if Date().timeIntervalSince(lastSave) > 5 {

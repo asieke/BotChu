@@ -7,7 +7,8 @@ import Testing
     func effortIsPassedOnNewAndResumedTurns(kind: AgentKind) {
         for session in [nil, "saved-session"] {
             let invocation = CommandBuilder.invocation(kind: kind, prompt: "hello", model: "custom-model",
-                                                       sessionID: session, reasoningEffort: .high)
+                                                       sessionID: session, reasoningEffort: .high,
+                                                       catalog: kind == .pi ? [ModelOption(id: "custom-model", name: "Custom", efforts: [.high], providerID: "openrouter")] : nil)
             let expected: [String]
             switch kind {
             case .claude, .antigravity, .sail: expected = ["--effort", "high"]

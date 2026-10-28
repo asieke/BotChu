@@ -353,8 +353,8 @@ private struct ProviderProblemDetails: View {
                     .modifier(Prominent(status != .missingCommand))
                     if status == .missingCommand {
                         Button("Change Command…", action: changeCommand).buttonStyle(.borderedProminent)
-                    } else if account.kind == .pi {
-                        // Pi's usage is the shared OpenRouter key's, set in Settings (#232).
+                    } else if request.usesLegacyOpenRouterKey {
+                        // Only the built-in Pi profile uses the legacy OpenRouter key.
                         Button("Open Settings") {
                             dismiss()
                             model.openSettings(.openRouter)
@@ -611,7 +611,7 @@ private struct AvatarGap: View {
         guard !checking.contains(request), await usage.isDue(request, for: check) else { return }
         checking.insert(request)
         defer { checking.remove(request) }
-        let key = request.account.kind == .pi ? openRouterKey() : nil
+        let key = request.usesLegacyOpenRouterKey ? openRouterKey() : nil
         states[request] = await usage.read(request, openRouterKey: key, for: check)
     }
 
@@ -690,6 +690,18 @@ private struct ProviderInspector: View {
                         }
                         .buttonStyle(InspectorButtonStyle(fill: true))
                     }
+                    if account.kind == .pi {
+                        InspectorSection("Authentication", preferenceKey: "provider.authentication") {
+                            InspectorCard(padded: true) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(account.configurationDirectory ?? "Pi command’s own config folder")
+                                        .font(.caption.monospaced()).textSelection(.enabled)
+                                    Button("Copy Pi Login Command") { copy(account.loginCommand(command: request.command)) }
+                                        .help("Run in Terminal, then use /login in Pi")
+                                }
+                            }
+                        }
+                    }
                     if model.settings.customAccounts.contains(where: { $0.id == account.id }) {
                         Button(role: .destructive, action: remove) { Text("Remove Profile…").foregroundStyle(GitHubColors.danger) }
                             .buttonStyle(InspectorButtonStyle(fill: true))
@@ -739,8 +751,7 @@ struct AddProviderSheet: View {
     @State private var command = ""
     @State private var testing = false
     @State private var found: Bool?
-    /// Whether the OpenRouter key is in the Keychain, read when Pi is chosen.
-    @State private var openRouterKeySaved = false
+    @State private var profileID = "custom-" + UUID().uuidString.lowercased()
     private var valid: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !command.contains(where: \.isNewline)
@@ -750,27 +761,14 @@ struct AddProviderSheet: View {
             Text("New CLI Profile").font(.headline).padding(20)
             Form {
                 TextField("Profile name", text: $name, prompt: Text("Claude Research"))
-                Picker("CLI family", selection: $kind) { ForEach(AgentKind.profileFamilies, id: \.self) { ProviderMenuLabel(title: $0.displayName, kind: $0).tag($0) } }
+                Picker("Runtime", selection: $kind) { ForEach(AgentKind.profileFamilies, id: \.self) { ProviderMenuLabel(title: $0.displayName, kind: $0).tag($0) } }
                 TextField("Command", text: $command, prompt: Text("~/.local/bin/claude-research"))
                     .font(.system(.body, design: .monospaced))
                     .onChange(of: command) { found = nil }
-                // A Pi profile runs on the shared OpenRouter key: whether it is saved, or the way to it (#232).
                 if kind == .pi {
-                    LabeledContent("OpenRouter key") {
-                        if openRouterKeySaved {
-                            Label("Saved", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                        } else {
-                            HStack {
-                                Label("Not saved", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Palette.warning)
-                                // Settings is behind the sheet, which closes to show it: only with nothing typed to lose.
-                                Button("Add Key in Settings…") {
-                                    dismiss()
-                                    model.openSettings(.openRouter)
-                                }
-                                .disabled(!name.isEmpty || !command.isEmpty)
-                                .help(name.isEmpty && command.isEmpty ? "" : "Add the profile or cancel first")
-                            }
-                        }
+                    LabeledContent("Authentication", value: "Pi profile login")
+                    LabeledContent("Config folder") {
+                        Text(piDirectory).font(.caption.monospaced()).textSelection(.enabled)
                     }
                 }
                 HStack {
@@ -795,15 +793,15 @@ struct AddProviderSheet: View {
                 Button("Add Profile") { save() }.buttonStyle(.borderedProminent).disabled(!valid || testing)
             }.padding(20)
         }.frame(width: 540, height: 410).background(Color(nsColor: .windowBackgroundColor))
-        .task(id: kind) {
-            if kind == .pi { openRouterKeySaved = !(model.openRouterKey() ?? "").isEmpty }
-        }
     }
+    private var piDirectory: String { "~/.pi/botchu-profiles/" + profileID }
+
     private func save() {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let command = command.trimmingCharacters(in: .whitespacesAndNewlines)
         let symbol = model.settings.accounts.first { $0.kind == kind }?.symbol ?? "terminal"
-        model.settings.customAccounts.append(Account(id: "custom-" + UUID().uuidString.lowercased(), name: name, kind: kind, defaultCommand: command, symbol: symbol))
+        model.settings.customAccounts.append(Account(id: profileID, name: name, kind: kind, defaultCommand: command, symbol: symbol,
+                                                     configurationDirectory: kind == .pi ? piDirectory : nil))
         dismiss()
     }
 }

@@ -93,10 +93,12 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var accountID: String
     public var accountProfile: Account?
     public var model: String
+    public var providerID: String?
     public var reasoningEffort: ReasoningEffort?
     public var fastMode: Bool?
     public var sessionID: String?
     public var sessionAccountID: String?
+    public var sessionScope: RunSessionScope?
     public var reportedModel: ReportedModel?
     public var createdAt: Date
     /// When its tab was closed. Its record and conversation stay, and it can be opened again.
@@ -153,6 +155,7 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
         self.init(title: title, repo: repo, checkout: checkout, branch: branch, work: work, brief: brief, origin: origin,
                   accountID: bot.accountID, model: bot.model, reasoningEffort: bot.reasoningEffort,
                   hostID: host?.id, hostName: host?.nickname, review: review)
+        self.providerID = bot.providerID
         self.accountProfile = bot.accountProfile
         self.fastMode = bot.fastMode
     }

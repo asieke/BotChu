@@ -16,17 +16,19 @@ public struct ModelOption: Identifiable, Equatable, Sendable {
     /// The full name with its version, or for a moving alias the name without one.
     public let name: String
     public let efforts: [ReasoningEffort]
+    public var providerID: String?
     /// A CLI alias that moves to newer versions, such as Claude Code's `opus`, not a pinned version.
     public var moving = false
     /// Whether it has Codex's Fast tier (#249).
     public var fast = false
 
-    public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false, fast: Bool = false) {
+    public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false, fast: Bool = false, providerID: String? = nil) {
         self.id = id
         self.name = name
         self.efforts = efforts
         self.moving = moving
         self.fast = fast
+        self.providerID = providerID
     }
 }
 
@@ -47,7 +49,12 @@ public struct ModelLabel: Equatable, Sendable {
 /// catalogs and account access change independently of BotChu. No login files are read. A Codex or
 /// Muse profile's own list (`catalog`, #220, #248) replaces its starters once read; they stand in until then.
 public enum GenerationOptions {
-    public static func models(for kind: AgentKind, catalog: [ModelOption]?) -> [ModelOption] {
+    public static func models(for kind: AgentKind, catalog: [ModelOption]?, providerID: String? = nil) -> [ModelOption] {
+        if kind == .pi {
+            let provider = ModelProvider.effectiveID(providerID, runtime: kind)
+            if let catalog { return catalog.filter { $0.providerID == provider || ($0.providerID == nil && provider == "openrouter") } }
+            return provider == "openrouter" ? models(for: kind) : []
+        }
         if NativeModelList.lists(kind), let catalog, !catalog.isEmpty { return catalog }
         return models(for: kind)
     }
@@ -86,20 +93,23 @@ public enum GenerationOptions {
                     ModelOption(id: "muse-spark-1.3", name: "Muse Spark 1.3", efforts: listed),
                     ModelOption(id: "muse-spark-1.2", name: "Muse Spark 1.2", efforts: [.minimal, .low, .medium, .high, .xhigh])]
         case .pi:
-            return [ModelOption(id: CommandBuilder.defaultOpenRouterModel, name: "Claude Sonnet 4.5", efforts: [.off, .minimal] + common + [.xhigh, .max])]
+            return [ModelOption(id: CommandBuilder.defaultOpenRouterModel, name: "Claude Sonnet 4.5", efforts: [.off, .minimal] + common, providerID: "openrouter")]
         case .sail:
             // Sail's models depend on the key: Settings ▸ Sail lists them, and any ID can be typed.
             return []
         }
     }
 
-    public static func efforts(for kind: AgentKind, model: String, catalog: [ModelOption]? = nil) -> [ReasoningEffort] {
+    public static func efforts(for kind: AgentKind, model: String, catalog: [ModelOption]? = nil, providerID: String? = nil) -> [ReasoningEffort] {
+        if kind == .pi {
+            return models(for: kind, catalog: catalog, providerID: providerID).first { $0.id == model }?.efforts ?? []
+        }
         if let option = option(for: model, kind: kind, catalog: catalog) { return option.efforts }
         switch kind {
         case .claude, .antigravity: return [.low, .medium, .high, .xhigh, .max]
         case .codex: return [.low, .medium, .high, .xhigh, .max, .ultra]
         case .muse: return [.none, .minimal, .low, .medium, .high, .xhigh, .max, .ultra]
-        case .pi: return [.off, .minimal, .low, .medium, .high, .xhigh, .max]
+        case .pi: return []
         case .sail: return [.low, .medium, .high]
         }
     }
@@ -211,11 +221,12 @@ public enum GenerationOptions {
     /// The model sent on the next turn. Native CLI defaults stay unspecified; OpenRouter always
     /// receives a model, inherited from Settings or the built-in fallback when Settings is blank.
     /// Sail inherits Settings ▸ Sail's (`sailDefault`), and has none when that is blank.
-    public static func effectiveModel(_ model: String, kind: AgentKind, openRouterDefault: String, sailDefault: String = "") -> String {
+    public static func effectiveModel(_ model: String, kind: AgentKind, openRouterDefault: String, sailDefault: String = "", providerID: String? = nil) -> String {
         let selected = model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard selected.isEmpty else { return selected }
         switch kind {
         case .pi:
+            guard ModelProvider.effectiveID(providerID, runtime: kind) == "openrouter" else { return "" }
             let fallback = openRouterDefault.trimmingCharacters(in: .whitespacesAndNewlines)
             return fallback.isEmpty ? CommandBuilder.defaultOpenRouterModel : fallback
         case .sail:
@@ -230,7 +241,7 @@ extension RunSettings {
     /// `catalog`: the profile's own list, when read (#220), whose efforts the model offers.
     public mutating func selectModel(_ model: String, catalog: [ModelOption]? = nil) {
         self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let reasoningEffort, !GenerationOptions.efforts(for: account.kind, model: self.model, catalog: catalog).contains(reasoningEffort) {
+        if let reasoningEffort, !GenerationOptions.efforts(for: account.kind, model: self.model, catalog: catalog, providerID: providerID).contains(reasoningEffort) {
             self.reasoningEffort = nil
         }
         if fastMode == true, !GenerationOptions.offersFast(for: account.kind, model: self.model, catalog: catalog) {
@@ -243,13 +254,42 @@ extension RunSettings {
     }
 
     public mutating func selectAccount(_ selected: Account) {
+        let oldScope = executionScope
         let oldKind = account.kind
         self.accountID = selected.id
         self.accountProfile = Accounts.all.contains(where: { $0.id == selected.id }) ? nil : selected
         if account.kind != oldKind {
+            providerID = nil
             model = ""
             reasoningEffort = nil
             fastMode = nil
         }
+        if executionScope != oldScope { invalidateSession(previous: oldScope) }
+    }
+
+    public mutating func selectProvider(_ id: String) {
+        guard account.kind == .pi else { return }
+        let selected = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selected.isEmpty, selected != effectiveProviderID else { return }
+        let previous = executionScope
+        providerID = selected
+        model = ""
+        reasoningEffort = nil
+        fastMode = nil
+        invalidateSession(previous: previous)
+    }
+
+    private mutating func invalidateSession(previous: RunSessionScope) {
+        // Keep the previous owner as a status marker, but never a resumable ID.
+        if sessionID != nil { sessionScope = sessionScope ?? previous }
+        sessionID = nil
+        reportedModel = nil
+    }
+
+    public mutating func clearSession() {
+        sessionID = nil
+        sessionAccountID = nil
+        sessionScope = nil
+        reportedModel = nil
     }
 }
