@@ -62,7 +62,7 @@ import Testing
                 _ = try await ProviderUsageClient.read(request, openRouterKey: "must-not-use")
                 Issue.record("A scoped-out allowance must not make a request")
             } catch let failure as UsageFailure {
-                #expect(failure.message.contains(request.remote == true ? "host" : "Pi manages"))
+                #expect(failure.message.contains(request.remote == true ? "host" : "provider allowance"))
             } catch { Issue.record("Expected a plain unavailable allowance reason") }
         }
     }
@@ -82,7 +82,7 @@ import Testing
     }
 
     @Test func nullMapIsExactAndForeignEffortsAreNeverMapped() throws {
-        let response: [String: Any] = ["success": true, "data": ["models": [
+        let response: [String: Any] = ["type": "response", "command": "get_available_models", "success": true, "data": ["models": [
             ["id": "kimi-k3", "provider": "moonshotai", "reasoning": true,
              "thinkingLevelMap": ["off": NSNull(), "minimal": NSNull(), "low": "low", "medium": NSNull(),
                                   "high": "high", "xhigh": NSNull(), "max": "max"]],
@@ -91,9 +91,9 @@ import Testing
              "thinkingLevelMap": ["none": "off", "ultra": "max"]]
         ]]]
         let models = try PiModelList.parse(response)
-        #expect(models[0].efforts == [.low, .high, .max])
-        #expect(models[1].efforts == [.off])
-        #expect(models[2].efforts == [.off, .minimal, .low, .medium, .high])
+        #expect(models.first { $0.provider == "moonshotai" && $0.id == "kimi-k3" }?.efforts == [.low, .high, .max])
+        #expect(models.first { $0.provider == "another" }?.efforts == [.off])
+        #expect(models.first { $0.id == "ordinary" }?.efforts == [.off, .minimal, .low, .medium, .high])
         let adapter = RuntimeAdapters.adapter(for: .pi)
         #expect(adapter.providers(in: models) == ["another", "moonshotai"])
         let filtered = adapter.models(in: models, provider: "moonshotai")
@@ -157,10 +157,10 @@ import Testing
         printf '%s\\n' "$@" > \(Shell.quote(arguments.path))
         if [ "$1" = auth ]; then
             test "$OPENROUTER_API_KEY" = test-only || exit 1
-            printf '%s\\n' '{"status":"ready"}'
+            printf '%s\\n' '{"provider":"custom-backend","status":"ready"}'
         else
             read request
-            printf '%s\\n' '{"id":"botchu-models","success":true,"data":{"models":[{"id":"model","name":"Selected profile model","provider":"custom-backend","reasoning":false}]}}'
+            printf '%s\\n' '{"id":"botchu-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"id":"model","name":"Selected profile model","provider":"custom-backend","reasoning":false}]}}'
         fi
         """
         try script.write(to: command, atomically: true, encoding: .utf8)

@@ -91,7 +91,8 @@ public final class AgentRun: @unchecked Sendable {
         remote = nil
         initialInput = invocation.input ?? []
         // Under the tool policy's profile, when it blocks any tool (#246).
-        let launch = ToolSandbox.launch("/bin/zsh", ["-l", "-c", Self.delegationShellPrefix(invocation.environment) + CommandBuilder.shellScript(command: command),
+        let launch = ToolSandbox.launch("/bin/zsh", ["-l", "-c", Self.profileShellPrefix(invocation.environment, unset: invocation.unsetEnvironment)
+                                                     + Self.delegationShellPrefix(invocation.environment) + CommandBuilder.shellScript(command: command),
                                                      "botchu"] + invocation.arguments, profile: invocation.toolProfile)
         process.executableURL = URL(fileURLWithPath: launch.executable)
         process.arguments = launch.arguments
@@ -99,7 +100,7 @@ public final class AgentRun: @unchecked Sendable {
         var env = Self.childEnvironment(ProcessInfo.processInfo.environment)
         env["NO_COLOR"] = "1"
         env["TERM"] = "dumb"
-        for (key, value) in invocation.environment { env[key] = value }
+        env.merge(Self.profileEnvironment(invocation.environment)) { _, value in value }
         process.environment = env
         attachInput(invocation)
     }
@@ -142,10 +143,46 @@ public final class AgentRun: @unchecked Sendable {
     /// those would make each bot's CLI act as a nested child of that session (Claude Code then waits
     /// on its parent's auth and messaging sockets) or use its account.
     public static func childEnvironment(_ env: [String: String]) -> [String: String] {
-        let prefixes = ["CLAUDE", "CODEX_", "ANTHROPIC_", "OPENAI_", "BOTCHU_", "MCP_", "AI_AGENT"]
+        let prefixes = ["CLAUDE", "CODEX_", "ANTHROPIC_", "OPENAI_", "BOTCHU_", "MCP_", "AI_AGENT", "AZURE_OPENAI_"]
         let names: Set<String> = ["API_TIMEOUT_MS", "BAGGAGE", "DISABLE_AUTOUPDATER", "DISABLE_MICROCOMPACT",
-                                  "USE_LOCAL_OAUTH", "USE_STAGING_OAUTH", "OPENROUTER_API_KEY", "SAIL_API_KEY"]
-        return env.filter { key, _ in !names.contains(key) && !prefixes.contains(where: key.hasPrefix) }
+                                  "USE_LOCAL_OAUTH", "USE_STAGING_OAUTH", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_PACKAGE_DIR"]
+        return env.filter { key, _ in !names.contains(key) && !modelCredentialNames.contains(key) && !prefixes.contains(where: key.hasPrefix) }
+    }
+
+    /// Credentials for the installed runtimes' model services. A profile command can explicitly
+    /// supply its own after the shell starts; another agent's or global shell's keys are not its login.
+    public static let modelCredentialNames: Set<String> = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN",
+                                  "OPENAI_API_KEY", "OPENROUTER_API_KEY", "SAIL_API_KEY", "AZURE_OPENAI_API_KEY",
+                                  "ANT_LING_API_KEY", "DEEPSEEK_API_KEY", "NVIDIA_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY",
+                                  "CEREBRAS_API_KEY", "XAI_API_KEY", "FIREWORKS_API_KEY", "TOGETHER_API_KEY", "BASETEN_API_KEY",
+                                  "AI_GATEWAY_API_KEY", "ZAI_API_KEY", "ZAI_CODING_CN_API_KEY", "MISTRAL_API_KEY", "MINIMAX_API_KEY",
+                                  "MOONSHOT_API_KEY", "OPENCODE_API_KEY", "KIMI_API_KEY", "META_API_KEY", "RADIUS_API_KEY",
+                                  "CLOUDFLARE_API_KEY", "QWEN_TOKEN_PLAN_API_KEY", "QWEN_TOKEN_PLAN_CN_API_KEY", "XIAOMI_API_KEY",
+                                  "XIAOMI_TOKEN_PLAN_CN_API_KEY", "XIAOMI_TOKEN_PLAN_AMS_API_KEY", "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
+                                  "AWS_BEARER_TOKEN_BEDROCK"]
+
+    private static let openRouterLaunchVariable = "BOTCHU_LAUNCH_OPENROUTER_API_KEY"
+
+    static func profileEnvironment(_ environment: [String: String]) -> [String: String] {
+        var result = environment
+        if let key = result.removeValue(forKey: "OPENROUTER_API_KEY") { result[openRouterLaunchVariable] = key }
+        return result
+    }
+
+    /// Applied after login shell initialization, on This Mac only. Only a config path is exported,
+    /// never a credential value; this same prefix scopes Pi's catalog query and its turns.
+    static func profileShellPrefix(_ environment: [String: String], unset: [String] = []) -> String {
+        let names = unset.filter { modelCredentialNames.contains($0) }
+        var prefix = names.isEmpty ? "" : "unset " + names.joined(separator: " ") + "; "
+        if let directory = environment["PI_CODING_AGENT_DIR"] {
+            prefix += "unset PI_CODING_AGENT_SESSION_DIR; export PI_CODING_AGENT_DIR=\(Shell.quote(directory)); "
+        }
+        if environment["OPENROUTER_API_KEY"] != nil {
+            // Preserve the selected Keychain credential across shell startup without putting its
+            // value in argv. It replaces a global shell key only for the authorized legacy profile.
+            prefix += "export OPENROUTER_API_KEY=\"$\(openRouterLaunchVariable)\"; unset \(openRouterLaunchVariable); "
+        }
+        return prefix
     }
 
     /// Login shell files can replace PATH. Install the helper path afterwards, and export only

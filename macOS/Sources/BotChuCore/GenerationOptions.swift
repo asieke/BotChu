@@ -16,20 +16,27 @@ public struct ModelOption: Identifiable, Equatable, Sendable {
     /// The full name with its version, or for a moving alias the name without one.
     public let name: String
     public let efforts: [ReasoningEffort]
+    public var providerID: String?
+    public var provider: String? {
+        get { providerID }
+        set { providerID = newValue }
+    }
+    /// False when only a public model name/reasoning flag is known, without runtime capabilities.
+    public var effortsKnown: Bool
     /// A CLI alias that moves to newer versions, such as Claude Code's `opus`, not a pinned version.
     public var moving = false
     /// Whether it has Codex's Fast tier (#249).
     public var fast = false
-    /// The actual backend provider named by a multi-provider runtime.
-    public var provider: String?
 
-    public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false, fast: Bool = false, provider: String? = nil) {
+    public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false, fast: Bool = false,
+                providerID: String? = nil, effortsKnown: Bool = true, provider: String? = nil) {
         self.id = id
         self.name = name
         self.efforts = efforts
         self.moving = moving
         self.fast = fast
-        self.provider = provider
+        self.providerID = providerID ?? provider
+        self.effortsKnown = effortsKnown
     }
 }
 
@@ -50,8 +57,13 @@ public struct ModelLabel: Equatable, Sendable {
 /// catalogs and account access change independently of BotChu. No login files are read. A Codex or
 /// Muse profile's own list (`catalog`, #220, #248) replaces its starters once read; they stand in until then.
 public enum GenerationOptions {
-    public static func models(for kind: AgentKind, catalog: [ModelOption]?) -> [ModelOption] {
-        if NativeModelList.lists(kind), let catalog, (!catalog.isEmpty || kind == .pi) { return catalog }
+    public static func models(for kind: AgentKind, catalog: [ModelOption]?, providerID: String? = nil) -> [ModelOption] {
+        if kind == .pi {
+            let provider = ModelProvider.effectiveID(providerID, runtime: kind)
+            if let catalog { return catalog.filter { $0.providerID == provider || ($0.providerID == nil && provider == "openrouter") } }
+            return provider == "openrouter" ? models(for: kind) : []
+        }
+        if NativeModelList.lists(kind), let catalog, !catalog.isEmpty { return catalog }
         return models(for: kind)
     }
 
@@ -96,7 +108,10 @@ public enum GenerationOptions {
         }
     }
 
-    public static func efforts(for kind: AgentKind, model: String, catalog: [ModelOption]? = nil) -> [ReasoningEffort] {
+    public static func efforts(for kind: AgentKind, model: String, catalog: [ModelOption]? = nil, providerID: String? = nil) -> [ReasoningEffort] {
+        if kind == .pi {
+            return models(for: kind, catalog: catalog, providerID: providerID).first { $0.id == model }?.efforts ?? []
+        }
         if let option = option(for: model, kind: kind, catalog: catalog) { return option.efforts }
         switch kind {
         case .claude, .antigravity: return [.low, .medium, .high, .xhigh, .max]
@@ -105,6 +120,20 @@ public enum GenerationOptions {
         case .pi: return []
         case .sail: return [.low, .medium, .high]
         }
+    }
+
+    /// Preserve a saved custom Pi choice while metadata is unavailable. It must still be valid
+    /// Pi syntax; when the runtime lists the model, its exact capabilities take precedence.
+    public static func effectiveEffort(_ effort: ReasoningEffort?, kind: AgentKind, model: String,
+                                       catalog: [ModelOption]? = nil, providerID: String? = nil) -> ReasoningEffort? {
+        guard let effort else { return nil }
+        if kind == .pi {
+            let option = models(for: kind, catalog: catalog, providerID: providerID).first { $0.id == model }
+            if option == nil || option?.effortsKnown == false {
+                return PiModelList.thinkingLevels.contains(effort) ? effort : nil
+            }
+        }
+        return efforts(for: kind, model: model, catalog: catalog, providerID: providerID).contains(effort) ? effort : nil
     }
 
     /// Whether Fast can be turned on (#249): on Codex, for a model its list gives the Fast tier, and
@@ -214,11 +243,12 @@ public enum GenerationOptions {
     /// The model sent on the next turn. Native CLI defaults stay unspecified; OpenRouter always
     /// receives a model, inherited from Settings or the built-in fallback when Settings is blank.
     /// Sail inherits Settings ▸ Sail's (`sailDefault`), and has none when that is blank.
-    public static func effectiveModel(_ model: String, kind: AgentKind, openRouterDefault: String, sailDefault: String = "") -> String {
+    public static func effectiveModel(_ model: String, kind: AgentKind, openRouterDefault: String, sailDefault: String = "", providerID: String? = nil) -> String {
         let selected = model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard selected.isEmpty else { return selected }
         switch kind {
         case .pi:
+            guard ModelProvider.effectiveID(providerID, runtime: kind) == "openrouter" else { return "" }
             let fallback = openRouterDefault.trimmingCharacters(in: .whitespacesAndNewlines)
             return fallback.isEmpty ? CommandBuilder.defaultOpenRouterModel : fallback
         case .sail:
@@ -233,9 +263,8 @@ extension RunSettings {
     /// `catalog`: the profile's own list, when read (#220), whose efforts the model offers.
     public mutating func selectModel(_ model: String, catalog: [ModelOption]? = nil) {
         self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let reasoningEffort, !GenerationOptions.efforts(for: account.kind, model: self.model, catalog: catalog).contains(reasoningEffort) {
-            self.reasoningEffort = nil
-        }
+        reasoningEffort = GenerationOptions.effectiveEffort(reasoningEffort, kind: account.kind, model: self.model,
+                                                             catalog: catalog, providerID: providerID)
         if fastMode == true, !GenerationOptions.offersFast(for: account.kind, model: self.model, catalog: catalog) {
             fastMode = nil
         }
@@ -246,16 +275,30 @@ extension RunSettings {
     }
 
     public mutating func selectAccount(_ selected: Account) {
+        let oldScope = executionScope
         let oldKind = account.kind
-        let oldProvider = resolvedProvider
-        let oldID = accountID
         self.accountID = selected.id
         self.accountProfile = Accounts.all.contains(where: { $0.id == selected.id }) ? nil : selected
-        if oldID != selected.id { provider = nil }
-        if account.kind != oldKind || oldProvider != resolvedProvider {
+        if account.kind != oldKind {
+            providerID = nil
             model = ""
             reasoningEffort = nil
             fastMode = nil
         }
+        if executionScope != oldScope { invalidateSession(previous: oldScope) }
+    }
+
+    private mutating func invalidateSession(previous: RunSessionScope) {
+        // Keep the previous owner as a status marker, but never a resumable ID.
+        if sessionID != nil { sessionScope = sessionScope ?? previous }
+        sessionID = nil
+        reportedModel = nil
+    }
+
+    public mutating func clearSession() {
+        sessionID = nil
+        sessionAccountID = nil
+        sessionScope = nil
+        reportedModel = nil
     }
 }

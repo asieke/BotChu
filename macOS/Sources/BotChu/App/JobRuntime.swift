@@ -314,6 +314,7 @@ final class JobRuntime {
             $0.taskID = task.id
             $0.accountID = account.id
             $0.accountName = account.name
+            $0.providerID = agent.resolvedProvider
             $0.model = modelChoice
             $0.reasoningEffort = agent.reasoningEffort
         }
@@ -333,9 +334,10 @@ final class JobRuntime {
         preparing[runID] = Task { [weak self] in
             let caller: SubagentRuntime.Caller
             do {
+                await model.preparePiModels(for: agent)
                 if let problem = await agent.runtimeAdapter.readiness(command: model.settings.command(for: account), provider: agent.provider,
                     model: modelChoice, machine: .thisMac, folder: bot.workspace,
-                    environment: key.map { ["OPENROUTER_API_KEY": $0] } ?? [:]) { throw ModelListFailure(problem) }
+                    environment: account.runtimeEnvironment.merging(key.map { ["OPENROUTER_API_KEY": $0] } ?? [:]) { _, value in value }) { throw ModelListFailure(problem) }
                 caller = try await model.delegation.prepareCaller(target: target, directory: bot.workspace, machine: .thisMac, hostID: nil)
             } catch {
                 guard let self, !Task.isCancelled, self.preparing.removeValue(forKey: runID) != nil else { return }
@@ -357,7 +359,7 @@ final class JobRuntime {
                     availableBots: model.delegation.roster, tools: model.tools.instructions(), locale: .current)
                 let prompt = BotContext.prompt(for: job.prompt, preamble: preamble)
                 var invocation = JobLaunch.invocation(for: agent, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key,
-                                                      sailDefault: model.settings.sailModel, sailKey: sailKey)
+                                                      sailDefault: model.settings.sailModel, sailKey: sailKey, catalog: model.nativeModels(for: agent))
                 invocation.environment.merge(caller.environment) { _, new in new }
                 invocation.toolProfile = prepared.toolProfile
                 self.run(launch, prompt: prompt, invocation: invocation, caller: caller, account: account, agent: agent, target: target)
@@ -423,8 +425,8 @@ final class JobRuntime {
                 }
                 self.refresh()
                 // The task resumes the run's session when the owner writes in it.
-                if let session { model.recordSession(session, accountID: account.id, for: target) }
-                if let reported { model.recordReportedModel(reported, requested: agent.model, accountID: account.id, for: target) }
+                if let session { model.recordSession(session, accountID: account.id, scope: agent.executionScope, for: target) }
+                if let reported { model.recordReportedModel(reported, requested: agent.model, accountID: account.id, scope: agent.executionScope, for: target) }
             }
             // A crash loses at most a few seconds of the transcript.
             if Date().timeIntervalSince(lastSave) > 5 {

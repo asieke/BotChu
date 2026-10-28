@@ -5,11 +5,13 @@ public struct CatalogModel: Identifiable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let contextLength: Int?
+    public var supportsReasoning: Bool?
 
-    public init(id: String, name: String, contextLength: Int? = nil) {
+    public init(id: String, name: String, contextLength: Int? = nil, supportsReasoning: Bool? = nil) {
         self.id = id
         self.name = name
         self.contextLength = contextLength
+        self.supportsReasoning = supportsReasoning
     }
 
     public var title: String {
@@ -56,7 +58,8 @@ public enum OpenRouterCatalog {
                   entry.supported_parameters?.contains("tools") != false,
                   entry.architecture?.output_modalities?.contains("text") != false,
                   seen.insert(entry.id).inserted else { return nil }
-            return CatalogModel(id: entry.id, name: entry.name, contextLength: entry.context_length)
+            return CatalogModel(id: entry.id, name: entry.name, contextLength: entry.context_length,
+                                supportsReasoning: entry.supported_parameters.map { $0.contains("reasoning") || $0.contains("reasoning_effort") })
         }
         guard !models.isEmpty else { throw CatalogError.unavailable }
         return models.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
@@ -76,6 +79,7 @@ public struct ModelPickerData: Sendable {
     }
 
     public let kind: AgentKind
+    public let providerID: String?
     public let selectedID: String
     public let effectiveID: String
     public let title: String
@@ -86,27 +90,31 @@ public struct ModelPickerData: Sendable {
     /// `resolved` is the model the CLI reported for this selection (`RunSettings.resolvedModel`).
     /// `native` is a Codex profile's own list once read (#220): it replaces the starters, which stand
     /// in only while it is nil; the selection and the default stay choices either way.
-    /// `catalog` is Sail's list; Pi uses its selected profile/provider's `native` list.
+    /// `catalog` is the list for this kind: OpenRouter's for Pi, Sail's for Sail.
     public init(kind: AgentKind, model: String, openRouterDefault: String, sailDefault: String = "",
-                catalog: [CatalogModel] = [], native: [ModelOption]? = nil, resolved: String? = nil, provider: String? = nil) {
+                catalog: [CatalogModel] = [], native: [ModelOption]? = nil, resolved: String? = nil, providerID: String? = nil, provider: String? = nil) {
         self.kind = kind
-        let native = native.map { RuntimeAdapters.adapter(for: kind).models(in: $0, provider: provider) }
+        let providerID = providerID ?? provider
+        self.providerID = ModelProvider.effectiveID(providerID, runtime: kind)
         let selectedID = model.trimmingCharacters(in: .whitespacesAndNewlines)
         self.selectedID = selectedID
-        let usesPiDefault = kind == .pi && (provider ?? "openrouter") == "openrouter"
-        self.effectiveID = kind == .pi && !usesPiDefault ? selectedID : GenerationOptions.effectiveModel(model, kind: kind, openRouterDefault: openRouterDefault, sailDefault: sailDefault)
-        let usesSettingsDefault = usesPiDefault || kind == .sail
+        self.effectiveID = GenerationOptions.effectiveModel(model, kind: kind, openRouterDefault: openRouterDefault, sailDefault: sailDefault, providerID: providerID)
+        let usesSettingsDefault = (kind == .pi && self.providerID == "openrouter") || kind == .sail
         let available = kind == .sail ? catalog : []
+        let native = kind == .pi ? native.map { GenerationOptions.models(for: kind, catalog: $0, providerID: providerID) } : native
         func label(_ id: String) -> ModelLabel {
+            if kind == .pi, id.isEmpty, ModelProvider.effectiveID(providerID, runtime: kind) != "openrouter" {
+                return ModelLabel(title: "Choose model", detail: "Choose a model for \(ModelProvider.effectiveID(providerID, runtime: kind) ?? "Pi")")
+            }
             if let found = available.first(where: { $0.id == id }) { return ModelLabel(title: found.title, detail: found.detail) }
+            if kind == .pi, let found = native?.first(where: { $0.id == id }) { return ModelLabel(title: found.name, detail: id) }
             return GenerationOptions.label(for: id, kind: kind, resolved: id == selectedID ? resolved : nil, catalog: native)
         }
-        let current = kind == .pi && !usesPiDefault && effectiveID.isEmpty
-            ? ModelLabel(title: "Choose model", detail: "Choose a model for \(provider ?? "this provider")") : label(effectiveID)
+        let current = label(effectiveID)
         self.title = current.title
         self.detail = usesSettingsDefault && selectedID.isEmpty && !effectiveID.isEmpty ? "Default from Settings · \(current.detail)" : current.detail
-        let defaultID = kind == .pi && !usesPiDefault ? "" : GenerationOptions.effectiveModel("", kind: kind, openRouterDefault: openRouterDefault, sailDefault: sailDefault)
-        var choices = [Choice(id: "", title: kind == .pi && !usesPiDefault ? "Choose a model" : usesSettingsDefault ? "Use default from Settings" : "Use account default",
+        let defaultID = GenerationOptions.effectiveModel("", kind: kind, openRouterDefault: openRouterDefault, sailDefault: sailDefault, providerID: providerID)
+        var choices = [Choice(id: "", title: usesSettingsDefault ? "Use default from Settings" : kind == .pi ? "Choose model" : "Use account default",
                               detail: usesSettingsDefault && !defaultID.isEmpty ? label(defaultID).title : label("").detail)]
         var seen: Set<String> = [""]
         // Keep the current model reachable even if it is custom, retired, or the catalog is offline.
@@ -117,7 +125,7 @@ public struct ModelPickerData: Sendable {
         for entry in available where seen.insert(entry.id).inserted {
             choices.append(Choice(id: entry.id, title: entry.title, detail: entry.detail))
         }
-        for option in GenerationOptions.models(for: kind, catalog: native) where seen.insert(option.id).inserted {
+        for option in GenerationOptions.models(for: kind, catalog: native, providerID: providerID) where seen.insert(option.id).inserted {
             let found = label(option.id)
             choices.append(Choice(id: option.id, title: found.title, detail: found.detail))
         }
