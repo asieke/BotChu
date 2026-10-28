@@ -55,6 +55,11 @@ cat > "$out/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>UTExportedTypeDeclarations</key><array><dict>
+    <key>UTTypeIdentifier</key><string>local.BotChu.bot</string>
+    <key>UTTypeDescription</key><string>BotChu bot</string>
+    <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+  </dict></array>
 </dict></plist>
 PLIST
 # A stable identity keeps macOS permission and Keychain grants across rebuilds; ad hoc without one.

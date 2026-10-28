@@ -532,15 +532,6 @@ public enum BotContext {
     public static let rememberTag = "remember"
     static let maxHomeRecapCharacters = 4_000
 
-    /// Brief summary of the memory capture rules, shown in the status sidebar's Memory area.
-    public static let memoryOverview = """
-        Bots save stable preferences, confirmed facts, reusable lessons and durable decisions as soon as they are \
-        established, in <remember> notes BotChu writes to MEMORY.md and confirms (Replace: and Forget: update them, from Home, tasks \
-        and sub-agents). Temporary task progress, repository rules, unverified guesses, raw tool output and \
-        secrets stay out; sensitive details need an explicit request, which never overrides exclusions. \
-        Multi-step workflows and tool runbooks go in skills instead.
-        """
-
     /// The shared capture policy for Home (`AGENTS.md` and `sessionPreamble`), local and SSH tasks,
     /// and sub-agents: what belongs in durable memory, what is excluded, explicit requests vs.
     /// inference, bot-only vs. shared scope, examples, and how updates or forget requests work.

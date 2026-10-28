@@ -153,13 +153,9 @@ struct DraftEditor: View {
                 }
             }
             if let problem = images.problem { Text(problem).font(.caption).foregroundStyle(.red) }
-            HStack(spacing: 4) {
-                AddImagesButton(add: images.add)
-                    .disabled(!editable)
-                Text("Paste, drop or add images")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            // The + alone, as in the composer: pasting and dropping need no words (#232).
+            AddImagesButton(add: images.add)
+                .disabled(!editable)
         }
         .overlay {
             if dropTargeted {

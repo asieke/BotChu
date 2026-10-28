@@ -122,14 +122,14 @@ extension RenderingTests {
         #expect(request.url.path == model.settings.teamPath)
         model.documentEditor = nil
 
+        // A few words over an empty draft, and whose file it is beside its name (#232): the two
+        // MEMORY.md files differ by owner.
         let botMemoryRequest = DocumentEditorRequest(bot: bot, document: .memory)
         let sharedMemoryRequest = DocumentEditorRequest(shared: .memory, botsRoot: model.settings.botsRoot)
-        #expect(botMemoryRequest.placeholder.contains("data, not instructions"))
-        #expect(botMemoryRequest.placeholder.contains("Leave out secrets, raw output, guesses and temporary task state."))
-        #expect(sharedMemoryRequest.placeholder.contains("Owner-wide preferences and confirmed facts shared by every bot"))
-        #expect(sharedMemoryRequest.placeholder.contains("Leave out secrets, raw output, guesses and temporary task state."))
-        #expect(BotContext.memoryOverview.contains("stable preferences, confirmed facts, reusable lessons and durable decisions"))
-        #expect(BotContext.memoryOverview.contains("secrets stay out"))
+        #expect(botMemoryRequest.placeholder == "Durable facts and preferences…")
+        #expect(sharedMemoryRequest.placeholder == "Shared facts and preferences…")
+        #expect(botMemoryRequest.owner == "Scout" && sharedMemoryRequest.owner == "Every bot")
+        #expect(botMemoryRequest.conversation == nil && sharedMemoryRequest.conversation == nil)
 
         // In the window, it opens empty, since BotChu never creates it, and saves beside the shared memory.
         let host = NSHostingView(rootView: ContentView().environment(model).defaultAppStorage(defaults))
@@ -155,6 +155,67 @@ extension RenderingTests {
         #expect(model.documentEditor == nil)
         #expect(try String(contentsOfFile: model.settings.teamPath, encoding: .utf8) == playbook)
         #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: bot.workspace).appendingPathComponent("TEAM.md").path))
+    }
+
+    /// Save & Start New Session (#232): a bot's own file, opened while its Home is shown, can start
+    /// that Home over once saved, and only it: not its task, not another bot, nor a turn under way;
+    /// the files every bot shares save for the next new sessions only.
+    @Test func saveAndStartNewSessionStartsOnlyTheShownIdleConversationOver() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-restart-\(UUID().uuidString)")
+        let domain = "local.BotChu.restart.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: domain)
+        }
+        defaults.set(root.appendingPathComponent("bots").path, forKey: "botsRoot")
+        let scout = Bot(name: "Scout", accountID: "claude-dev", workspace: root.appendingPathComponent("bots/scout").path,
+                        sessionID: "home-session", sessionAccountID: "claude-dev")
+        let other = Bot(name: "Other", accountID: "claude-dev", workspace: root.appendingPathComponent("bots/other").path,
+                        sessionID: "other-session", sessionAccountID: "claude-dev")
+        var task = BotTask(for: scout, repo: "octocat/BotChu", checkout: root.path, work: nil, brief: "Keep going")
+        task.sessionID = "task-session"
+        task.sessionAccountID = "claude-dev"
+        try BotHome(workspace: scout.workspace).save(scout)
+        try BotHome(workspace: scout.workspace).save(task)
+        try BotHome(workspace: other.workspace).save(other)
+        let store = Store(root: root.appendingPathComponent("Support"))
+        try store.saveIndex([Store.Entry(id: scout.id, workspace: scout.workspace), Store.Entry(id: other.id, workspace: other.workspace)])
+        let model = AppModel(store: store, settings: AppSettings(defaults: defaults),
+                             usage: UsageCache { _, _ in throw UsageFailure("No usage in tests") })
+        defer { model.stopAll() }
+        let home = ChatTarget.home(scout.id)
+        let taskTarget = ChatTarget.task(task.id, of: scout.id)
+        model.show(home)
+
+        model.editDocument(.instructions, for: scout.id)
+        let request = try #require(model.documentEditor)
+        #expect(request.conversation == home)
+        #expect(model.sessionRestart(of: request.conversation) == .ready)
+        // Not another bot's, nor a conversation that isn't shown, nor a shared file.
+        model.editDocument(.memory, for: other.id)
+        #expect(model.documentEditor?.conversation == nil)
+        #expect(model.sessionRestart(of: .home(other.id)) == .unavailable)
+        #expect(model.sessionRestart(of: taskTarget) == .unavailable)
+        #expect(DocumentEditorRequest(shared: .team, botsRoot: model.settings.botsRoot).conversation == nil)
+
+        // As the sheet's button does: the file saved, then that Home starts over, and nothing else.
+        var draft = try BotDocumentDraft(bot: scout, document: .instructions)
+        draft.text = "Answer in haiku."
+        try draft.save { model.newSession(home) }
+        #expect(try String(contentsOf: BotDocument.instructions.url(for: scout), encoding: .utf8) == "Answer in haiku.")
+        #expect(model.runSettings(of: home)?.resumableSessionID == nil)
+        // The note joins the thread once its history has loaded, which happens after showing it.
+        for _ in 0..<300 where model.thread(home).last?.text != "New session" { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.thread(home).last?.text == "New session")
+        #expect(model.runSettings(of: taskTarget)?.resumableSessionID == "task-session")
+        #expect(model.runSettings(of: .home(other.id))?.resumableSessionID == "other-session")
+        #expect(model.sessionRestart(of: home) == .unavailable, "Its next turn starts the new session")
+
+        // The task shown, it is the one offered.
+        model.show(taskTarget)
+        #expect(model.sessionRestart(of: taskTarget) == .ready)
+        #expect(model.sessionRestart(of: home) == .unavailable)
     }
 
     @Test func inspectorSectionsCollapseFromTheirHeadingAndRememberTheirState() async throws {

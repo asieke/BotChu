@@ -337,14 +337,15 @@ private struct AccountsSettings: View {
                 }
             }
         } header: {
+            // The shell is in the tooltip; that prompts are bypassed stays in view (#232).
             HStack {
                 Text("Commands")
                 Spacer()
-                Label("zsh -l · Permission prompts bypassed", systemImage: "checkmark.shield")
+                Label("Permission prompts bypassed", systemImage: "checkmark.shield")
                     .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(.secondary)
-                    .help("Each account runs its command through your login shell (zsh -l), headless, in the bot's folder or a task's worktree, with permission prompts bypassed. Leave a command empty for the default.")
             }
+            .help("Each account runs its command through your login shell (zsh -l), headless, in the bot's folder or a task's worktree, with permission prompts bypassed. Leave a command empty for the default.")
         }
     }
 }

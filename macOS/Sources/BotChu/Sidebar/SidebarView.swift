@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import BotChuCore
 
 struct SidebarView: View {
@@ -46,9 +47,19 @@ struct SidebarView: View {
                                 Divider()
                                 Button("Delete…", role: .destructive) { pendingDelete = bot }
                             }
+                            // Dragged to its place among the bots, in its section or another (#231).
+                            .itemProvider { BotDrag.provider(for: bot.id) }
+                    }
+                    // A bot dropped between these goes before the one below where it lands, or last.
+                    .onInsert(of: [BotDrag.contentType]) { index, providers in
+                        drop(providers, in: group, at: index)
                     }
                 } header: {
                     SidebarSectionHeader(group: group, rename: { naming.ask(.rename($0)) })
+                        // Dropped on a heading, collapsed or not, a bot goes last in its section.
+                        .onDrop(of: [BotDrag.contentType], isTargeted: nil) { providers in
+                            BotDrag.load(providers) { model.dropBot($0, inSection: group.name, before: nil) }
+                        }
                 }
             }
         }
@@ -99,6 +110,14 @@ struct SidebarView: View {
 
     private func reveal(_ title: String) {
         if collapsed.titles.contains(title) { collapsed.titles.remove(title) }
+    }
+
+    /// Puts a bot dropped at `index` among a section's bots, as the sidebar shows them, before the
+    /// bot shown there, or last after them. The bot to go before is read now, as the drop lands.
+    private func drop(_ providers: [NSItemProvider], in group: BotSections.Group, at index: Int) {
+        let shown = group.botIDs.filter { model.bot($0) != nil }
+        let next = shown.indices.contains(index) ? shown[index] : nil
+        _ = BotDrag.load(providers) { model.dropBot($0, inSection: group.name, before: next) }
     }
 }
 
@@ -190,7 +209,9 @@ struct BotRow: View {
 }
 
 /// The small dots at the end of a bot's row, in its tabs' colours, the most urgent first (#218).
-/// On the selection's accent colour each sits on a white disc, so it keeps its colour.
+/// On the selection's accent colour each sits on a disc of the task column's background, as a rail
+/// tile's dot does, so it is drawn on the same ground as its tab's and looks the same (#237); on a
+/// white disc, dark mode's colours, made for a dark ground, read pale.
 struct BotRowDots: View {
     @Environment(\.backgroundProminence) private var prominence
     let summary: BotRowSummary
@@ -198,7 +219,7 @@ struct BotRowDots: View {
     var body: some View {
         HStack(spacing: 4) {
             ForEach(Array(summary.dots.enumerated()), id: \.offset) { _, kind in
-                StatusDot(kind: kind, size: 6, cutout: prominence == .increased ? .white : nil)
+                StatusDot(kind: kind, size: 6, cutout: prominence == .increased ? Palette.conversationColumn : nil)
             }
             if summary.more > 0 {
                 Text("+\(summary.more)")

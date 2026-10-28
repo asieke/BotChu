@@ -242,6 +242,57 @@ public enum MissedRunPolicy: String, Codable, CaseIterable, Sendable {
     case skip
 }
 
+/// What a job does about times BotChu missed, as its editor offers it in one picker (#232): run the
+/// latest of them once if it is within a catch-up window, or skip them. Its words say what happens,
+/// so the editor needs no paragraph to explain the policy and its window.
+public enum MissedRunChoice: Hashable, Sendable {
+    case runLatest(within: TimeInterval)
+    case skip
+
+    /// The catch-up windows the editor offers.
+    public static let windows: [TimeInterval] = [3600, 6 * 3600, 86_400, 7 * 86_400]
+
+    public init(_ job: Job) {
+        self = job.missedRuns == .skip ? .skip : .runLatest(within: job.catchUpWindow)
+    }
+
+    /// Each offered window, with `window` among them when it is another (a job saved elsewhere),
+    /// shortest first, then Skip.
+    public static func choices(including window: TimeInterval) -> [MissedRunChoice] {
+        let all = windows.contains(window) || window.isNaN ? windows : (windows + [window]).sorted()
+        return all.map { .runLatest(within: $0) } + [.skip]
+    }
+
+    public var label: String {
+        switch self {
+        case .runLatest(let window) where window.isFinite && window > 0: "Run latest missed run if within \(Self.words(window))"
+        case .runLatest: "Run latest missed run, however late"
+        case .skip: "Skip missed runs"
+        }
+    }
+
+    /// Sets the job's policy, and its window when it runs the latest. Skipping keeps the window, for
+    /// when it is chosen again.
+    public func apply(to job: inout Job) {
+        switch self {
+        case .runLatest(let window):
+            job.missedRuns = .runOnce
+            job.catchUpWindow = window
+        case .skip:
+            job.missedRuns = .skip
+        }
+    }
+
+    /// A window in whole days or hours, such as “1 day” or “6 hours”, else as `JobWords` says it.
+    static func words(_ seconds: TimeInterval) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "any time" }
+        let minutes = Int((seconds / 60).rounded())
+        if minutes % 1440 == 0 { return minutes == 1440 ? "1 day" : "\(minutes / 1440) days" }
+        if minutes % 60 == 0 { return minutes == 60 ? "1 hour" : "\(minutes / 60) hours" }
+        return JobWords.duration(seconds)
+    }
+}
+
 public enum JobTrigger: String, Codable, Sendable {
     case scheduled
     /// A missed occurrence, run late (`MissedRunPolicy.runOnce`).

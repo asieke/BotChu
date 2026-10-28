@@ -24,8 +24,7 @@ struct SkillsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            LibraryHeading(title: "Skills", subtitle: "Reusable workflows and tool runbooks your bots read when their work calls for them.",
-                           count: entries.count) {
+            LibraryHeading(title: "Skills", count: entries.count) {
                 Button { model.revealSkill(nil) } label: { Label("Shared Folder", systemImage: "folder") }
                     .help("Open the skills every bot shares, in the bots folder")
                 Button { creating = true } label: { Label("New Skill", systemImage: "plus") }.buttonStyle(.borderedProminent)
@@ -171,10 +170,16 @@ struct NewSkillSheet: View {
                     Text("Every bot (shared)").tag(UUID?.none)
                     ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in Text("\(bot.emoji) \(bot.name) only").tag(Optional(bot.id)) }
                 }
+                // Where it is saved, in the bots folder or the bot's workspace as For says (#232).
+                LabeledContent("File") {
+                    Text(verbatim: "skills/\(Skills.slug(name))/SKILL.md")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
             .formStyle(.grouped)
-            Text("Saved as skills/\(Skills.slug(name))/SKILL.md \(botID == nil ? "in the bots folder" : "in the bot's workspace"). Bots see its name and description at the start of each session, and read the rest when it fits their work.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
             HStack {
                 Spacer()

@@ -63,10 +63,6 @@ struct AccountUsageSection: View {
                             }
                         }
                         freshness(state, checking: checking, now: now)
-                        if request.account.kind == .muse {
-                            Text("Updates hourly with a brief Muse request.")
-                                .font(.system(size: 11)).foregroundStyle(Palette.secondaryText)
-                        }
                     }
                     .fixedSize(horizontal: false, vertical: true)
                 }

@@ -31,6 +31,25 @@ public enum IssueReport {
         return title.isEmpty ? fallbackTitle : title
     }
 
+    /// The longest title GitHub takes; a title typed longer is cut at a word.
+    public static let typedTitleLimit = 256
+
+    /// The issue's title: the one typed in Report a Bug or Feature's Title field (#232), on one line,
+    /// else the report's own (`title(from:)`).
+    public static func title(typed: String, report: String) -> String {
+        let typed = typed.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !typed.isEmpty else { return title(from: report) }
+        return typed.count > typedTitleLimit ? cut(typed, to: typedTitleLimit) : typed
+    }
+
+    /// Who can see what a report sends, as the sheet's header says it beside the repository (#232):
+    /// the issue is public, and so are the window's screenshot and the other images it attaches.
+    public static func visibility(screenshot: Bool, images: Int) -> String {
+        let images = images == 0 ? nil : images == 1 ? "1 image" : "\(images) images"
+        let shown = [screenshot ? "screenshot" : nil, images].compactMap { $0 }
+        return "Public issue" + (shown.isEmpty ? "" : " with " + shown.joined(separator: " and "))
+    }
+
     /// The issue's description: the report as written, its images, then the app's state. Each image
     /// is its file as gh attaches it (`imageFile(_:)`), which gh puts its address on GitHub in place of.
     public static func body(report: String, images: Int = 0, snapshot: IssueSnapshot) -> String {
@@ -199,8 +218,9 @@ public struct IssueFiler: Sendable {
         self.file = file
     }
 
-    /// Files the report, titled from its first line, with its images and the snapshot.
-    public func file(_ report: String, images: [Data] = [], snapshot: IssueSnapshot) async -> Outcome {
+    /// Files the report, titled as typed, else from its first line (`IssueReport.title(typed:report:)`),
+    /// with its images and the snapshot.
+    public func file(_ report: String, title: String = "", images: [Data] = [], snapshot: IssueSnapshot) async -> Outcome {
         let report = report.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !report.isEmpty else { return .failed("Write the report first.") }
         guard images.count <= IssueReport.imageLimit else { return .failed("Attach up to \(IssueReport.imageLimit) images.") }
@@ -208,7 +228,7 @@ public struct IssueFiler: Sendable {
         guard body.count + images.count * IssueReport.imageAddressAllowance <= IssueReport.bodyLimit else {
             return .failed("This report is too long for a GitHub issue, which holds \(IssueReport.bodyLimit.formatted()) characters with the app state. Shorten it, then try again.")
         }
-        return await file(IssueReport.title(from: report), body, images)
+        return await file(IssueReport.title(typed: title, report: report), body, images)
     }
 }
 

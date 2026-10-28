@@ -36,39 +36,37 @@ struct ProjectSelection: Equatable {
 struct DocumentEditorRequest: Identifiable {
     let id = UUID()
     let name: String
-    let subtitle: String
+    /// Whose file it is, beside its name: the bot's, or "Every bot" for one they share.
+    let owner: String
     let url: URL
     let seed: String
-    /// Shown over an empty draft, saying what the file is for.
+    /// Shown over an empty draft, in a few words.
     let placeholder: String
-    /// When the bots read the file, beside Save.
-    var footnote = "Read at the start of each new session. Use New Session to apply changes to an existing conversation."
+    /// The conversation shown when one of a bot's own files was opened, which Save & Start New
+    /// Session starts over (#232); nil for the files every bot shares, and skills.
+    var conversation: ChatTarget?
 
-    init(bot: Bot, document: BotDocument) {
+    init(bot: Bot, document: BotDocument, conversation: ChatTarget? = nil) {
         name = document.rawValue
-        subtitle = "\(bot.name) · \(document.summary)"
+        owner = bot.name
         url = document.url(for: bot)
         seed = document.seed(for: bot)
         placeholder = switch document {
-        case .instructions:
-            "\(bot.name)'s role and job, in Markdown: what it works on, with whom, and how it hands work on."
-        case .memory:
-            "Durable facts, preferences, reusable lessons and decisions for \(bot.name) (data, not instructions). Leave out secrets, raw output, guesses and temporary task state."
-        case .soul:
-            ""
+        case .instructions: "Role and job in Markdown…"
+        case .memory: "Durable facts and preferences…"
+        case .soul: ""
         }
+        self.conversation = conversation.flatMap { $0.botID == bot.id ? $0 : nil }
     }
 
     init(shared document: SharedDocument, botsRoot: String) {
         name = document.rawValue
-        subtitle = "Every bot · \(document.summary)"
+        owner = "Every bot"
         url = document.url(botsRoot: botsRoot)
         seed = document.seed
         placeholder = switch document {
-        case .team:
-            "The process every bot follows, in Markdown: its stages, handoffs, who calls whom with botchu-subagent, and when work is done. Left out of every bot's context while empty."
-        case .memory:
-            "Owner-wide preferences and confirmed facts shared by every bot (data, not instructions). Leave out secrets, raw output, guesses and temporary task state."
+        case .team: "Team process in Markdown…"
+        case .memory: "Shared facts and preferences…"
         }
     }
 }
@@ -176,6 +174,13 @@ final class AppModel {
     @ObservationIgnored var lastSummaryRun: Task<Void, Never>?
     /// Runs a summary; nil runs it on this Mac (`EvaluationCLI`). Tests set it.
     @ObservationIgnored var summaryRunner: RunEvaluator.Runner?
+    /// Tasks' titles being made again from their conversations, the task Rename… asks a title for
+    /// and what is typed for it, and why a title couldn't be made again (#236, `TaskSummaries.swift`).
+    var titleRequests = TaskTitleRequests()
+    @ObservationIgnored var titleRuns: [UUID: Task<Void, Never>] = [:]
+    var renamingTask: ChatTarget?
+    var renamingText = ""
+    var titleNotice: TaskTitleNotice?
     var editor: EditorRequest?
     var taskSheet: TaskSheetRequest?
     /// The repository selected in Projects, shown in its sidebar; nil hides the sidebar.
@@ -212,6 +217,8 @@ final class AppModel {
     let modelCatalog = ModelCatalog()
 
     private let store: Store
+    /// BotChu's data folder (`~/Library/Application Support/BotChu`, or a test's).
+    var dataFolder: URL { store.root }
     /// Where conversations, settings, logs, memory, sub-agents' and jobs' files are written, off the
     /// main thread, each target in order (`StorageQueue`, #107).
     let storage: StorageQueue
@@ -483,7 +490,17 @@ final class AppModel {
 
     func editDocument(_ document: BotDocument, for id: UUID) {
         guard let bot = bot(id), !bot.isRemoteQueue else { return }
-        documentEditor = DocumentEditorRequest(bot: bot, document: document)
+        // The conversation shown, which Save & Start New Session can start over; none for a bot not shown.
+        documentEditor = DocumentEditorRequest(bot: bot, document: document, conversation: visibleBotID == id ? tab(of: id) : nil)
+    }
+
+    /// Whether Save & Start New Session is offered for a file of the conversation's bot (#232), and
+    /// whether that conversation is idle enough for it now.
+    func sessionRestart(of target: ChatTarget?) -> DocumentSessionRestart {
+        guard let target, let bot = bot(target.botID), let settings = runSettings(of: target) else { return .unavailable }
+        return DocumentSessionRestart(selected: visibleBotID == target.botID && tab(of: target.botID) == target,
+                                      local: !bot.isRemoteQueue && task(target)?.isRemote != true,
+                                      hasSession: settings.resumableSessionID != nil, running: isRunning(target))
     }
 
     /// Opens a file every bot shares, in the bots folder, as Settings does.
@@ -2031,6 +2048,7 @@ final class AppModel {
         for run in petRuns.values { run.stop() }
         for task in petTasks.values { task.cancel() }
         for run in summaryRuns.values { run.cancel() }
+        for run in titleRuns.values { run.cancel() }
         // Sidebar changes that couldn't be saved get one more try.
         if indexFailure != nil { saveIndex() }
         unsavedAtQuit = storage.wait(timeout: quitTimeout)

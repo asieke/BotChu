@@ -47,6 +47,71 @@ import Testing
         #expect(ProjectMetadata(name: "App", kind: .library, deploy: "registry:a,registry:b").problem != nil)
         #expect(ProjectMetadata(name: "App", kind: .local, deploy: "local:-mac:~/repo").problem != nil)
     }
+
+    /// Edit Metadata's deploy pickers (#232): what PROJECT.md says reads as kinds with folders and
+    /// names, and anything BotChu doesn't recognize, or doesn't change, goes back exactly as written.
+    @Test func deployFormReadsTargetsAndRoundTripsWhatItDoesntChange() throws {
+        let written = "local:Alexs-Mac:~/Desktop/WORKSPACE/BotChu ,  local:omarchy-1:~/apps/botchu,vercel:rowchuk, ftp:weird://x, none"
+        var form = DeployForm(deploy: written, thisMac: "alexs-mac", hosts: ["omarchy-1"])
+        #expect(form.targets.map(\.kind) == [.thisMac, .host, .vercel, .custom, .custom])
+        #expect(form.targets[0].machine == "Alexs-Mac" && form.targets[0].path == "~/Desktop/WORKSPACE/BotChu")
+        #expect(form.targets[1].machine == "omarchy-1" && form.targets[1].path == "~/apps/botchu")
+        #expect(form.targets[2].name == "rowchuk")
+        #expect(form.targets.suffix(2).map(\.name) == ["ftp:weird://x", "none"])
+        #expect(form.value == written, "Unchanged, it is saved as it was read")
+
+        // Through PROJECT.md and back, a value is kept as written, its spacing too, while another
+        // field changes; one BotChu can't read stays, with the problem that names it.
+        let spaced = "local:Alexs-Mac:~/Desktop/WORKSPACE/BotChu ,  vercel:rowchuk"
+        let record = ProjectRecord(text: "---\nname: App\ntype: hosted\nstatus: active\ndeploy: \(spaced)\nmerge: owner\n---\n", sha: "1")
+        var metadata = try record.metadata(repoName: "app")
+        metadata.deploy = DeployForm(deploy: metadata.deploy, thisMac: "alexs-mac").value
+        #expect(try record.updating(metadata) == record.text)
+        metadata.status = .paused
+        let updated = try record.updating(metadata)
+        #expect(updated.contains("deploy: \(spaced)\n") && updated.contains("status: paused\n"))
+        #expect(try ProjectRecord(text: updated, sha: "2").metadata(repoName: "app").deploy == spaced)
+        let custom = ProjectMetadata(name: "App", kind: .hosted, deploy: DeployForm(deploy: "ftp:weird://x", thisMac: nil).value)
+        #expect(custom.deploy == "ftp:weird://x" && custom.problem != nil)
+
+        // A change writes each target, keeping the others as they read.
+        form.change(form.targets[2].id, to: .registry)
+        #expect(form.targets[2].name == "rowchuk")
+        form.targets[2].name = "swift-botchu"
+        #expect(form.value == "local:Alexs-Mac:~/Desktop/WORKSPACE/BotChu, local:omarchy-1:~/apps/botchu, registry:swift-botchu, ftp:weird://x, none")
+        // A local target moved to another computer keeps its folder.
+        form.change(form.targets[0].id, to: .host)
+        #expect(form.targets[0].value == "local:omarchy-1:~/Desktop/WORKSPACE/BotChu")
+        form.change(form.targets[0].id, to: .thisMac)
+        #expect(form.targets[0].value == "local:alexs-mac:~/Desktop/WORKSPACE/BotChu")
+        // As Custom, a target starts from what it writes.
+        form.change(form.targets[1].id, to: .custom)
+        #expect(form.targets[1].name == "local:omarchy-1:~/apps/botchu")
+
+        // None removes every target; a kind chosen for none adds one; Add adds Vercel beside this Mac.
+        form.first = nil
+        #expect(form.targets.isEmpty && form.value == "none")
+        form.first = .thisMac
+        #expect(form.targets.count == 1 && form.targets[0].machine == "alexs-mac")
+        form.targets[0].path = "~/apps/app"
+        form.add()
+        #expect(form.targets.map(\.kind) == [.thisMac, .vercel])
+        form.targets[1].name = "app"
+        let hosted = ProjectMetadata(name: "App", kind: .hosted, deploy: form.value)
+        #expect(hosted.deploy == "local:alexs-mac:~/apps/app, vercel:app")
+        #expect(hosted.problem == nil)
+        form.remove(form.targets[1].id)
+        form.first = .vercel
+        #expect(form.targets.map(\.kind) == [.vercel] && form.targets[0].name.isEmpty)
+        // An empty name still writes its kind, which the project's problem names.
+        #expect(ProjectMetadata(name: "App", kind: .hosted, deploy: form.value).problem != nil)
+
+        // Nothing read, nothing written: an empty or none value reads as no targets and stays as it was.
+        #expect(DeployForm(deploy: "none", thisMac: "mac").targets.isEmpty)
+        #expect(DeployForm(deploy: "", thisMac: nil).value == "")
+        #expect(DeployForm(deploy: "local:mac:~/x", thisMac: nil).targets.first?.kind == .host,
+                "This Mac's name not known yet: a local target stays a machine of its own")
+    }
 }
 
 @Suite struct ProjectGitHubTests {

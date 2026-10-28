@@ -246,7 +246,6 @@ import Testing
         }
         for context in files { #expect(context.contains("`skills/<name>/SKILL.md` in your own workspace, never in a repository you work on")) }
         for context in tags { #expect(context.contains("draft that file in your reply for your owner to add in BotChu ▸ Skills")) }
-        #expect(BotContext.memoryOverview.contains("go in skills"))
     }
 
     // MARK: Workspace

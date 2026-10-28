@@ -71,10 +71,9 @@ extension AppModel {
 extension DocumentEditorRequest {
     init(skill: Skill, bot: Bot?) {
         name = skill.name
-        subtitle = "\(bot?.name ?? "Every bot") · Skill · \((skill.url.path as NSString).abbreviatingWithTildeInPath)"
+        owner = bot?.name ?? "Every bot"
         url = skill.url
         seed = skill.text
-        placeholder = "A runbook in Markdown, after YAML frontmatter with name and a one-line description of when to use it."
-        footnote = "Bots see the name and description at the start of each session, and read the rest when the skill matches their work."
+        placeholder = "Frontmatter, then the runbook…"
     }
 }

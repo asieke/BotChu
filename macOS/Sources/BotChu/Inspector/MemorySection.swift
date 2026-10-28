@@ -7,13 +7,6 @@ struct MemorySection: View {
 
     var body: some View {
         InspectorSection("Memory") {
-            Text(BotContext.memoryOverview)
-                .font(.system(size: 11))
-                .foregroundStyle(Palette.secondaryText)
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 4)
-                .padding(.bottom, 2)
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 ForEach(BotDocument.allCases) { document in
                     DocumentCard(name: document.rawValue, summary: document.summary,
@@ -49,12 +42,6 @@ struct SkillsSection: View {
             let shared = entries.filter { $0.bot == nil && !own.map(\.skill.slug).contains($0.skill.slug) }
             let active = own.count + shared.filter { bot.usesSharedSkill($0.skill.slug) }.count
             InspectorSection("Skills", trailing: entries.isEmpty ? nil : "\(active) on") {
-                Text("Runbooks this bot reads when its work calls for them: each session gets their names and descriptions only.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 4)
-                    .padding(.bottom, 2)
                 if !own.isEmpty || !shared.isEmpty {
                     InspectorCard {
                         let rows = own + shared

@@ -40,8 +40,8 @@ struct JobsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            LibraryHeading(title: "Jobs", subtitle: "Recurring work your agents do on a schedule, each run in a session of its own.",
-                           count: model.jobs.jobs.count) {
+            LibraryHeading(title: "Jobs", count: model.jobs.jobs.count) {
+                JobsRuntimeBadge()
                 Button { model.jobs.newJob(for: model.jobs.agentFilter) } label: { Label("New Job", systemImage: "plus") }
                     .buttonStyle(.borderedProminent)
                     .disabled(model.bots.isEmpty)
@@ -57,8 +57,7 @@ struct JobsView: View {
                     filters
                 }
             }
-            .padding(.horizontal, 24).padding(.bottom, 10)
-            JobsRuntimeNote().padding(.horizontal, 24).padding(.bottom, 12)
+            .padding(.horizontal, 24).padding(.bottom, 12)
             if model.jobs.jobs.isEmpty {
                 LibraryEmpty(title: "No jobs yet",
                              subtitle: model.bots.isEmpty
@@ -146,16 +145,22 @@ struct JobsView: View {
     }
 }
 
-/// Where jobs run, said wherever they are listed: only while BotChu is open and the Mac awake.
-struct JobsRuntimeNote: View {
+/// Where jobs run, as a status in Jobs' header (#232): while BotChu is open. What a job does about a
+/// time missed meanwhile is its editor's When Mac or BotChu Was Asleep choice.
+struct JobsRuntimeBadge: View {
     var body: some View {
-        Label {
-            Text("Jobs run while BotChu is open and this Mac is awake, never while it is quit or the Mac sleeps. A time missed meanwhile runs once when BotChu is open again, or is skipped, as each job says.")
-        } icon: {
-            Image(systemName: "info.circle")
+        HStack(spacing: 6) {
+            Circle().fill(Color.green).frame(width: 7, height: 7)
+            Text("Active while BotChu is open")
         }
-        .font(.caption).foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(.quaternary.opacity(0.5), in: Capsule())
+        .fixedSize()
+        .help("Jobs run while BotChu is open and this Mac is awake, never while it is quit or the Mac sleeps")
+        .accessibilityElement(children: .combine)
     }
 }
 

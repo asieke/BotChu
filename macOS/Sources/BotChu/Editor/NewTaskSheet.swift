@@ -64,20 +64,28 @@ struct NewTaskSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .labelsHidden()
                     repositoryList
+                    if let location { locationRow(location) }
                 } header: {
                     Text("Project")
                 } footer: {
-                    placeFooter
+                    if let error = model.repositoriesError, model.repositories == nil {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                    }
                 }
                 Section {
-                    if let work { workRow(work) }
+                    if let work {
+                        workRow(work)
+                        if work.isPullRequest { modePicker }
+                    }
                     DraftEditor(text: $brief, focused: $editing, images: images,
                                 placeholder: work == nil ? "What should \(botName) do?" : "Anything to add? (optional)",
                                 maxHeight: 200, identifier: "task-brief")
                 } header: {
                     Text("Task")
                 } footer: {
-                    taskFooter
+                    if let conflict {
+                        Text(conflict).font(.caption).foregroundStyle(.red)
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -184,19 +192,16 @@ struct NewTaskSheet: View {
         }
     }
 
-    @ViewBuilder private var placeFooter: some View {
-        Group {
-            if let error = model.repositoriesError, model.repositories == nil {
-                Text(error).foregroundStyle(.red)
-            } else if let location {
-                Text("Works on \(model.machineName(location.hostID))\(location.hostID == nil ? "" : " over SSH"), in \(displayed(location)). BotChu clones it there if it isn't yet.")
-                    .textSelection(.enabled)
-            } else {
-                Text("Your GitHub repositories, and your organizations', as gh lists them.")
-            }
+    /// Where the chosen repository is worked on (#232): the computer, then its folder there.
+    private func locationRow(_ location: RepoLocation) -> some View {
+        LabeledContent("Location") {
+            Text(verbatim: "\(model.machineName(location.hostID)) · \(displayed(location))")
+                .font(.system(.body, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+                .help(location.hostID == nil ? displayed(location) : "Over SSH, in \(location.path)")
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
     }
 
     /// A folder as the sheet shows it: with `~` for this Mac's home.
@@ -234,20 +239,15 @@ struct NewTaskSheet: View {
         }
     }
 
-    @ViewBuilder private var taskFooter: some View {
-        Group {
-            if let conflict {
-                Text(conflict).foregroundStyle(.red)
-            } else if purpose == .comment {
-                Text("\(botName) reviews the changes and posts one review on GitHub.")
-            } else if purpose == .review {
-                Text("\(botName) reviews the changes and gives its review here; it posts nothing.")
-            } else {
-                Text("The task's first message, after \(botName)'s instructions and memory. It has a workspace and conversation of its own, on \(model.bot(botID)?.account.name ?? "the bot's account").")
-            }
+    /// What the task does with a pull request (#232): continues it, reviews it here, or reviews it
+    /// and posts the review on GitHub, chosen here rather than told in a footer.
+    private var modePicker: some View {
+        Picker("Mode", selection: $purpose) {
+            Text("Continue PR").tag(Purpose.work)
+            Text("Review in BotChu").tag(Purpose.review)
+            Text("Review & Comment on GitHub").tag(Purpose.comment)
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .pickerStyle(.segmented)
     }
 
     // MARK: Starting

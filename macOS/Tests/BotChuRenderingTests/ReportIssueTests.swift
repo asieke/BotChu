@@ -124,6 +124,12 @@ extension RenderingTests {
         try await waitForReport { request.text == report && request.canSubmit }
         #expect(request.text == report)
         #expect(request.title == "The sidebar flickers")
+        #expect(request.visibility == "Public issue with screenshot")
+        // A title typed in its field names the issue; left empty, the first line does (#232).
+        request.typedTitle = "Sidebar flicker"
+        #expect(request.title == "Sidebar flicker")
+        request.typedTitle = ""
+        #expect(request.title == "The sidebar flickers")
         // Only a screenshot on the pasteboard: Edit ▸ Paste stays on, and the image goes after the text.
         let pasteboard = StandInPasteboard()
         defer { pasteboard.restore() }
@@ -134,6 +140,7 @@ extension RenderingTests {
         #expect(editor.validateMenuItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")))
         editor.paste(nil)
         #expect(request.images.images.count == 2)
+        #expect(request.visibility == "Public issue with screenshot and 1 image")
         #expect(editor.string == report)
         try await waitForReport { request.images.images.count == 2 && editor.isEditable }
         if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {

@@ -232,6 +232,48 @@ import Testing
         #expect(quiet.dots.isEmpty && quiet.more == 0 && quiet.spokenDots.isEmpty)
     }
 
+    /// #237: a bot row's dots are its tabs' own states, never others. For every Home with every
+    /// pair of tasks, and for rows with more than four busy tabs, the dots and +N count exactly the
+    /// tabs that aren't idle, kind for kind, the most urgent first, and the tooltip names them all;
+    /// answering a request, then reading the finished turn, changes the row's dot as the tab's.
+    @Test func aRowsDotsAreItsTabsOwnStates() {
+        let states: [TabState] = [.idle(since: now), .preparing, .starting(since: now), .working(.coding, since: now),
+                                  .news(pullRequest: 7, at: now), .failed(at: now), .stopped(at: now), .needsInput(requests: 1, at: now)]
+        var rows: [(home: TabState, tasks: [TabState])] = []
+        for home in states {
+            for first in states {
+                for second in states { rows.append((home: home, tasks: [first, second])) }
+            }
+        }
+        rows.append((home: .needsInput(requests: 2, at: now), tasks: states))
+        rows.append((home: .news(pullRequest: nil, at: now), tasks: states.reversed() + states))
+        let kinds: [TabState.Kind] = [.needsInput, .failed, .stopped, .preparing, .starting, .working, .news]
+        for (home, tasks) in rows {
+            let row = BotRowSummary(account: "Claude Dev", home: home, tasks: tasks.map { (task: issue, state: $0) })
+            let busy = ([home] + tasks).map(\.kind).filter { $0 != .idle }
+            let label = "Home \(home.kind), tasks \(tasks.map(\.kind))"
+            #expect(row.dots.count + row.more == busy.count, "\(label)")
+            #expect(row.dots.map(\.urgency) == Array(busy.map(\.urgency).sorted(by: >).prefix(BotRowSummary.dotLimit)), "\(label): \(row.dots)")
+            #expect(row.spokenDots.isEmpty == busy.isEmpty, "\(label)")
+            for kind in kinds {
+                let count = busy.filter { $0 == kind }.count
+                // None made up or recoloured, and the tooltip counts those past the fourth too.
+                #expect(row.dots.filter { $0 == kind }.count <= count, "\(label): \(row.dots)")
+                if count > 0 { #expect(row.spokenDots.contains("\(count) \(kind.name(count: count))"), "\(label): \(row.spokenDots)") }
+            }
+        }
+        let last = now.addingTimeInterval(-120)
+        let replied = status([ChatMessage(role: .user, text: "Go", date: last.addingTimeInterval(-5)),
+                              ChatMessage(role: .assistant, text: "Done", date: last)])
+        let steps = [TabState(status: replied, unread: true, awaitingInput: [now]), TabState(status: replied, unread: true),
+                     TabState(status: replied, unread: false)]
+        #expect(steps.map(\.kind) == [.needsInput, .news, .idle])
+        for state in steps {
+            let row = BotRowSummary(account: "Claude Dev", home: .idle(since: nil), tasks: [(task: issue, state: state)])
+            #expect(row.dots == (state.kind == .idle ? [] : [state.kind]))
+        }
+    }
+
     /// #218: waiting on the owner outranks everything, then a failed or stopped turn, then a turn
     /// under way, then a finished one not yet seen, then idle.
     @Test func theMostUrgentStateWins() {

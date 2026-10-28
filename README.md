@@ -22,7 +22,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   - **Sections:** bots can be grouped into sections you name, each a heading of its own in the
     sidebar and in **Agents**, which edits the same sections (below). A bot's **Move to Section** menu lists Conversations (no section) and the sections,
     with its own checked, and **New Section…**, which names a section and moves the bot into it;
-    a moved bot goes last in its section. Bots in no section, new bots among them, come first,
+    a moved bot goes last in its section. A bot can also be dragged into place: dropped between two
+    bots, in its own section or another, it goes exactly there, and dropped on a section's heading,
+    collapsed or not, it goes last in that section; the sections keep their order, and Agents shows
+    the bots in the same order. Bots in no section, new bots among them, come first,
     under Conversations, so a sidebar without sections looks as before. A section heading's menu
     renames it (another section's name merges the two), moves it up or down, or removes it, which
     returns its bots to Conversations and deletes nothing. Names are trimmed and matched whatever
@@ -50,10 +53,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     once it is known to be active. The type filter (all projects, code or non-code) is remembered too;
     a repository without a readable `PROJECT.md` has no type, so it shows only under all projects.
     **Pull Requests** and **Issues** list the open ones across the repositories (up to 30 most
-    recently updated per repository, saying so when there are more), with checks, review state,
+    recently updated per repository, with a footer when there are more: "Showing 30 most recent of
+    120" and **Open on GitHub ↗**, a link for each repository cut short), with checks, review state,
     labels, author and any bot's task on them, filtered by repository or search. They cover the same
     repositories as the list, by the same status and type filters, which all three views show (#186):
-    the repository menu, the counts beside their names (GitHub's totals) and the note about what
+    the repository menu, the counts beside their names (GitHub's totals) and the footer about what
     wasn't read leave the others out, and a chosen repository narrows that further. A repository
     chosen before the filters left it out counts as all repositories until they cover it again. When
     the filters leave out everything open, the view says so and offers **Show All Projects**. The
@@ -97,8 +101,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   - **Project sidebar:** selecting a repository, in the table or the gallery, shows it on the right
     with three tabs; closing the sidebar deselects it, and an issue or pull request count in the
     table opens that tab. **Overview** has its open work, its type, status, merge policy and
-    deployment, where its tasks work, the open tasks on it, **Start Task with**, **Edit Metadata…**
-    and GitHub. **Issues** and **PRs** list the open ones read for it (saying so when there are
+    deployment, where its tasks work, the open tasks on it, **Start Task with** (**New Agent…** while
+    there is no agent to start one), **Edit Metadata…** and GitHub. **Issues** and **PRs** list the open ones read for it (saying so when there are
     more), with their labels, checks and the bots on them, and the tables' menu; each opens in place, read with `gh issue
     view` or `gh pr view`: its description, labels and conversation, and a pull request's branches,
     checks, changed files and reviews. An open issue's bar has Delete (the trash), which deletes it
@@ -113,7 +117,13 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     chosen, so the account and workspace can be checked (and the brief edited) first. Its tasks work
     on this Mac, wherever the project deploys.
   - **Project metadata:** **Edit Metadata…** edits the name, type, status, deployment, and merge
-    policy in `PROJECT.md`. **Create Metadata PR** uses `gh api` to create a documentation branch,
+    policy in `PROJECT.md`. Deployment is a picker per target (#232), so nobody types
+    `local:<machine>:<path>`: **None**, **This Mac** or **SSH Host** (one of Settings ▸ Hosts, by its
+    machine name) with its folder, **Vercel** with its project, **Registry** with its package, or
+    **Custom**, any target as written; **Add Target** adds another (a hosted app's local and Vercel
+    targets). A target BotChu doesn't recognize stays as written, and a deployment whose targets
+    weren't changed is saved exactly as it was read; a combination the project's type doesn't take
+    says why under it. **Create Metadata PR** uses `gh api` to create a documentation branch,
     commit only that file, and open a PR; it never clones the repo or runs its test suite. Repository
     checks and merge requirements still apply. Other frontmatter and the Markdown body are preserved;
     ambiguous YAML and a file changed since editing began are refused. Interrupted saves can retry
@@ -122,7 +132,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     access for this flow; forks can be used through GitHub. The editor creates no commits directly
     on the default branch and never merges metadata PRs.
   - **Agents:** a gallery of the existing bots, grouped under the sidebar's sections, in its order,
-    with Conversations ("Not in a section") first while any bot is in none, showing their
+    with Conversations first while any bot is in none, showing their
     personality summary, provider, activity and task count, with **Open Chat**, **Edit…** and
     **New Agent**. Sections are edited here with the sidebar's own menus: a card's folder button, or
     a right click on it, moves its bot to a section, back to Conversations, or into a **New
@@ -157,7 +167,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     (older than the background's interval, or a later check failed; its bars and shares are
     dimmed), **Usage unavailable** or **Command not found**, a button that shows why, with **Try
     Again** (labelled with the time the profile's limit allows it) and, for a missing command,
-    **Change Command…**; a profile not read yet says Checking…, over empty tracks. Selecting a
+    **Change Command…**, or for Pi **Open Settings** (its OpenRouter key); a profile not read yet says Checking…, over empty tracks. Selecting a
     profile shows it on the right: its family and plan, its allowance as **Model & Usage** shows it, its
     **Connectors** (below), the agents set to
     it, each opening its Home, and its command, with Copy and Change… (Settings ▸ Accounts). A row's
@@ -172,7 +182,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     while Providers shows, so it opens on the last numbers and updates them in place; a
     conversation's **Model & Usage** shows the same readings, with the same refresh limits. It
     searches by name or family. **New Profile** adds a named profile of Claude Code, Codex,
-    Antigravity, Muse or Pi, with an installed command or wrapper and **Test Command**. Sign in through that CLI in Terminal; BotChu does not create its
+    Antigravity, Muse or Pi, with an installed command or wrapper and **Test Command**; for Pi, it
+    shows whether the shared OpenRouter key is saved, or **Add Key in Settings…** (which closes
+    the sheet, so only before anything is typed). Sign in through that CLI in Terminal; BotChu does not create its
     login. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
     Codex profiles can also draw pets. Bots and tasks retain a copy of their custom profile’s CLI
     family and command across relaunches. Command overrides remain editable in Settings. Pi profiles
@@ -199,9 +211,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     A missing clip falls back to a close one, then idle. Only the
     selected bot and busy bots move in the sidebar, the chat shows still frames, and Reduce Motion
     shows stills everywhere.
-  - **Making a pet:** describe the bot's look in **Appearance** in **Edit Bot** and choose **Make
-    Pet…** (or **Create and Make Pet** when creating a bot with an appearance); BotChu asks first,
-    with the estimated cost. One `codex exec` on a Codex account draws eight square stills of the
+  - **Making a pet:** describe the pet character in **Animated Pet** in **Edit Bot** and choose
+    **Make Pet…**, which asks first, with the estimated cost. In **New Bot**, **Generate animated pet
+    on create** (off until turned on, and only with a description) makes it as the bot is created;
+    it says the estimate for the model chosen in Settings ▸ Pets, and its tooltip what it uses. One `codex exec` on a Codex account draws eight square stills of the
     character, one per pose, with its built-in image generation (on that account's ChatGPT
     allowance). BotChu then sends each still to an image-to-video model on OpenRouter, as both the
     first and last frame of a 4 or 5 second clip, so it loops; all ten clips at once. A request
@@ -347,9 +360,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     GitHub repositories, with its own conversation and CLI session, in its own git worktree, so
     tasks never share files. BotChu does all of this itself, with no other app. **New Task** (⌘T)
     asks only for the repository (from the ones `gh` lists for your account and your organizations,
-    newest push first) and what to do, in one box that takes images as the message box does; they
-    go with the task's first message, and ⌘↩ starts it. Opened from Projects for an issue or pull
-    request, it works on that, and the box adds to it. The task runs on its bot's account (change
+    newest push first), with its **Location** shown once chosen (`This Mac · ~/Desktop/WORKSPACE/repo`,
+    or the host's nickname and folder), and what to do, in one box that takes images as the message
+    box does; they go with the task's first message, and ⌘↩ starts it. Opened from Projects for an
+    issue or pull request, it works on that, and the box adds to it; for a pull request, **Mode**
+    chooses **Continue PR**, **Review in BotChu** or **Review & Comment on GitHub** (#232). The task runs on its bot's account (change
     it in the status sidebar), and BotChu names and manages branches automatically. A repository
     is worked on where you chose for it (Settings lists those choices), else in the repositories
     folder on this Mac (`~/Desktop/WORKSPACE` by default), whatever its `PROJECT.md` deploys: a
@@ -369,7 +384,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     prominent line is the repository it works in and its issue's or pull request's number
     ("BotChu #113"; a review's with an eye, a host's name after it); a task's second says what it
     is about: its summary, a label of three or four words saved when it started (see Quick tasks,
-    below), or for a task without one its issue's title or a brief's words; its third says what it
+    below) or the title it was renamed to or made again from its menu, or for a task without one its
+    issue's title or a brief's words; its third says what it
     is doing, with a time on the right that is never cut off: making the worktree or starting (a
     violet ring), working (violet, what it is doing and its elapsed time, ticking each second),
     finished since it was last shown (green, with its pull request), its last turn failed (a red dot)
@@ -382,7 +398,17 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     and ↑ and ↓ while a tab has keyboard focus switch conversations. Hovering a task's tab turns its
     dot into a close button, unless its turn is running, and its tooltip says what it is about,
     then the repository, the issue, the machine and the shortcut; its context menu keeps the issue, pull request, branch,
-    folder, Terminal, new-session and close actions. Closing the shown task shows the tab above it.
+    folder, Terminal, new-session and close actions, with **Rename…** and **Regenerate Title** (#236)
+    for its second line. Rename… asks for a title, starting from the one shown: any one line of up
+    to 120 characters once trimmed (it needn't be three or four words); Cancel or an empty name
+    changes nothing. Regenerate Title makes it again in the background, as a new task's summary is
+    asked for (see Quick tasks), from its issue's title and brief and its own latest messages, its
+    menu saying **Regenerating Title…** meanwhile; without a Quick tasks profile it offers **Open
+    Quick Tasks Settings** and asks no other account, and a failure, a timeout or a reply that isn't
+    a label of three or four words keeps the title and says why, with **Try Again**. A rename wins
+    over a title still being made, which never reaches a closed task. Neither changes the issue or
+    pull request on GitHub, the branch, the folder, the session, the draft or the tab shown; the
+    title is saved in the task's `task.json`. Closing the shown task shows the tab above it.
     The column is 240 points wide; drag its edge to make it 200 to 320, which is remembered. **«**
     or **View ▸ Collapse Tasks** folds it into a 56-point rail of tiles (a house for Home, each
     task's number, or a checklist for a brief, then **+**), with a dot in the corner of each tile
@@ -413,8 +439,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   - **Hosts:** Settings ▸ Hosts lists other computers tasks can work on, reached with `ssh` and
     your keys, never a password: a nickname, the SSH host (an alias from `~/.ssh/config`, a host
     name or `user@host`), the folder repositories are checked out in there (`~/apps` by default),
-    the machine name a `PROJECT.md` deploy target calls it (**Test Connection** reads it), and each
-    account's command there when it isn't the same as on this Mac. A task on a host makes its
+    the machine name a `PROJECT.md` deploy target calls it (**Read from Host** reads it, and **Test
+    Connection** fills it in while empty), with the deploy target that makes (`local:<machine>:<folder>/…`)
+    beside it, and each account's command there when it isn't the same as on this Mac (the Mac's
+    command as each field's placeholder). Under Test Connection, only what a test found, or why the
+    host can't be saved yet. A task on a host makes its
     worktree there and runs its CLI there, in that user's login shell; its output streams back, and
     Stop interrupts the CLI there. The bot's folder stays on this Mac: the task's first message
     brings the bot's identity, instructions and memory and a recap of its Home conversation, and
@@ -553,17 +582,20 @@ on that pull request's branch to continue in instead). The same command run agai
     efforts offered are those the chosen account and model take, and another CLI family clears the
     model and effort), title, instructions, how often
     it runs (every day, weekdays or chosen days at a time; every so many minutes, from 5, or hours,
-    from a start time), its time zone (the Mac's at first, shown with the job everywhere), missed
-    times, the time limit and whether it is on, with the schedule in words and its next three times.
+    from a start time), its time zone (the Mac's at first, shown with the job everywhere), what
+    happens to missed times (**When Mac or BotChu Was Asleep**), the time limit and whether it is on,
+    with the schedule in words and its next three times; an empty Instructions field says "Prompt to
+    send on each scheduled run…".
     BotChu runs jobs itself, only while it is open and the Mac is awake: there is no background
-    helper or login item, and Jobs says so. It looks for due jobs every 20 seconds, when the Mac
+    helper or login item, and Jobs' header says so with an **Active while BotChu is open** status
+    (its tooltip says the rest). It looks for due jobs every 20 seconds, when the Mac
     wakes and when the clock changes. A job keeps its own time zone, so travelling or changing the
     Mac's never moves it; a time a daylight-saving change skips runs when the clock jumps, a time it
     repeats runs once, and every so many minutes or hours counts true durations from the start time.
-    **Run once if missed** (the default) runs once for the latest time missed while BotChu was closed
-    or the Mac asleep, if that was within its catch-up window (seven days unless set shorter), and
-    tells the agent when the run was meant for and how late it is; **Skip missed runs** records them
-    skipped. Earlier missed times are never made up, nor are times while a job was paused, or before
+    Missed times are one picker (#232): **Run latest missed run if within 1 hour**, **6 hours**,
+    **1 day** or **7 days** (the default) runs once for the latest time missed while BotChu was closed
+    or the Mac asleep, if that was within the window, and tells the agent when the run was meant for
+    and how late it is; **Skip missed runs** records them skipped (and keeps the window for later). Earlier missed times are never made up, nor are times while a job was paused, or before
     its schedule changed. Each run is a fresh CLI session of its agent's, with its identity,
     instructions, team playbook, personality, memory and skills, then the job's instructions, but not
     its Home conversation, on the job's account, model and effort, else the agent's (recorded with
@@ -667,7 +699,9 @@ on that pull request's branch to continue in instead). The same command run agai
     account's catalog doesn't list, is never moved to another: the box shows it dotted, says why,
     and offers **Unlink** and **Refresh Projects**. Without a saved catalog, `#` offers **Load
     Projects**; a saved one stays searchable and says when it was synced. Suggestions come from what
-    is saved, never from GitHub while you type. The report and New Task sheets have no completion.
+    is saved, never from GitHub while you type; past the rows shown, the list ends with **+N more**.
+    The report and New Task sheets have no completion, and their **+** adds images with no words
+    beside it.
   - **Images:** use the **+** button, paste an image (⌘V, such as a copied screenshot) or image
     files, or drop them into the message box. Copied text still pastes as text when its app adds a
     picture of it after the text (as spreadsheets do), and other files paste as text too.
@@ -710,9 +744,10 @@ on that pull request's branch to continue in instead). The same command run agai
     reports the model that wrote its replies and Muse the one its usage counted; until a turn
     reports one, and always for Codex and Antigravity, the version shows as unresolved. The report
     is kept with the conversation for the account and choice it was made for, so changing either
-    shows it unresolved again; a label never changes which model a turn asks for. **Auto** effort
-    leaves the choice to the account; explicit levels include short explanations, and unsupported
-    effort controls are disabled.
+    shows it unresolved again; a label never changes which model a turn asks for. **Auto
+    (Account default)** effort leaves the choice to the account; each level is its name and bars, with
+    no description (#232), and unsupported effort controls are disabled. The custom model ID field's
+    placeholder (`provider/model-name` for OpenRouter, else Model ID) says what it takes.
     Search supports arrow keys and Return; Escape dismisses a picker. Controls wait until the shown
     conversation's turn ends. The card's **Account** selector changes the account for Home or a task,
     including custom CLI profiles; the next message starts a session on that account. Other tasks
@@ -953,7 +988,7 @@ on that pull request's branch to continue in instead). The same command run agai
     stay on this Mac. Memory capture tells bots that multi-step workflows go in a skill of their
     own, not in `MEMORY.md`; they change shared skills only when you ask. **Skills** in the sidebar lists them as cards (shared, or a bot's own, with a
     search and a filter), with the number of files beside each `SKILL.md`; **New Skill** makes one,
-    shared or for one bot, from a template and opens it in the Markdown editor, as do a card's
+    shared or for one bot (its **File** row shows `skills/<name>/SKILL.md`), from a template and opens it in the Markdown editor, as do a card's
     **Edit…** and double-click; a shared skill's **Bots** menu turns it on or off for each bot (kept in
     `bot.json` as `disabledSkills`; every shared skill is on until turned off), and its menu shows it
     in Finder or puts its folder in the Trash. **Shared Folder** opens the bots folder's `skills/`.
@@ -995,13 +1030,19 @@ on that pull request's branch to continue in instead). The same command run agai
     Sections within each area, and Status above the tabs, still collapse from their headings, with
     their expansion remembered. **Memory** has four cards matching
     Conversation: the bot's **INSTRUCTIONS.md**, **SOUL.md** and **MEMORY.md**, and **TEAM.md**, the
-    playbook every bot shares (the same file as in Settings), followed by a summary of what bots
-    save in memory and what stays out. **Skills** below them lists the bot's own skills and the
+    playbook every bot shares (the same file as in Settings). **Skills** below them lists the bot's own skills and the
     shared ones, each with a switch that turns it on or off for this bot, and **Manage Skills**
     opens the Skills gallery. Each card and skill opens an in-app Markdown editor at half the
-    parent window's width and height, with Save (⌘S), Cancel (Escape), and Reload. Saving preserves exact
-    Markdown and refuses to overwrite a file changed on disk since it was opened. Saved changes
-    apply at the next new session; **New Session** applies them to an existing conversation. The
+    parent window's width and height, its file's name with whose it is beside it (the bot's, or
+    Every bot), a few words over an empty file, and Save (⌘S), Cancel (Escape), and Reload. Saving
+    preserves exact Markdown and refuses to overwrite a file changed on disk since it was opened.
+    Saved changes apply at the next new session; **New Session** applies them to an existing
+    conversation. For one of the bot's own files (#232), while its Home or a task of it on this Mac
+    is the conversation shown and has a CLI session, the editor also has **Save & Start New
+    Session**: it saves, and only once the file is saved starts that one conversation over in a new
+    session, as New Session does; it waits, disabled, while a turn or sub-agent runs there, and never
+    touches the bot's other conversations, other bots, or a task on a host. The files every bot
+    shares, and skills, only save, for the next new sessions. The
     window is never narrower than the sidebar, chat and status
     need, so it widens when they do.
   - **Account usage:** the selected account's allowance used and reset times, shared by all bots
@@ -1082,9 +1123,14 @@ on that pull request's branch to continue in instead). The same command run agai
     It opens on the page last shown, and links elsewhere (Change Command…, GitHub Settings,
     Connection Settings…) open their page. Preferences save as you change them; the OpenRouter and
     Sail keys and Telegram token save only with Save, and a key typed and not saved stays while you change
-    pages, until you leave Settings. **GitHub ▸ Test Connection** checks that `gh` is available and can authenticate to
+    pages, until you leave Settings. Pages have no subtitles or prose notes (#201, #232): their
+    controls are labelled, with details in tooltips. **Accounts** keeps **Permission prompts
+    bypassed** beside its Commands heading, with the login shell (`zsh -l`) in its tooltip. **GitHub ▸ Test Connection** checks that `gh` is available and can authenticate to
     github.com, then shows its version and signed-in username. Connection failures give install/login
-    guidance without displaying credentials. Settings also contains the bots folder, the repositories folder, the hosts and where you chose to work
+    guidance without displaying credentials, with `gh auth login --hostname github.com` as a row to
+    **Copy**. **Run reviews** is its switch and review time; how a review works (the bot's own
+    account without tools, at most 12 model calls a day per account, up to 3 notes a day to its
+    `MEMORY.md`, Antigravity and Pi skipped) is the section's tooltip. Settings also contains the bots folder, the repositories folder, the hosts and where you chose to work
     on repositories, each account's command, the Codex account that draws pets' stills, the
     OpenRouter model that animates them (with its cost per pet), the OpenRouter API key (Keychain)
     and default OpenRouter model, the Sail API key (a Keychain item of its own) and default Sail
@@ -1099,7 +1145,14 @@ on that pull request's branch to continue in instead). The same command run agai
     as a run review is, on that profile's allowance and never another's, and logged in its bot's
     turn log as a "task summary". A reply that isn't a label of three or four words, a failure, or
     none within 90 seconds leaves the task named as before. The summary is saved in its
-    `task.json`; nothing is asked at launch, while drawing tabs, or for tasks from before.
+    `task.json`; nothing is asked at launch, while drawing tabs, or for tasks from before. A task's
+    **Regenerate Title** (#236) asks the same way, also for a task from before, logged as a "task
+    title": its issue's title and brief, and up to its 12 latest messages of the owner's and the
+    bot's in its own conversation (4,000 characters at most, each shortened, without tool calls,
+    errors, BotChu's notes, `<remember>` blocks, other bots' messages, or lines that look like
+    secrets), quoted as evidence rather than instructions; with no such messages it is asked as a
+    new task's summary. Nothing from another task, Home, the bot's instructions or its memory goes
+    in, and it is never asked after a turn by itself.
   - **Remote queue bots:** choose **Remote queue** in New Bot to message an agent such as Danny
     on its own computer. BotChu serves an authenticated HTTP queue, while the remote runtime
     polls for messages and posts complete replies or errors into Home. Documents go both ways: attach
@@ -1108,7 +1161,10 @@ on that pull request's branch to continue in instead). The same command run agai
     its answer comes back into the asking conversation as a message from it, starting a turn; it only
     answers, never starts a conversation itself. The queue survives relaunch,
     retains replies without truncation, and deduplicates retry acknowledgements. This bot has no
-    local workspace, CLI, account/model controls, tasks, jobs or sub-agents. Settings ▸ **Remote queue**
+    local workspace, CLI, account/model controls, tasks, jobs or sub-agents; its editor shows its
+    **Connection** (Configured while Settings serves the queue, else Not configured) with **Open
+    Remote Queue Settings…**, which closes the editor, so it is off for a new bot or
+    while there are unsaved changes. Settings ▸ **Remote queue**
     controls its address/port, generated Keychain token and connection status; the sidebar shows
     whether a poll arrived in the last two minutes and how many messages wait, or **Tailscale off**
     when the queue is served through Tailscale and Tailscale is disconnected on this Mac (BotChu
@@ -1135,7 +1191,9 @@ on that pull request's branch to continue in instead). The same command run agai
     conversation. While the Mac sleeps or BotChu isn't running, messages wait on Telegram for up to
     a day. See [Telegram gateway](docs/telegram.md) for setup and troubleshooting.
   - **Reporting bugs and features:** the ladybug button at the toolbar's trailing end, on every
-    screen, or **Help ▸ Report a Bug or Feature…** opens a sheet with one field, which takes up to
+    screen, or **Help ▸ Report a Bug or Feature…** opens a sheet whose header says where it goes and
+    who sees it (`asieke/BotChu · Public issue with screenshot`, and the other images when there are
+    any), with a **Title** field and one field for the report, which takes up to
     eight images as the message box does. Just before the sheet opens, BotChu takes a screenshot of
     the window it was opened from, as it shows then (its sidebar, conversation or gallery, and
     status sidebar, scrolled as they were), and puts it first among the report's images, one of the
@@ -1144,13 +1202,14 @@ on that pull request's branch to continue in instead). The same command run agai
     doesn't ask for Screen Recording to take it (it needs macOS 14.4 or later); when it can't be
     taken, the sheet says that no screenshot is attached, and the report goes without it. It is
     kept in memory, not in a file, and nothing is uploaded before **Submit**. **Submit** (⌘↩)
-    files it as an issue in `asieke/BotChu` with `gh issue create`, titled from its first line or
-    sentence (cut at a word, 72 characters at most), with its images after the text, and links the
+    files it as an issue in `asieke/BotChu` with `gh issue create`, titled as typed in Title (on one
+    line, 256 characters at most), else from its first line or sentence (cut at a word, 72 characters
+    at most), which the empty Title field shows, with its images after the text, and links the
     new issue; when gh fails, the report stays, with gh's reason. gh attaches the images itself
     (`--attach`, gh 2.99 or later, which needs write access to the repository), each as
     `image-<n>.png` from a private folder that goes afterwards; if one doesn't upload, the issue is
     made without it, and the sheet says so. The repository is public: anyone can see the issue's
-    images, as the sheet says beneath them, and the screenshot shows whatever the window showed,
+    images, as the sheet's header says, and the screenshot shows whatever the window showed,
     conversations and names included. Besides the images, the issue adds only the app state
     the sheet shows before it goes, as categories and counts: the version and commit, macOS, the
     screen and status sidebar area, the conversation's kind (Home, or a task on this Mac or a host
@@ -1158,6 +1217,19 @@ on that pull request's branch to continue in instead). The same command run agai
     only), message and queue counts, the window's size and appearance, and how many bots and turns
     there are. Conversations, instructions, memory, prompts, tool calls, error text, paths and the
     names of bots, tasks, accounts, hosts and repositories never go into the app state.
+  - **Analytics:** **View ▸ Open Analytics Dashboard** reads what BotChu has recorded (conversations'
+    transcripts, tasks, jobs' histories, sub-agent runs and the saved allowance readings) off the main
+    thread, changing nothing, and opens a read-only page of it in the default browser: turns and runs
+    a day by outcome (finished, failed, stopped, in progress), median durations, failure rates and
+    time at work, by bot, provider account and project, for 7, 30 or 90 days, all or a range of days,
+    and for Home turns, task turns, job runs or sub-agent runs; then each profile's latest allowance
+    reading, apart. Days are this Mac's calendar days; a finished turn isn't taken as work that
+    succeeded; durations BotChu can't know are left out rather than counted as zero; tokens and cost
+    are shown as unavailable, as nothing records them; run reviews and remote queue bots are left out.
+    The page is one file, `analytics/dashboard.html` in BotChu's data folder, that only your macOS user
+    can read, holds names and numbers only (no messages, titles, paths or credentials), and loads
+    nothing; nothing serves it, so it has no port. Choosing the command again makes it again. See
+    [Analytics dashboard](docs/analytics.md) for each metric's source, calculation and retention.
 - Does not: run a bot's Home anywhere but this Mac, or tasks anywhere but this Mac and SSH hosts
   (no containers or cloud), run scheduled jobs while BotChu is quit or the Mac asleep, ask for approval of tool calls (every CLI runs with
   its permission prompts bypassed, inside the bot's folder or the task's worktree), or keep any
@@ -1170,8 +1242,8 @@ on that pull request's branch to continue in instead). The same command run agai
     version, an alias's or default's once reported) and public OpenRouter model metadata
     (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model, with the model a
     conversation's CLI last reported running (`Models.swift`), the
-    sections the sidebar and Agents group bots into, where a new bot goes and what a search of them
-    finds (`BotSections.swift`), skills: finding them, reading their frontmatter, which a bot uses,
+    sections the sidebar and Agents group bots into, where a new bot goes, where a dragged one lands
+    and what a search of them finds (`BotSections.swift`), skills: finding them, reading their frontmatter, which a bot uses,
     and making one (`Skills.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
@@ -1197,7 +1269,9 @@ on that pull request's branch to continue in instead). The same command run agai
     its `MEMORY.md` (`BotStatus.swift`), what a conversation's tab and its bot's row say: its state,
     the tab's lines, the row's dots and subtitle, and when the column folds into the rail
     (`ConversationTabs.swift`), a new task's summary on the Quick tasks profile: what it is made
-    from, its prompt and which replies are kept (`TaskSummaries.swift`), replies' parsed Markdown, cached by their text within a
+    from, its prompt and which replies are kept, and a title renamed or made again from the task's
+    own latest messages, which names the owner may type, one request at a time per task, and why a
+    late one is dropped (`TaskSummaries.swift`), replies' parsed Markdown, cached by their text within a
     budget of bytes (`MarkdownCache.swift`), and parsed off the main thread as they are written, one
     revision at a time for each reply (`MarkdownPreparation.swift`), a reply's text as it is selected
     and copied: its texts in reading order, what goes between them, words and paragraphs
@@ -1269,7 +1343,10 @@ on that pull request's branch to continue in instead). The same command run agai
     limit, the saved offset and replies owed, and retries). `@` and `#` mentions are in
     `Mentions.swift`: the link a message keeps, where a query starts and ends, matching and ranking,
     what a choice inserts, whether a link still resolves, and what a sent message tells its bot
-    about them.
+    about them. The analytics dashboard (#233) is in `Analytics.swift` (the records read into a
+    snapshot of days, outcomes and durations by bot, account and project, a conversation's turns, and
+    `AnalyticsSummary`) and `AnalyticsDashboard.swift` (the page, its script and writing it for this
+    user only), tested by `AnalyticsTests`; the app's `App/Analytics.swift` is its menu command.
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
     in standard system materials: `App/` (the app, window, model, each conversation's state, observed
     on its own, with whether its history is in memory and what waits for it (`Conversations.swift`), settings, Keychain, dev hooks, making
@@ -1302,16 +1379,20 @@ on that pull request's branch to continue in instead). The same command run agai
     context and store, and tasks: naming, dispatch requests, Tasks handed to other bots (the
     helper's request and every answer it prints, checks, and the same request recognized), checkouts, `gh`'s output, and worktrees
     made in throwaway repositories, the project status filter, issues and pull requests read in
-    full from `gh`'s output, and fan-out briefs; the Projects catalog and its sync through a stand-in
+    full from `gh`'s output, the count and link under a table cut short, Edit Metadata's deploy
+    targets (kinds, folders and names, and a value unchanged or unrecognized going back as written),
+    and fan-out briefs; the Projects catalog and its sync through a stand-in
     `gh` (the saved catalog shown before any request completes, checks for changes that read only
     what changed, failures, removals, coalesced refreshes, another account, a missing or unreadable
     file, the four-request limit, and a deleted issue leaving it at once, also while a sync that read
     it is under way, or staying when gh refuses, with why); and hosts: their `ssh` command lines, where a repository is worked on, clones,
-    worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, and notes kept
-    from a remote task; memory: #88's Home sequence (a routing preference saved in the turn that
+    worktrees, reviews and turns on a host through a stand-in `ssh` that runs here, the deploy target
+    a host's machine name makes, and notes kept from a remote task; memory: #88's Home sequence (a routing preference saved in the turn that
     agrees, and recalled by a fresh session), what is left out, bot or shared scope, repeats,
     corrections and forgets, concurrent saves, and saves that fail, wait (also across a relaunch)
-    and are tried again; reports: their titles, app state, the size of their window's screenshot, and filing (with attached images) through a stand-in `gh`;
+    and are tried again; a bot's files saved before Save & Start New Session starts anything, and
+    only for the shown, idle conversation on this Mac; a new bot's pet only when opted in, at the
+    chosen model's estimate; reports: their titles (typed, or from the first line), who sees them, app state, the size of their window's screenshot, and filing (with attached images) through a stand-in `gh`;
     output parsed off the main thread and delivered in batches, a CLI's end (#145: one still
     running after it said its turn ended is ended with its turn standing, one that takes input only
     once its input is closed, one that carries on is left alone, and Stop kills one that ignores
@@ -1332,7 +1413,8 @@ on that pull request's branch to continue in instead). The same command run agai
     inputs or an edited thread, measurements of rows gone dropped, and the reader's row (or the end)
     kept as rows above it change, are forgotten or move; when the chat keeps its reader at its end
     (only their own scrolling up leaves it, not a bounce; back within 40 points, or sending, opening
-    or Jump to Latest from anywhere, pins it again); the sidebar's sections of bots, and searching them; follow-ups the CLI
+    or Jump to Latest from anywhere, pins it again); the sidebar's sections of bots, bots dropped within and between them,
+    and searching them; follow-ups the CLI
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
     before the next save, also in a queue going through a relaunch; saving off the main thread: each
@@ -1363,7 +1445,8 @@ on that pull request's branch to continue in instead). The same command run agai
     message back into the draft, links that no longer resolve, and the context a message carries,
     kept through the queue and the saved thread; scheduled jobs, with a fake clock and store and
     no CLI: times across daylight-saving changes and in their own zones, chosen days, intervals that
-    stay true durations, missed times run once or skipped within a window, a reservation saved before
+    stay true durations, missed times run once or skipped within a window (and the editor's one
+    choice for them, in words), a reservation saved before
     a run starts (and nothing started when it can't be), repeated ticks and relaunches that start
     nothing twice, runs waiting for their agent's workspace and a slot, a job that never overlaps
     itself, pausing, resuming and editing that never make up time, Run Now while paused, failures
@@ -1412,10 +1495,11 @@ on that pull request's branch to continue in instead). The same command run agai
     sub-agents streaming without invalidating other conversations' views, what quitting mid-turn
     saves, a follow-up taken while the transcript can't be saved (back in it after a relaunch), model-picker keyboard interaction and persisted choices,
     the message box's text staying put while it is typed (narrow and wide, past its maximum and back),
-    Markdown editor sizing and Save/Cancel, collapsing status sections, a bot's tabs beside its
+    Markdown editor sizing and Save/Cancel, Save & Start New Session starting only the shown Home or
+    task over once saved, collapsing status sections, a bot's tabs beside its
     chat (a click, the close button on hover, **+**, « and », the arrow keys, ⌘1 to ⌘9, the rail at
     the narrowest window and by the owner's choice, light and dark) and its row in the bot list,
-    the sidebar's sections of bots (their menus, the alert that names them, collapsing and revealing, and changes that can't
+    the sidebar's sections of bots (their menus, the alert that names them, collapsing and revealing, bots dropped in them, and changes that can't
     be saved, shown until Try Again or quitting saves them), Agents grouped under them and editing
     them with the same menus and alert, inspector tab navigation and
     restored selection, conversation-scoped allowance reads that show the background's reading
@@ -1495,7 +1579,8 @@ on that pull request's branch to continue in instead). The same command run agai
     otherwise. It records the SDK the app was linked against in the binary (`vtool`), because
     SwiftPM's default build system records the deployment target there instead, and macOS then
     runs the app with the old window design, whose toolbar overhangs the sidebar. It also records the commit it
-    was built from (`BotChuCommit` in Info.plist, `-dirty` with uncommitted changes), which reports name. `install.sh` builds into `~/Applications`, restarts BotChu if it was running, and
+    was built from (`BotChuCommit` in Info.plist, `-dirty` with uncommitted changes), which reports name, and declares
+    the type a bot's row carries while it is dragged in the sidebar (`local.BotChu.bot`). `install.sh` builds into `~/Applications`, restarts BotChu if it was running, and
     smoke-tests that it starts; it goes by the installed copy's path, so review copies and builds run
     from a checkout are neither counted nor quit. `test.sh` runs the unit tests. `ui-review.sh` opens a build on
     throwaway data for checking its screens (see **Test**).
@@ -1503,6 +1588,7 @@ on that pull request's branch to continue in instead). The same command run agai
   `~/Library/Application Support/BotChu/`, which only lists the bots' workspaces in sidebar order,
   with the section each is in, and `telegram.json` there: where the Telegram gateway's updates are
   up to and the replies it owes (IDs only, no text).
+  The analytics page, `analytics/dashboard.html`, is written there when asked for, readable only by its user.
   Versions before bot folders kept everything in `bots.json` and `threads/` there; the first launch
   moves them into the bots' folders and keeps the old files in `backup-before-bot-folders/`.
   Project metadata stays in each repository’s `PROJECT.md` on GitHub; what Projects read from GitHub
@@ -1742,9 +1828,9 @@ on that pull request's branch to continue in instead). The same command run agai
   whose CLI has no tool-free mode are skipped. It spends a little of each account's allowance and
   isn't part of `check`; run it after changing how reviews run a CLI.
 - Task summaries (Quick tasks) without tools: `swift run --package-path macOS botchu-smoke --summary
-  [account id …]` names a sample task on each account the way a new task's summary is asked for, on
-  its family's smallest model (or `BOTCHU_SMOKE_MODEL`), and passes when the reply is a label of
-  three or four words. It spends a little of each account's allowance; run it after changing how
+  [account id …]` names a sample task on each account the way a new task's summary is asked for,
+  then again from a short conversation as Regenerate Title asks (#236), on its family's smallest
+  model (or `BOTCHU_SMOKE_MODEL`), and passes when both replies are labels of three or four words. It spends a little of each account's allowance; run it after changing how
   summaries are asked for.
 - Telegram end to end: the gateway's tests use stand-ins for Telegram, so a real exchange is
   checked by hand, with your own Telegram bot: see

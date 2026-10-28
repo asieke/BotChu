@@ -38,7 +38,6 @@ struct JobEditor: View {
         }
     }
 
-    static let catchUpWindows: [(String, TimeInterval)] = [("1 hour", 3600), ("6 hours", 6 * 3600), ("1 day", 86_400), ("7 days", 7 * 86_400)]
     static let timeLimits: [(String, TimeInterval)] = [("10 minutes", 600), ("30 minutes", 1800), ("1 hour", 3600), ("2 hours", 7200), ("4 hours", 14_400)]
 
     @Environment(AppModel.self) private var model
@@ -54,6 +53,11 @@ struct JobEditor: View {
 
     private var repeatChoice: Binding<Repeat> {
         Binding(get: { Repeat(job.schedule) }, set: { $0.apply(to: &job.schedule) })
+    }
+
+    /// What happens to missed times, and within what window, as one choice.
+    private var missedRuns: Binding<MissedRunChoice> {
+        Binding(get: { MissedRunChoice(job) }, set: { $0.apply(to: &job) })
     }
 
     /// The time of day, shown in the job's own zone.
@@ -92,9 +96,16 @@ struct JobEditor: View {
                             .padding(4)
                             .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+                            .overlay(alignment: .topLeading) {
+                                if job.prompt.isEmpty {
+                                    Text("Prompt to send on each scheduled run…")
+                                        .foregroundStyle(.tertiary)
+                                        .padding(.horizontal, 9)
+                                        .padding(.vertical, 4)
+                                        .allowsHitTesting(false)
+                                }
+                            }
                             .accessibilityLabel("Instructions")
-                        Text("What the agent does each time, as you would ask it in a message.")
-                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Section("Schedule") {
@@ -120,29 +131,20 @@ struct JobEditor: View {
                     }
                     SchedulePreview(schedule: job.schedule, after: max(Date(), job.handledThrough))
                 }
-                Section("When BotChu misses a time") {
-                    Picker("Missed times", selection: $job.missedRuns) {
-                        Text("Run once if missed").tag(MissedRunPolicy.runOnce)
-                        Text("Skip missed runs").tag(MissedRunPolicy.skip)
-                    }
-                    .pickerStyle(.radioGroup)
-                    if job.missedRuns == .runOnce {
-                        Picker("Catch up within", selection: $job.catchUpWindow) {
-                            ForEach(Self.options(Self.catchUpWindows, including: job.catchUpWindow), id: \.1) { Text($0.0).tag($0.1) }
+                // One choice that says what happens to times missed while BotChu was closed or the
+                // Mac asleep, with its window in its words (#232).
+                Section("When Mac or BotChu Was Asleep") {
+                    Picker("Missed runs", selection: missedRuns) {
+                        ForEach(MissedRunChoice.choices(including: job.catchUpWindow), id: \.self) { choice in
+                            Text(choice.label).tag(choice)
                         }
                     }
-                    Text(job.missedRuns == .runOnce
-                         ? "BotChu runs jobs only while it is open and this Mac is awake. If it misses times, it runs the job once for the latest of them when it is open again (if that was within \(JobWords.duration(job.catchUpWindow))), and tells the agent how late it is. Earlier missed times aren't run."
-                         : "BotChu runs jobs only while it is open and this Mac is awake. Times it misses are recorded as skipped, and the job waits for its next time.")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Section("Each run") {
                     Picker("Time limit", selection: $job.timeLimit) {
                         ForEach(Self.options(Self.timeLimits, including: job.timeLimit), id: \.1) { Text($0.0).tag($0.1) }
                     }
                     Toggle("Enabled", isOn: $job.enabled)
-                    Text("Each run is a fresh session of \(agent?.name ?? "the agent")'s\(agent.map { " on \(model.jobs.runSettings(of: job, agent: $0).settings.account.name)" } ?? ""), with its identity, instructions and memory, in its workspace, as a new task beside its Home conversation, which it never uses. Findings and failures appear in Home with Open Run; a run that ends with nothing to report stays in the job's history and its task.")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             .formStyle(.grouped)
@@ -211,24 +213,17 @@ private struct RunsOnRows: View {
                                                        catalog: model.nativeModels(for: shown)) }, inForm: true)
             // There's no choosing a model for an account BotChu can't run.
             .disabled(unavailable?.isAccount ?? false)
-        Group {
-            if let unavailable {
-                Label {
-                    Text(unavailable.explanation(agent: agent.name) + " Choose another \(unavailable.isAccount ? "account" : "model"), or Same as \(agent.name).")
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                }
-                .foregroundStyle(.orange)
-            } else if job.runsOn == nil {
-                Text("Runs use \(agent.name)'s account, model and effort, as they are when each starts. Choose others here for this job alone.")
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Runs use these, whatever \(agent.name) uses. Same as \(agent.name) goes back to the agent's.")
-                    .foregroundStyle(.secondary)
+        // Only why the runs can't use the choice: the Account picker's Same as row says the rest (#232).
+        if let unavailable {
+            Label {
+                Text(unavailable.explanation(agent: agent.name) + " Choose another \(unavailable.isAccount ? "account" : "model"), or Same as \(agent.name).")
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
             }
+            .foregroundStyle(.orange)
+            .font(.caption)
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .font(.caption)
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// The job's account, nil for its agent's. Only an account BotChu offers can be chosen: choosing

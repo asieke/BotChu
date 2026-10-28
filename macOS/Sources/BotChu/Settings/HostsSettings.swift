@@ -109,11 +109,25 @@ struct HostEditor: View {
                         .font(.system(.body, design: .monospaced))
                     TextField("Repositories folder", text: $host.reposFolder, prompt: Text("~/apps"))
                         .font(.system(.body, design: .monospaced))
-                    TextField("Machine name", text: $host.machine, prompt: Text(SSHHost.machineName(destination: host.destination)))
-                        .font(.system(.body, design: .monospaced))
-                } footer: {
-                    Text("The machine name is what PROJECT.md's deploy calls this computer (local:<machine>:<path>); Test reads it from the host.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    LabeledContent("Machine name") {
+                        HStack {
+                            TextField("Machine name", text: $host.machine, prompt: Text(SSHHost.machineName(destination: host.destination)))
+                                .labelsHidden()
+                                .font(.system(.body, design: .monospaced))
+                            Button("Read from Host") { test(readingName: true) }
+                                .disabled(SSHHost.destinationProblem(host.destination) != nil || testing)
+                                .help("Connect and use the name the host gives itself")
+                        }
+                    }
+                    // As PROJECT.md's deploy names a project there (#232).
+                    LabeledContent("Deploy target") {
+                        Text(verbatim: host.deployExample)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                    }
                 }
                 Section {
                     ForEach(model.settings.accounts) { account in
@@ -129,23 +143,21 @@ struct HostEditor: View {
                     }
                 } header: {
                     Text("Commands there")
-                } footer: {
-                    Text("Each account's CLI on this host, run through its user's login shell. Leave one empty to use the same command as on this Mac.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
                     HStack {
-                        Button("Test Connection", action: test)
+                        Button("Test Connection") { test(readingName: false) }
                             .disabled(SSHHost.destinationProblem(host.destination) != nil || testing)
                         if testing { ProgressView().controlSize(.small) }
                         Spacer()
                     }
                 } footer: {
+                    // Only what a test found, or why the host can't be saved yet (#232).
                     Group {
                         switch tested {
                         case .success(let name)?: Text("Reached \(name).").foregroundStyle(.green)
                         case .failure(let failure)?: Text(failure.message).foregroundStyle(.red).textSelection(.enabled)
-                        case nil: Text(problem ?? "BotChu connects with ssh, as you would in Terminal, without asking for a password.")
+                        case nil: if let problem { Text(problem) }
                         }
                     }
                     .font(.caption).foregroundStyle(.secondary)
@@ -176,7 +188,9 @@ struct HostEditor: View {
         return nil
     }
 
-    private func test() {
+    /// Connects and reads the host's name, which fills an empty Machine name, or replaces it when
+    /// `readingName` (Read from Host).
+    private func test(readingName: Bool) {
         testing = true
         tested = nil
         let machine = Machine(destination: host.destination.trimmingCharacters(in: .whitespaces))
@@ -184,7 +198,7 @@ struct HostEditor: View {
             let result = await machine.machineName()
             testing = false
             tested = result
-            if case .success(let name) = result, host.machine.trimmingCharacters(in: .whitespaces).isEmpty { host.machine = name }
+            if case .success(let name) = result, readingName || host.machine.trimmingCharacters(in: .whitespaces).isEmpty { host.machine = name }
         }
     }
 
