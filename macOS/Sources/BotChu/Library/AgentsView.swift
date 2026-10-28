@@ -12,7 +12,7 @@ struct AgentsView: View {
     var body: some View {
         let groups = Self.groups(in: model, matching: query)
         VStack(alignment: .leading, spacing: 0) {
-            LibraryHeading(title: "Agents", subtitle: "Choose who you work with. Each bot keeps its own memory and personality.", count: model.bots.count) {
+            LibraryHeading(title: "Agents", count: model.bots.count) {
                 Button { model.newBot() } label: { Label("New Agent", systemImage: "plus") }.buttonStyle(.borderedProminent)
             }
             LibrarySearch(text: $query, prompt: "Search agents and sections").padding(.horizontal, 24).padding(.bottom, 16)
@@ -80,8 +80,6 @@ struct AgentSectionHeading: View {
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .help("Rename, move or remove \(name)")
                     .accessibilityLabel("\(name) section actions")
-            } else {
-                Text("Not in a section").font(.callout).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }

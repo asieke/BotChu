@@ -150,12 +150,6 @@ struct ProjectOverviewTab: View {
                         Text(metadata?.deploy ?? "—").truncationMode(.middle).textSelection(.enabled).help(metadata?.deploy ?? "")
                     }
                 }
-                if let record, !record.exists {
-                    Text("No PROJECT.md yet. Add a project record to describe its type and deployment.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
             InspectorSection("Workspace", preferenceKey: "project.workspace") {
                 InspectorCard {
@@ -177,9 +171,15 @@ struct ProjectOverviewTab: View {
                 }
             }
             VStack(alignment: .leading, spacing: 8) {
-                BotMenu(title: "Start Task with", systemImage: "plus") { model.newTask(for: $0, repo: repo.id) }
-                    .buttonStyle(InspectorButtonStyle(prominent: true, fill: true))
-                    .help("Choose an agent, then what it works on, in New Task")
+                // With no agent to start a task, the action makes one (#232).
+                if model.bots.contains(where: { !$0.isRemoteQueue }) {
+                    BotMenu(title: "Start Task with", systemImage: "plus") { model.newTask(for: $0, repo: repo.id) }
+                        .buttonStyle(InspectorButtonStyle(prominent: true, fill: true))
+                        .help("Choose an agent, then what it works on, in New Task")
+                } else {
+                    Button { model.newBot() } label: { Label("New Agent…", systemImage: "plus") }
+                        .buttonStyle(InspectorButtonStyle(prominent: true, fill: true))
+                }
                 HStack(spacing: 8) {
                     Button(record?.exists == true ? "Edit Metadata…" : "Add Metadata…") {
                         if let record, let metadata { editor = ProjectEditRequest(record: record, metadata: metadata) }
@@ -188,9 +188,6 @@ struct ProjectOverviewTab: View {
                     Button("Open on GitHub") { NSWorkspace.shared.open(repo.webURL) }
                 }
                 .buttonStyle(InspectorButtonStyle(fill: true))
-                if !model.bots.contains(where: { !$0.isRemoteQueue }) {
-                    Text("Create an agent to work on this project.").font(.system(size: 11)).foregroundStyle(Palette.secondaryText)
-                }
             }
         }
         .sheet(item: $editor) { request in

@@ -50,7 +50,7 @@ struct ProjectsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            LibraryHeading(title: "Projects", subtitle: "Your repositories, their open pull requests and issues, and where they work.",
+            LibraryHeading(title: "Projects",
                            count: model.repositories == nil ? nil : scope == .repositories ? rows.count : allRows.filter(projectScope.includes).count) {
                 if loading { ProgressView().controlSize(.small) }
                 TimelineView(.everyMinute) { context in
@@ -192,7 +192,7 @@ struct ProjectsView: View {
                 } description: {
                     // The search covers only what was read; say so when that isn't everything.
                     Text("Nothing open matches the search\(work.repo.map { " in \(TaskNaming.repoName($0))" } ?? "")."
-                         + (truncation(work).map { "\n\n" + $0 } ?? ""))
+                         + (work.shownOfOpen.map { "\n\nSearched the \($0.shown) most recent of \($0.open)." } ?? ""))
                 } actions: {
                     Button("Show All") { query = ""; repoFilter = nil }
                 }
@@ -209,17 +209,28 @@ struct ProjectsView: View {
             }
         } else {
             WorkTable(items: work.items, pulls: pulls)
-            if let note = truncation(work) {
-                Text(note).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 24).padding(.vertical, 8)
-            }
+            if let counts = work.shownOfOpen { truncationBar(work, shown: counts.shown, open: counts.open) }
         }
     }
 
-    /// The repositories shown with more open pull requests or issues than were read, when any are.
-    private func truncation(_ work: ProjectWork) -> String? {
-        let cut = work.truncated
-        guard !cut.isEmpty else { return nil }
-        return "Showing the most recently updated \(work.pulls ? "pull requests" : "issues") of \(cut.map(\.name).joined(separator: ", ")). Open \(cut.count == 1 ? "it" : "them") on GitHub for the rest."
+    /// Under the table when GitHub has more open than were read (#232): how many of how many, and
+    /// the rest on GitHub, a link for each repository cut short.
+    private func truncationBar(_ work: ProjectWork, shown: Int, open: Int) -> some View {
+        HStack(spacing: 6) {
+            Text("Showing \(shown) most recent of \(open)")
+            ForEach(work.truncated) { repo in
+                Text("·").foregroundStyle(.tertiary)
+                Link(destination: work.githubURL(of: repo)) {
+                    Text(work.truncated.count == 1 ? "Open on GitHub ↗" : "\(repo.name) on GitHub ↗")
+                }
+                .help("Open \(repo.nameWithOwner)’s open \(work.pulls ? "pull requests" : "issues") on GitHub")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 8)
     }
 
     private func projectCard(_ row: ProjectRow, selected: Bool) -> some View {
@@ -592,10 +603,18 @@ struct ProjectMetadataEditor: View {
     let repo: GitHubLookup.Repo
     let original: ProjectRecord
     @State var metadata: ProjectMetadata
+    /// The deploy field as pickers (#232), read from `metadata.deploy` once Settings is known.
+    @State private var deploy: DeployForm?
     @State private var saving = false
     @State private var failure: String?
     @State private var publication: ProjectGitHub.Publication?
-    private var changedText: String? { try? original.updating(metadata) }
+    /// The metadata as edited, its deploy from the pickers.
+    private var edited: ProjectMetadata {
+        var edited = metadata
+        if let deploy { edited.deploy = deploy.value }
+        return edited
+    }
+    private var changedText: String? { try? original.updating(edited) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -607,23 +626,25 @@ struct ProjectMetadataEditor: View {
                 Spacer()
             }.padding(20)
             Form {
-                TextField("Name", text: $metadata.name)
-                Picker("Type", selection: $metadata.kind) { ForEach(ProjectMetadata.Kind.allCases, id: \.self) { Text($0.label).tag($0) } }
-                Picker("Status", selection: $metadata.status) { ForEach(ProjectMetadata.Status.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) } }
-                TextField("Deploy", text: $metadata.deploy)
-                Picker("Who merges PRs", selection: $metadata.merge) { Text("Owner").tag("owner"); Text("Agent").tag("agent") }
-                Text("Deployment tells BotChu where this project lives, such as local:my-mac:~/apps/project or vercel:project. Workspace overrides remain available in New Task.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if let problem = metadata.problem { Text(problem).font(.caption).foregroundStyle(.orange) }
+                Section {
+                    TextField("Name", text: $metadata.name)
+                    Picker("Type", selection: $metadata.kind) { ForEach(ProjectMetadata.Kind.allCases, id: \.self) { Text($0.label).tag($0) } }
+                    Picker("Status", selection: $metadata.status) { ForEach(ProjectMetadata.Status.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) } }
+                    Picker("Who merges PRs", selection: $metadata.merge) { Text("Owner").tag("owner"); Text("Agent").tag("agent") }
+                }
+                Section {
+                    if let form = Binding($deploy) {
+                        DeployTargetRows(form: form, hosts: model.settings.hosts)
+                    }
+                } footer: {
+                    if let problem = edited.problem { Text(problem).font(.caption).foregroundStyle(.orange) }
+                }
             }.formStyle(.grouped).disabled(saving || publication != nil)
             VStack(alignment: .leading, spacing: 10) {
                 if let url = publication?.url {
                     Label("Metadata pull request opened", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                     Link("Review pull request on GitHub", destination: url)
-                    Text("The project updates after this PR merges and you refresh Projects.").font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text("Creates a PR changing only PROJECT.md. No clone or test run. Your repository’s merge requirements still apply.")
-                        .font(.caption).foregroundStyle(.secondary)
                     if let failure { Text(failure).font(.callout).foregroundStyle(.red) }
                     if let branch = publication?.branch {
                         Link("View saved branch", destination: URL(string: "https://github.com/\(repo.id)/tree/\(branch)")!)
@@ -635,11 +656,17 @@ struct ProjectMetadataEditor: View {
                     if publication?.url == nil {
                         Button(saving ? "Opening PR…" : publication == nil ? "Create Metadata PR" : "Retry") { Task { await save() } }
                             .buttonStyle(.borderedProminent)
-                            .disabled(saving || metadata.problem != nil || changedText == nil || changedText == original.text)
+                            .disabled(saving || edited.problem != nil || changedText == nil || changedText == original.text)
                     }
                 }
             }.padding(20)
         }.frame(width: 580, height: 590).background(Color(nsColor: .windowBackgroundColor)).interactiveDismissDisabled(saving)
+        // Read again once this Mac's name is known, as long as nothing in it was changed.
+        .task(id: model.settings.thisMacName) {
+            if deploy.map({ $0.value == metadata.deploy }) ?? true {
+                deploy = DeployForm(deploy: metadata.deploy, thisMac: model.settings.thisMacName, hosts: model.settings.hosts.map(\.machine))
+            }
+        }
     }
 
     private func save() async {
@@ -651,5 +678,76 @@ struct ProjectMetadataEditor: View {
             publication = result
             failure = result.problem
         } catch { failure = error.localizedDescription }
+    }
+}
+
+/// PROJECT.md's deploy targets as pickers (#232): None or the first target's kind, its folder or
+/// name, then any others, each removable, and Add Target. A host is chosen from Settings ▸ Hosts by
+/// its machine name, which stays a choice when the file names one Settings doesn't have.
+private struct DeployTargetRows: View {
+    @Binding var form: DeployForm
+    let hosts: [SSHHost]
+
+    var body: some View {
+        Picker("Deploy", selection: $form.first) {
+            Text("None").tag(DeployForm.Kind?.none)
+            Divider()
+            ForEach(DeployForm.Kind.allCases) { kind in Text(kind.label).tag(DeployForm.Kind?.some(kind)) }
+        }
+        ForEach(form.targets) { target in
+            if target.id != form.targets.first?.id {
+                HStack {
+                    Picker("Also deploy to", selection: kind(of: target.id)) {
+                        ForEach(DeployForm.Kind.allCases) { kind in Text(kind.label).tag(kind) }
+                    }
+                    Button { form.remove(target.id) } label: { Image(systemName: "minus.circle") }
+                        .buttonStyle(.borderless)
+                        .help("Remove this target")
+                        .accessibilityLabel("Remove \(target.kind.label) target")
+                }
+            }
+            fields(target)
+        }
+        if !form.targets.isEmpty {
+            Button { form.add() } label: { Label("Add Target", systemImage: "plus") }
+        }
+    }
+
+    @ViewBuilder private func fields(_ target: DeployForm.Target) -> some View {
+        switch target.kind {
+        case .thisMac:
+            TextField("Folder", text: field(target.id, \.path), prompt: Text("~/apps/project"))
+                .font(.system(.body, design: .monospaced))
+        case .host:
+            let machines = hosts.map(\.machine).filter { !$0.isEmpty }
+            if machines.isEmpty {
+                TextField("Machine", text: field(target.id, \.machine), prompt: Text("omarchy-1"))
+                    .font(.system(.body, design: .monospaced))
+            } else {
+                Picker("Host", selection: field(target.id, \.machine)) {
+                    ForEach(hosts.filter { !$0.machine.isEmpty }) { host in Text("\(host.nickname) · \(host.machine)").tag(host.machine) }
+                    if !machines.contains(target.machine) { Text(target.machine.isEmpty ? "None" : target.machine).tag(target.machine) }
+                }
+            }
+            TextField("Folder", text: field(target.id, \.path), prompt: Text("~/apps/project"))
+                .font(.system(.body, design: .monospaced))
+        case .vercel:
+            TextField("Vercel project", text: field(target.id, \.name), prompt: Text("project"))
+        case .registry:
+            TextField("Package", text: field(target.id, \.name), prompt: Text("name"))
+        case .custom:
+            TextField("Target", text: field(target.id, \.name), prompt: Text("kind:value"))
+                .font(.system(.body, design: .monospaced))
+        }
+    }
+
+    private func kind(of id: DeployForm.Target.ID) -> Binding<DeployForm.Kind> {
+        Binding(get: { form.targets.first { $0.id == id }?.kind ?? .custom }, set: { form.change(id, to: $0) })
+    }
+
+    private func field(_ id: DeployForm.Target.ID, _ key: WritableKeyPath<DeployForm.Target, String>) -> Binding<String> {
+        Binding(get: { form.targets.first { $0.id == id }?[keyPath: key] ?? "" }, set: { value in
+            if let i = form.targets.firstIndex(where: { $0.id == id }) { form.targets[i][keyPath: key] = value }
+        })
     }
 }
