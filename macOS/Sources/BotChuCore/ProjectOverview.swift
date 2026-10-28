@@ -369,6 +369,22 @@ public struct ProjectWork: Equatable, Sendable {
     public var truncated: [GitHubLookup.Repo]
     /// How many read are left out by the scope alone, before the repository and search.
     public var outOfScope: Int
+    /// How many of this kind were read for each repository in scope, by lowercased name.
+    private var read: [String: Int]
+
+    /// Of the repositories shown with more open than were read, how many were read and how many
+    /// GitHub counts open, as the footer under Projects' table says it (#232), or nil when nothing
+    /// shown was left unread.
+    public var shownOfOpen: (shown: Int, open: Int)? {
+        guard !truncated.isEmpty else { return nil }
+        return (truncated.reduce(0) { $0 + (read[$1.id.lowercased()] ?? 0) },
+                truncated.reduce(0) { $0 + (pulls ? $1.openPullRequests : $1.openIssues) })
+    }
+
+    /// A repository's open pull requests or issues on GitHub, for the rest of them.
+    public func githubURL(of repo: GitHubLookup.Repo) -> URL {
+        URL(string: "https://github.com/\(repo.nameWithOwner)/\(pulls ? "pulls" : "issues")")!
+    }
 
     public init(rows: [ProjectRow], items: [GitHubLookup.OpenItem], scope: ProjectScope, pulls: Bool, repo chosen: String?, query: String) {
         let eligible = rows.filter(scope.includes)
@@ -384,6 +400,7 @@ public struct ProjectWork: Equatable, Sendable {
         let names = (inScope.map(\.repo) + [repo].compactMap { $0 }).filter { seen.insert($0.lowercased()).inserted }
         self.repos = names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         let read = Dictionary(grouping: inScope, by: { $0.repo.lowercased() }).mapValues(\.count)
+        self.read = read
         self.truncated = eligible.map(\.repo).filter { row in
             (repo == nil || row.id == repo) && (pulls ? row.openPullRequests : row.openIssues) > (read[row.id.lowercased()] ?? 0)
         }

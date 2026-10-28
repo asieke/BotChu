@@ -45,6 +45,13 @@ private struct FakeGH {
     func attached(_ name: String) -> Data? { try? Data(contentsOf: folder.appendingPathComponent("attached-" + name)) }
 }
 
+/// The titles and bodies a stand-in filer was given, in order.
+private actor Filed {
+    private(set) var titles: [String] = []
+    private(set) var bodies: [String] = []
+    func add(_ title: String, _ body: String) { titles.append(title); bodies.append(body) }
+}
+
 @Suite struct IssueReportTests {
     @Test func titleIsTheFirstLineOrSentenceCutAtAWord() {
         #expect(IssueReport.title(from: "The sidebar flickers when a task starts.\n\nSteps: open a bot.") == "The sidebar flickers when a task starts")
@@ -115,6 +122,35 @@ private struct FakeGH {
         #expect(await IssueFiler(gh: gh.path).file(report, snapshot: snapshot) == .filed(URL(string: "https://github.com/asieke/BotChu/issues/4242")))
         #expect(gh.arguments == ["issue", "create", "--repo", "asieke/BotChu", "--title=Projects never finish loading", "--body-file", "-"])
         #expect(gh.body == IssueReport.body(report: report, snapshot: snapshot))
+    }
+
+    /// The sheet's Title field (#232): a typed title is the issue's, on one line; left empty, the
+    /// report's first line still names it. The header says who sees what goes with it.
+    @Test func aTypedTitleNamesTheIssueAndTheHeaderSaysWhatIsPublic() async {
+        let report = "Projects never finish loading.\n\nThe spinner keeps going."
+        #expect(IssueReport.title(typed: "", report: report) == "Projects never finish loading")
+        #expect(IssueReport.title(typed: "  \n ", report: report) == "Projects never finish loading")
+        #expect(IssueReport.title(typed: "  Spinner\nnever   stops ", report: report) == "Spinner never stops")
+        let long = IssueReport.title(typed: String(repeating: "word ", count: 80), report: report)
+        #expect(long.count <= IssueReport.typedTitleLimit && long.hasSuffix("…"))
+
+        let snapshot = IssueSnapshot(info: nil, screen: .projects, bots: 1, runningTurns: 0)
+        let filed = Filed()
+        let filer = IssueFiler { title, body, _ in
+            await filed.add(title, body)
+            return .filed(nil)
+        }
+        #expect(await filer.file(report, title: "Spinner never stops", snapshot: snapshot) == .filed(nil))
+        #expect(await filer.file(report, title: " ", snapshot: snapshot) == .filed(nil))
+        #expect(await filed.titles == ["Spinner never stops", "Projects never finish loading"])
+        let bodies = await filed.bodies
+        #expect(bodies == Array(repeating: IssueReport.body(report: report, snapshot: snapshot), count: 2), "The title isn't added to the body")
+        #expect(IssueReport.arguments(title: "Spinner never stops").contains("--title=Spinner never stops"))
+
+        #expect(IssueReport.visibility(screenshot: true, images: 0) == "Public issue with screenshot")
+        #expect(IssueReport.visibility(screenshot: true, images: 2) == "Public issue with screenshot and 2 images")
+        #expect(IssueReport.visibility(screenshot: false, images: 1) == "Public issue with 1 image")
+        #expect(IssueReport.visibility(screenshot: false, images: 0) == "Public issue")
     }
 
     @Test func attachesImagesFromAFolderThatGoesAfterwards() async throws {

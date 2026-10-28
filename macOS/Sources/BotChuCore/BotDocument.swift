@@ -47,6 +47,30 @@ public enum SharedDocument: String, CaseIterable, Identifiable, Sendable {
     public var seed: String { self == .team ? "" : BotContext.seedSharedMemory }
 }
 
+/// Whether the editor of one of a bot's own files offers Save & Start New Session (#232), which saves
+/// the file and then starts a new CLI session in the one conversation the owner has selected, so it
+/// reads the file now rather than at its next new session. Only for a conversation of that bot that
+/// runs on this Mac and has a session to start over; while a turn or delegated work runs there it
+/// waits, since it never interrupts a run. Other conversations, other bots and the files every bot
+/// shares are left to their next new session.
+public enum DocumentSessionRestart: Equatable, Sendable {
+    /// Not offered.
+    case unavailable
+    /// Offered, held back until the conversation is idle.
+    case waiting
+    case ready
+
+    /// - Parameters:
+    ///   - selected: the conversation is the bot's, and the one shown in the window.
+    ///   - local: a local CLI bot's conversation on this Mac: not a remote queue bot, nor a task on a host.
+    ///   - hasSession: its next turn would resume a CLI session.
+    ///   - running: a turn, or work it delegated, is under way there.
+    public init(selected: Bool, local: Bool, hasSession: Bool, running: Bool) {
+        guard selected, local, hasSession else { self = .unavailable; return }
+        self = running ? .waiting : .ready
+    }
+}
+
 /// A draft keeps its original contents so saving cannot silently overwrite an agent's newer notes.
 public struct BotDocumentDraft {
     public let url: URL
@@ -73,6 +97,13 @@ public struct BotDocumentDraft {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try text.write(to: url, atomically: true, encoding: .utf8)
         original = text
+    }
+
+    /// Saves, then, only once the file is saved, does `then`: Save & Start New Session's restart
+    /// (#232), which a save that fails never reaches.
+    public mutating func save(then: () -> Void) throws {
+        try save()
+        then()
     }
 
     private static func read(_ url: URL) throws -> String? {
