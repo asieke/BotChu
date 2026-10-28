@@ -48,6 +48,25 @@ import Testing
         #expect(UsageRequest(account: fresh, command: "pi", openRouterKeyRevision: 7).credentialRevision == 0)
     }
 
+    @Test func allowanceNeverReadsMacCredentialsForRemoteOrOtherBackends() async {
+        let account = Accounts.account(id: "openrouter")
+        let legacy = UsageRequest(account: account, command: "pi", openRouterKeyRevision: 7)
+        let radius = UsageRequest(account: account, command: "pi", openRouterKeyRevision: 7, providerID: "radius")
+        let remote = UsageRequest(account: account, command: "must-not-run", openRouterKeyRevision: 7, remote: true)
+        #expect(legacy.usesLegacyOpenRouterKey && legacy.credentialRevision == 7)
+        #expect(!radius.usesLegacyOpenRouterKey && radius.credentialRevision == 0)
+        #expect(!remote.usesLegacyOpenRouterKey && remote.credentialRevision == 0)
+        #expect(legacy != radius && legacy != remote)
+        for request in [radius, remote] {
+            do {
+                _ = try await ProviderUsageClient.read(request, openRouterKey: "must-not-use")
+                Issue.record("A scoped-out allowance must not make a request")
+            } catch let failure as UsageFailure {
+                #expect(failure.message.contains(request.remote == true ? "host" : "Pi manages"))
+            } catch { Issue.record("Expected a plain unavailable allowance reason") }
+        }
+    }
+
     @Test func providerChangeResetsSessionAndSelectionButSameProviderKeepsThem() {
         var bot = Bot(name: "Pi", accountID: "openrouter", model: "vendor/model", reasoningEffort: .high,
                       workspace: "/tmp/pi", sessionID: "saved", sessionAccountID: "openrouter")

@@ -408,6 +408,15 @@ final class AppModel {
         UsageRequest(account: account, command: settings.command(for: account), openRouterKeyRevision: settings.usageCredentialRevision)
     }
 
+    /// A conversation's allowance follows its selected backend and host, never another login.
+    func usageRequest(for run: any RunSettings) -> UsageRequest {
+        let task = run as? BotTask
+        let remote = task?.isRemote == true || (run as? SubagentRun)?.hostID != nil
+        let command = remote ? "" : settings.command(for: run.account)
+        return UsageRequest(account: run.account, command: command, openRouterKeyRevision: settings.usageCredentialRevision,
+                            providerID: run.resolvedProvider, remote: remote)
+    }
+
     /// Every profile's usage request.
     var usageRequests: [UsageRequest] { settings.accounts.map(usageRequest) }
 

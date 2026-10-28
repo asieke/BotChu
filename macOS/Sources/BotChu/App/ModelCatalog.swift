@@ -133,6 +133,7 @@ extension AppModel {
             return ModelCatalogScope(accountID: settings.accountID, command: settings.runtimeAdapter.command(local: "", host: host.command(for: settings.account), remote: true),
                 kind: settings.account.kind, machine: Machine(destination: host.destination), folder: task.folder ?? "~")
         }
+        if (settings as? SubagentRun)?.hostID != nil { return nil }
         return modelCatalogScope(for: settings.account)
     }
 

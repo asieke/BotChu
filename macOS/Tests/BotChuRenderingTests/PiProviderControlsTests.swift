@@ -47,6 +47,23 @@ extension RenderingTests {
         app.storage.wait(timeout: 5)
         #expect(home.loadBot()?.provider == "moonshotai")
         #expect(keyReads == 0)
+        let backendRequest = app.usageRequest(for: bot)
+        #expect(!backendRequest.usesLegacyOpenRouterKey)
+        task.hostID = UUID()
+        let remoteRequest = app.usageRequest(for: task)
+        #expect(remoteRequest.remote == true && remoteRequest.command.isEmpty)
+        #expect(!remoteRequest.usesLegacyOpenRouterKey)
+        await app.usageBoard.refresh(remoteRequest, usage: app.usage, openRouterKey: app.openRouterKey)
+        #expect(keyReads == 0)
+
+        // Bot model/effort edits apply to the next turn; provider changes wait for this one.
+        app.runStates[target] = RunState()
+        app.setProvider("openrouter", for: target)
+        #expect(app.bot(bot.id)?.resolvedProvider == "moonshotai")
+        app.setModel("kimi-k3", ofBot: bot.id)
+        app.setReasoningEffort(.high, ofBot: bot.id)
+        #expect(app.bot(bot.id)?.reasoningEffort == .high)
+        app.runStates[target] = nil
 
         // The same provider control is used in composer, inspector, editor and job form.
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 180),

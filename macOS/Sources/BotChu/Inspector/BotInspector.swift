@@ -36,7 +36,7 @@ struct BotInspector: View {
                     InspectorSection("Runs on") {
                         RunsOnCard(settings: bot, target: .home(botID))
                     }
-                    let usageRequest = model.usageRequest(for: bot.account)
+                    let usageRequest = model.usageRequest(for: bot)
                     AccountUsageSection(request: usageRequest, isRunning: model.isRunning(.home(botID)))
                         .id(usageRequest)
                     ConnectorsSection(target: .home(botID))

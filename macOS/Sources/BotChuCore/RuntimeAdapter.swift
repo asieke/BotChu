@@ -10,6 +10,9 @@ public protocol RuntimeAdapter: Sendable {
     func resolvedProvider(_ selection: String?) -> String?
     func usesLegacyOpenRouterKey(account: Account, provider: String?) -> Bool
     func sessionsArePortable(from: String?, to: String?) -> Bool
+    func effectiveModel(_ model: String, provider: String?, openRouterDefault: String, sailDefault: String) -> String
+    func invocation(for settings: any RunSettings, prompt: String, model: String, sessionID: String?, remote: Bool,
+                    openRouterKey: String?, sailKey: String?, liveInput: Bool) -> Invocation
     func readiness(command: String, provider: String?, model: String, machine: Machine, folder: String,
                    environment: [String: String]) async -> String?
 }
@@ -23,6 +26,16 @@ extension RuntimeAdapter {
     public func resolvedProvider(_ selection: String?) -> String? { nil }
     public func usesLegacyOpenRouterKey(account: Account, provider: String?) -> Bool { false }
     public func sessionsArePortable(from: String?, to: String?) -> Bool { from == to }
+    public func effectiveModel(_ model: String, provider: String?, openRouterDefault: String, sailDefault: String) -> String {
+        GenerationOptions.effectiveModel(model, kind: kind, openRouterDefault: openRouterDefault, sailDefault: sailDefault)
+    }
+    public func invocation(for settings: any RunSettings, prompt: String, model: String, sessionID: String?, remote: Bool,
+                           openRouterKey: String?, sailKey: String?, liveInput: Bool) -> Invocation {
+        CommandBuilder.invocation(kind: kind, prompt: prompt, model: model, sessionID: sessionID,
+            reasoningEffort: settings.reasoningEffort, fast: settings.fastMode == true, provider: resolvedProvider(settings.provider),
+            openRouterKey: !remote && usesLegacyOpenRouterKey(account: settings.account, provider: settings.provider) ? openRouterKey : nil,
+            sailKey: remote ? nil : sailKey, liveInput: liveInput)
+    }
     public func readiness(command: String, provider: String?, model: String, machine: Machine, folder: String,
                           environment: [String: String]) async -> String? { nil }
 
@@ -76,18 +89,15 @@ extension RunSettings {
     }
 
     public func effectiveModel(openRouterDefault: String, sailDefault: String = "") -> String {
-        if runtimeAdapter.offersProviders, resolvedProvider != "openrouter" { return model.trimmingCharacters(in: .whitespacesAndNewlines) }
-        return GenerationOptions.effectiveModel(model, kind: account.kind, openRouterDefault: openRouterDefault, sailDefault: sailDefault)
+        runtimeAdapter.effectiveModel(model, provider: provider, openRouterDefault: openRouterDefault, sailDefault: sailDefault)
     }
 
     /// The same launch policy for Home, task, job and delegated turns. A key supplied by a caller
     /// can never cross profile ownership or SSH boundaries, even if the caller passes one in error.
     public func invocation(prompt: String, model: String, sessionID: String?, remote: Bool = false,
                            openRouterKey: String? = nil, sailKey: String? = nil, liveInput: Bool = false) -> Invocation {
-        CommandBuilder.invocation(kind: account.kind, prompt: prompt, model: model, sessionID: sessionID,
-            reasoningEffort: reasoningEffort, fast: fastMode == true, provider: resolvedProvider,
-            openRouterKey: usesLegacyOpenRouterKey(remote: remote) ? openRouterKey : nil,
-            sailKey: remote ? nil : sailKey, liveInput: liveInput)
+        runtimeAdapter.invocation(for: self, prompt: prompt, model: model, sessionID: sessionID, remote: remote,
+                                  openRouterKey: openRouterKey, sailKey: sailKey, liveInput: liveInput)
     }
 }
 
@@ -99,6 +109,10 @@ public struct PiRuntimeAdapter: RuntimeAdapter {
     }
     public func command(local: String, host: String?, remote: Bool) -> String { remote ? host ?? "pi" : local }
     public func resolvedProvider(_ selection: String?) -> String? { selection ?? "openrouter" }
+    public func effectiveModel(_ model: String, provider: String?, openRouterDefault: String, sailDefault: String) -> String {
+        guard resolvedProvider(provider) == "openrouter" else { return model.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return GenerationOptions.effectiveModel(model, kind: kind, openRouterDefault: openRouterDefault, sailDefault: sailDefault)
+    }
     public func usesLegacyOpenRouterKey(account: Account, provider: String?) -> Bool {
         account.credentialOwnership != .runtime && resolvedProvider(provider) == "openrouter"
     }
