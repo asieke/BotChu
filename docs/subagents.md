@@ -147,9 +147,18 @@ A Tasks list (`botchu-task list --mine`) is a request with `"kind": "taskList"`;
 the rows and the text the helper prints, and the helper removes it once read.
 The app namespace survives relaunch. Isolated tests and development runs use their own data root.
 
+Local mailboxes watch their request directory before the initial scan, then drain bounded
+batches on filesystem notifications. A parent-directory watch re-arms a replaced request
+directory; a recovery scan every 4.5 seconds covers missed notifications and retries failed
+reads or acknowledgments. Idle callers scan fourteen times per minute including the initial
+scan. Their two-second heartbeats and changed status writes run independently of request
+handling, so a slow admission does not delay either. Completion drains pending Inbox deliveries
+after any in-flight receive finishes, then releases the watches and closes the heartbeat.
+
 SSH mailbox polling uses an independent connection through the existing ControlMaster, so a
-provider that buffers a shell tool's output cannot block delivery. Mailboxes are polled off the
-main thread, and on a host a poll refreshes the heartbeat in the same round trip. Remote filesystem operations
+provider that buffers a shell tool's output cannot block delivery. All mailbox scans run off the
+main thread; on a host the existing 750 ms poll refreshes the heartbeat in the same round trip
+when due. Remote filesystem operations
 have bounded requests, timeouts and cancellation; results go through stdin to avoid argument-size
 limits. Only the exact delegation environment keys cross SSH. The OpenRouter key and the local
 provider environment stay on this Mac; remote children use the host's own account commands and
@@ -157,6 +166,13 @@ credentials. No CLI parser or provider-specific output marker is required.
 
 The inspector's Clear action removes a completed run and its completed descendants from history;
 it does not erase already-returned handoff files or undo delegated changes.
+
+To compare local pickup with the previous 250 ms polling loop, run the Core benchmark with
+`BOTCHU_MAILBOX_BENCHMARK=/tmp/mailbox.txt swift test --package-path macOS --filter mailboxPickupBenchmark`.
+It publishes 64 atomic requests at the same deterministic spacing for each path and records
+scan/wakeup counts, p50/p95 handler latency, and recovery with notifications deliberately lost.
+`MailboxPollTests` also replays a simulated minute with twelve idle callers and independent
+heartbeats. Timing measurements are opt-in and do not impose load-dependent test assertions.
 
 ## Verification
 

@@ -1438,7 +1438,9 @@ on that pull request's branch to continue in instead). The same command run agai
     main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
     `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (each run's transcript and record saved in
     a lane of its own, off the main thread, while they stream and at their start and end), `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
-    handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation. A Task
+    handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.
+    `LocalMailboxWatcher.swift` wakes local request scans on directory changes, with a recovery
+    scan every 4.5 seconds; heartbeats and changed statuses are delivered independently. A Task
     handed to another bot (`botchu-task create`, the same helper under a second name) goes through
     the same mailbox; `TaskHandoff.swift` reads and checks the request, recognizes it when asked
     again, and holds what is written back; `TaskList.swift` does the same for `botchu-task list --mine`. A delivery to the Inbox (`botchu-inbox send`) goes through
