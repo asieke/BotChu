@@ -451,6 +451,20 @@ private typealias S = SailSamples
         let kept = try #require(try harness.store.load("s9")?.pending)
         #expect(kept.idempotencyKey == "key-1")
         #expect(kept.responseID == nil)
+
+        // A 2xx Sail may have acted on, whose body can't be read, isn't a refusal: the next run
+        // sends it again with its key, so Sail returns that submission instead of starting another.
+        let garbled = SailFixture([("POST", "/v1/responses", .http(202, "<html>gateway</html>"))])
+        #expect(!(await harness.run(garbled, SailAgent.Turn(sessionID: "s10", resume: false, model: S.model, prompt: "Go"))))
+        let uncertain = try #require(try harness.store.load("s10")?.pending)
+        #expect(uncertain.responseID == nil)
+        let again = SailFixture([
+            ("POST", "/v1/responses", .ok(S.response("resp_1", "completed", output: "[\(S.message("Went."))]"))),
+            ("POST", "/v1/responses", .ok(S.response("resp_2", "completed", output: "[\(S.message("Again."))]"))),
+        ])
+        #expect(await harness.run(again, SailAgent.Turn(sessionID: "s10", resume: true, model: S.model, prompt: "Again")))
+        #expect(again.requests.first?.value(forHTTPHeaderField: "Idempotency-Key") == uncertain.idempotencyKey)
+        #expect(again.bodies.first == uncertain.body)
     }
 
     @Test func stoppingLeavesTheResponseAtSailAndSaysSo() async throws {

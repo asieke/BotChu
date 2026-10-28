@@ -280,8 +280,9 @@ public struct SailAgent: Sendable {
                         emit(.flex(row: row, detail: "Submitting to Sail Flex · \(model) · trying again in \(Self.duration(wait)) after \(reason)", state: .waiting))
                     }
                 }
-            } catch let failure as SailFailure where failure.kind != .unavailable {
-                // Refused outright: nothing is running at Sail.
+            } catch let failure as SailFailure where failure.kind != .unavailable && failure.kind != .malformed {
+                // Refused outright: nothing is running at Sail. An unreadable answer to a submission
+                // Sail may have taken stays pending, for the next run to send again with its key.
                 try settle(&session)
                 emit(.flex(row: row, detail: "Refused by Sail · \(model)", state: .failed))
                 throw failure
