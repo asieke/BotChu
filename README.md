@@ -611,10 +611,11 @@ on that pull request's branch to continue in instead). The same command run agai
     optional `--note`, and where it goes, one or more of `--env-file <path>` with `--name <VAR>`
     (set in a dotenv file, the file a link points to, made with mode 600 if missing, its other lines
     and mode kept), `--file <path>` (written alone) and `--pipe "<command>"` (given on standard
-    input, such as `vercel env add NAME production` or `gh secret set NAME`). BotChu shows a popup
-    window of its own, over whatever the window has open, bouncing the Dock icon when it isn't
-    active: the asking bot (a sub-agent run's own bot) and conversation, the note, a secure field,
-    each destination, and Cancel and Save; closing it cancels, and several wait their turn. What is
+    input, such as `vercel env add NAME production` or `gh secret set NAME`). BotChu shows a popup, a
+    floating panel over whatever the window has open; while BotChu isn't active, the Dock icon
+    bounces and the popup comes forward once it is. It shows the asking bot (a sub-agent run's own
+    bot) and conversation, the note, a secure field, each destination, and Cancel and Save; closing
+    it cancels, and several wait their turn. What is
     pasted, without the spaces and line breaks around it, goes into the asking turn's mailbox; the
     helper reads and deletes it at once, puts it in place, and prints only where (a command's output
     with the value replaced by `[secret]`), or that the owner cancelled, so it never enters the

@@ -88,8 +88,9 @@ final class SecretPrompts {
     }
 }
 
-/// The popup: a small window of its own, so it shows over whatever the main window has open
-/// (another sheet, Settings). The Dock icon bounces when BotChu isn't the active app.
+/// The popup: a floating panel of its own, so it shows over whatever the main window has open
+/// (another sheet, Settings) and never behind it. While BotChu isn't the active app, the Dock icon
+/// bounces, and the popup comes forward when it is.
 @MainActor
 final class SecretPanel: NSObject, NSWindowDelegate {
     private weak var model: AppModel?
@@ -98,6 +99,13 @@ final class SecretPanel: NSObject, NSWindowDelegate {
 
     init(model: AppModel) {
         self.model = model
+        super.init()
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.shown != nil else { return }
+                self.panel?.makeKeyAndOrderFront(nil)
+            }
+        }
     }
 
     func show(_ prompt: SecretPrompts.Prompt?) {
@@ -116,7 +124,6 @@ final class SecretPanel: NSObject, NSWindowDelegate {
         if NSApp.isActive {
             panel.makeKeyAndOrderFront(nil)
         } else {
-            panel.orderFront(nil)
             NSApp.requestUserAttention(.informationalRequest)
         }
     }
@@ -125,8 +132,8 @@ final class SecretPanel: NSObject, NSWindowDelegate {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 240), styleMask: [.titled, .closable],
                             backing: .buffered, defer: true)
         panel.isReleasedWhenClosed = false
-        panel.hidesOnDeactivate = false
-        panel.isFloatingPanel = false
+        panel.hidesOnDeactivate = true
+        panel.isFloatingPanel = true
         panel.identifier = NSUserInterfaceItemIdentifier("secret-prompt")
         panel.delegate = self
         self.panel = panel
