@@ -43,6 +43,18 @@ import Testing
         }
     }
 
+    @Test func piPricesBelongToTheSelectedServiceRatherThanTheRuntime() throws {
+        let usage = ModelUsage(model: "deepseek/deepseek-v4.1-flash-1017", output: 1_000_000)
+        var bot = Bot(name: "Pricing", accountID: "openrouter", workspace: "/tmp/pricing")
+        let legacy = try #require(ModelPricing.price(usage, settings: bot))
+        #expect(ModelPricing.price(usage, provider: .pi, providerID: "openrouter") == legacy)
+        bot.selectProvider("radius")
+        #expect(ModelPricing.price(usage, settings: bot) == nil)
+        bot.selectProvider("anthropic")
+        let direct = ModelUsage(model: "claude-haiku-5-5", output: 1_000_000)
+        #expect(try #require(ModelPricing.price(direct, settings: bot)).usd == ModelPricing.price(direct, provider: .claude)?.usd)
+    }
+
     @Test func subsetsAreNotChargedTwiceAndMissingHourRateUsesTwiceInput() throws {
         // Inject rates to exercise the documented fallback independently of snapshot contents.
         let entry = ModelPrice(.init(2, 10, 0.2, 2.5), tiers: [.init(aboveInput: 100, rates: .init(4, 15, 0.4, 5))])

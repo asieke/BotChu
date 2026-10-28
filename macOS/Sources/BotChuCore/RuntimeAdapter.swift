@@ -12,7 +12,7 @@ public protocol RuntimeAdapter: Sendable {
     func sessionsArePortable(from: String?, to: String?) -> Bool
     func effectiveModel(_ model: String, provider: String?, openRouterDefault: String, sailDefault: String) -> String
     func invocation(for settings: any RunSettings, prompt: String, model: String, sessionID: String?, remote: Bool,
-                    openRouterKey: String?, sailKey: String?, liveInput: Bool) -> Invocation
+                    openRouterKey: String?, sailKey: String?, liveInput: Bool, catalog: [ModelOption]?, newID: () -> String) -> Invocation
     func readiness(command: String, provider: String?, model: String, machine: Machine, folder: String,
                    environment: [String: String]) async -> String?
 }
@@ -30,14 +30,62 @@ extension RuntimeAdapter {
         GenerationOptions.effectiveModel(model, kind: kind, openRouterDefault: openRouterDefault, sailDefault: sailDefault)
     }
     public func invocation(for settings: any RunSettings, prompt: String, model: String, sessionID: String?, remote: Bool,
-                           openRouterKey: String?, sailKey: String?, liveInput: Bool) -> Invocation {
-        CommandBuilder.invocation(kind: kind, prompt: prompt, model: model, sessionID: sessionID,
-            reasoningEffort: settings.reasoningEffort, fast: settings.fastMode == true, provider: resolvedProvider(settings.provider),
-            openRouterKey: !remote && usesLegacyOpenRouterKey(account: settings.account, provider: settings.provider) ? openRouterKey : nil,
-            sailKey: remote ? nil : sailKey, liveInput: liveInput)
+                           openRouterKey: String?, sailKey: String?, liveInput: Bool, catalog: [ModelOption]?, newID: () -> String) -> Invocation {
+        var invocation = CommandBuilder.invocation(kind: kind, prompt: prompt, model: model, sessionID: sessionID,
+            reasoningEffort: settings.reasoningEffort, fast: settings.fastMode == true,
+            openRouterKey: !remote && settings.usesLegacyOpenRouterKey ? openRouterKey : nil,
+            sailKey: remote ? nil : sailKey, liveInput: liveInput, providerID: settings.resolvedProvider,
+            catalog: catalog, newID: newID)
+        if !remote {
+            invocation.environment.merge(profileEnvironment(account: settings.account, providerID: settings.providerID,
+                                                            openRouterKey: openRouterKey)) { _, new in new }
+            invocation.unsetEnvironment = unsetEnvironment(account: settings.account, providerID: settings.providerID)
+        }
+        return invocation
     }
+
     public func readiness(command: String, provider: String?, model: String, machine: Machine, folder: String,
                           environment: [String: String]) async -> String? { nil }
+
+    public var hasProviderSelection: Bool { offersProviders }
+    public var listsModels: Bool { kind == .codex || kind == .muse || offersProviders }
+    public var takesInputMidTurn: Bool { kind == .claude }
+    public var runsToolFree: Bool { kind == .claude || kind == .codex || kind == .muse }
+    public func parser() -> any StreamParser { StreamParsers.make(for: kind) }
+    public func resumeID(invocation: Invocation, reported: String) -> String {
+        CommandBuilder.resumeID(kind: kind, invocation: invocation, reported: reported)
+    }
+    public func canResume(from previous: RunSessionScope, to current: RunSessionScope) -> Bool {
+        previous.runtime == kind && current.runtime == kind && previous == current
+    }
+    public func authenticationProblem(account: Account, providerID: String?, command: String,
+                                      machine: Machine = .thisMac, folder: String = NSHomeDirectory(),
+                                      openRouterKey: String? = nil) async -> String? {
+        guard offersProviders else { return nil }
+        return await PiAuthentication.problem(account: account, providerID: providerID, command: command,
+            machine: machine, folder: folder, openRouterKey: openRouterKey)
+    }
+    func profileEnvironment(account: Account, providerID: String?, openRouterKey: String?) -> [String: String] {
+        var environment = account.runtimeEnvironment
+        if usesLegacyOpenRouterKey(account: account, provider: providerID), let openRouterKey, !openRouterKey.isEmpty {
+            environment["OPENROUTER_API_KEY"] = openRouterKey
+        }
+        return environment
+    }
+    func unsetEnvironment(account: Account, providerID: String?) -> [String] {
+        guard offersProviders else { return [] }
+        return account.configurationDirectory != nil ? AgentRun.modelCredentialNames.sorted()
+            : usesLegacyOpenRouterKey(account: account, provider: providerID) ? [] : ["OPENROUTER_API_KEY"]
+    }
+    public func invocation(for settings: any RunSettings, prompt: String, sessionID: String?,
+                           openRouterDefault: String, sailDefault: String = "", catalog: [ModelOption]? = nil,
+                           openRouterKey: String? = nil, sailKey: String? = nil, liveInput: Bool = false,
+                           newID: () -> String = { UUID().uuidString.lowercased() }) -> Invocation {
+        invocation(for: settings, prompt: prompt,
+            model: settings.effectiveModel(openRouterDefault: openRouterDefault, sailDefault: sailDefault),
+            sessionID: sessionID, remote: false, openRouterKey: openRouterKey, sailKey: sailKey,
+            liveInput: liveInput, catalog: catalog, newID: newID)
+    }
 
     public func providers(in models: [ModelOption]) -> [String] {
         Array(Set(models.compactMap(\.provider))).sorted()
@@ -78,13 +126,15 @@ extension RunSettings {
 
     @discardableResult
     public mutating func selectProvider(_ selection: String) -> Bool {
-        guard runtimeAdapter.offersProviders, resolvedProvider != selection else { return false }
+        let selection = selection.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard runtimeAdapter.offersProviders, !selection.isEmpty, resolvedProvider != selection else { return false }
         let portable = runtimeAdapter.sessionsArePortable(from: resolvedProvider, to: selection)
         provider = selection
         model = ""
         reasoningEffort = nil
+        fastMode = nil
         reportedModel = nil
-        if !portable { sessionID = nil; sessionAccountID = nil }
+        if !portable { clearSession() }
         return !portable
     }
 
@@ -95,9 +145,10 @@ extension RunSettings {
     /// The same launch policy for Home, task, job and delegated turns. A key supplied by a caller
     /// can never cross profile ownership or SSH boundaries, even if the caller passes one in error.
     public func invocation(prompt: String, model: String, sessionID: String?, remote: Bool = false,
-                           openRouterKey: String? = nil, sailKey: String? = nil, liveInput: Bool = false) -> Invocation {
+                           openRouterKey: String? = nil, sailKey: String? = nil, liveInput: Bool = false, catalog: [ModelOption]? = nil) -> Invocation {
         runtimeAdapter.invocation(for: self, prompt: prompt, model: model, sessionID: sessionID, remote: remote,
-                                  openRouterKey: openRouterKey, sailKey: sailKey, liveInput: liveInput)
+                                  openRouterKey: openRouterKey, sailKey: sailKey, liveInput: liveInput, catalog: catalog,
+                                  newID: { UUID().uuidString.lowercased() })
     }
 }
 
@@ -105,10 +156,14 @@ public struct PiRuntimeAdapter: RuntimeAdapter {
     public let kind = AgentKind.pi
     public var offersProviders: Bool { true }
     public func catalog(_ scope: ModelCatalogScope, environment: [String: String]) async throws -> [ModelOption] {
-        try await PiModelList.list(command: scope.command, machine: scope.machine, folder: scope.folder, environment: environment)
+        var environment = scope.machine.isRemote ? [:] : environment
+        if !scope.usesLegacyOpenRouterKey { environment.removeValue(forKey: "OPENROUTER_API_KEY") }
+        return try await PiModelList.list(command: scope.command, machine: scope.machine, folder: scope.folder,
+            environment: environment.merging(scope.profileEnvironment) { _, scoped in scoped },
+            unsetEnvironment: scope.unsetEnvironment)
     }
     public func command(local: String, host: String?, remote: Bool) -> String { remote ? host ?? "pi" : local }
-    public func resolvedProvider(_ selection: String?) -> String? { selection ?? "openrouter" }
+    public func resolvedProvider(_ selection: String?) -> String? { ModelProvider.effectiveID(selection, runtime: .pi) }
     public func effectiveModel(_ model: String, provider: String?, openRouterDefault: String, sailDefault: String) -> String {
         guard resolvedProvider(provider) == "openrouter" else { return model.trimmingCharacters(in: .whitespacesAndNewlines) }
         return GenerationOptions.effectiveModel(model, kind: kind, openRouterDefault: openRouterDefault, sailDefault: sailDefault)
@@ -124,68 +179,13 @@ public struct PiRuntimeAdapter: RuntimeAdapter {
                           environment: [String: String]) async -> String? {
         let provider = resolvedProvider(provider)!
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Choose a model for Pi provider \(provider) before starting a turn." }
-        return await Task.detached(priority: .utility) {
-            do {
-                let launch = PiModelList.launch(command: command,
-                    arguments: ["auth", "check", "--provider", provider, "--json", "--no-refresh"], machine: machine, folder: folder)
-                let process = try UsageProcess(command: launch.command, arguments: launch.arguments,
-                    directory: URL(fileURLWithPath: machine.isRemote ? NSHomeDirectory() : folder),
-                    environment: machine.isRemote ? [:] : environment, timeout: 20)
-                defer { process.stop() }
-                // Never include raw auth output/errors in UI or logs: only the status is needed.
-                let data = try process.output()
-                if let response = try JSONSerialization.jsonObject(with: data) as? [String: Any], response["status"] as? String == "ready" { return nil }
-            } catch { }
-            return "Pi provider \(provider) is not ready. Sign in to this profile on \(machine.isRemote ? "its host" : "this Mac") or configure its credentials."
-        }.value
+        return await PiAuthentication.check(provider: provider, command: command, machine: machine, folder: folder,
+            environment: machine.isRemote ? [:] : environment,
+            unsetEnvironment: environment["PI_CODING_AGENT_DIR"] != nil ? AgentRun.modelCredentialNames.sorted()
+                : environment["OPENROUTER_API_KEY"] == nil ? ["OPENROUTER_API_KEY"] : [])
     }
 }
 
-public enum PiModelList {
-    /// Exact `getSupportedThinkingLevels`: null disables a base level; upper levels require an
-    /// explicit non-null entry. Missing map entries differ from JSON null. No foreign aliases.
-    public static func efforts(reasoning: Bool, map: [String: Any]?) -> [ReasoningEffort] {
-        guard reasoning else { return [.off] }
-        return PiRuntimeAdapter.thinkingLevels.filter { level in
-            if let value = map?[level.rawValue] { return !(value is NSNull) }
-            return level != .xhigh && level != .max
-        }
-    }
-
-    public static func parse(_ response: [String: Any]) throws -> [ModelOption] {
-        guard response["success"] as? Bool == true,
-              let data = response["data"] as? [String: Any], let rows = data["models"] as? [[String: Any]] else {
-            throw ModelListFailure.unrecognized("Pi")
-        }
-        var seen = Set<String>()
-        return rows.compactMap { row in
-            guard let id = row["id"] as? String, !id.isEmpty,
-                  let provider = row["provider"] as? String, !provider.isEmpty,
-                  seen.insert(provider + "\u{0}" + id).inserted else { return nil }
-            return ModelOption(id: id, name: row["name"] as? String ?? id,
-                efforts: efforts(reasoning: row["reasoning"] as? Bool ?? false, map: row["thinkingLevelMap"] as? [String: Any]), provider: provider)
-        }
-    }
-
-    static func launch(command: String, arguments: [String], machine: Machine, folder: String) -> (command: String, arguments: [String]) {
-        guard machine.isRemote else { return (command, arguments) }
-        return (Shell.quote(Machine.ssh), Machine.sshOptions + [machine.destination ?? "",
-            Machine.remoteCommand(script: CommandBuilder.shellScript(command: command), arguments: arguments, in: folder)])
-    }
-
-    public static func list(command: String, machine: Machine = .thisMac, folder: String = NSHomeDirectory(),
-                            environment: [String: String] = [:], timeout: TimeInterval = 20) async throws -> [ModelOption] {
-        try await Task.detached(priority: .utility) {
-            let launch = launch(command: command, arguments: ["--mode", "rpc", "--no-session"], machine: machine, folder: folder)
-            let process = try UsageProcess(command: launch.command, arguments: launch.arguments,
-                directory: URL(fileURLWithPath: machine.isRemote ? NSHomeDirectory() : folder),
-                environment: machine.isRemote ? [:] : environment, timeout: timeout, frameLimit: 16 << 20)
-            defer { process.stop() }
-            try process.send(["id": "botchu-models", "type": "get_available_models"])
-            while true {
-                guard let response = try process.next(), response["id"] as? String == "botchu-models" else { continue }
-                return try parse(response)
-            }
-        }.value
-    }
+extension AgentKind {
+    public var adapter: any RuntimeAdapter { RuntimeAdapters.adapter(for: self) }
 }

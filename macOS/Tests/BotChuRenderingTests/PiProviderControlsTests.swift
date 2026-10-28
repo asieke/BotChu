@@ -19,6 +19,7 @@ extension RenderingTests {
         try home.save(bot)
         var task = BotTask(for: bot, repo: "test/repo", checkout: root.path, work: nil, brief: "Test")
         task.sessionID = "task-session"
+        task.sessionAccountID = task.accountID
         try home.save(task)
         let store = Store(root: root.appendingPathComponent("index"))
         try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
@@ -32,6 +33,7 @@ extension RenderingTests {
         ] }
         await app.modelCatalog.refresh(scope)
         let target = ChatTarget.home(bot.id)
+        #expect(app.runSettings(of: .task(task.id, of: bot.id))?.resumableSessionID == "task-session")
         app.setProvider("moonshotai", for: target)
         bot = try #require(app.bot(bot.id))
         #expect(bot.resolvedProvider == "moonshotai")

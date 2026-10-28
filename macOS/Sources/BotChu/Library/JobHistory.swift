@@ -145,7 +145,7 @@ private struct JobRunDetail: View {
                         row("Took", BotStatus.formatElapsed(from: started, to: finished))
                     }
                     if let account = run.accountName {
-                        row("Ran on", [account, run.reportedModel ?? (run.model?.isEmpty == false ? run.model : nil) ?? "its default model",
+                        row("Ran on", [account, run.providerID, run.reportedModel ?? (run.model?.isEmpty == false ? run.model : nil) ?? "its default model",
                                        run.reasoningEffort.map { "\($0.rawValue) effort" }].compactMap { $0 }.joined(separator: " · "))
                     }
                     row("Time zone", run.timeZone)
