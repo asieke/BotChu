@@ -50,7 +50,7 @@ struct SailSettings: View {
                 Text(problem).font(.caption).foregroundStyle(.secondary)
             }
         }
-        .onAppear { key.seed(saved: Keychain.get(Keychain.sailAccount)) }
+        .onAppear { key.seed(saved: model.sailKey()) }
     }
 
     private func save() {
@@ -63,13 +63,13 @@ struct SailSettings: View {
 
     /// Asks Sail which models the saved key can use.
     private func loadModels() {
-        let saved = key.saved
-        guard !saved.isEmpty, !loading else { return }
+        let savedKey = key.saved
+        guard !savedKey.isEmpty, !loading else { return }
         loading = true
         problem = nil
         Task {
             do {
-                models = try await SailClient(key: saved).models()
+                models = try await SailClient(key: savedKey).models()
             } catch {
                 problem = (error as? SailFailure)?.message ?? "Sail didn’t list its models: \(error.localizedDescription)"
             }

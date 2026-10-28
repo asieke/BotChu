@@ -423,6 +423,19 @@ private typealias S = SailSamples
         #expect(try harness.store.load("s7")?.pending == nil)
     }
 
+    @Test func aResponseThatFailsOverFlexOffersTheChoicesToo() async throws {
+        let harness = try SailHarness()
+        defer { harness.remove() }
+        let fixture = SailFixture([
+            ("POST", "/v1/responses", .ok(S.response("resp_1", "queued"))),
+            ("GET", "/v1/responses/resp_1", .ok(S.response("resp_1", "failed", extra: #","error":{"code":"unsupported_completion_window","message":"Flex is not available for this model"}"#))),
+        ])
+        #expect(!(await harness.run(fixture, SailAgent.Turn(sessionID: "s14", resume: false, model: S.model, prompt: "Go"))))
+        guard case .failed(let message)? = harness.events.all.last else { Issue.record("No failure"); return }
+        #expect(message.hasPrefix("Sail won't run \(S.model) on Flex (response resp_1 failed: Flex is not available for this model)."))
+        #expect(message.contains("Choose a model that takes Flex"))
+    }
+
     @Test func aRefusedSubmissionLeavesNothingPendingAndAnUnreachableOneIsKept() async throws {
         let harness = try SailHarness()
         defer { harness.remove() }

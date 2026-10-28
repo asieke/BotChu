@@ -207,6 +207,8 @@ final class AppModel {
     @ObservationIgnored private var usageWatch: Task<Void, Never>?
     /// Usage views inject this lookup in tests so they never read the owner's Keychain.
     let openRouterKey: @MainActor () -> String?
+    /// The Sail key as Settings ▸ Sail shows it; tests replace it, so they never read the Keychain.
+    @ObservationIgnored var sailKey: @MainActor () -> String? = { Keychain.get(Keychain.sailAccount) }
     let modelCatalog = ModelCatalog()
 
     private let store: Store

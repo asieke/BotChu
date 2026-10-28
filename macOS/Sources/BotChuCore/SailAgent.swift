@@ -235,7 +235,11 @@ public struct SailAgent: Sendable {
                 throw SailFailure(.rejected, "Sail stopped response \(response.id) before it finished (\(response.incompleteReason ?? "no reason given")). What it wrote is above; send a message to go on.")
             case .failed:
                 try settle(&session)
-                throw SailFailure(.rejected, "Sail couldn't complete response \(response.id): \(response.errorMessage ?? response.errorCode ?? "no reason given").")
+                let said = response.errorMessage ?? response.errorCode ?? "no reason given"
+                if SailHTTP.isAboutFlex(said + " " + (response.errorCode ?? "")) {
+                    throw SailFailure(.flex, SailHTTP.flexRefusal(model: model, said: "response \(response.id) failed: \(said)"))
+                }
+                throw SailFailure(.rejected, "Sail couldn't complete response \(response.id): \(said).")
             case .cancelled:
                 try settle(&session)
                 throw SailFailure(.rejected, "Sail cancelled response \(response.id). BotChu never asks it to; check the Sail dashboard.")

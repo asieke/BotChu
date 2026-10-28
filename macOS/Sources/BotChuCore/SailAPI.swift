@@ -300,16 +300,27 @@ public enum SailHTTP {
         case 401, 403:
             return SailFailure(.key, status: status, "Sail refused the API key (HTTP \(status): \(said)). Check it in BotChu ▸ Settings ▸ Sail.")
         default:
-            let lower = said.lowercased()
-            if [400, 404, 422].contains(status), lower.contains("completion_window") || lower.contains("flex") {
-                return SailFailure(.flex, status: status, """
-                    Sail won't run \(model) on Flex (HTTP \(status): \(said)). BotChu sends every Sail request on Flex and \
-                    doesn't move work to a faster, pricier completion window on its own. Choose a model that takes Flex in \
-                    BotChu ▸ Settings ▸ Sail or this conversation's model menu, or switch the conversation to another account.
-                    """)
+            if [400, 404, 422].contains(status), isAboutFlex(said) {
+                return SailFailure(.flex, status: status, flexRefusal(model: model, said: "HTTP \(status): \(said)"))
             }
             return SailFailure(.rejected, status: status, "Sail rejected the request for \(model) (HTTP \(status): \(said)).")
         }
+    }
+
+    /// Whether what Sail said is about the completion window.
+    public static func isAboutFlex(_ said: String) -> Bool {
+        let lower = said.lowercased()
+        return lower.contains("completion_window") || lower.contains("completion window") || lower.contains("flex")
+    }
+
+    /// A model or request Sail won't run on Flex, with the owner's choices: BotChu doesn't pick a
+    /// faster, pricier window for them.
+    public static func flexRefusal(model: String, said: String) -> String {
+        """
+        Sail won't run \(model) on Flex (\(said)). BotChu sends every Sail request on Flex and doesn't move work to \
+        a faster, pricier completion window on its own. Choose a model that takes Flex in BotChu ▸ Settings ▸ Sail or \
+        this conversation's model menu, or switch the conversation to another account.
+        """
     }
 
     public static func pollFailure(status: Int, data: Data, id: String) -> SailFailure {
