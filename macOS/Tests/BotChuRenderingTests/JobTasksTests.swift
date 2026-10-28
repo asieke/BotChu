@@ -113,7 +113,8 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(300))
         // The first row under the heading is the run's task.
         let menu = try jobTabMenu(at: NSPoint(x: 120, y: 124), in: host)
-        #expect(menu.items.map(\.title) == ["Show Run in Job History", "Show Task Folder in Finder", "Open Task in Terminal", "", "New Session", "Close Task"])
+        #expect(menu.items.map(\.title) == ["Show Run in Job History", "Show Task Folder in Finder", "Open Task in Terminal", "",
+                                            "Rename…", "Regenerate Title", "", "New Session", "Close Task"])
         #expect(menu.items.filter { !$0.isEnabled && !$0.isSeparatorItem }.isEmpty)
         menu.performActionForItem(at: menu.indexOfItem(withTitle: "Show Run in Job History"))
         #expect(app.jobs.history?.jobID == job.id && app.jobs.history?.runID == run.id)

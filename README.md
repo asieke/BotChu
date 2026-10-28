@@ -345,7 +345,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     prominent line is the repository it works in and its issue's or pull request's number
     ("BotChu #113"; a review's with an eye, a host's name after it); a task's second says what it
     is about: its summary, a label of three or four words saved when it started (see Quick tasks,
-    below), or for a task without one its issue's title or a brief's words; its third says what it
+    below) or the title it was renamed to or made again from its menu, or for a task without one its
+    issue's title or a brief's words; its third says what it
     is doing, with a time on the right that is never cut off: making the worktree or starting (a
     violet ring), working (violet, what it is doing and its elapsed time, ticking each second),
     finished since it was last shown (green, with its pull request), its last turn failed (a red dot)
@@ -358,7 +359,17 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     and ↑ and ↓ while a tab has keyboard focus switch conversations. Hovering a task's tab turns its
     dot into a close button, unless its turn is running, and its tooltip says what it is about,
     then the repository, the issue, the machine and the shortcut; its context menu keeps the issue, pull request, branch,
-    folder, Terminal, new-session and close actions. Closing the shown task shows the tab above it.
+    folder, Terminal, new-session and close actions, with **Rename…** and **Regenerate Title** (#236)
+    for its second line. Rename… asks for a title, starting from the one shown: any one line of up
+    to 120 characters once trimmed (it needn't be three or four words); Cancel or an empty name
+    changes nothing. Regenerate Title makes it again in the background, as a new task's summary is
+    asked for (see Quick tasks), from its issue's title and brief and its own latest messages, its
+    menu saying **Regenerating Title…** meanwhile; without a Quick tasks profile it offers **Open
+    Quick Tasks Settings** and asks no other account, and a failure, a timeout or a reply that isn't
+    a label of three or four words keeps the title and says why, with **Try Again**. A rename wins
+    over a title still being made, which never reaches a closed task. Neither changes the issue or
+    pull request on GitHub, the branch, the folder, the session, the draft or the tab shown; the
+    title is saved in the task's `task.json`. Closing the shown task shows the tab above it.
     The column is 240 points wide; drag its edge to make it 200 to 320, which is remembered. **«**
     or **View ▸ Collapse Tasks** folds it into a 56-point rail of tiles (a house for Home, each
     task's number, or a checklist for a brief, then **+**), with a dot in the corner of each tile
@@ -1074,7 +1085,14 @@ on that pull request's branch to continue in instead). The same command run agai
     as a run review is, on that profile's allowance and never another's, and logged in its bot's
     turn log as a "task summary". A reply that isn't a label of three or four words, a failure, or
     none within 90 seconds leaves the task named as before. The summary is saved in its
-    `task.json`; nothing is asked at launch, while drawing tabs, or for tasks from before.
+    `task.json`; nothing is asked at launch, while drawing tabs, or for tasks from before. A task's
+    **Regenerate Title** (#236) asks the same way, also for a task from before, logged as a "task
+    title": its issue's title and brief, and up to its 12 latest messages of the owner's and the
+    bot's in its own conversation (4,000 characters at most, each shortened, without tool calls,
+    errors, BotChu's notes, `<remember>` blocks, other bots' messages, or lines that look like
+    secrets), quoted as evidence rather than instructions; with no such messages it is asked as a
+    new task's summary. Nothing from another task, Home, the bot's instructions or its memory goes
+    in, and it is never asked after a turn by itself.
   - **Remote queue bots:** choose **Remote queue** in New Bot to message an agent such as Danny
     on its own computer. BotChu serves an authenticated HTTP queue, while the remote runtime
     polls for messages and posts complete replies or errors into Home. Documents go both ways: attach
@@ -1172,7 +1190,9 @@ on that pull request's branch to continue in instead). The same command run agai
     its `MEMORY.md` (`BotStatus.swift`), what a conversation's tab and its bot's row say: its state,
     the tab's lines, the row's dots and subtitle, and when the column folds into the rail
     (`ConversationTabs.swift`), a new task's summary on the Quick tasks profile: what it is made
-    from, its prompt and which replies are kept (`TaskSummaries.swift`), replies' parsed Markdown, cached by their text within a
+    from, its prompt and which replies are kept, and a title renamed or made again from the task's
+    own latest messages, which names the owner may type, one request at a time per task, and why a
+    late one is dropped (`TaskSummaries.swift`), replies' parsed Markdown, cached by their text within a
     budget of bytes (`MarkdownCache.swift`), and parsed off the main thread as they are written, one
     revision at a time for each reply (`MarkdownPreparation.swift`), a reply's text as it is selected
     and copied: its texts in reading order, what goes between them, words and paragraphs
@@ -1707,9 +1727,9 @@ on that pull request's branch to continue in instead). The same command run agai
   whose CLI has no tool-free mode are skipped. It spends a little of each account's allowance and
   isn't part of `check`; run it after changing how reviews run a CLI.
 - Task summaries (Quick tasks) without tools: `swift run --package-path macOS botchu-smoke --summary
-  [account id …]` names a sample task on each account the way a new task's summary is asked for, on
-  its family's smallest model (or `BOTCHU_SMOKE_MODEL`), and passes when the reply is a label of
-  three or four words. It spends a little of each account's allowance; run it after changing how
+  [account id …]` names a sample task on each account the way a new task's summary is asked for,
+  then again from a short conversation as Regenerate Title asks (#236), on its family's smallest
+  model (or `BOTCHU_SMOKE_MODEL`), and passes when both replies are labels of three or four words. It spends a little of each account's allowance; run it after changing how
   summaries are asked for.
 - Telegram end to end: the gateway's tests use stand-ins for Telegram, so a real exchange is
   checked by hand, with your own Telegram bot: see

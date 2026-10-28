@@ -113,6 +113,7 @@ struct ConversationSplit<Chat: View>: View {
                 .environment(\.composerTakesFocus, focus == nil)
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { available = $0 }
+        .modifier(TaskTitlePrompts(botID: botID))
     }
 
     /// ↑ and ↓ move between the tabs while one has focus, without wrapping around.
@@ -559,7 +560,8 @@ private struct RailTile: View {
 }
 
 /// A task's menu, in its tab and its tile: its issue or pull request (a job's run: the run in its
-/// job's history), branch, folder and Terminal, then New Session and Close Task.
+/// job's history), branch, folder and Terminal, then Rename… and Regenerate Title (#236), then New
+/// Session and Close Task.
 struct TaskMenu: View {
     @Environment(AppModel.self) private var model
     let target: ChatTarget
@@ -588,6 +590,8 @@ struct TaskMenu: View {
         }
         Button("Open Task in Terminal") { model.openWorktreeInTerminal(target) }
             .disabled(task.folder == nil)
+        Divider()
+        TaskTitleItems(target: target)
         Divider()
         Button("New Session") { model.newSession(target) }
             .disabled(model.isRunning(target))
