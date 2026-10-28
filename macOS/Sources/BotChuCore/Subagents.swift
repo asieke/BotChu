@@ -40,6 +40,7 @@ public struct SubagentRun: Identifiable, Codable, Equatable, Sendable, RunSettin
     public var callerHostID: UUID?
     public var accountID: String
     public var accountProfile: Account?
+    public var provider: String?
     public var model: String
     public var reasoningEffort: ReasoningEffort?
     public var fastMode: Bool?
@@ -77,6 +78,7 @@ public struct SubagentRun: Identifiable, Codable, Equatable, Sendable, RunSettin
         self.callerHostID = callerHostID
         accountID = targetBot.accountID
         accountProfile = targetBot.accountProfile
+        provider = targetBot.provider
         model = targetBot.model
         reasoningEffort = targetBot.reasoningEffort
         fastMode = targetBot.fastMode

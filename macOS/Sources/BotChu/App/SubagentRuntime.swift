@@ -669,10 +669,14 @@ final class SubagentRuntime {
                                                  machine: machine, hostID: record.hostID)
             guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
             let account = record.account
-            let key = account.kind == .pi && !machine.isRemote ? Keychain.get(Keychain.openRouterAccount) : nil
-            if account.kind == .pi && !machine.isRemote && (key?.isEmpty ?? true) {
-                throw DelegationFailure("Add your OpenRouter API key in BotChu Settings first.")
-            }
+            let key = record.usesLegacyOpenRouterKey(remote: machine.isRemote) ? model.openRouterKey() : nil
+            let command = record.runtimeAdapter.command(local: model.settings.command(for: account),
+                host: model.settings.host(record.hostID)?.command(for: account), remote: machine.isRemote)
+            let chosenModel = record.effectiveModel(openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel)
+            let readinessProblem = await record.runtimeAdapter.readiness(command: command, provider: record.provider, model: chosenModel,
+                machine: machine, folder: record.workingDirectory, environment: key.map { ["OPENROUTER_API_KEY": $0] } ?? [:])
+            guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
+            if let problem = readinessProblem { throw DelegationFailure(problem) }
             let sailKey = account.kind == .sail && !machine.isRemote ? Keychain.get(Keychain.sailAccount) : nil
             if account.kind == .sail, let problem = SailLaunch.problem(remote: machine.isRemote, key: sailKey) {
                 throw DelegationFailure(problem)
@@ -693,13 +697,10 @@ final class SubagentRuntime {
                 memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, soul: snapshot.soul,
                 instructions: snapshot.instructions, team: snapshot.team, availableBots: roster, skills: snapshot.skills,
                 tools: machine.isRemote ? nil : model.tools.instructions())
-            var invocation = CommandBuilder.invocation(kind: account.kind, prompt: prompt,
-                model: GenerationOptions.effectiveModel(record.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
-                                                        sailDefault: model.settings.sailModel),
-                sessionID: nil, reasoningEffort: record.reasoningEffort, fast: record.fastMode == true, openRouterKey: key, sailKey: sailKey)
+            var invocation = record.invocation(prompt: prompt, model: chosenModel, sessionID: nil, remote: machine.isRemote,
+                openRouterKey: key, sailKey: sailKey)
             invocation.environment.merge(context.environment) { _, new in new }
             invocation.toolProfile = prepared.toolProfile
-            let command = model.settings.host(record.hostID)?.command(for: account) ?? model.settings.command(for: account)
             let runner = machine.isRemote
                 ? AgentRun(command: command, invocation: invocation, on: machine, folder: record.workingDirectory)
                 : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: record.workingDirectory))

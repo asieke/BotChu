@@ -8,15 +8,21 @@ public struct ModelCatalogScope: Hashable, Sendable {
     public var command: String
     /// The profile's CLI family, which says how its list is read.
     public var kind: AgentKind
+    public var machine: Machine
+    public var folder: String
+    public var usesLegacyOpenRouterKey: Bool
 
-    public init(accountID: String, command: String, kind: AgentKind) {
+    public init(accountID: String, command: String, kind: AgentKind, machine: Machine = .thisMac, folder: String = NSHomeDirectory(), usesLegacyOpenRouterKey: Bool = false) {
         self.accountID = accountID
         self.command = command
         self.kind = kind
+        self.machine = machine
+        self.folder = folder
+        self.usesLegacyOpenRouterKey = usesLegacyOpenRouterKey && !machine.isRemote
     }
 
     /// How the scope is saved: opaque, so `model-catalogs.json` holds no command.
-    public var key: String { ConnectorScope.profile(accountID: accountID, command: command) }
+    public var key: String { ConnectorScope.profile(accountID: accountID, command: command + (machine.destination.map { "@" + $0 + ":" + folder } ?? "")) }
 }
 
 /// The models a profile's CLI listed, read whole, and when that was. A listing is not proof that a
@@ -45,14 +51,15 @@ public struct ModelListFailure: Error, Equatable, Sendable {
 public enum NativeModelList {
     public static let timeout: TimeInterval = 20
 
-    public static func lists(_ kind: AgentKind) -> Bool { kind == .codex || kind == .muse }
+    public static func lists(_ kind: AgentKind) -> Bool { kind == .codex || kind == .muse || kind == .pi }
 
     /// The scope's models, run from `folder` (the home folder).
     public static func list(_ scope: ModelCatalogScope, folder: String = NSHomeDirectory(), timeout: TimeInterval = timeout) async throws -> [ModelOption] {
         switch scope.kind {
         case .codex: try await CodexModelList.list(command: scope.command, folder: folder, timeout: timeout)
         case .muse: try await MuseModelList.list(command: scope.command, folder: folder, timeout: timeout)
-        case .claude, .antigravity, .pi, .sail: throw ModelListFailure.unsupported(scope.kind.displayName)
+        case .pi: try await PiModelList.list(command: scope.command, machine: scope.machine, folder: scope.folder, timeout: timeout)
+        case .claude, .antigravity, .sail: throw ModelListFailure.unsupported(scope.kind.displayName)
         }
     }
 
@@ -293,12 +300,13 @@ public enum NativeCatalogFile {
         var efforts: [String]
         /// Whether it has the Fast tier; nil in lists saved before #249, which offer it until read again.
         var fast: Bool?
+        var provider: String?
     }
 
     public static func encode(_ catalogs: [String: NativeCatalog]) -> Data? {
         let file = File(version: version, catalogs: catalogs.sorted { $0.key < $1.key }.map { key, catalog in
             Catalog(key: key, checkedAt: catalog.checkedAt,
-                    models: catalog.models.map { Model(id: $0.id, name: $0.name, efforts: $0.efforts.map(\.rawValue), fast: $0.fast) })
+                    models: catalog.models.map { Model(id: $0.id, name: $0.name, efforts: $0.efforts.map(\.rawValue), fast: $0.fast, provider: $0.provider) })
         })
         return try? JSONEncoder().encode(file)
     }
@@ -308,7 +316,7 @@ public enum NativeCatalogFile {
         guard let file = try? JSONDecoder().decode(File.self, from: data), file.version == version else { return [:] }
         return Dictionary(file.catalogs.compactMap { catalog -> (String, NativeCatalog)? in
             let models = catalog.models.filter { !$0.id.isEmpty }.map {
-                ModelOption(id: $0.id, name: $0.name, efforts: $0.efforts.compactMap(ReasoningEffort.init), fast: $0.fast ?? true)
+                ModelOption(id: $0.id, name: $0.name, efforts: $0.efforts.compactMap(ReasoningEffort.init), fast: $0.fast ?? true, provider: $0.provider)
             }
             return models.isEmpty ? nil : (catalog.key, NativeCatalog(models: models, checkedAt: catalog.checkedAt))
         }) { $1 }

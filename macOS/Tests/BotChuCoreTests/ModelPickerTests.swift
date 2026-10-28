@@ -11,7 +11,7 @@ import Testing
             ("", " \n", CommandBuilder.defaultOpenRouterModel),
         ] {
             let picker = ModelPickerData(kind: .pi, model: selected, openRouterDefault: fallback,
-                catalog: [CatalogModel(id: "recursive/flint-v1.0:free", name: "Recursive: Flint (free)")])
+                native: [ModelOption(id: "recursive/flint-v1.0:free", name: "Flint (free)", efforts: [.off], provider: "openrouter")])
             #expect(picker.effectiveID == expected)
             #expect(picker.title != "Default model")
             for session in [nil, "saved-session"] {
@@ -21,7 +21,7 @@ import Testing
             }
         }
         let inherited = ModelPickerData(kind: .pi, model: "", openRouterDefault: "recursive/flint-v1.0:free",
-            catalog: [CatalogModel(id: "recursive/flint-v1.0:free", name: "Recursive: Flint (free)")])
+            native: [ModelOption(id: "recursive/flint-v1.0:free", name: "Flint (free)", efforts: [.off], provider: "openrouter")])
         #expect(inherited.title == "Flint (free)")
         #expect(inherited.selectedID.isEmpty)
         #expect(inherited.choices.first?.detail == "Flint (free)")
@@ -96,12 +96,12 @@ import Testing
 
     @Test func searchUsesNamesProvidersAndIDsWithoutDuplicates() {
         let picker = ModelPickerData(kind: .pi, model: "recursive/flint-v1.0:free", openRouterDefault: "recursive/flint-v1.0:free",
-            catalog: [CatalogModel(id: "recursive/flint-v1.0:free", name: "Recursive: Flint (free)", contextLength: 262144),
-                      CatalogModel(id: "minimax/minimax-m3.1-flash", name: "MiniMax: MiniMax M3.1 Flash", contextLength: 1000000)])
+            native: [ModelOption(id: "recursive/flint-v1.0:free", name: "Flint (free)", efforts: [.off], provider: "openrouter"),
+                     ModelOption(id: "minimax/minimax-m3.1-flash", name: "MiniMax M3.1 Flash", efforts: [.high], provider: "openrouter")])
         #expect(Set(picker.choices.map(\.id)).count == picker.choices.count)
         #expect(picker.matching("recursive FREE").map(\.id) == ["recursive/flint-v1.0:free"])
         #expect(picker.matching("minimax flash").first?.title == "MiniMax M3.1 Flash")
-        #expect(picker.matching("minimax").first?.detail.contains("1M context") == true)
+        #expect(picker.matching("minimax").first?.detail == "minimax/minimax-m3.1-flash")
     }
 
     @Test func parsesPublicCatalogAndExcludesIncompatibleOutputs() throws {

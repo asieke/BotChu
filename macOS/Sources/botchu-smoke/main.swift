@@ -25,6 +25,8 @@
 //   swift run --package-path macOS botchu-smoke --models codex-work
 //   BOTCHU_SMOKE_BLOCK=gh swift run --package-path macOS botchu-smoke claude-personal codex-dev
 //
+// BOTCHU_SMOKE_PROVIDER selects a backend for Pi; BOTCHU_SMOKE_CUSTOM_PROFILE=1 uses a new
+// Pi-managed profile without the legacy shared key.
 // BOTCHU_SMOKE_BLOCK names catalog tools to block (#246): both turns run under the profile a turn on
 // This Mac gets with them off, and the first also runs them and `ssh -V`, which must still run.
 import Foundation
@@ -117,10 +119,14 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
         : nil
     let kind = bot.account.kind
     let fullPrompt = BotContext.prompt(for: prompt, preamble: preamble)
-    var invocation = CommandBuilder.invocation(
-        kind: bot.account.kind, prompt: fullPrompt, model: bot.model, sessionID: resume, reasoningEffort: bot.reasoningEffort,
-        fast: bot.fastMode == true, openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], sailKey: ProcessInfo.processInfo.environment[Sail.keyVariable],
+    var invocation = bot.invocation(
+        prompt: fullPrompt, model: bot.effectiveModel(openRouterDefault: ""), sessionID: resume,
+        openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], sailKey: ProcessInfo.processInfo.environment[Sail.keyVariable],
         liveInput: CommandBuilder.takesInputMidTurn(kind))
+    if let problem = await bot.runtimeAdapter.readiness(command: command(for: bot.account), provider: bot.provider,
+        model: bot.effectiveModel(openRouterDefault: ""), machine: .thisMac, folder: bot.workspace, environment: invocation.environment) {
+        return Turn(messages: [ChatMessage(role: .error, text: problem)], status: -1)
+    }
     // A stand-in for Sail's API, when one is named; the app never sets it.
     if kind == .sail, let base = ProcessInfo.processInfo.environment[Sail.baseVariable] { invocation.environment[Sail.baseVariable] = base }
     invocation.toolProfile = toolProfile
@@ -237,7 +243,9 @@ Task {
             let started = Date()
             do {
                 let scope = ModelCatalogScope(accountID: account.id, command: account.defaultCommand, kind: account.kind)
-                for model in try await NativeModelList.list(scope) {
+                let adapter = RuntimeAdapters.adapter(for: account.kind)
+                let key = adapter.usesLegacyOpenRouterKey(account: account, provider: nil) ? ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] : nil
+                for model in try await adapter.catalog(scope, environment: key.map { ["OPENROUTER_API_KEY": $0] } ?? [:]) {
                     print("    \(model.id) · \(model.name) · \(model.efforts.map(\.rawValue).joined(separator: " "))")
                 }
                 print("    OK in \(Int(Date().timeIntervalSince(started)))s")
@@ -367,6 +375,7 @@ Task {
             // A custom profile must work after the same persistence round trip used by a bot.
             if let data = try? JSONEncoder().encode(bot), let restored = try? JSONDecoder().decode(Bot.self, from: data) { bot = restored }
         }
+        if let provider = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_PROVIDER"] { bot.selectProvider(provider) }
         bot.selectModel(ProcessInfo.processInfo.environment["BOTCHU_SMOKE_MODEL"] ?? "")
         bot.reasoningEffort = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_EFFORT"].flatMap(ReasoningEffort.init(rawValue:))
         if ProcessInfo.processInfo.environment["BOTCHU_SMOKE_FAST"] == "1" { bot.fastMode = true }

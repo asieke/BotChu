@@ -92,6 +92,7 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var origin: Origin
     public var accountID: String
     public var accountProfile: Account?
+    public var provider: String?
     public var model: String
     public var reasoningEffort: ReasoningEffort?
     public var fastMode: Bool?
@@ -154,6 +155,7 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
                   accountID: bot.accountID, model: bot.model, reasoningEffort: bot.reasoningEffort,
                   hostID: host?.id, hostName: host?.nickname, review: review)
         self.accountProfile = bot.accountProfile
+        self.provider = bot.provider
         self.fastMode = bot.fastMode
     }
 

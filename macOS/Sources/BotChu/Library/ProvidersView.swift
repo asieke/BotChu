@@ -353,7 +353,7 @@ private struct ProviderProblemDetails: View {
                     .modifier(Prominent(status != .missingCommand))
                     if status == .missingCommand {
                         Button("Change Command…", action: changeCommand).buttonStyle(.borderedProminent)
-                    } else if account.kind == .pi {
+                    } else if request.usesLegacyOpenRouterKey {
                         // Pi's usage is the shared OpenRouter key's, set in Settings (#232).
                         Button("Open Settings") {
                             dismiss()
@@ -611,7 +611,7 @@ private struct AvatarGap: View {
         guard !checking.contains(request), await usage.isDue(request, for: check) else { return }
         checking.insert(request)
         defer { checking.remove(request) }
-        let key = request.account.kind == .pi ? openRouterKey() : nil
+        let key = request.usesLegacyOpenRouterKey ? openRouterKey() : nil
         states[request] = await usage.read(request, openRouterKey: key, for: check)
     }
 
@@ -739,8 +739,6 @@ struct AddProviderSheet: View {
     @State private var command = ""
     @State private var testing = false
     @State private var found: Bool?
-    /// Whether the OpenRouter key is in the Keychain, read when Pi is chosen.
-    @State private var openRouterKeySaved = false
     private var valid: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !command.contains(where: \.isNewline)
@@ -754,24 +752,9 @@ struct AddProviderSheet: View {
                 TextField("Command", text: $command, prompt: Text("~/.local/bin/claude-research"))
                     .font(.system(.body, design: .monospaced))
                     .onChange(of: command) { found = nil }
-                // A Pi profile runs on the shared OpenRouter key: whether it is saved, or the way to it (#232).
-                if kind == .pi {
-                    LabeledContent("OpenRouter key") {
-                        if openRouterKeySaved {
-                            Label("Saved", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                        } else {
-                            HStack {
-                                Label("Not saved", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Palette.warning)
-                                // Settings is behind the sheet, which closes to show it: only with nothing typed to lose.
-                                Button("Add Key in Settings…") {
-                                    dismiss()
-                                    model.openSettings(.openRouter)
-                                }
-                                .disabled(!name.isEmpty || !command.isEmpty)
-                                .help(name.isEmpty && command.isEmpty ? "" : "Add the profile or cancel first")
-                            }
-                        }
-                    }
+                if RuntimeAdapters.adapter(for: kind).offersProviders {
+                    Text("This profile uses Pi’s own sign-in and environment credentials. Its providers and models appear after it is added.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack {
                     Button(testing ? "Testing…" : "Test Command") {
@@ -795,9 +778,6 @@ struct AddProviderSheet: View {
                 Button("Add Profile") { save() }.buttonStyle(.borderedProminent).disabled(!valid || testing)
             }.padding(20)
         }.frame(width: 540, height: 410).background(Color(nsColor: .windowBackgroundColor))
-        .task(id: kind) {
-            if kind == .pi { openRouterKeySaved = !(model.openRouterKey() ?? "").isEmpty }
-        }
     }
     private func save() {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)

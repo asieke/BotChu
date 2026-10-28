@@ -21,7 +21,7 @@ struct AccountUsageSection: View {
                 InspectorCard(padded: true) {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Text(request.account.kind == .pi ? "OpenRouter key allowance" : "Account allowance")
+                            Text(request.usesLegacyOpenRouterKey ? "OpenRouter key allowance" : "Account allowance")
                                 .font(.system(size: 12))
                                 .foregroundStyle(Palette.secondaryText)
                             Spacer()

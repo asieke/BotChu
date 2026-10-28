@@ -113,7 +113,8 @@ struct ConnectorHandoffRequest: Equatable {
 extension AppModel {
     /// The command a conversation's CLI runs: on a host, its own for the account when it has one.
     func effectiveCommand(for account: Account, task: BotTask?) -> String {
-        task.flatMap { settings.host($0.hostID)?.command(for: account) } ?? settings.command(for: account)
+        RuntimeAdapters.adapter(for: account.kind).command(local: settings.command(for: account),
+            host: task.flatMap { settings.host($0.hostID)?.command(for: account) }, remote: task?.isRemote == true)
     }
 
     /// The profile, command, folder and host the conversation's next turn runs in; nil for a task

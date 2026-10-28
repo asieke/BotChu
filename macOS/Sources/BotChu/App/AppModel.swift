@@ -622,10 +622,15 @@ final class AppModel {
         }
         let moved = bot.workspace != bots[i].workspace
         let roleChanged = bot.isSpecialist != bots[i].isSpecialist
+        let providerChanged = bot.accountID == bots[i].accountID && bot.resolvedProvider != bots[i].resolvedProvider
         // The editor doesn't change what a turn reported while it was open.
-        bot.reportedModel = bots[i].reportedModel
+        bot.reportedModel = providerChanged ? nil : bots[i].reportedModel
         bots[i] = bot
         save(bot)
+        if providerChanged {
+            append(ChatMessage(role: .note, text: "New session · provider changed to \(bot.resolvedProvider ?? "default")."), to: .home(bot.id))
+            saveThread(.home(bot.id))
+        }
         // Its AGENTS.md says whether it runs tasks, so it is written again with the role.
         prepareWorkspace(bot)
         // A specialist's jobs pause, and an agent's that paused for it resume; its open tasks go on (#250).
@@ -642,6 +647,16 @@ final class AppModel {
         }
     }
 
+    func setProvider(_ provider: String, for target: ChatTarget) {
+        guard !isRunning(target) else { return }
+        var reset = false
+        change(target) { reset = $0.selectProvider(provider) }
+        if reset {
+            append(ChatMessage(role: .note, text: "New session · provider changed to \(provider)."), to: target)
+            saveThread(target)
+        }
+    }
+
     func setModel(_ selected: String, for target: ChatTarget) {
         guard !isRunning(target) else { return }
         let catalog = runSettings(of: target).flatMap(nativeModels(for:))
@@ -650,7 +665,7 @@ final class AppModel {
 
     func setReasoningEffort(_ effort: ReasoningEffort?, for target: ChatTarget) {
         guard !isRunning(target), let current = runSettings(of: target) else { return }
-        let effective = GenerationOptions.effectiveModel(current.model, kind: current.account.kind, openRouterDefault: settings.openRouterModel)
+        let effective = current.effectiveModel(openRouterDefault: settings.openRouterModel)
         if let effort, !GenerationOptions.efforts(for: current.account.kind, model: effective, catalog: nativeModels(for: current)).contains(effort) { return }
         change(target) { $0.reasoningEffort = effort }
     }
@@ -686,7 +701,7 @@ final class AppModel {
 
     func setReasoningEffort(_ effort: ReasoningEffort?, ofBot botID: UUID) {
         guard let bot = bot(botID) else { return }
-        let effective = GenerationOptions.effectiveModel(bot.model, kind: bot.account.kind, openRouterDefault: settings.openRouterModel)
+        let effective = bot.effectiveModel(openRouterDefault: settings.openRouterModel)
         if let effort, !GenerationOptions.efforts(for: bot.account.kind, model: effective, catalog: nativeModels(for: bot)).contains(effort) { return }
         editRunSettings(of: botID) { $0.reasoningEffort = effort }
     }
@@ -1747,19 +1762,17 @@ final class AppModel {
                     : (toolText.isEmpty ? ToolsBoard.cleared : toolText)
                 let contextSections = [preamble, delegationInstructions, toolInstructions].compactMap { $0 }
                 let prompt = BotContext.prompt(for: text, preamble: contextSections.isEmpty ? nil : contextSections.joined(separator: "\n\n"), updates: updates)
-                let model = GenerationOptions.effectiveModel(current.model, kind: account.kind, openRouterDefault: settings.openRouterModel,
-                                                             sailDefault: settings.sailModel)
+                let model = current.effectiveModel(openRouterDefault: settings.openRouterModel, sailDefault: settings.sailModel)
                 // A CLI that takes input mid-turn keeps its stdin open for follow-ups (This Mac only).
                 let liveInput = CommandBuilder.takesInputMidTurn(account.kind) && !machine.isRemote
                 let sailKey = account.kind == .sail && !machine.isRemote ? Keychain.get(Keychain.sailAccount) : nil
-                var invocation = CommandBuilder.invocation(
-                    kind: account.kind,
+                let key = current.usesLegacyOpenRouterKey(remote: machine.isRemote) ? openRouterKey() : nil
+                var invocation = current.invocation(
                     prompt: prompt,
                     model: model,
                     sessionID: resume,
-                    reasoningEffort: current.reasoningEffort,
-                    fast: current.fastMode == true,
-                    openRouterKey: account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil,
+                    remote: machine.isRemote,
+                    openRouterKey: key,
                     sailKey: sailKey,
                     liveInput: liveInput)
                 invocation.toolProfile = toolProfile
@@ -1776,12 +1789,15 @@ final class AppModel {
                 }
                 invocation.environment.merge(context.environment) { _, new in new }
 
-                // On a host, the OpenRouter key stays here: the CLI there uses that machine's own.
-                if account.kind == .pi, !machine.isRemote, Keychain.get(Keychain.openRouterAccount)?.isEmpty ?? true {
+                let command = effectiveCommand(for: account, task: task)
+                let readinessProblem = await current.runtimeAdapter.readiness(command: command, provider: current.provider, model: model,
+                    machine: machine, folder: directory, environment: invocation.environment)
+                guard waiting[target] == ticket, !Task.isCancelled else { delegation.endCaller(context.id); return }
+                if let problem = readinessProblem {
                     delegation.endCaller(context.id)
                     runStates[target] = nil
                     pauseQueue(target)
-                    append(ChatMessage(role: .error, text: "Add your OpenRouter API key in BotChu ▸ Settings first."), to: target)
+                    append(ChatMessage(role: .error, text: problem), to: target)
                     saveThread(target)
                     return
                 }
@@ -1797,7 +1813,6 @@ final class AppModel {
                 }
 
                 // On a host, its own command for the account when it has one.
-                let command = effectiveCommand(for: account, task: task)
                 let connectorScope = ConnectorScope(accountID: account.id, command: command, folder: directory, hostID: task?.hostID)
                 let run = machine.isRemote
                     ? AgentRun(command: command, invocation: invocation, on: machine, folder: directory)

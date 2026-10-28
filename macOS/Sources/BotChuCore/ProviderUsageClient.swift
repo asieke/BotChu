@@ -16,8 +16,10 @@ public struct UsageRequest: Hashable, Sendable, Codable {
     /// conversation's Model & Usage share one reading. Only a Pi profile's reading depends on the
     /// OpenRouter key, so saving another key (`openRouterKeyRevision`) starts only its readings afresh.
     public init(account: Account, command: String, openRouterKeyRevision: Int) {
-        self.init(account: account, command: command, credentialRevision: account.kind == .pi ? openRouterKeyRevision : 0)
+        self.init(account: account, command: command, credentialRevision: RuntimeAdapters.adapter(for: account.kind).usesLegacyOpenRouterKey(account: account, provider: nil) ? openRouterKeyRevision : 0)
     }
+
+    public var usesLegacyOpenRouterKey: Bool { RuntimeAdapters.adapter(for: account.kind).usesLegacyOpenRouterKey(account: account, provider: nil) }
 
     public var refreshInterval: TimeInterval { account.kind == .muse ? 3_600 : 300 }
     /// How often the app checks while Providers isn't showing, so it opens on current numbers;
@@ -49,6 +51,7 @@ public enum UsageCheck: Sendable {
 public enum ProviderUsageClient {
     public static func read(_ request: UsageRequest, openRouterKey: String? = nil) async throws -> ProviderUsage {
         if request.account.kind == .pi {
+            guard request.usesLegacyOpenRouterKey else { throw UsageFailure("Pi manages this profile’s provider credentials. Provider allowance is not available here.") }
             guard let key = openRouterKey, !key.isEmpty else {
                 throw UsageFailure("Add an OpenRouter API key in Settings to see its allowance.")
             }

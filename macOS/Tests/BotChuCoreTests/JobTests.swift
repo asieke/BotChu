@@ -702,7 +702,8 @@ extension JobSchedule {
         job.selectAccount(Accounts.account(id: "openrouter"), agent: agent)
         #expect(job.runsOn == JobRunsOn(accountID: "openrouter", model: "", reasoningEffort: nil))
         // OpenRouter's effort applies to the default model from Settings.
-        job.selectReasoningEffort(.off, agent: agent, openRouterDefault: "anthropic/claude-sonnet-4.5")
+        job.selectReasoningEffort(.off, agent: agent, openRouterDefault: "anthropic/claude-sonnet-4.5",
+            catalog: [ModelOption(id: "anthropic/claude-sonnet-4.5", name: "Sonnet", efforts: [.off, .high], provider: "openrouter")])
         #expect(job.runsOn?.reasoningEffort == .off)
         // Choosing the agent's again drops the job's own choice.
         job.selectAccount(nil, agent: agent)
