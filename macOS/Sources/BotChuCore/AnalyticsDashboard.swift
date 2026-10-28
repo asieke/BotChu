@@ -449,15 +449,12 @@ public enum AnalyticsDashboard {
             var family = (snapshot.accounts[r.account] || {}).family;
             return ({"Claude Code": "claude", Codex: "codex", Antigravity: "antigravity", Muse: "muse", Sail: "sail", Pi: "pi:unknown", OpenRouter: "pi:openrouter"})[family] || family || "unknown";
           }
-          if (k === "model")
-            return (
-              r.model ||
-              ((r.models || []).length === 1
-                ? r.models[0].model
-                : (r.models || []).length > 1
-                  ? "mixed"
-                  : "unknown")
-            );
+          if (k === "model") {
+            var models = Array.from(new Set((r.models || []).map(function(usage) { return usage.model; })));
+            // A whole-invocation bill cannot be assigned to its primary model when others also ran.
+            if (models.length > 1) return "mixed";
+            return r.model || models[0] || "unknown";
+          }
           return r[k] == null ? "unknown" : String(r[k]);
         }
         function label(k, v) {
@@ -1782,7 +1779,7 @@ public enum AnalyticsDashboard {
             "Spend",
             "Actual is provider-reported billing. Estimated uses list prices dated " +
               data.priceSnapshotDate +
-              ". Missing prices show —; known subtotals can coexist with unpriced runs. Subscription charges and allowances are separate."
+              ". Missing prices show —; known subtotals can coexist with unpriced runs. Subscription charges and allowances are separate. Invocations reporting multiple models keep their whole cost in Multiple models."
           ],
           [
             "Tokens",

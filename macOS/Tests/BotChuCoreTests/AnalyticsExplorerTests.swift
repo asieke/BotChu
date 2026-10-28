@@ -78,6 +78,32 @@ struct AnalyticsExplorerTests {
         #expect(c.evaluateScript("E.insights(from,through).find(c=>c.id==='fanout').value===null").toBool() == true)
     }
 
+    @Test func mixedModelInvocationKeepsItsWholeActualCostTogether() throws {
+        let c = try context()
+        c.evaluateScript("""
+            fixture.records[0].models.push({model:'claude-sonnet-4-6',uncachedInput:2000,output:500});
+            fixture.records[0].cost=.32;
+            fixture.records[0].costProvenance='actual';
+            fixture.records[1].models.push(Object.assign({},fixture.records[1].models[0]));
+            fixture.records[1].model=null;
+            E=BotChuAnalytics.createExplorer(fixture);
+            var grouped=E.groups(E.range(from,through),'model','cost',-1);
+            var mixed=grouped.find(g=>g.value==='mixed');
+            """)
+        #expect(c.evaluateScript("fixture.records[0].model").toString() == "claude-opus-4-6")
+        #expect(c.evaluateScript("mixed.label").toString() == "Multiple models")
+        #expect(c.evaluateScript("mixed.rows.length").toInt32() == 1)
+        #expect(abs(c.evaluateScript("mixed.summary.cost").toDouble() - 0.32) < 0.00000001)
+        #expect(abs(c.evaluateScript("mixed.summary.actualCost").toDouble() - 0.32) < 0.00000001)
+        #expect(c.evaluateScript("mixed.summary.estimatedCost===null").toBool() == true)
+        #expect(c.evaluateScript("E.matches(fixture.records[0],[{k:'model',v:'claude-opus-4-6'}])").toBool() == false)
+        #expect(c.evaluateScript("E.dimension(fixture.records[1],'model')").toString() == "claude-opus-4-6")
+        #expect(c.evaluateScript("grouped.length").toInt32() == 2)
+        #expect(abs(c.evaluateScript("grouped.find(g=>g.value==='claude-opus-4-6').summary.cost").toDouble() - 0.105) < 0.00000001)
+        #expect(abs(c.evaluateScript("grouped.reduce((sum,g)=>sum+g.summary.cost,0)-E.aggregate(E.range(from,through)).cost").toDouble()) < 0.00000001)
+        #expect(c.exception == nil)
+    }
+
     @Test func dollarAxisKeepsFractionalAndSubCentTicksExact() throws {
         let c = try context()
         #expect(c.evaluateScript("BotChuAnalytics.dollarTick(2.5,2.5)").toString() == "$2.5")
