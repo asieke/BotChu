@@ -337,8 +337,7 @@ public enum AnalyticsDashboard {
         if (item.day < firstDay) { firstDay = item.day; }
         if (item.day > lastDay) { lastDay = item.day; }
       });
-      document.getElementById("generated").textContent = "Made " + when(data.generatedAt) + " · days in "
-        + data.timeZone + " · read-only: choose View ▸ Open Analytics Dashboard in BotChu for current data";
+      document.getElementById("generated").textContent = "Made " + when(data.generatedAt) + " · days in " + data.timeZone;
 
       var state = { preset: "30", from: addDays(today, -29), through: today, kinds: { home: true, task: true, job: true, subagent: true } };
       function setPreset(preset) {
@@ -538,9 +537,8 @@ public enum AnalyticsDashboard {
       function inRange(item) { return item.day >= state.from && item.day <= state.through; }
 
       /* One table per breakdown: each bot, account or project in the range, busiest first. */
-      function breakdown(title, names, field, none, note) {
+      function breakdown(title, names, field, none) {
         var card = add(el("section", "card"), el("h2", null, title));
-        if (note) { add(card, el("p", "note", note)); }
         var keys = {};
         records.forEach(function (r) { if (inRange(r) && state.kinds[r.kind]) { keys[r[field] === undefined || r[field] === null ? "none" : r[field]] = true; } });
         tasks.forEach(function (t) { if (inRange(t)) { keys[t[field] === undefined || t[field] === null ? "none" : t[field]] = true; } });
@@ -566,10 +564,9 @@ public enum AnalyticsDashboard {
       }
 
       function allowanceCard() {
-        var card = add(el("section", "card"), el("h2", null, "Provider allowance"),
-          el("p", "note", "Each profile's latest reading, as its provider reported it: not a history, and not split by bot, so it isn't added to the activity above."));
+        var card = add(el("section", "card"), el("h2", null, "Provider allowance"));
         var allowance = data.allowance || [];
-        if (!allowance.length) { return add(card, el("p", "empty", "No allowance readings are saved yet. Providers in BotChu reads them.")); }
+        if (!allowance.length) { return add(card, el("p", "empty", "No allowance readings saved yet.")); }
         var status = { current: "Current", stale: "Stale", unavailable: "No reading" };
         var rows = [];
         allowance.forEach(function (profile) {
@@ -674,8 +671,7 @@ public enum AnalyticsDashboard {
         }
 
         if (!records.length && !tasks.length) {
-          add(app, add(el("section", "card"), el("h2", null, "No activity recorded yet"),
-            el("p", "note", "Turns, tasks, job runs and sub-agent runs appear here once BotChu has saved some.")));
+          add(app, add(el("section", "card"), el("h2", null, "No activity recorded yet")));
         } else {
           var total = summarize(records, state.from, state.through, state.kinds);
           var started = tasks.filter(inRange).length;
@@ -685,13 +681,13 @@ public enum AnalyticsDashboard {
           var cost = measureText(measures.filter(function (m) { return m.metric === "cost"; })[0]);
           add(app, add(el("div", "tiles"),
             tile("Turns & runs", total.runs, total.skipped ? total.skipped + " skipped job times not counted" : dayLabel(state.from) + " – " + dayLabel(state.through)),
-            tile("Finished", o.finished || 0, "Ended without an error"),
+            tile("Finished", o.finished || 0),
             tile("Failed", o.failed || 0, "Failure rate " + formatPercent(total.failureRate)),
-            tile("Stopped", (o.stopped || 0) + (o.interrupted || 0), o.interrupted ? o.interrupted + " job runs cut short by a quit or crash" : "By you, or by a quit"),
-            tile("In progress", o.inProgress || 0, "No duration yet"),
+            tile("Stopped", (o.stopped || 0) + (o.interrupted || 0), o.interrupted ? o.interrupted + " job runs cut short by a quit or crash" : null),
+            tile("In progress", o.inProgress || 0),
             tile("Median time", total.timed ? formatDuration(total.medianSeconds) : "—", total.timed + " of " + total.ended + " with a known duration"),
-            tile("Time at work", total.timed ? formatDuration(total.totalSeconds) : "—", "Known durations added up"),
-            tile("Tasks started", started, "Job runs not included"),
+            tile("Time at work", total.timed ? formatDuration(total.totalSeconds) : "—"),
+            tile("Tasks started", started),
             tile("Tokens", tokens.value, tokens.detail, tokens.unavailable),
             tile("Cost", cost.value, cost.detail, cost.unavailable)));
 
@@ -703,8 +699,7 @@ public enum AnalyticsDashboard {
           var legend = el("div", "legend");
           SERIES.forEach(function (series) { add(legend, add(el("span"), key(series[0]), document.createTextNode(series[1]))); });
           add(volume, legend);
-          var durations = add(el("section", "card"), el("h2", null, "Median duration a day"),
-            el("p", "note", "Days without a known duration are gaps, not zero."));
+          var durations = add(el("section", "card"), el("h2", null, "Median duration a day"));
           add(charts, volume, durations);
           add(app, charts);
           var volumeBox = el("div", "chart"), durationBox = el("div", "chart");
@@ -726,10 +721,9 @@ public enum AnalyticsDashboard {
               })));
             add(volume, details);
           }
-          add(app, breakdown("By bot", data.bots, "bot", "Unknown bot", "Sub-agent runs count for the bot they ran as."));
-          add(app, breakdown("By provider account", data.accounts, "account", "Account not recorded",
-            "Job and sub-agent runs on the account they recorded; Home and task turns on the account their conversation uses now."));
-          add(app, breakdown("By project", data.projects, "project", "No project (Home and job runs)", "Task turns and tasks by their repository; sub-agent runs by the task that delegated them."));
+          add(app, breakdown("By bot", data.bots, "bot", "Unknown bot"));
+          add(app, breakdown("By provider account", data.accounts, "account", "Account not recorded"));
+          add(app, breakdown("By project", data.projects, "project", "No project"));
         }
         add(app, allowanceCard());
         add(app, aboutCard());

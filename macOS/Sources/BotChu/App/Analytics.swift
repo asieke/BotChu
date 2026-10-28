@@ -8,7 +8,7 @@ extension AppModel {
     /// it again with current data.
     func openAnalyticsDashboard() {
         let running = Set(conversations.filter { $0.value.run != nil }.map { AnalyticsConversation(botID: $0.key.botID, taskID: $0.key.taskID) })
-        let input = AnalyticsInput(root: store.root, accounts: settings.accounts, running: running, now: Date(), zone: .current)
+        let input = AnalyticsInput(root: dataFolder, accounts: settings.accounts, running: running, now: Date(), zone: .current)
         Task {
             let result = await Task.detached(priority: .userInitiated) { AnalyticsDashboard.publish(input) }.value
             switch result {

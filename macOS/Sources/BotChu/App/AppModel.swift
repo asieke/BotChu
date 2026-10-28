@@ -209,7 +209,9 @@ final class AppModel {
     let openRouterKey: @MainActor () -> String?
     let modelCatalog = ModelCatalog()
 
-    let store: Store
+    private let store: Store
+    /// BotChu's data folder (`~/Library/Application Support/BotChu`, or a test's).
+    var dataFolder: URL { store.root }
     /// Where conversations, settings, logs, memory, sub-agents' and jobs' files are written, off the
     /// main thread, each target in order (`StorageQueue`, #107).
     let storage: StorageQueue
