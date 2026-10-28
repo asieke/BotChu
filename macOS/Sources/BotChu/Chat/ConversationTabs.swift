@@ -160,8 +160,11 @@ struct ConversationColumn: View {
                     .font(.system(size: 11))
                     .monospacedDigit()
                 Spacer(minLength: 0)
-                ColumnButton(symbol: "plus", help: "New Task (⌘T)") { model.newTask(for: botID) }
-                    .accessibilityIdentifier("conversation-new-task")
+                // A specialist's tasks from before it was one finish here; it starts none (#250).
+                if model.bot(botID)?.canOwnTasks == true {
+                    ColumnButton(symbol: "plus", help: "New Task (⌘T)") { model.newTask(for: botID) }
+                        .accessibilityIdentifier("conversation-new-task")
+                }
                 ColumnButton(symbol: "chevron.left.2", help: "Collapse Tasks", action: collapse)
                     .accessibilityIdentifier("conversation-collapse")
             }
@@ -461,17 +464,19 @@ struct ConversationRail: View {
                     ForEach(Array(tasks.enumerated()), id: \.element) { index, target in
                         RailTile(target: target, index: index + 1, selected: shown == target, focus: focus)
                     }
-                    Button { model.newTask(for: botID) } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 13, weight: .medium))
-                            .frame(width: 40, height: 32)
-                            .contentShape(Rectangle())
+                    if model.bot(botID)?.canOwnTasks == true {
+                        Button { model.newTask(for: botID) } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 13, weight: .medium))
+                                .frame(width: 40, height: 32)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Palette.secondaryText)
+                        .help("New Task (⌘T)")
+                        .accessibilityLabel("New Task")
+                        .accessibilityIdentifier("conversation-new-task")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Palette.secondaryText)
-                    .help("New Task (⌘T)")
-                    .accessibilityLabel("New Task")
-                    .accessibilityIdentifier("conversation-new-task")
                 }
             }
             .scrollIndicators(.never)

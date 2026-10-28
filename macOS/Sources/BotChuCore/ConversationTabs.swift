@@ -322,6 +322,19 @@ public struct BotRowSummary: Equatable, Sendable {
             return n == 0 ? nil : "\(n) \(kind.name(count: n))"
         }.joined(separator: ", ")
     }
+
+    /// Several bots' rows as one collapsed heading shows them, such as Specialists' in the sidebar
+    /// (#250): their dots together, most urgent first and in the rows' order among equals, at most
+    /// `dotLimit`, then +N for the rest; spoken as each busy bot's own dots, by name.
+    public init(merging rows: [(name: String, summary: BotRowSummary)]) {
+        let busy = rows.flatMap(\.summary.dots).enumerated()
+            .sorted { ($0.element.urgency, -$0.offset) > ($1.element.urgency, -$1.offset) }
+            .map(\.element)
+        dots = Array(busy.prefix(Self.dotLimit))
+        more = max(0, busy.count - Self.dotLimit) + rows.map(\.summary.more).reduce(0, +)
+        subtitle = ""
+        spokenDots = rows.filter { !$0.summary.dots.isEmpty }.map { "\($0.name): \($0.summary.spokenDots)" }.joined(separator: "; ")
+    }
 }
 
 /// Where the conversation column goes (#128): 240 points beside the chat, which the owner can

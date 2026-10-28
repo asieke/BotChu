@@ -12,28 +12,34 @@ struct JobsSection: View {
     var body: some View {
         let jobs = model.jobs.jobs(of: botID)
         let on = jobs.filter(\.enabled).count
-        InspectorSection("Jobs", trailing: jobs.isEmpty ? nil : "\(on) on") {
-            if !jobs.isEmpty {
-                InspectorCard {
-                    let listed = Array(jobs.prefix(Self.shown))
-                    ForEach(Array(listed.enumerated()), id: \.element.id) { index, job in
-                        JobRow(job: job, last: index == listed.count - 1)
-                    }
-                }
-            }
-            HStack(spacing: 8) {
-                Button { model.jobs.newJob(for: botID) } label: {
-                    Label("New Job…", systemImage: "plus")
-                }
-                .help("Saved instructions this agent runs on a schedule, each run in a session of its own")
+        // A specialist owns no new jobs; the ones paused when it became one still show (#250).
+        let ownsJobs = model.bot(botID)?.canOwnTasks == true
+        if ownsJobs || !jobs.isEmpty {
+            InspectorSection("Jobs", trailing: jobs.isEmpty ? nil : "\(on) on") {
                 if !jobs.isEmpty {
-                    Button { model.showJobs(for: botID) } label: {
-                        Label(jobs.count > Self.shown ? "All \(jobs.count)" : "All Jobs", systemImage: "clock.arrow.circlepath")
+                    InspectorCard {
+                        let listed = Array(jobs.prefix(Self.shown))
+                        ForEach(Array(listed.enumerated()), id: \.element.id) { index, job in
+                            JobRow(job: job, last: index == listed.count - 1)
+                        }
                     }
-                    .help("Show this agent's jobs in Jobs")
                 }
+                HStack(spacing: 8) {
+                    if ownsJobs {
+                        Button { model.jobs.newJob(for: botID) } label: {
+                            Label("New Job…", systemImage: "plus")
+                        }
+                        .help("Saved instructions this agent runs on a schedule, each run in a session of its own")
+                    }
+                    if !jobs.isEmpty {
+                        Button { model.showJobs(for: botID) } label: {
+                            Label(jobs.count > Self.shown ? "All \(jobs.count)" : "All Jobs", systemImage: "clock.arrow.circlepath")
+                        }
+                        .help("Show this agent's jobs in Jobs")
+                    }
+                }
+                .buttonStyle(InspectorButtonStyle(fill: true))
             }
-            .buttonStyle(InspectorButtonStyle(fill: true))
         }
     }
 }

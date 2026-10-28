@@ -12,6 +12,8 @@ import Foundation
 ///   (`busy`), and at most `maxConcurrent` run at once.
 /// - After a crash or quit, a run that was running is recorded interrupted, never run again; one
 ///   that was waiting never started, and is recorded skipped (`recover`).
+/// - An agent that can't own jobs (a specialist, #250: `refusal`) starts none, scheduled or Run Now.
+///   Becoming a specialist pauses its jobs, and becoming an agent again resumes them (`switchRole`).
 public final class JobEngine {
     public struct Launch: Equatable, Sendable {
         public var job: Job
@@ -39,6 +41,8 @@ public final class JobEngine {
     /// Why each job's last save failed, while it does.
     public private(set) var problems: [UUID: String] = [:]
     public var now: () -> Date
+    /// Why an agent's jobs can't run (`Bot.taskOwnershipProblem`), or nil when they can.
+    public var refusal: (UUID) -> String?
     public var maxConcurrent: Int
     public var grace: TimeInterval
     private let persist: (Job) throws -> Void
@@ -46,9 +50,10 @@ public final class JobEngine {
 
     public init(jobs: [Job] = [], now: @escaping () -> Date = Date.init, maxConcurrent: Int = JobLimits.concurrentRuns,
                 grace: TimeInterval = JobLimits.onTimeGrace, persist: @escaping (Job) throws -> Void,
-                erase: @escaping (Job) throws -> Void = { _ in }) {
+                erase: @escaping (Job) throws -> Void = { _ in }, refusal: @escaping (UUID) -> String? = { _ in nil }) {
         self.jobs = jobs
         self.now = now
+        self.refusal = refusal
         self.maxConcurrent = maxConcurrent
         self.grace = grace
         self.persist = persist
@@ -102,6 +107,10 @@ public final class JobEngine {
     /// before it is never made up; so does turning a paused job on.
     public func save(_ edited: Job) throws {
         if let problem = edited.problem { throw Problem.invalid(problem) }
+        // A specialist gets no new job, and its paused jobs can be edited but not turned on.
+        if let refused = refusal(edited.botID), job(edited.id).map({ !$0.enabled && edited.enabled }) ?? true {
+            throw Problem.invalid(refused)
+        }
         let at = now()
         var job = edited
         job.title = job.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -126,15 +135,53 @@ public final class JobEngine {
     }
 
     /// Pauses or resumes a job. Pausing cancels a run waiting to start (a running one goes on, and
-    /// can be stopped); resuming counts from now, so paused time is never made up.
-    public func setEnabled(_ id: UUID, _ enabled: Bool) throws {
+    /// can be stopped), and keeps `pauseReason` when BotChu pauses it; resuming counts from now, so
+    /// paused time is never made up. A specialist's job doesn't resume.
+    public func setEnabled(_ id: UUID, _ enabled: Bool, pauseReason: String? = nil) throws {
         guard var job = job(id) else { throw Problem.missing }
         guard job.enabled != enabled else { return }
+        if enabled, let refused = refusal(job.botID) { throw Problem.invalid(refused) }
         let at = now()
         job.enabled = enabled
         job.updatedAt = at
-        if enabled { resume(&job, at: at) } else { cancelWaiting(&job, reason: "The job was paused before this run started.", at: at) }
+        if enabled {
+            resume(&job, at: at)
+        } else {
+            job.pauseReason = pauseReason
+            cancelWaiting(&job, reason: "The job was paused before this run started.", at: at)
+        }
         try commitOrThrow(job)
+    }
+
+    /// Why BotChu paused a job when its agent became a specialist (#250): what `switchRole` resumes.
+    public static let specialistPauseReason = "Paused while its agent is a specialist. Make it an agent again to resume it."
+
+    /// The jobs making the agent a specialist would pause: its jobs that are on.
+    public static func pausedBySpecialistSwitch(of botID: UUID, in jobs: [Job]) -> [Job] {
+        jobs.filter { $0.botID == botID && $0.enabled }
+    }
+
+    /// Pauses or resumes an agent's jobs as its role changes (#250). Becoming a specialist pauses each
+    /// job that is on, with `specialistPauseReason`; a run under way goes on. Becoming an agent again
+    /// resumes only those, so a job paused for another reason (by the owner, or after failures) stays
+    /// paused. Call it once the role has changed, so `refusal` already answers for the new one. Returns
+    /// the jobs it changed; throws the first save that failed, after trying every job.
+    @discardableResult
+    public func switchRole(of botID: UUID, toSpecialist: Bool) throws -> [UUID] {
+        let affected = toSpecialist
+            ? Self.pausedBySpecialistSwitch(of: botID, in: jobs)
+            : jobs(of: botID).filter { !$0.enabled && $0.pauseReason == Self.specialistPauseReason }
+        var changed: [UUID] = [], failure: Error?
+        for job in affected {
+            do {
+                try setEnabled(job.id, !toSpecialist, pauseReason: toSpecialist ? Self.specialistPauseReason : nil)
+                changed.append(job.id)
+            } catch {
+                failure = failure ?? error
+            }
+        }
+        if let failure { throw failure }
+        return changed
     }
 
     /// Deletes a job and its history. Returns its running run, for the app to stop.
@@ -166,7 +213,8 @@ public final class JobEngine {
     /// (a Home turn, a sub-agent) uses an agent's workspace.
     public func tick(busy: (UUID) -> Bool) -> [Launch] {
         let at = now()
-        for job in jobs where job.enabled {
+        // A specialist's job waits, unreserved: it is paused, and resuming it counts from then.
+        for job in jobs where job.enabled && refusal(job.botID) == nil {
             switch JobPlanner.decide(job, now: at, grace: grace) {
             case .none:
                 continue
@@ -192,6 +240,7 @@ public final class JobEngine {
     /// run waiting or running already.
     public func runNow(_ id: UUID, busy: (UUID) -> Bool) throws -> [Launch] {
         guard var job = job(id) else { throw Problem.missing }
+        if let refused = refusal(job.botID) { throw Problem.invalid(refused) }
         guard job.activeRun == nil else { throw Problem.busy }
         job.runs.append(JobRun(trigger: .manual, scheduledFor: nil, timeZone: job.schedule.timeZone, reservedAt: now()))
         try commitOrThrow(job)
@@ -252,6 +301,13 @@ public final class JobEngine {
         for (jobID, run) in waiting {
             guard runningCount < maxConcurrent else { break }
             guard var job = job(jobID), let i = job.runs.firstIndex(where: { $0.id == run.id }) else { continue }
+            if let refused = refusal(job.botID) {
+                job.runs[i].outcome = .skipped
+                job.runs[i].summary = refused
+                job.runs[i].finishedAt = now()
+                _ = commit(job)
+                continue
+            }
             // One run at a time in an agent's workspace, after any interactive work there.
             if isRunning(botID: job.botID) || busy(job.botID) { continue }
             job.runs[i].outcome = .running

@@ -42,9 +42,12 @@ struct JobsView: View {
         VStack(alignment: .leading, spacing: 0) {
             LibraryHeading(title: "Jobs", count: model.jobs.jobs.count) {
                 JobsRuntimeBadge()
-                Button { model.jobs.newJob(for: model.jobs.agentFilter) } label: { Label("New Job", systemImage: "plus") }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.bots.isEmpty)
+                // For the agent shown, or the first that can own a job when that is a specialist (#250).
+                Button { model.jobs.newJob(for: model.jobs.agentFilter.flatMap { model.bot($0)?.canOwnTasks == true ? $0 : nil }) } label: {
+                    Label("New Job", systemImage: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.taskOwners.isEmpty)
             }
             // The search beside the filters, or above them in a narrow window.
             ViewThatFits(in: .horizontal) {
@@ -86,7 +89,10 @@ struct JobsView: View {
             Picker("Agent", selection: agentFilter) {
                 Text("All agents").tag(UUID?.none)
                 Divider()
-                ForEach(model.bots) { bot in Text("\(bot.emoji) \(bot.name)").tag(UUID?.some(bot.id)) }
+                // The agents, and a specialist while it still owns (paused) jobs (#250).
+                ForEach(model.bots.filter { $0.canOwnTasks || !model.jobs.jobs(of: $0.id).isEmpty }) { bot in
+                    Text("\(bot.emoji) \(bot.name)").tag(UUID?.some(bot.id))
+                }
             }
             .labelsHidden().fixedSize()
             .accessibilityLabel("Agent")

@@ -523,6 +523,13 @@ enum DevHooks {
         }
     }
 
+    private static func snapshotRow(_ bot: Bot, model: AppModel) -> some View {
+        BotRow(bot: bot, status: model.status(of: bot), summary: model.botRowSummary(of: bot),
+               selected: model.visibleBotID == bot.id)
+            .padding(.horizontal, 6)
+            .background(model.visibleBotID == bot.id ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 8))
+    }
+
     /// The sidebar's rows as `sidebar.png`; the sidebar's material isn't in the window's picture.
     static func snapshotSidebar(model: AppModel, into dir: URL) {
         let rows = VStack(alignment: .leading, spacing: 4) {
@@ -541,16 +548,25 @@ enum DevHooks {
             }
             // Each section's heading, and its bots unless it is collapsed (as the sidebar keeps it).
             let collapsed = CollapsedSections(rawValue: UserDefaults.standard.string(forKey: CollapsedSections.storageKey) ?? "")
-            ForEach(model.botSections.groups) { group in
+            let specialists = model.specialists
+            ForEach(model.agentSections.groups.filter { !$0.botIDs.isEmpty || specialists.isEmpty }) { group in
                 Text(group.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.vertical, 6)
                 if !collapsed.titles.contains(group.title) {
-                    ForEach(group.botIDs.compactMap(model.bot)) { bot in
-                        BotRow(bot: bot, status: model.status(of: bot), summary: model.botRowSummary(of: bot),
-                               selected: model.visibleBotID == bot.id)
-                            .padding(.horizontal, 6)
-                            .background(model.visibleBotID == bot.id ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 8))
-                    }
+                    ForEach(group.botIDs.compactMap(model.bot)) { bot in snapshotRow(bot, model: model) }
                 }
+            }
+            // Specialists last, collapsed with its busy dots unless opened (#250).
+            if !specialists.isEmpty {
+                let expanded = UserDefaults.standard.bool(forKey: "sidebar.specialistsExpanded")
+                let summary = BotRowSummary(merging: specialists.map { ($0.name, model.botRowSummary(of: $0)) })
+                HStack {
+                    Text("Specialists").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    if !expanded, !summary.dots.isEmpty { BotRowDots(summary: summary) }
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 6)
+                if expanded { ForEach(specialists) { bot in snapshotRow(bot, model: model) } }
             }
             // What sits above New Bot while the sidebar's changes aren't saved.
             if let failure = model.indexFailure { IndexFailureBanner(failure: failure).padding(.horizontal, -10) }

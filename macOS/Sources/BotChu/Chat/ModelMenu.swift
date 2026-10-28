@@ -13,6 +13,13 @@ struct ModelMenu: View {
     var inInspector = false
     /// As rows of a form, such as the job editor's.
     var inForm = false
+    /// One of the two, as a cell of the Agents table (#250): a plain value whose chevron shows while
+    /// its row is hovered, in space kept for it. An effort the model doesn't take is a dash.
+    var tableCell: TableCell?
+    var rowHovered = false
+    /// The effort as its glyph only, in a narrow table.
+    var compact = false
+    enum TableCell { case model, effort }
     @State private var showsModels = false
     @State private var showsEffort = false
 
@@ -35,7 +42,18 @@ struct ModelMenu: View {
 
     var body: some View {
         Group {
-            if inInspector {
+            if let tableCell {
+                switch tableCell {
+                case .model: modelButton
+                case .effort:
+                    if efforts.isEmpty {
+                        Text("—").foregroundStyle(.tertiary).padding(.leading, 6)
+                            .accessibilityLabel("Reasoning effort is not supported by this model")
+                    } else {
+                        effortButton
+                    }
+                }
+            } else if inInspector {
                 InspectorRow("Model") { modelButton }
                 InspectorRow("Reasoning", last: !offersFast) { effortButton }
                 if offersFast {
@@ -59,7 +77,7 @@ struct ModelMenu: View {
         .disabled(disabled)
         .task(id: settings.account.kind) {
             if settings.account.kind == .pi { await app.modelCatalog.load() }
-            if DevHooks.dataDir != nil, DevHooks.env["BOTCHU_OPEN"] != nil {
+            if DevHooks.dataDir != nil, DevHooks.env["BOTCHU_OPEN"] != nil, tableCell == nil {
                 // Let the review window finish opening/resizing before anchoring its popover.
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { return }
@@ -81,6 +99,11 @@ struct ModelMenu: View {
         Button { showsModels.toggle() } label: {
             if inForm {
                 FormChoiceLabel(title: data.title)
+            } else if tableCell != nil {
+                HStack(spacing: 4) {
+                    Text(data.title).lineLimit(1).truncationMode(.middle)
+                    tableChevron(active: showsModels)
+                }
             } else if inInspector {
                 InspectorChoiceLabel(title: data.title)
             } else {
@@ -93,7 +116,7 @@ struct ModelMenu: View {
                 }
             }
         }
-        .buttonStyle(GenerationButtonStyle(active: showsModels, compact: inInspector, form: inForm))
+        .buttonStyle(GenerationButtonStyle(active: showsModels, compact: inInspector, form: inForm, table: tableCell != nil))
         .accessibilityLabel("Model: \(data.title)")
         .help(disabled ? "Model can change when this turn ends" : modelHelp)
         .popover(isPresented: $showsModels, arrowEdge: .top) {
@@ -107,6 +130,12 @@ struct ModelMenu: View {
         Button { showsEffort.toggle() } label: {
             if inForm {
                 FormChoiceLabel(title: efforts.isEmpty ? "Not supported" : settings.reasoningEffort?.title ?? "Auto")
+            } else if tableCell != nil {
+                HStack(spacing: 6) {
+                    EffortGlyph(effort: settings.reasoningEffort)
+                    if !compact { Text(settings.reasoningEffort?.title ?? "Auto").lineLimit(1) }
+                    tableChevron(active: showsEffort)
+                }
             } else if inInspector {
                 InspectorChoiceLabel(title: efforts.isEmpty ? "Not supported" : settings.reasoningEffort?.title ?? "Auto")
             } else {
@@ -119,7 +148,7 @@ struct ModelMenu: View {
                 }
             }
         }
-        .buttonStyle(GenerationButtonStyle(active: showsEffort, compact: inInspector, form: inForm))
+        .buttonStyle(GenerationButtonStyle(active: showsEffort, compact: inInspector, form: inForm, table: tableCell != nil))
         .fixedSize()
         .disabled(efforts.isEmpty)
         .accessibilityLabel(efforts.isEmpty ? "Reasoning effort is not supported by this model"
@@ -158,6 +187,10 @@ struct ModelMenu: View {
             .foregroundStyle(Palette.secondaryText)
     }
 
+    private func tableChevron(active: Bool) -> some View {
+        TableChevron(symbol: "chevron.down", shown: rowHovered || active)
+    }
+
     private var modelHelp: String {
         let argument = GenerationOptions.modelArgument(data.effectiveID, kind: settings.account.kind, effort: settings.reasoningEffort)
         return argument == data.effectiveID ? data.detail : "\(data.detail) · runs as \(argument)"
@@ -181,15 +214,47 @@ private struct FormChoiceLabel: View {
     }
 }
 
-private struct GenerationButtonStyle: ButtonStyle {
+/// A table cell's chevron (#250): shown while its row is hovered or its control is open, and kept
+/// in place while hidden, so the value beside it never moves.
+struct TableChevron: View {
+    let symbol: String
+    let shown: Bool
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(Palette.secondaryText)
+            .opacity(shown ? 1 : 0)
+            .animation(.easeOut(duration: 0.12), value: shown)
+            .accessibilityHidden(true)
+    }
+}
+
+struct GenerationButtonStyle: ButtonStyle {
     var active = false
     var compact = false
     var form = false
+    /// As a value in a table's cell (#250): plain at rest, a light fill while hovered, and the
+    /// violet of an open control while its popover shows.
+    var table = false
     @Environment(\.isEnabled) private var enabled
     @State private var hovered = false
 
     func makeBody(configuration: Configuration) -> some View {
-        if form {
+        if table {
+            configuration.label
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.text)
+                .padding(.horizontal, 6)
+                .frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(active ? Palette.violet.opacity(0.12) : Color.primary.opacity(hovered || configuration.isPressed ? 0.07 : 0)))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(active ? Palette.violet.opacity(0.4) : .clear))
+                .opacity(enabled ? 1 : 0.45)
+                .contentShape(RoundedRectangle(cornerRadius: 6))
+                .onHover { hovered = $0 }
+        } else if form {
             configuration.label
                 .foregroundStyle(Palette.text)
                 .opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)

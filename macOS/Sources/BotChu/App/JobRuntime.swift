@@ -152,7 +152,7 @@ final class JobRuntime {
     // MARK: Owner actions
 
     func newJob(for botID: UUID?) {
-        guard let model, let botID = botID ?? model.bots.first(where: { !$0.isRemoteQueue })?.id, model.bot(botID)?.isRemoteQueue == false else { return }
+        guard let model, let botID = botID ?? model.taskOwners.first?.id, model.bot(botID)?.canOwnTasks == true else { return }
         var schedule = JobSchedule()
         // Intervals start at the next whole hour.
         let hour = Calendar.current.dateInterval(of: .hour, for: Date())?.end ?? Date()
@@ -220,6 +220,18 @@ final class JobRuntime {
     }
 
     // MARK: Agents
+
+    /// The jobs that making the agent a specialist would pause (#250), for the confirmation before it.
+    func pausedBySpecialistSwitch(of botID: UUID) -> [Job] { JobEngine.pausedBySpecialistSwitch(of: botID, in: jobs) }
+
+    /// An agent's role changed (#250): becoming a specialist pauses its jobs that are on, and becoming
+    /// an agent again resumes the ones that paused. Its runs under way, and its tasks, go on.
+    func roleChanged(_ botID: UUID, toSpecialist: Bool) {
+        // A job whose save fails says so in Jobs (`problems`); the engine starts none of a specialist's runs anyway.
+        _ = try? engine.switchRole(of: botID, toSpecialist: toSpecialist)
+        refresh()
+        if !toSpecialist { tick() }
+    }
 
     /// An agent is being deleted: its runs stop, and its jobs go with its folder.
     func removeBot(_ botID: UUID) {
@@ -627,7 +639,8 @@ final class JobRuntime {
 
     private func makeEngine(jobs: [Job], now: @escaping () -> Date) -> JobEngine {
         JobEngine(jobs: jobs, now: now, persist: { [weak self] job in try MainActor.assumeIsolated { try self?.write(job) } },
-                  erase: { [weak self] job in try MainActor.assumeIsolated { try self?.erase(job) } })
+                  erase: { [weak self] job in try MainActor.assumeIsolated { try self?.erase(job) } },
+                  refusal: { [weak self] botID in MainActor.assumeIsolated { self?.model?.bot(botID)?.taskOwnershipProblem } })
     }
 
     /// Clears what the owner was told about a job's last action.
