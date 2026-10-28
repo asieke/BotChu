@@ -142,8 +142,24 @@ final class TranscriptModel {
         self.epoch = epoch
         if loading == nil, transcript.backlog(messages) > Self.coldLimit { load(messages, root: root) }
         if holding { return [] }
+        let previous = verifyNext ? transcript.items : nil
         let anchor = windowStart.flatMap { transcript.items.indices.contains($0) ? transcript.items[$0].id : nil }
         transcript.update(messages, verify: verifyNext)
+        if let previous {
+            viewport.relocateAnchor(from: previous, to: transcript.items)
+            // The same exploration remains open when paging changes its first resident call.
+            let groups = transcript.items.compactMap { item -> ExplorationGroup? in
+                if case .exploration(let group) = item { group } else { nil }
+            }
+            let containing = Dictionary(groups.flatMap { group in group.calls.map { ($0.id, group.id) } }, uniquingKeysWith: { _, last in last })
+            for item in previous {
+                guard case .exploration(let group) = item,
+                      !groups.contains(where: { $0.id == group.id }),
+                      let next = group.calls.lazy.compactMap({ containing[$0.id] }).first else { continue }
+                if let open = overrides.removeValue(forKey: group.id) { overrides[next] = open }
+                if anchor == group.id { windowStart = transcript.items.firstIndex { $0.id == next } }
+            }
+        }
         if let anchor, let moved = transcript.items.firstIndex(where: { $0.id == anchor }) { windowStart = moved }
         if revealNext {
             windowStart = max(0, (windowStart ?? 0) - Self.page)
@@ -218,8 +234,12 @@ final class TranscriptModel {
     func follow(_ event: ChatPin.Event) {
         var event = event
         if hasLaterPage, case .scrolled(let delta, let below) = event {
-            if delta > 0, below < 200 { loadLater?() }
-            event = .scrolled(delta: delta, below: max(100, below))
+            // AppKit can clamp a drag at the end (or settle it during layout) before reporting
+            // the live scroll, leaving a zero delta. That scroll still asks for the next page.
+            if delta >= 0, below < 200 { loadLater?() }
+            // A synchronous live-tail read can reach the newest content during this scroll.
+            // Only intermediate pages must prevent the reader from resuming Follow Live.
+            if hasLaterPage { event = .scrolled(delta: delta, below: max(100, below)) }
         }
         if event == .jumped || event == .opened || event == .sent { windowStart = nil }
         var pin = self.pin

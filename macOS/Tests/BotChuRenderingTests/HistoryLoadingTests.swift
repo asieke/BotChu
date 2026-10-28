@@ -9,6 +9,34 @@ import BotChuCore
 /// conversation is read when it is shown or something needs it; and what is asked of one meanwhile
 /// waits for it, in order, so nothing is lost, sent twice or written over a full transcript.
 extension RenderingTests {
+    @Test func pinningAnUnsavedExplorationKeepsTheSelectedCallInPlace() throws {
+        let state = ConversationState(), model = TranscriptModel()
+        let calls = (0..<600).map(BrowsingFixture.read)
+        state.replace(calls)
+        var items = model.items(for: state.displayMessages, root: nil, epoch: state.epoch)
+        model.scrolled(top: 0, height: 800, width: 640)
+        let inputs = TranscriptViewport.Inputs(width: 640, density: 2, dark: false, epoch: state.epoch)
+        _ = model.plan(items, from: 0, inputs: inputs) { _, _ in .init(split: .calls) }
+        model.follow(.openedCard)
+        model.scrolled(top: model.viewport.plan.total * 0.75, height: 800, width: 640)
+        _ = model.plan(items, from: 0, inputs: inputs) { _, _ in .init(split: .calls) }
+        let top = try #require(model.viewport.visibleTop)
+        let row = try #require(model.viewport.plan.rows.first { $0.top + $0.height > top })
+        let selected = calls[row.part].id, offset = row.top - top
+        model.toggleExpanded(selected)
+        // A burst can exceed the browsing limit before its first checkpoint. Pinning the view
+        // then changes a group's first resident call just as a disk page does.
+        state.pinDisplay()
+        items = model.items(for: state.displayMessages, root: nil, epoch: state.epoch)
+        _ = model.plan(items, from: 0, inputs: .init(width: 640, density: 2, dark: false, epoch: state.epoch)) { _, _ in .init(split: .calls) }
+        let moved = try #require(model.viewport.plan.rows.first { BrowsingFixture.messages(in: $0, items: items).contains(selected) })
+        let corrected = model.viewport.correction ?? top
+        #expect(abs(moved.top - corrected - offset) < 0.5)
+        #expect(model.isExpanded(selected))
+        #expect(state.displayMessages.count == PagedTranscript.browsingLimit)
+        #expect(state.messages.count == calls.count, "Unsaved output is still retained for its checkpoint")
+    }
+
     @Test func aSubagentReaderKeepsItsPageWhenTheActiveTailIsTrimmed() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-subagent-page-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -100,12 +128,14 @@ extension RenderingTests {
         #expect(state.displayMessages.contains { $0.id == forwardAnchor })
         #expect(state.displayMessages.count <= PagedTranscript.browsingLimit)
         let old = state.displayMessages
+        let displayEpoch = state.epoch
         // Appending/saving while an old page is selected leaves its IDs and selectable text alone.
         for i in 0..<1_000 { state.append(ChatMessage(role: .assistant, text: "Live \(i)")) }
         app.saveThread(target)
         await app.storage.settle()
         #expect(state.messages.count <= PagedTranscript.residentLimit)
         #expect(state.displayMessages == old)
+        #expect(state.epoch == displayEpoch, "Saving an unrelated tail must not invalidate the reader's measured page")
         #expect(old.first?.text == messages[state.displayStart].text)
         let requested = try #require(await app.loadedThread(target))
         #expect(requested.count == 6_000)

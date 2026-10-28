@@ -36,6 +36,10 @@ final class ConversationState {
         return browsing.messages.map { latest[$0.id] ?? pending[$0.id]?.message ?? $0 }
     }
     var displayStart: Int { browsing?.start ?? historyStart }
+    var startsBotTurn: Bool {
+        let previous = (browsing?.prefix ?? prefixDigest).summary.lastRole
+        return previous != .assistant && previous != .tool
+    }
     var hasLaterPage: Bool { browsing.map { $0.start + $0.messages.count < historyStart + messages.count } ?? false }
     var snapshot: PagedTranscript.Snapshot { .init(messages, start: historyStart, base: savedBase, pending: Array(pending.values)) }
 
@@ -57,9 +61,14 @@ final class ConversationState {
     func pinDisplay() {
         guard browsing == nil else { return }
         let shown = Array(messages.suffix(PagedTranscript.browsingLimit))
+        var prefix = prefixDigest
+        let omitted = Array(messages.prefix(messages.count - shown.count))
+        prefix.summary.extend(with: omitted, from: 0)
+        prefix.count += omitted.count
         browsing = HistoryLoad(messages: shown, digest: ThreadDigest(summary: summary, count: historyStart + messages.count,
                                 lastReply: messages.last(where: { $0.role == .assistant })?.text), bytes: 0, reindexed: false,
-                                start: historyStart + messages.count - shown.count, prefix: prefixDigest)
+                                start: historyStart + messages.count - shown.count, prefix: prefix)
+        epoch += 1
     }
 
     func browseLater(_ page: HistoryLoad) {
@@ -68,6 +77,8 @@ final class ConversationState {
         let overlap = max(0, end - page.start)
         current.messages += page.messages.dropFirst(overlap)
         let drop = max(0, current.messages.count - PagedTranscript.browsingLimit)
+        current.prefix.summary.extend(with: Array(current.messages.prefix(drop)), from: 0)
+        current.prefix.count += drop
         current.messages.removeFirst(drop)
         current.start += drop
         browsing = current
@@ -186,6 +197,11 @@ final class ConversationState {
         let keep = max(0, safe)
         guard keep > 0, messages.prefix(keep).elementsEqual(snapshot.messages.prefix(keep)) else { return }
         let dropped = Array(messages.prefix(keep))
+        if var page = browsing {
+            let committed = Dictionary(dropped.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            page.messages = page.messages.map { committed[$0.id] ?? $0 }
+            browsing = page
+        }
         for (offset, message) in dropped.enumerated() where message.toolState == .running {
             pending[message.id] = .init(position: historyStart + offset, message: message)
         }
@@ -200,7 +216,9 @@ final class ConversationState {
         historyStart += keep
         messages.removeFirst(keep)
         savedBase?.removeFirst(keep)
-        epoch += 1
+        // The frozen page has not changed. Invalidating its measured heights on every live
+        // checkpoint would move a reader while unrelated output is saved below them.
+        if browsing == nil { epoch += 1 }
     }
 
     /// The whole thread given anew. Given to a conversation not in memory, it is the thread now:

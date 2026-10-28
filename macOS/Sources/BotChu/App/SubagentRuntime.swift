@@ -426,8 +426,9 @@ final class SubagentRuntime {
             // Admitted once its record is saved, off the main thread; the limits count it meanwhile.
             admitting += 1
             requestCounts[caller.target, default: 0] += 1
+            let brief = ChatMessage(role: .user, text: request.brief)
             do {
-                try await archive.save(snapshot(record, messages: [ChatMessage(role: .user, text: request.brief)]))
+                try await archive.save(snapshot(record, messages: [brief]))
                 admitting -= 1
             } catch {
                 admitting -= 1
@@ -435,7 +436,9 @@ final class SubagentRuntime {
                 throw error
             }
             add(record, to: caller.target)
-            live(record.id).messages = [ChatMessage(role: .user, text: request.brief)]
+            // Admission and launch refer to the same persisted message. A fresh ID here would
+            // make the paged archive preserve both briefs when it reconciles the next save.
+            live(record.id).messages = [brief]
             live(record.id).state = RunState(preparing: true)
             deliveries[record.id] = caller.transport
             guard contexts[caller.id] != nil else { stop(record.id); return }

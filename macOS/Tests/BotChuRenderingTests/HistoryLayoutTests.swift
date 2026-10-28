@@ -16,7 +16,10 @@ extension RenderingTests {
         defer { fixture.cleanUp() }
         let app = fixture.app
         let conversation = app.conversation(fixture.task)
-        conversation.replace(BrowsingFixture.messages(5_000))
+        let original = BrowsingFixture.messages(5_000)
+        conversation.replace(original)
+        app.saveThread(fixture.task)
+        await app.storage.settle()
         TranscriptCache.forget(fixture.task)
         app.runStates[fixture.task] = RunState(hasOutput: true)
         app.show(fixture.task)
@@ -32,46 +35,64 @@ extension RenderingTests {
         try await settle(window)
         let limit = TranscriptViewport.rowLimit
         let scroll = try #require(Self.chatScrollView(in: host))
-        func scrollTo(_ y: CGFloat) async throws {
+        func scrollTo(_ y: CGFloat, frames: Int = 4) async throws {
             Self.dragScroller(scroll, to: y)
-            try await settle(window)
+            try await settle(window, frames: frames)
+            for _ in 0..<250 where conversation.isPaging { try await settle(window) }
+            try #require(!conversation.isPaging)
         }
         func items() -> ChunkedArray<ActivityItem> {
-            model.items(for: app.thread(fixture.task), root: app.task(fixture.task)?.folder, epoch: conversation.epoch)
+            model.items(for: conversation.displayMessages, root: app.task(fixture.task)?.folder, epoch: conversation.epoch)
+        }
+        func earlier() async throws {
+            if model.start(of: items()) > 0 { model.showEarlier(items: items()) }
+            else {
+                await withCheckedContinuation { done in
+                    app.pageEarlier(fixture.task) { model.revealEarlier(); done.resume() }
+                }
+            }
+            try await settle(window)
+            #expect(conversation.messages.count <= PagedTranscript.residentLimit)
+            #expect(conversation.displayMessages.count <= PagedTranscript.browsingLimit)
         }
         #expect(model.realized > 0)
         #expect(model.realized <= limit)
-        #expect(items().count > 3_000)
+        #expect(conversation.summary.messageCount == ThreadSummary(original).messageCount)
+        #expect(conversation.messages.map(\.id) == original.suffix(PagedTranscript.residentLimit).map(\.id))
 
-        // Ten pages of earlier items, each clicked at the top: what the reader saw stays put.
-        for page in 0..<10 {
+        // At least ten Show Earlier actions and 400 items, including partial disk pages:
+        // each clicked at the top keeps what the reader saw in place.
+        var revealed: Set<UUID> = []
+        for page in 0..<20 {
             try await scrollTo(0)
             let seen = try #require(picture(of: scroll, in: window))
             let anchor = BrowsingFixture.anchor(model)
             let start = model.start(of: items())
             let state = model.viewport.summary
-            model.showEarlier(items: items())
+            try await earlier()
             try await settle(window, frames: 12)
+            revealed.formUnion(items()[model.start(of: items())...].map(\.id))
             #expect(model.realized <= limit)
             let now = anchor.flatMap { BrowsingFixture.position(model, $0.row) }
             #expect(picture(of: scroll, in: window) == seen,
                     "page \(page) from \(start) of \(items().count): reader's row at \(anchor.map { "\($0.at)" } ?? "-"), now \(now.map { "\($0)" } ?? "gone"); clip \(scroll.contentView.bounds.minY); before: \(state); after: \(model.viewport.summary)")
+            if page >= 9 && revealed.count >= 400 { break }
         }
-        let open = items().count - model.start(of: items())
-        #expect(open >= 400)
+        #expect(revealed.count >= 400, "Earlier items remain reachable across bounded pages")
 
         // Paused at an old message while 1,000 items arrive and the reply streams below.
         try await scrollTo((scroll.documentView?.frame.height ?? 0) * 0.3)
         try await settle(window, frames: 10)
         model.peakRealized = model.realized
         let held = try #require(picture(of: scroll, in: window))
-        let before = items().count
-        var index = 0
-        while items().count < before + 1_000 {
-            for _ in 0..<20 {
-                conversation.append(BrowsingFixture.message(100_000 + index))
-                index += 1
-            }
+        let selected = conversation.displayMessages
+        let incoming = (100_000..<101_400).map(BrowsingFixture.message)
+        var grouped = ActivityTranscript()
+        grouped.update(incoming)
+        #expect(grouped.items.count >= 1_000)
+        for offset in stride(from: 0, to: incoming.count, by: 20) {
+            for message in incoming[offset..<min(offset + 20, incoming.count)] { conversation.append(message) }
+            app.saveThread(fixture.task)
             try await Task.sleep(for: .milliseconds(5))
             window.contentView?.layoutSubtreeIfNeeded()
         }
@@ -80,32 +101,57 @@ extension RenderingTests {
             conversation.stream { $0[$0.count - 1].text += " token \(i) with **some** words" }
             try await Task.sleep(for: .milliseconds(10))
         }
+        app.saveThread(fixture.task)
+        await app.storage.settle()
         try await settle(window, frames: 12)
         #expect(model.peakRealized <= limit)
         #expect(picture(of: scroll, in: window) == held)
+        #expect(conversation.displayMessages == selected, "The selected page's full text survives live-tail eviction")
+        #expect(conversation.messages.count <= PagedTranscript.residentLimit)
 
-        // Down through everything open, then up again: every row is laid out at some point,
-        // never more than the bound at once.
-        var planned: Set<UUID> = []
-        try await scrollTo(0)
+        // Open back to the first page, then walk the complete history in both directions,
+        // including pages evicted from memory. Follow the corrected position after each page.
+        var progress = BrowsingFixture.Progress()
+        while conversation.displayStart > 0 || model.start(of: items()) > 0 {
+            try await scrollTo(0)
+            try await earlier()
+            try progress.check(conversation, model, scroll)
+        }
+        let expected = Set((original + incoming + conversation.messages.suffix(1)).map(\.id))
+        var planned = Set<UUID>()
+        progress = BrowsingFixture.Progress()
         model.peakRealized = model.realized
-        var y: CGFloat = 0
-        while y < (scroll.documentView?.frame.height ?? 0) {
-            planned.formUnion(model.viewport.plan.rows.map(\.id.item))
-            y += 1_000
-            try await scrollTo(y)
+        try await scrollTo(0)
+        for _ in 0..<4_000 {
+            planned.formUnion(BrowsingFixture.plannedMessages(model, items: items()))
+            let below = (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.maxY
+            if !conversation.hasLaterPage && below < 1 { break }
+            // Approach a page edge as a wheel does, allowing its prefetch to lay out before
+            // continuing, rather than dragging directly to the newest page's end.
+            let step = scroll.contentView.bounds.height * 0.7
+            let advance = conversation.hasLaterPage && below > 150 ? min(step, below - 150) : step
+            try await scrollTo(scroll.contentView.bounds.minY + advance, frames: 2)
+            try progress.check(conversation, model, scroll)
         }
-        planned.formUnion(model.viewport.plan.rows.map(\.id.item))
-        let reachable = items()[model.start(of: items())...].map(\.id)
-        #expect(Set(reachable).isSubset(of: planned))
-        while y > 0 {
-            y -= 1_500
-            try await scrollTo(y)
+        #expect(expected.subtracting(planned).isEmpty, "\(expected.subtracting(planned).count) messages unreachable scrolling down")
+        planned.removeAll()
+        progress = BrowsingFixture.Progress()
+        for _ in 0..<4_000 {
+            planned.formUnion(BrowsingFixture.plannedMessages(model, items: items()))
+            if scroll.contentView.bounds.minY < 1 {
+                if conversation.displayStart == 0 && model.start(of: items()) == 0 { break }
+                try await earlier()
+            } else {
+                try await scrollTo(max(0, scroll.contentView.bounds.minY - scroll.contentView.bounds.height * 0.7), frames: 2)
+            }
+            try progress.check(conversation, model, scroll)
         }
+        #expect(expected.subtracting(planned).isEmpty, "\(expected.subtracting(planned).count) messages unreachable scrolling up")
         #expect(model.peakRealized <= limit)
 
         // Back to the newest, and away and back: the newest rows only, at the end.
-        try await scrollTo(.greatestFiniteMagnitude)
+        conversation.showLatest()
+        model.follow(.jumped)
         try await settle(window, frames: 10)
         #expect(model.realized <= limit)
         let below = (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.maxY
@@ -131,8 +177,11 @@ extension RenderingTests {
         defer { fixture.cleanUp() }
         let app = fixture.app
         let calls = (0..<5_000).map { BrowsingFixture.read($0) }
-        app.conversation(fixture.task).replace([ChatMessage(role: .user, text: "Trace every file")] + calls
+        let conversation = app.conversation(fixture.task)
+        conversation.replace([ChatMessage(role: .user, text: "Trace every file")] + calls
             + [ChatMessage(role: .assistant, text: "Traced.")])
+        app.saveThread(fixture.task)
+        await app.storage.settle()
         TranscriptCache.forget(fixture.task)
         app.show(fixture.task)
         let defaults = UserDefaults(suiteName: fixture.domain)!
@@ -148,27 +197,61 @@ extension RenderingTests {
         try await settle(window, frames: 10)
         let limit = TranscriptViewport.rowLimit
         let scroll = try #require(Self.chatScrollView(in: host))
-        func scrollTo(_ y: CGFloat) async throws {
+        func scrollTo(_ y: CGFloat, frames: Int = 4) async throws {
             Self.dragScroller(scroll, to: y)
+            try await settle(window, frames: frames)
+            for _ in 0..<250 where conversation.isPaging { try await settle(window) }
+            try #require(!conversation.isPaging)
+        }
+        func items() -> ChunkedArray<ActivityItem> {
+            model.items(for: conversation.displayMessages, root: app.task(fixture.task)?.folder, epoch: conversation.epoch)
+        }
+        func earlier() async throws {
+            if model.start(of: items()) > 0 { model.showEarlier(items: items()) }
+            else {
+                await withCheckedContinuation { done in
+                    app.pageEarlier(fixture.task) { model.revealEarlier(); done.resume() }
+                }
+            }
             try await settle(window)
+            #expect(conversation.displayMessages.count <= PagedTranscript.browsingLimit)
+            #expect(conversation.messages.count <= PagedTranscript.residentLimit)
         }
         model.peakRealized = model.realized
         #expect(model.realized > 10)
         #expect(model.realized <= limit)
-        // In Raw, every call is a card of its own: scroll a long way up through them.
-        #expect((scroll.documentView?.frame.height ?? 0) > 5_000 * 20)
-        let bottom = scroll.contentView.bounds.minY
-        for step in 1...20 { try await scrollTo(bottom - CGFloat(step) * 4_000) }
+        // In Raw, every call is a card of its own. Visit every card across all the pages;
+        // prepending calls to a partial group keeps the same call at the reader's position.
+        var planned = Set<UUID>()
+        var progress = BrowsingFixture.Progress()
+        for _ in 0..<4_000 {
+            let current = items()
+            planned.formUnion(BrowsingFixture.plannedMessages(model, items: current))
+            if scroll.contentView.bounds.minY < 1 {
+                if conversation.displayStart == 0 && model.start(of: current) == 0 { break }
+                let anchor = try #require(model.viewport.plan.rows.first { $0.top + $0.height > (model.viewport.visibleTop ?? 0) })
+                let message = try #require(BrowsingFixture.messages(in: anchor, items: current).first)
+                let at = anchor.top - (model.viewport.visibleTop ?? 0)
+                try await earlier()
+                let now = model.viewport.plan.rows.first { BrowsingFixture.messages(in: $0, items: items()).contains(message) }
+                    .map { $0.top - (model.viewport.visibleTop ?? 0) }
+                #expect(now.map { abs($0 - at) < 1.5 } == true, "Paged exploration moved its call from \(at) to \(now.map(String.init(describing:)) ?? "gone")")
+            } else {
+                try await scrollTo(max(0, scroll.contentView.bounds.minY - scroll.contentView.bounds.height * 0.7), frames: 2)
+            }
+            try progress.check(conversation, model, scroll)
+        }
+        let expected = Set(calls.map(\.id))
+        #expect(expected.subtracting(planned).isEmpty, "\(expected.subtracting(planned).count) raw calls were unreachable")
         #expect(model.peakRealized <= limit)
         // Detailed, opened and closed again and again, scrolling through it each time.
         defaults.set(ChatDensity.detailed.rawValue, forKey: ChatDensity.storageKey)
         try await settle(window, frames: 10)
-        let group = try #require(model.items(for: app.thread(fixture.task), root: app.task(fixture.task)?.folder,
-                                             epoch: app.conversation(fixture.task).epoch).first { if case .exploration = $0 { true } else { false } })
         let entry = calls[2].id
-        let head = TranscriptViewport.RowID(item: group.id, part: 0)
         for round in 0..<4 {
             try await scrollTo(0)
+            let group = try #require(items().first { if case .exploration = $0 { true } else { false } })
+            let head = TranscriptViewport.RowID(item: group.id, part: 0)
             // Opened where the reader clicked it, it grows downward from its header.
             let clicked = try #require(BrowsingFixture.position(model, head))
             model.toggle(group.id, default: false)
@@ -176,11 +259,30 @@ extension RenderingTests {
             #expect(model.realized <= limit)
             #expect(BrowsingFixture.position(model, head).map { abs($0 - clicked) < 1.5 } == true)
             if round == 0 { model.toggleExpanded(entry) }
-            for step in 1...8 { try await scrollTo(CGFloat(step) * 9_000) }
+            var reachable = Set<UUID>()
+            progress = BrowsingFixture.Progress()
+            for _ in 0..<100 {
+                reachable.formUnion(conversation.displayMessages.filter { $0.role == .tool }.map(\.id))
+                let current = try #require(items().first { if case .exploration = $0 { true } else { false } })
+                #expect(model.isOpen(current.id, default: false), "A paged group's open state follows its calls")
+                if !conversation.hasLaterPage { break }
+                try await scrollTo(.greatestFiniteMagnitude)
+                try progress.check(conversation, model, scroll)
+            }
+            #expect(expected.subtracting(reachable).isEmpty, "Detailed round \(round) could not reach \(expected.subtracting(reachable).count) calls")
             #expect(model.isExpanded(entry))
-            model.toggle(group.id, default: false)
+            let last = try #require(items().first { if case .exploration = $0 { true } else { false } })
+            model.toggle(last.id, default: false)
             try await settle(window, frames: 10)
             #expect(model.realized <= limit)
+            progress = BrowsingFixture.Progress()
+            while conversation.displayStart > 0 || model.start(of: items()) > 0 {
+                try await scrollTo(0)
+                try await earlier()
+                try progress.check(conversation, model, scroll)
+            }
+            #expect(conversation.displayMessages.contains { $0.id == entry })
+            #expect(model.isExpanded(entry), "Details remain selected after eviction and reloading")
         }
         #expect(model.peakRealized <= limit)
     }
@@ -276,6 +378,36 @@ extension RenderingTests {
 }
 
 @MainActor enum BrowsingFixture {
+    @MainActor struct Progress {
+        private var last = ""
+        private var stalled = 0
+
+        mutating func check(_ state: ConversationState, _ model: TranscriptModel, _ scroll: NSScrollView) throws {
+            let location = "\(state.displayStart):\(model.windowStart ?? -1):\(Int(scroll.contentView.bounds.minY.rounded()))"
+            stalled = location == last ? stalled + 1 : 0
+            last = location
+            let diagnostic = "Paging stopped at \(location); later \(state.hasLaterPage)/\(model.hasLaterPage), loading \(state.isPaging); \(model.viewport.summary)"
+            try #require(stalled < 5, Comment(rawValue: diagnostic))
+        }
+    }
+
+    static func messages(in row: TranscriptViewport.Row, items: ChunkedArray<ActivityItem>) -> [UUID] {
+        guard items.indices.contains(row.index) else { return [] }
+        let item = items[row.index]
+        guard case .exploration(let group) = item else { return [item.id] }
+        switch row.split {
+        case .calls: return [group.calls[row.part].id]
+        case .opened where row.part > 0 && row.part <= group.entries.count:
+            return group.calls(of: group.entries[row.part - 1]).map(\.id)
+        case .opened: return []
+        case .whole: return group.calls.map(\.id)
+        }
+    }
+
+    static func plannedMessages(_ model: TranscriptModel, items: ChunkedArray<ActivityItem>) -> Set<UUID> {
+        Set(model.viewport.plan.rows.flatMap { messages(in: $0, items: items) })
+    }
+
     static func read(_ index: Int) -> ChatMessage {
         let path = "/work/repo/Sources/Folder\(index % 5)/File\(index).swift"
         return ChatMessage(role: .tool, toolID: "r\(index)", toolName: "Read", toolInput: path, toolOutput: "let x = \(index)", toolState: .done)

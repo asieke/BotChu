@@ -641,9 +641,15 @@ extension RenderingTests {
         try Data().write(to: fixture.folder.appendingPathComponent("stream-go"))
         try await fixture.wait { (app.delegation.threads[run.id]?.count ?? 0) >= 102 }
         // Nothing streamed is written yet: not once per batch.
-        #expect(fixture.home.loadSubagentThread(id: run.id, taskID: fixture.target.taskID).count == 1)
+        let checkpoint = fixture.home.loadSubagentThread(id: run.id, taskID: fixture.target.taskID)
+        #expect(checkpoint.count == 1)
+        #expect(checkpoint.first?.id == app.delegation.threads[run.id]?.first?.id,
+                "Admission and launch keep the same brief message")
         app.stopAll()
-        #expect(fixture.home.loadSubagentThread(id: run.id, taskID: fixture.target.taskID).filter { $0.role == .tool }.count == 101)
+        let saved = fixture.home.loadSubagentThread(id: run.id, taskID: fixture.target.taskID)
+        #expect(saved.filter { $0.role == .tool }.count == 101)
+        #expect(saved.filter { $0.role == .user }.map(\.id) == checkpoint.map(\.id))
+        #expect(Set(saved.map(\.id)).count == saved.count)
     }
 
     @Test func subagentTreesGroupChildrenOnce() throws {

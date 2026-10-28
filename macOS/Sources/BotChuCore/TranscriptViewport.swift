@@ -61,12 +61,14 @@ public struct TranscriptViewport: Sendable {
         public var dark: Bool
         /// The conversation's `epoch`: a thread replaced or edited measures again.
         public var epoch: Int
+        public var startsBotTurn: Bool
 
-        public init(width: Int, density: Int, dark: Bool, epoch: Int) {
+        public init(width: Int, density: Int, dark: Bool, epoch: Int, startsBotTurn: Bool = true) {
             self.width = width
             self.density = density
             self.dark = dark
             self.epoch = epoch
+            self.startsBotTurn = startsBotTurn
         }
     }
 
@@ -194,6 +196,48 @@ public struct TranscriptViewport: Sendable {
 
     // MARK: Planning
 
+    /// A page can begin in the middle of an exploration group. Its first call (and therefore
+    /// the group's ID and its row numbers) changes as the window moves; the call being read does
+    /// not. Move the anchor by that stable call before planning the replacement window.
+    public mutating func relocateAnchor(from previous: ChunkedArray<ActivityItem>, to items: ChunkedArray<ActivityItem>) {
+        // Reaching a page's end does not mean following the end of the replacement page.
+        if !pinned, previous.first?.id != items.first?.id { atEnd = false }
+        guard var anchor, let old = previous.first(where: { $0.id == anchor.row.item }),
+              case .exploration(let group) = old, !group.calls.isEmpty, let split = cache[group.id]?.split else { return }
+        let message: UUID
+        switch split {
+        case .calls: message = group.calls[min(anchor.row.part, group.calls.count - 1)].id
+        case .opened where anchor.row.part > 0 && anchor.row.part <= group.entries.count:
+            message = group.entries[anchor.row.part - 1].id
+        default: message = group.id
+        }
+        for item in items {
+            guard case .exploration(let next) = item, let call = next.calls.firstIndex(where: { $0.id == message }) else { continue }
+            if split == .whole, next.id != group.id, let visibleTop,
+               let following = plan.rows.first(where: { row in
+                   row.id.item != group.id && row.top > (plan.rows.first(where: { $0.id.item == group.id })?.top ?? .infinity)
+                       && row.top < visibleTop + (viewport ?? Self.defaultViewport)
+                       && items.contains(where: { $0.id == row.id.item })
+               }) {
+                // The partial group's header gains earlier calls/chips. Keep the unchanged
+                // message below it where the reader saw it, letting that header grow upward.
+                self.anchor = Anchor(row: following.id, offset: visibleTop - following.top)
+                return
+            }
+            let part: Int
+            switch split {
+            case .calls: part = call
+            case .opened where anchor.row.part > 0 && anchor.row.part <= group.entries.count:
+                part = (next.entries.firstIndex(where: { $0.range.contains(call) }) ?? 0) + 1
+            case .opened where anchor.row.part > group.entries.count: part = next.entries.count + 1
+            default: part = 0
+            }
+            anchor.row = RowID(item: next.id, part: part)
+            self.anchor = anchor
+            return
+        }
+    }
+
     /// Works out the rows to lay out of `items` from `start`, the first that can be scrolled to:
     /// at the newest content while `pinned`, else around the reader's row. `expansions` changes
     /// whenever a call's details are opened or closed (`expanded` holds those open).
@@ -214,7 +258,7 @@ public struct TranscriptViewport: Sendable {
         for index in start..<items.count {
             let item = items[index]
             let style = style(index, item)
-            let turn = index == 0 || !items[index - 1].isBotTurn
+            let turn = index == 0 ? inputs.startsBotTurn : !items[index - 1].isBotTurn
             let signature = Self.signature(item, style: style, startsTurn: turn, inputs: inputs, expanded: expanded, expansions: expansions)
             let id = item.id
             if cache[id]?.signature != signature {

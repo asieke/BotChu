@@ -73,10 +73,12 @@ public enum PagedTranscript {
                                     count: min(Int(index.stamp.size), TranscriptIndex.tailLength), counted: false),
               ContentHash.of(tail) == index.tail else { return nil }
         if let pages = index.pages {
+            guard index.digest.count == 0 || index.digest.summary.lastRole != nil else { return nil }
             var start = 0, offset = 0
             for page in pages {
                 guard page.start == start, page.prefix.count == start, page.offset == offset, page.count > 0, page.count <= pageSize,
-                      page.bytes > 0, page.bytes <= Int(index.stamp.size) - offset else { return nil }
+                      page.bytes > 0, page.bytes <= Int(index.stamp.size) - offset,
+                      page.start == 0 || page.prefix.summary.lastRole != nil else { return nil }
                 start += page.count; offset += page.bytes
             }
             guard start == index.digest.count, offset == Int(index.stamp.size) else { return nil }

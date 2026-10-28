@@ -37,7 +37,8 @@ struct ChatView: View {
             let kind = current.account.kind
             let density = density, transcript = transcript
             let plan = transcript.plan(items, from: start,
-                                       inputs: .init(width: 0, density: density.layoutValue, dark: colorScheme == .dark, epoch: epoch)) { index, item in
+                                       inputs: .init(width: 0, density: density.layoutValue, dark: colorScheme == .dark, epoch: epoch,
+                                                     startsBotTurn: conversation.startsBotTurn)) { index, item in
                 Self.style(of: item, at: index, count: items.count, density: density, turnRunning: turnRunning, transcript: transcript, cards: cards)
             }
             VStack(spacing: 0) {
@@ -79,7 +80,7 @@ struct ChatView: View {
                         ForEach(plan.rows) { row in
                             let item = items[row.index]
                             TranscriptRow(row: row, item: item, bot: bot, kind: kind,
-                                          startsBotTurn: !(row.index > 0 && items[row.index - 1].isBotTurn),
+                                          startsBotTurn: row.index == 0 ? conversation.startsBotTurn : !items[row.index - 1].isBotTurn,
                                           density: density, live: turnRunning && row.index == items.count - 1,
                                           open: transcript.isOpen(item.id, default: false),
                                           runs: cards.runs(for: item), after: cards.unplaced(after: item.id))
@@ -106,7 +107,9 @@ struct ChatView: View {
                 .onAppear {
                     conversation.showLatest()
                     transcript.hasLaterPage = false
-                    transcript.loadLater = { model.pageLater(target) }
+                    transcript.loadLater = {
+                        model.pageLater(target) { transcript.hasLaterPage = conversation.hasLaterPage }
+                    }
                     transcript.follow(.opened)
                 }
                 .onDisappear {

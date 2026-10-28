@@ -135,6 +135,48 @@ private struct Layout {
 }
 
 @Suite struct TranscriptViewportTests {
+    @Test func aPartialGroupHeaderKeepsTheFollowingMessageInPlaceWhenEarlierCallsJoinIt() throws {
+        let calls = (0..<50).map { call($0) }
+        let reply = ChatMessage(role: .assistant, text: "The result below these calls.")
+        var layout = Layout(items(Array(calls.suffix(20)) + [reply]))
+        layout.pinned = false
+        layout.settle()
+        layout.jump(to: -20)
+        let row = TranscriptViewport.RowID(item: reply.id, part: 0)
+        let before = try #require(layout.onScreen(row))
+        let next = items(calls + [reply])
+        layout.viewport.relocateAnchor(from: layout.items, to: next)
+        layout.items = next
+        layout.epoch += 1
+        layout.settle()
+        #expect(layout.onScreen(row).map { abs($0 - before) < 0.5 } == true)
+    }
+
+    @Test(arguments: [false, true]) func aCallKeepsItsPositionWhenPagingChangesItsGroupID(raw: Bool) throws {
+        let calls = (0..<1_000).map { call($0) }
+        var layout = Layout(items(Array(calls[256..<768])))
+        layout.raw = raw
+        layout.pinned = false
+        layout.opened = Set(layout.items.map(\.id))
+        layout.settle()
+        layout.jump(to: layout.viewport.plan.total * 0.5)
+        let row = try #require(layout.topRow)
+        let before = try #require(layout.onScreen(row))
+        let selected = calls[256 + row.part - (raw ? 0 : 1)].id
+        for range in [128..<640, 384..<896] {
+            let next = items(Array(calls[range]))
+            layout.viewport.relocateAnchor(from: layout.items, to: next)
+            layout.items = next
+            layout.opened = Set(next.map(\.id))
+            layout.epoch += 1
+            layout.settle()
+            let offset = try #require(calls[range].firstIndex { $0.id == selected }) - range.lowerBound
+            let moved = TranscriptViewport.RowID(item: try #require(next.first?.id), part: offset + (raw ? 0 : 1))
+            #expect(layout.onScreen(moved).map { abs($0 - before) < 0.5 } == true)
+            #expect(layout.viewport.plan.rows.count <= TranscriptViewport.rowLimit)
+        }
+    }
+
     /// #110's fixture: 5,000 messages, ten pages of earlier history opened, the reader paused at
     /// an old message, and 1,000 new items arriving: the rows laid out stay within the bound, the
     /// reader's row stays put, and the rows a delta lays out don't grow with what arrived.

@@ -258,6 +258,74 @@ extension RenderingTests {
         settings.remoteQueueEnabled = false
     }
 
+    @Test func overlappingRemoteRecoveryDoesNotReplayMessagesAlreadySavedAndEvicted() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-remote-recovery-\(UUID())")
+        let domain = "local.BotChu.RemoteRecoveryTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: domain)!
+        defer { defaults.removePersistentDomain(forName: domain); try? FileManager.default.removeItem(at: root) }
+        let store = Store(root: root), settings = AppSettings(defaults: defaults)
+        let usage = UsageCache { _, _ in throw UsageFailure("No usage in tests") }
+        let seed = AppModel(store: store, settings: settings, usage: usage, openRouterKey: { nil })
+        var bot = Bot(name: "Remote recovery", workspace: "")
+        bot.kind = .remoteQueue
+        seed.create(bot)
+        bot = try #require(seed.bot(bot.id))
+        seed.stopAll()
+        let target = ChatTarget.home(bot.id), home = BotHome(workspace: bot.persistencePath)
+        let journal = try RemoteQueue(botID: bot.id, file: home.url.appendingPathComponent("remote-queue.json"))
+        for index in 0..<400 {
+            let message = try await journal.enqueue("Question \(index)")
+            try await journal.reply(to: message.id, text: "Answer \(index)", error: nil)
+        }
+        try await journal.enqueue("Still waiting")
+        let expected = await journal.snapshot().messages
+        try home.saveThread(Array(expected.prefix(400)))
+
+        let app = AppModel(store: store, settings: settings, usage: usage, openRouterKey: { nil })
+        defer { app.stopAll() }
+        var held: CheckedContinuation<Void, Never>?
+        var reading = 0
+        var resumed = false
+        app.remoteQueue.readHistory = { [weak app] target in
+            let first = reading == 0
+            reading += 1
+            let history = await app?.loadedThread(target)
+            if first {
+                await withCheckedContinuation { held = $0 }
+                resumed = true
+            }
+            return history
+        }
+        // The automatic reopen reconciliation has captured the old full history. Hold its
+        // result while a second reconciliation restores, saves and evicts over 256 messages.
+        try await remoteEventually { held != nil }
+        defer { held?.resume() }
+        await app.remoteQueue.reconcile()
+        await app.storage.settle()
+        #expect(app.thread(target).count == PagedTranscript.residentLimit)
+        #expect(home.loadThread().map(\.id) == expected.map(\.id))
+        let continuation = held
+        held = nil
+        continuation?.resume()
+        try await remoteEventually { resumed }
+        await app.storage.settle()
+        #expect(home.loadThread().map(\.id) == expected.map(\.id))
+        #expect(app.conversation(target).reportDigest.count == expected.count)
+
+        // Unchanged message revision must still refresh the pending turn's status.
+        app.runStates[target] = nil
+        await app.remoteQueue.reconcile()
+        #expect(app.remoteQueue.pending == 1)
+        #expect(app.isRunning(target))
+        #expect(app.thread(target).count == PagedTranscript.residentLimit)
+        let reads = reading, next = UUID()
+        #expect(await app.sendAccepted("A new request after recovery", to: target, id: next))
+        await app.storage.settle()
+        #expect(reading == reads, "Incremental journal updates must not decode the full saved history again")
+        #expect(home.loadThread().map(\.id) == expected.map(\.id) + [next])
+        #expect(app.remoteQueue.pending == 2)
+    }
+
     @Test func remoteQueueSaysWhenTailscaleIsOffUntilAPollArrives() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-remote-tailscale-\(UUID())")
         let domain = "local.BotChu.RemoteTailscaleTests.\(UUID())"

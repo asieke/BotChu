@@ -20,6 +20,7 @@ extension HistoryTests {
         let loaded = fixture.home.loadHistory()
         #expect(loaded.messages == Array(messages.suffix(PagedTranscript.residentLimit)))
         #expect(loaded.start == count - PagedTranscript.residentLimit)
+        #expect(loaded.prefix.summary.lastRole == messages[loaded.start - 1].role)
         #expect(loaded.digest == ThreadDigest(messages))
         #expect(!loaded.reindexed)
         #expect(fixture.counts.decoded <= PagedTranscript.residentLimit + PagedTranscript.pageSize)
@@ -45,6 +46,7 @@ extension HistoryTests {
         let old = fixture.home.loadHistory(before: 256, limit: 128)
         #expect(old.messages == Array(messages[128..<256]))
         #expect(old.start == 128)
+        #expect(old.prefix.summary.lastRole == messages[127].role)
     }
 
     @Test func resumeContextAndReportsReachBeyondAToolOnlyTail() throws {
@@ -62,6 +64,38 @@ extension HistoryTests {
         #expect(context.first(where: { $0.id == receipt.id })?.text == receipt.text)
         #expect(context.filter { $0.role == .tool }.allSatisfy { $0.toolOutput == nil })
         #expect(try PagedTranscript.context(fixture.home.threadURL, through: conversation[20].id).last?.id == conversation[20].id)
+    }
+
+    @Test func pageTurnContextSurvivesIndexDecodingAndRebuildWithoutOrdinaryFullReads() throws {
+        let fixture = try Fixture()
+        let roles: [ChatMessage.Role] = [.user, .assistant, .tool, .note, .error, .receipt]
+        let messages = (0..<1_000).map { ChatMessage(role: roles[$0 % roles.count], text: "Message \($0)") }
+        try fixture.home.writeTranscript(messages)
+        let indexURL = PagedTranscript.indexURL(fixture.home.threadURL)
+        let bytes = try Data(contentsOf: fixture.home.threadURL)
+        // An older sidecar decodes, then is upgraded once to include its missing boundary
+        // context. The conversation's bytes and ordered message IDs are left alone.
+        var index = try JSONSerialization.jsonObject(with: Data(contentsOf: indexURL)) as! [String: Any]
+        var pages = index["pages"] as! [[String: Any]]
+        for i in pages.indices {
+            var prefix = pages[i]["prefix"] as! [String: Any]
+            var summary = prefix["summary"] as! [String: Any]
+            summary.removeValue(forKey: "lastRole")
+            prefix["summary"] = summary
+            pages[i]["prefix"] = prefix
+        }
+        index["pages"] = pages
+        try JSONSerialization.data(withJSONObject: index).write(to: indexURL, options: .atomic)
+        #expect(fixture.home.loadHistory(before: 256, limit: 128).reindexed)
+        #expect(try Data(contentsOf: fixture.home.threadURL) == bytes)
+        for end in 256..<262 {
+            HistoryCounters.shared.reset(under: fixture.root)
+            let loaded = fixture.home.loadHistory(before: end, limit: 128)
+            #expect(!loaded.reindexed)
+            #expect(loaded.prefix.summary.lastRole == messages[loaded.start - 1].role)
+            #expect(loaded.messages.map(\.id) == messages[loaded.start..<end].map(\.id))
+            #expect(fixture.counts.decoded <= PagedTranscript.pageSize * 2)
+        }
     }
 
     @Test func externalEditsAndAppendsSurviveASaveOfAnAlreadyLoadedTail() throws {

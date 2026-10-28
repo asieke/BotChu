@@ -902,6 +902,8 @@ on that pull request's branch to continue in instead). The same command run agai
     and hashes of its end and indexed pages. Opening decodes the latest 256 messages (plus at most
     one boundary page), and **Show earlier** reads another 128. The browsing window keeps at most
     512 messages, separately from the active tail; **Jump to Latest** returns to the live tail.
+    Scrolling down reads later pages in place. An exploration spanning pages keeps the call being
+    read and its opened details in place; reaching the newest page resumes following new output.
     Completed saved payload leaves an active tail beyond 256 messages; unresolved tools are held
     individually, so one slow tool cannot pin completed messages after it. A late result for an
     evicted tool patches its original ID and position: only the affected page is decoded and the
