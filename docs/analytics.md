@@ -11,6 +11,31 @@ The code is `macOS/Sources/BotChuCore/Analytics.swift` (reading the records into
 `AnalyticsSummary`), `AnalyticsDashboard.swift` (the page and writing it) and the app's
 `Sources/BotChu/App/Analytics.swift` (the menu command). The tests are `AnalyticsTests`.
 
+## Exploring spend
+
+The toolbar keeps the date range and removable filter chips together. Chips within a dimension
+match alternatives (OR); different dimensions intersect (AND). Breakdown rows add their group
+filters; its chevrons expand a second level, and every column, including Name, sorts in either
+direction. Colors belong to fixed dimension entries, so filtering or sorting never recolors them.
+Only the first breakdown level uses those colors. Actual costs are solid, estimates hatched, and
+unpriced usage has a dashed swatch and a count. An all-unpriced selection shows `—`, never `$0`.
+
+The six efficiency cards are computed from the date range before chips are applied and ranked by
+their dollar impact. **Filter to these** selects the exact contributing records. Spend remains spend;
+for a savings or fan-out card, a separate impact beside the chips shows the selected records'
+potential savings or excess cost, using the same calculation as the card. Removing its chip clears
+that impact; adding other dimensions narrows it. The cards cover retried failed/stopped runs, the
+bot with the largest cache gap, sub-agents outspending their task, the costliest finished task,
+top-model work below 2K output tokens, and top-model job runs.
+
+Savings compare the same complete usage buckets at the bundled list prices, including context
+tiers and cache-write durations. The next-model mapping is explicit: Claude Opus to Sonnet,
+GPT-6 Astra to GPT-6 Sol, and Gemini Pro to Flash in the same version and pricing source. Unknown
+models, missing alternative rates and partial cumulative deltas produce no invented savings.
+Cache savings move uncached input to cache reads at other bots' aggregate cache-hit rate.
+Provider allowance is the latest saved reading, narrowed to the accounts represented by filters;
+it is not historical spend. About these numbers starts collapsed.
+
 ## Data inventory
 
 What exists on disk, for each bot in `index.json` (in its workspace's `.botchu/`), and how long it is
@@ -261,3 +286,9 @@ the main actor and does not change `ResponsivenessTests`.
 
 `BOTCHU_ANALYTICS_SAMPLE=/tmp/analytics.html swift test --package-path macOS --filter theSampleCoversEveryCase`
 writes a page of two months of sample data to look at in a browser.
+
+`swift test --package-path macOS --filter AnalyticsExplorerTests` checks each card against independently
+specified dollar amounts and its resulting selection, filter intersections, sorting, price tiers,
+and missing usage. The gated `theAnalyticsPageShowsItsTotalsFiltersByDateAndLoadsNothing` test
+exercises the controls and CSP in WebKit. Set `BOTCHU_ANALYTICS_PREVIEW` to the generated sample's
+absolute path to additionally write `.light.png` and `.dark.png` snapshots beside it.
