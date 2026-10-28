@@ -9,6 +9,12 @@ final class ModelCatalog {
     private(set) var loading = false
     private(set) var unavailable = false
     private var checkedAt: Date?
+    private(set) var sailModels: [CatalogModel] = []
+    private var sailLoading = false
+    /// Injectable so picker tests never contact Sail or read the owner's key.
+    @ObservationIgnored var listSailModels: @Sendable (String) async throws -> [CatalogModel] = { key in
+        try await SailClient(key: key).models()
+    }
 
     /// Each local Codex or Muse profile's own list (#220, #248), shared by every picker set to it and
     /// saved between launches in `model-catalogs.json`. A list a day old is checked again at launch, on
@@ -37,6 +43,24 @@ final class ModelCatalog {
             unavailable = true
             checkedAt = Date()
         }
+    }
+
+    func models(for kind: AgentKind) -> [CatalogModel] {
+        switch kind {
+        case .pi: models
+        case .sail: sailModels
+        default: []
+        }
+    }
+
+    /// Only the Sail picker asks, on opening, with the saved key. Keep the last list on failure;
+    /// the next opening tries again, including when the key changed in Settings.
+    func loadSail(key: String?) async {
+        guard let key, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !sailLoading else { return }
+        sailLoading = true
+        defer { sailLoading = false }
+        guard let listed = try? await listSailModels(key), !Task.isCancelled else { return }
+        sailModels = listed
     }
 
     /// Reads the saved lists; with `listModels`, also looks for stale ones shortly after launch, on

@@ -27,7 +27,8 @@ struct ModelMenu: View {
     private var scope: ModelCatalogScope? { app.modelCatalogScope(for: settings) }
     private var data: ModelPickerData {
         ModelPickerData(kind: settings.account.kind, model: settings.model, openRouterDefault: app.settings.openRouterModel,
-                        catalog: app.modelCatalog.models, native: app.modelCatalog.models(for: scope), resolved: settings.resolvedModel)
+                        sailDefault: app.settings.sailModel, catalog: app.modelCatalog.models(for: settings.account.kind),
+                        native: app.modelCatalog.models(for: scope), resolved: settings.resolvedModel)
     }
     private var efforts: [ReasoningEffort] {
         GenerationOptions.efforts(for: settings.account.kind, model: data.effectiveID, catalog: app.modelCatalog.models(for: scope))
@@ -121,7 +122,7 @@ struct ModelMenu: View {
         .help(disabled ? "Model can change when this turn ends" : modelHelp)
         .popover(isPresented: $showsModels, arrowEdge: .top) {
             ModelPicker(data: data, accountName: settings.account.name, catalog: app.modelCatalog,
-                        disabled: disabled, select: onModel, scope: scope)
+                        disabled: disabled, select: onModel, scope: scope, sailKey: app.sailKey)
         }
 
     }

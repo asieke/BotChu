@@ -294,7 +294,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     calls are reported not run, for the model to call again. Settings ▸ Sail holds the key (its own
     Keychain item) and the model a conversation runs when it chooses none (Load Models lists those
     Sail offers the key), and links Sail's dashboard, which has its usage and billing: BotChu reads
-    or infers none. Sail runs on This Mac only, and not for run reviews or Quick tasks.
+    or infers none. The conversation's model picker also lists and searches Sail's models, fetching
+    only when it opens with a saved key. A failed fetch keeps the last list and retries on the next
+    opening; the Settings default, current model and custom ID remain available. When the conversation
+    inherits its model, the picker names the default from Settings ▸ Sail.
+    Sail runs on This Mac only, and not for run reviews or Quick tasks.
   - **Chat:** one continuous thread per bot (its **Home**), and one per task. Replies stream in, rendered as Markdown (each reply
     is parsed once, and recent ones ahead of time, so showing a conversation again doesn't parse it again; parsed replies are
     kept within about 64 MB, and none once macOS reports memory pressure); the
