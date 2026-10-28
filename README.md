@@ -22,7 +22,10 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   - **Sections:** bots can be grouped into sections you name, each a heading of its own in the
     sidebar and in **Agents**, which edits the same sections (below). A bot's **Move to Section** menu lists Conversations (no section) and the sections,
     with its own checked, and **New Section…**, which names a section and moves the bot into it;
-    a moved bot goes last in its section. Bots in no section, new bots among them, come first,
+    a moved bot goes last in its section. A bot can also be dragged into place: dropped between two
+    bots, in its own section or another, it goes exactly there, and dropped on a section's heading,
+    collapsed or not, it goes last in that section; the sections keep their order, and Agents shows
+    the bots in the same order. Bots in no section, new bots among them, come first,
     under Conversations, so a sidebar without sections looks as before. A section heading's menu
     renames it (another section's name merges the two), moves it up or down, or removes it, which
     returns its bots to Conversations and deletes nothing. Names are trimmed and matched whatever
@@ -1142,8 +1145,8 @@ on that pull request's branch to continue in instead). The same command run agai
     version, an alias's or default's once reported) and public OpenRouter model metadata
     (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model, with the model a
     conversation's CLI last reported running (`Models.swift`), the
-    sections the sidebar and Agents group bots into, where a new bot goes and what a search of them
-    finds (`BotSections.swift`), skills: finding them, reading their frontmatter, which a bot uses,
+    sections the sidebar and Agents group bots into, where a new bot goes, where a dragged one lands
+    and what a search of them finds (`BotSections.swift`), skills: finding them, reading their frontmatter, which a bot uses,
     and making one (`Skills.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
@@ -1297,7 +1300,8 @@ on that pull request's branch to continue in instead). The same command run agai
     inputs or an edited thread, measurements of rows gone dropped, and the reader's row (or the end)
     kept as rows above it change, are forgotten or move; when the chat keeps its reader at its end
     (only their own scrolling up leaves it, not a bounce; back within 40 points, or sending, opening
-    or Jump to Latest from anywhere, pins it again); the sidebar's sections of bots, and searching them; follow-ups the CLI
+    or Jump to Latest from anywhere, pins it again); the sidebar's sections of bots, bots dropped within and between them,
+    and searching them; follow-ups the CLI
     took, kept through a transcript that can't be saved and a relaunch, in Home and in tasks;
     conversations' files with a line that isn't JSON, an unknown role, or no readable text, kept
     before the next save, also in a queue going through a relaunch; saving off the main thread: each
@@ -1380,7 +1384,7 @@ on that pull request's branch to continue in instead). The same command run agai
     Markdown editor sizing and Save/Cancel, collapsing status sections, a bot's tabs beside its
     chat (a click, the close button on hover, **+**, « and », the arrow keys, ⌘1 to ⌘9, the rail at
     the narrowest window and by the owner's choice, light and dark) and its row in the bot list,
-    the sidebar's sections of bots (their menus, the alert that names them, collapsing and revealing, and changes that can't
+    the sidebar's sections of bots (their menus, the alert that names them, collapsing and revealing, bots dropped in them, and changes that can't
     be saved, shown until Try Again or quitting saves them), Agents grouped under them and editing
     them with the same menus and alert, inspector tab navigation and
     restored selection, conversation-scoped allowance reads that show the background's reading
@@ -1460,7 +1464,8 @@ on that pull request's branch to continue in instead). The same command run agai
     otherwise. It records the SDK the app was linked against in the binary (`vtool`), because
     SwiftPM's default build system records the deployment target there instead, and macOS then
     runs the app with the old window design, whose toolbar overhangs the sidebar. It also records the commit it
-    was built from (`BotChuCommit` in Info.plist, `-dirty` with uncommitted changes), which reports name. `install.sh` builds into `~/Applications`, restarts BotChu if it was running, and
+    was built from (`BotChuCommit` in Info.plist, `-dirty` with uncommitted changes), which reports name, and declares
+    the type a bot's row carries while it is dragged in the sidebar (`local.BotChu.bot`). `install.sh` builds into `~/Applications`, restarts BotChu if it was running, and
     smoke-tests that it starts; it goes by the installed copy's path, so review copies and builds run
     from a checkout are neither counted nor quit. `test.sh` runs the unit tests. `ui-review.sh` opens a build on
     throwaway data for checking its screens (see **Test**).

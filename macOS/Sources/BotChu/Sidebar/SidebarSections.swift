@@ -1,10 +1,11 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import BotChuCore
 
-/// The sections the sidebar and Agents group bots into (`BotSections`): moving a bot into one, and
-/// renaming, reordering and removing them. Each change saves the bots' order and sections in
-/// `index.json`; when that fails, the change stays, unsaved, and the sidebar says so until a save
-/// works (`indexFailure`).
+/// The sections the sidebar and Agents group bots into (`BotSections`): moving a bot into one or
+/// dragging it to its place, and renaming, reordering and removing them. Each change saves the
+/// bots' order and sections in `index.json`; when that fails, the change stays, unsaved, and the
+/// sidebar says so until a save works (`indexFailure`).
 extension AppModel {
     /// The bots as the sidebar groups them.
     var botSections: BotSections { BotSections(order: bots.map(\.id), membership: sections) }
@@ -14,6 +15,17 @@ extension AppModel {
     func moveBot(_ id: UUID, toSection name: String?) {
         var layout = botSections
         layout.move(id, to: name)
+        arrange(layout)
+    }
+
+    /// Puts a bot dragged in the sidebar where it was dropped: in the section `name` names, or in
+    /// none with nil, just before its bot `next`, or last in it with nil (#231). A drop that changes
+    /// nothing saves nothing.
+    func dropBot(_ id: UUID, inSection name: String?, before next: UUID?) {
+        let before = botSections
+        var layout = before
+        layout.move(id, to: name, before: next)
+        guard layout != before else { return }
         arrange(layout)
     }
 
@@ -50,6 +62,36 @@ extension AppModel {
         if ordered.map(\.id) != bots.map(\.id) { bots = ordered }
         if sections != layout.membership { sections = layout.membership }
         if save { saveIndex() }
+    }
+}
+
+/// A bot's row dragged in the sidebar (#231). It carries the bot's id as BotChu's own type, so only
+/// the sidebar's bot sections and headings take it, and nothing dragged from elsewhere is taken for a bot.
+enum BotDrag {
+    /// Declared in the app's Info.plist (`build.sh`).
+    static let contentType = UTType(exportedAs: "local.BotChu.bot", conformingTo: .data)
+
+    /// What a bot's row gives a drag.
+    static func provider(for id: UUID) -> NSItemProvider {
+        let provider = NSItemProvider()
+        let payload = BotSections.dragPayload(id)
+        // Only BotChu reads it: another app or Finder gets nothing from a dragged bot.
+        provider.registerDataRepresentation(forTypeIdentifier: contentType.identifier, visibility: .ownProcess) { load in
+            load(payload, nil)
+            return nil
+        }
+        return provider
+    }
+
+    /// Reads the bot a drop carries and gives it to `dropped` on the main thread; false, taking
+    /// nothing, when the drop doesn't carry one.
+    static func load(_ providers: [NSItemProvider], into dropped: @escaping (UUID) -> Void) -> Bool {
+        guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(contentType.identifier) }) else { return false }
+        _ = provider.loadDataRepresentation(forTypeIdentifier: contentType.identifier) { data, _ in
+            guard let id = BotSections.draggedBot(data) else { return }
+            DispatchQueue.main.async { dropped(id) }
+        }
+        return true
     }
 }
 

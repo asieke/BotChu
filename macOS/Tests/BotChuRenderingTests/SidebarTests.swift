@@ -260,6 +260,157 @@ extension RenderingTests {
         #expect(fixture.store.loadIndex().map(\.section) == [nil, "Research", "Building", "Research"])
     }
 
+    /// #231: a bot dragged in the sidebar goes where it is dropped, before another bot or last, in
+    /// its section or another, and Agents and a relaunch show the same order, with the missing bot's
+    /// entry. What is shown, drafts, running turns and collapsed sections stay as they were. A drop
+    /// that changes nothing saves nothing; one that can't be saved stays, with the banner, until Try Again.
+    @Test func draggedBotsGoWhereTheyAreDroppedAndStayThere() throws {
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot, quiet = fixture.quiet
+        let task = ChatTarget.task(fixture.tasks[0].id, of: bot.id)
+        let gone = Store.Entry(id: UUID(), workspace: fixture.root.appendingPathComponent("gone").path, section: "Research")
+        model.missing = [gone]
+        model.show(task)
+        model.drafts[.home(bot.id)] = "Home draft"
+        model.runStates[task] = RunState(startedAt: Date(), hasOutput: true, activity: .coding)
+        fixture.defaults.set("Research", forKey: CollapsedSections.storageKey)
+
+        // Within Conversations, before the bot above it.
+        model.dropBot(quiet.id, inSection: nil, before: bot.id)
+        #expect(model.botSections.groups == [.init(name: nil, botIDs: [quiet.id, bot.id])])
+        #expect(fixture.store.loadIndex().map(\.id) == [quiet.id, bot.id, gone.id])
+        // On a collapsed section's heading it goes last there; then before the bot already in it.
+        model.moveBot(bot.id, toSection: "Research")
+        model.dropBot(quiet.id, inSection: "Research", before: nil)
+        #expect(model.botSections.groups == [.init(name: "Research", botIDs: [bot.id, quiet.id])])
+        model.dropBot(quiet.id, inSection: "Research", before: bot.id)
+        #expect(model.botSections.groups == [.init(name: "Research", botIDs: [quiet.id, bot.id])])
+        #expect(AgentsView.groups(in: model, matching: "") == model.botSections.groups)
+        #expect(fixture.store.loadIndex().map(\.id) == [quiet.id, bot.id, gone.id])
+        #expect(fixture.store.loadIndex().map(\.section) == ["Research", "Research", "Research"])
+        // Nothing else moved with it.
+        #expect(model.sidebarSelection == .bot(bot.id))
+        #expect(model.tab(of: bot.id) == task)
+        #expect(model.drafts[.home(bot.id)] == "Home draft")
+        #expect(model.isRunning(task))
+        #expect(fixture.defaults.string(forKey: CollapsedSections.storageKey) == "Research")
+        let relaunched = AppModel(store: fixture.store, settings: AppSettings(defaults: fixture.defaults),
+                                  usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
+        #expect(relaunched.botSections == model.botSections)
+        #expect(relaunched.missing == [gone])
+        #expect(AgentsView.groups(in: relaunched, matching: "") == model.botSections.groups)
+
+        // On itself, just above the bot after it, or a bot that isn't listed: nothing changes or is saved.
+        let index = fixture.store.root.appendingPathComponent("index.json")
+        let saved = try Data(contentsOf: index)
+        try FileManager.default.removeItem(at: index)
+        model.dropBot(quiet.id, inSection: "Research", before: quiet.id)
+        model.dropBot(quiet.id, inSection: "Research", before: bot.id)
+        model.dropBot(UUID(), inSection: nil, before: bot.id)
+        #expect(model.botSections.groups == [.init(name: "Research", botIDs: [quiet.id, bot.id])])
+        #expect(!FileManager.default.fileExists(atPath: index.path))
+        try saved.write(to: index)
+
+        // A drop that can't be saved shows at once, with why; Try Again saves it.
+        func lock(_ locked: Bool) throws { try FileManager.default.setAttributes([.immutable: locked], ofItemAtPath: index.path) }
+        defer { try? lock(false) }
+        try lock(true)
+        model.dropBot(bot.id, inSection: nil, before: nil)
+        #expect(model.botSections.groups == [.init(name: nil, botIDs: [bot.id]), .init(name: "Research", botIDs: [quiet.id])])
+        #expect(model.indexFailure?.item == .botIndex)
+        #expect(fixture.store.loadIndex().map(\.section) == ["Research", "Research", "Research"])
+        try lock(false)
+        model.saveIndex()
+        #expect(model.indexFailure == nil)
+        #expect(fixture.store.loadIndex().map(\.id) == [bot.id, quiet.id, gone.id])
+        #expect(fixture.store.loadIndex().map(\.section) == [nil, "Research", "Research"])
+    }
+
+    /// #231: a bot's row carries its bot to where it is dropped; anything else dropped carries none.
+    @Test func aDraggedBotRowCarriesItsBotOnly() async throws {
+        let id = UUID()
+        var dropped: [UUID] = []
+        let carried = BotDrag.load([BotDrag.provider(for: id)]) { dropped.append($0) }
+        let text = BotDrag.load([NSItemProvider(object: id.uuidString as NSString)]) { dropped.append($0) }
+        let nothing = BotDrag.load([]) { dropped.append($0) }
+        #expect(carried && !text && !nothing)
+        for _ in 0..<50 where dropped.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(dropped == [id])
+    }
+
+    /// The sidebar's own list takes a dragged bot: between bots through its outline view, and on a
+    /// section's heading, collapsed or not, through the heading's drop target, as AppKit hands a real
+    /// drag over; text, and drops among the Workspace rows, aren't taken (#231).
+    @Test func theSidebarListTakesADraggedBotBetweenBotsAndOnHeadings() async throws {
+        _ = NSApplication.shared
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot, quiet = fixture.quiet
+        model.moveBot(quiet.id, toSection: "Research")
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 640),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let host = NSHostingView(rootView: SidebarView().environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = host
+        window.orderBack(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        let outline = try #require(sidebarTable(in: host) as? NSOutlineView)
+        let source = try #require(outline.dataSource)
+        // Workspace, Conversations and Research are the top-level rows; the bots are their children.
+        func headings() -> [Int] { (0..<outline.numberOfRows).filter { outline.level(forRow: $0) == 0 } }
+        try #require(headings().count == 3)
+        func settle(until done: () -> Bool) async throws {
+            for _ in 0..<50 where !done() { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        func pasteboard(_ data: Data, as type: String) -> NSPasteboard {
+            let board = NSPasteboard(name: .init("BotChu.SidebarTests.\(UUID().uuidString)"))
+            board.clearContents()
+            board.setData(data, forType: .init(type))
+            return board
+        }
+        let botType = BotDrag.contentType.identifier, textType = NSPasteboard.PasteboardType.string.rawValue
+
+        // A bot's row gives a drag its bot, as BotChu's own type.
+        let botRow = headings()[1] + 1
+        let rowItem = try #require(outline.item(atRow: botRow))
+        let writer = try #require(source.outlineView?(outline, pasteboardWriterForItem: rowItem))
+        #expect(writer.writableTypes(for: .general).contains { $0.rawValue.caseInsensitiveCompare(botType) == .orderedSame })
+
+        // Between bots: dropped first in Conversations, before the bot there.
+        func dropBetween(_ data: Data, as type: String, heading: Int, at index: Int) -> Bool {
+            let drag = SidebarDrag(pasteboard(data, as: type), in: window)
+            let item = outline.item(atRow: heading)
+            guard source.outlineView?(outline, validateDrop: drag, proposedItem: item, proposedChildIndex: index) != [] else { return false }
+            return source.outlineView?(outline, acceptDrop: drag, item: item, childIndex: index) ?? false
+        }
+        #expect(!dropBetween(Data(quiet.id.uuidString.utf8), as: textType, heading: headings()[1], at: 0))
+        #expect(!dropBetween(BotSections.dragPayload(quiet.id), as: botType, heading: headings()[0], at: 1))
+        #expect(dropBetween(BotSections.dragPayload(quiet.id), as: botType, heading: headings()[1], at: 0))
+        try await settle { model.botSections.groups.count == 1 }
+        #expect(model.botSections.groups == [.init(name: nil, botIDs: [quiet.id, bot.id])])
+
+        // On a heading, collapsed or not: last in that section.
+        model.moveBot(quiet.id, toSection: "Research")
+        fixture.defaults.set("Research", forKey: CollapsedSections.storageKey)
+        try await Task.sleep(for: .milliseconds(150))
+        func dropOnHeading(_ data: Data, as type: String, _ heading: Int) throws -> Bool {
+            let row = try #require(outline.rowView(atRow: heading, makeIfNecessary: true))
+            let target = try #require(dropTarget(in: row))
+            let drag = SidebarDrag(pasteboard(data, as: type), in: window,
+                                   at: target.convert(NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil))
+            guard target.draggingEntered(drag) != [] else { return false }
+            return target.performDragOperation(drag)
+        }
+        #expect(try !dropOnHeading(Data(bot.id.uuidString.utf8), as: textType, headings()[2]))
+        #expect(try dropOnHeading(BotSections.dragPayload(bot.id), as: botType, headings()[2]))
+        try await settle { model.botSections.groups.count == 1 }
+        #expect(model.botSections.groups == [.init(name: "Research", botIDs: [quiet.id, bot.id])])
+        #expect(fixture.defaults.string(forKey: CollapsedSections.storageKey) == "Research")
+        #expect(fixture.store.loadIndex().map(\.section) == ["Research", "Research"])
+    }
+
     // Model and defaults changes only: no native clicks, so it can share the test process.
     @Test func sectionsShowAsHeadingsThatCollapseAndRevealTheShownBot() async throws {
         _ = NSApplication.shared
@@ -674,10 +825,42 @@ extension RenderingTests {
         ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(sidebarButtons)
     }
 
+    /// The deepest view in a row that takes drops, as a heading's `onDrop` puts there.
+    private func dropTarget(in view: NSView) -> NSView? {
+        for subview in view.subviews { if let found = dropTarget(in: subview) { return found } }
+        return view.registeredDraggedTypes.isEmpty ? nil : view
+    }
+
     private func sidebarTable(in view: NSView) -> NSTableView? {
         if let table = view as? NSTableView { return table }
         return view.subviews.lazy.compactMap(sidebarTable).first
     }
+}
+
+/// A drag as AppKit hands it to a drop target, carrying a pasteboard.
+private final class SidebarDrag: NSObject, NSDraggingInfo {
+    let draggingPasteboard: NSPasteboard
+    let draggingDestinationWindow: NSWindow?
+    let draggingLocation: NSPoint
+    init(_ pasteboard: NSPasteboard, in window: NSWindow, at location: NSPoint = .zero) {
+        draggingPasteboard = pasteboard
+        draggingDestinationWindow = window
+        draggingLocation = location
+    }
+    var draggingSourceOperationMask: NSDragOperation { [.move, .generic] }
+    var draggedImageLocation: NSPoint { draggingLocation }
+    var draggedImage: NSImage? { nil }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    var draggingFormation: NSDraggingFormation = .default
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?,
+                                classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+                                using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func resetSpringLoading() {}
 }
 
 @MainActor private final class SidebarFixture {
