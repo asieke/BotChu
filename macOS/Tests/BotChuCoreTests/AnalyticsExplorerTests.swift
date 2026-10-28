@@ -23,7 +23,7 @@ struct AnalyticsExplorerTests {
     function record(kind,bot,input,read,cost,outcome,hour,taskID) {
       var tokens={uncachedInput:input,cacheRead:read,output:100};
       return {kind:kind,bot:bot,account:bot,project:0,day:'2026-10-28',startedAt:'2026-10-28T'+hour+':00:00Z',taskID:taskID,
-        outcome:outcome,seconds:60,model:'claude-opus-4-6',provider:'claude',tokens:tokens,
+        outcome:outcome,seconds:bot===0?60:120,model:'claude-opus-4-6',provider:'claude',tokens:tokens,
         models:[Object.assign({model:'claude-opus-4-6'},tokens)],canReprice:true,cost:cost,costProvenance:'estimated'};
     }
     var fixture={bots:['Fox','Duck'],accounts:[{name:'Personal',family:'Claude Code'},{name:'Work',family:'Claude Code'}],projects:['owner/repo'],prices:prices,
@@ -63,8 +63,6 @@ struct AnalyticsExplorerTests {
         #expect(c.evaluateScript("E.groups(E.range(from,through).filter(r=>E.matches(r,[{k:'bot',v:'1'}])),'bot','cost',-1)[0].value").toString() == "1")
         #expect(c.evaluateScript("E.color('bot','1')").toString() == "var(--s2)")
         #expect(c.evaluateScript("E.label('model','claude-opus-4-6')").toString() == "Opus 4.6")
-        // Filtering never changes the stable range-only ranking or underlying card values.
-        #expect(c.evaluateScript("JSON.stringify(E.insights(from,through))===JSON.stringify(E.insights(from,through))").toBool() == true)
         #expect(c.evaluateScript("E.range(from,through).filter(r=>E.matches(r,E.insights(from,through)[0].filters.concat([{k:'bot',v:'1'}]))).length").toInt32() == 1)
     }
 
@@ -78,6 +76,14 @@ struct AnalyticsExplorerTests {
         c.evaluateScript("fixture.records[2].models[0].model='unknown-expensive-model'")
         #expect(c.evaluateScript("E.comparison(fixture.records[2],'swap')===null").toBool() == true)
         #expect(c.evaluateScript("E.insights(from,through).find(c=>c.id==='fanout').value===null").toBool() == true)
+    }
+
+    @Test func providerBackendsAndMissingUsageRemainDistinct() throws {
+        let c = try context()
+        c.evaluateScript("fixture.records[0].provider='pi';fixture.records[0].providerID='openrouter';fixture.records[1].provider='pi';fixture.records[1].providerID='radius';fixture.records[0].cost=null;fixture.records[0].costProvenance='unpriced';fixture.records[1].cost=null;fixture.records[1].costProvenance='unavailable';E=BotChuAnalytics.createExplorer(fixture)")
+        #expect(c.evaluateScript("E.groups(E.range(from,through),'provider','name',1).map(g=>g.label).join(',')").toString() == "Claude Code,OpenRouter,Radius")
+        #expect(c.evaluateScript("E.range(from,through).filter(r=>E.matches(r,[{k:'price',v:'unpriced'}])).length").toInt32() == 1)
+        #expect(c.evaluateScript("E.range(from,through).filter(r=>E.matches(r,[{k:'price',v:'unavailable'}])).length").toInt32() == 1)
     }
 
     @Test func repricingHonorsContextTiersSubsetBucketsAndMissingRates() throws {
@@ -94,7 +100,7 @@ struct AnalyticsExplorerTests {
         let c = try context()
         #expect(c.evaluateScript("E.groups(E.range(from,through),'bot','name',1)[0].label").toString() == "Duck")
         #expect(c.evaluateScript("E.groups(E.range(from,through),'bot','name',-1)[0].label").toString() == "Fox")
-        #expect(c.evaluateScript("['runs','finished','failureRate','totalTokens','cacheHitRate','cost','costPerFinishedTask','medianSeconds','share'].every(k=>{let up=E.groups(E.range(from,through),'bot',k,1),down=E.groups(E.range(from,through),'bot',k,-1);return up.length===2&&down.length===2})").toBool() == true)
+        #expect(c.evaluateScript("['runs','finished','failureRate','totalTokens','cacheHitRate','cost','costPerFinishedTask','medianSeconds','share'].every(k=>{let up=E.groups(E.range(from,through),'bot',k,1),down=E.groups(E.range(from,through),'bot',k,-1);let field=k==='share'?'cost':k;let value=g=>k==='finished'?g.summary.outcomes.finished||0:g.summary[field];return value(up[0])<=value(up[1])&&value(down[0])>=value(down[1])})").toBool() == true)
         #expect(abs(c.evaluateScript("E.groups(E.range(from,through),'bot','cost',-1).reduce((s,g)=>s+g.summary.cost,0)-E.aggregate(E.range(from,through)).cost").toDouble()) < 0.00000001)
         #expect(abs(c.evaluateScript("E.aggregate(E.range(from,through)).costPerFinishedTask").toDouble() - 0.09) < 0.00000001)
         #expect(c.exception == nil)

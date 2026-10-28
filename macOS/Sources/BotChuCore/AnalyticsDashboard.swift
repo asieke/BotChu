@@ -266,16 +266,9 @@ public enum AnalyticsDashboard {
     public static let script = #"""
     (function (root) {
       "use strict";
-      var OUTCOMES = ["finished", "failed", "stopped", "interrupted", "inProgress"];
       var LABELS = { finished: "Finished", failed: "Failed", stopped: "Stopped", interrupted: "Interrupted",
         inProgress: "In progress", skipped: "Skipped" };
       var KINDS = [["home", "Home turns"], ["task", "Task turns"], ["job", "Job runs"], ["subagent", "Sub-agent runs"]];
-      /* What the daily chart stacks, bottom up: a job run a quit cut short is charted with the stopped ones. */
-      var SERIES = [["finished", "Finished"], ["failed", "Failed"], ["stopped", "Stopped or interrupted"], ["inProgress", "In progress"]];
-      function seriesCount(summary, series) {
-        return (summary.outcomes[series] || 0) + (series === "stopped" ? summary.outcomes.interrupted || 0 : 0);
-      }
-
       function pad(n) { return (n < 10 ? "0" : "") + n; }
       function dayNumber(day) { var p = day.split("-"); return Math.round(Date.UTC(+p[0], +p[1] - 1, +p[2]) / 86400000); }
       function dayString(n) { var d = new Date(n * 86400000); return d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate()); }
@@ -377,7 +370,8 @@ public enum AnalyticsDashboard {
         outcome: "Outcome"
       };
       function money(value, estimated) {
-        return typeof value !== "number" ? "—" : (estimated ? "≈$" : "$") + value.toFixed(2);
+        var measure = measureText({metric: "cost", value: value, provenance: estimated ? "estimated" : "actual"});
+        return measure.unavailable ? "—" : measure.value.replace("≈ ", "≈");
       }
       function compact(value) {
         return typeof value !== "number"
@@ -393,7 +387,8 @@ public enum AnalyticsDashboard {
           prices = snapshot.prices || [],
           dimensions = {},
           taskMap = {},
-          resolved = new Map();
+          resolved = new Map(), recordIndex = new Map(), selectionSets = new WeakMap();
+        records.forEach(function(r,index) { recordIndex.set(r,index); });
         (snapshot.tasks || []).forEach(function (t) {
           if (t.id) taskMap[t.id] = t;
         });
@@ -439,7 +434,12 @@ public enum AnalyticsDashboard {
           return null;
         }
         function dimension(r, k) {
-          if (k === "provider") return r.provider || (snapshot.accounts[r.account] || {}).family || "unknown";
+          if (k === "provider") {
+            if (r.provider === "pi") return "pi:" + (r.providerID || "unknown");
+            if (r.provider) return r.provider;
+            var family = (snapshot.accounts[r.account] || {}).family;
+            return ({"Claude Code": "claude", Codex: "codex", Antigravity: "antigravity", Muse: "muse", Sail: "sail", Pi: "pi:unknown", OpenRouter: "pi:openrouter"})[family] || family || "unknown";
+          }
           if (k === "model")
             return (
               r.model ||
@@ -476,6 +476,10 @@ public enum AnalyticsDashboard {
               return x[0] === v;
             }) || [v, v])[1];
           if (k === "outcome") return LABELS[v] || v;
+          if (k === "provider" && v.indexOf("pi:") === 0) {
+            var backend = v.slice(3);
+            return ({openrouter: "OpenRouter", anthropic: "Anthropic", openai: "OpenAI", google: "Google", unknown: "Pi · unknown provider"})[backend] || backend.replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+          }
           if (k === "provider")
             return (
               {
@@ -545,8 +549,11 @@ public enum AnalyticsDashboard {
           });
           return Object.keys(by).every(function (k) {
             return by[k].some(function (f) {
-              if (k === "records") return f.ids.indexOf(records.indexOf(r)) >= 0;
-              if (k === "price") return f.v === "unpriced" ? r.cost == null : r.costProvenance === f.v;
+              if (k === "records") {
+                  if (!selectionSets.has(f)) selectionSets.set(f,new Set(f.ids));
+                  return selectionSets.get(f).has(recordIndex.get(r));
+                }
+              if (k === "price") return (r.costProvenance || "unavailable") === f.v;
               if (k === "taskID") return r.taskID === f.v;
               return dimension(r, k) === f.v;
             });
@@ -701,7 +708,7 @@ public enum AnalyticsDashboard {
                   k: "records",
                   v: id,
                   ids: selected.map(function (r) {
-                    return records.indexOf(r);
+                    return recordIndex.get(r);
                   }),
                   label: title
                 }
@@ -1055,6 +1062,10 @@ public enum AnalyticsDashboard {
         });
         return bar;
       }
+      function clearRangeSelection() {
+        S.insight = null;
+        S.filters = S.filters.filter(function(f) { return f.k !== "records"; });
+      }
       function toolbar(rows) {
         var bar = el("div", "bar"),
           row = el("div", "row"),
@@ -1076,7 +1087,7 @@ public enum AnalyticsDashboard {
                       return r.day < d ? r.day : d;
                     }, data.today)
                   : addDays(data.today, 1 - Number(p[0]));
-              S.insight = null;
+              clearRangeSelection();
               render();
             },
             "preset"
@@ -1099,7 +1110,7 @@ public enum AnalyticsDashboard {
               S.through = old;
             }
             S.preset = "custom";
-            S.insight = null;
+            clearRangeSelection();
             render();
           };
           add(row, add(el("label", "dates", label + " "), input));
@@ -1110,23 +1121,12 @@ public enum AnalyticsDashboard {
           add(el("span", "pv"), swatch("var(--text-2)", "actual"), el("span", null, "Actual")),
           add(el("span", "pv"), swatch("var(--text-2)", "estimated"), el("span", null, "Estimated"))
         );
-        var unknown = rows.filter(function (r) {
-          return r.cost == null;
-        }).length;
-        add(
-          row,
-          add(
-            button(
-              "",
-              function () {
-                addFilters([{ k: "price", v: "unpriced" }]);
-              },
-              "pv"
-            ),
-            swatch("var(--other)", "unpriced"),
-            el("span", null, "— Unpriced · " + unknown)
-          )
-        );
+        ["unpriced", "unavailable"].forEach(function(provenance) {
+          var count = rows.filter(function(r) { return (r.costProvenance || "unavailable") === provenance; }).length;
+          var label = provenance === "unpriced" ? "Unpriced" : "Unavailable";
+          add(row, add(button("", function() { addFilters([{k: "price", v: provenance}]); }, "pv"),
+            swatch("var(--other)", "unpriced"), el("span", null, "— " + label + " · " + count)));
+        });
         var chips = el("div", "row");
         S.filters.forEach(function (f, index) {
           var name =
@@ -1134,7 +1134,7 @@ public enum AnalyticsDashboard {
             (DIMENSIONS[f.k]
               ? DIMENSIONS[f.k] + " " + E.label(f.k, f.v)
               : f.k === "price"
-                ? "Unpriced"
+                ? f.v === "unpriced" ? "Unpriced" : "Unavailable"
                 : E.label(f.k, f.v));
           var chip = el("span", "chip", name);
           var remove = button("×", function () {
@@ -1182,7 +1182,7 @@ public enum AnalyticsDashboard {
               "span",
               "impact",
               S.insight.title +
-                ": " +
+                " · filtered impact: " +
                 money(E.metric(rows, S.insight.spec), S.insight.estimated) +
                 " " +
                 S.insight.unit
@@ -1235,7 +1235,8 @@ public enum AnalyticsDashboard {
             " est."
         );
         add(cost, split(a, a.cost, "var(--text-2)"));
-        if (a.unpriced + a.unavailable) add(cost, el("div", "d", a.unpriced + a.unavailable + " unpriced"));
+        if (a.unpriced) add(cost, el("div", "d", a.unpriced + " unpriced"));
+        if (a.unavailable) add(cost, el("div", "d", a.unavailable + " unavailable"));
         tile("Tokens", compact(a.totalTokens), delta(a.totalTokens, prior.totalTokens, false, false));
         tile(
           "Cache hit rate",
@@ -1276,7 +1277,10 @@ public enum AnalyticsDashboard {
                 );
               });
               render();
-            } else addFilters(wf);
+            } else {
+              S.filters = S.filters.filter(function(f) { return f.k !== "outcome"; });
+              addFilters(wf);
+            }
           }
         );
         waste.setAttribute(
@@ -1461,13 +1465,13 @@ public enum AnalyticsDashboard {
         add(
           details,
           table(
-            ["Day", "Turns & runs", "Spend", "Unpriced"],
+            ["Day", "Turns & runs", "Spend", "Unpriced", "Unavailable"],
             by
               .filter(function (d) {
                 return d.rows.length;
               })
               .map(function (d) {
-                return [d.day, d.a.runs, spend(d.a), d.a.unpriced + d.a.unavailable];
+                return [d.day, d.a.runs, spend(d.a), d.a.unpriced, d.a.unavailable];
               })
           )
         );
@@ -1556,6 +1560,8 @@ public enum AnalyticsDashboard {
             "go"
           );
           b.setAttribute("aria-pressed", String(same(c.filters)));
+          b.title = S.filters.length && !same(c.filters) ? "Filter to these records (replaces current filters)" : "Filter to these records";
+          b.setAttribute("aria-label", b.title + ": " + c.title);
           b.disabled = !c.filters[0].ids.length;
           add(grid, add(n, b));
         });

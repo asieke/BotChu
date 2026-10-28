@@ -18,7 +18,16 @@ extension RenderingTests {
             return AnalyticsTurn(start: start, end: start.addingTimeInterval(seconds), outcome: outcome)
         }
         builder.add(turns: [turn(150, 10, .finished), turn(8, 120, .finished), turn(1, 60, .finished), turn(1, 30, .failed)], bot: bot, task: nil)
-        return builder.snapshot()
+        var snapshot = builder.snapshot()
+        let usage = ModelUsage(model: "claude-opus-5-5", uncachedInput: 1000, cacheRead: 0, output: 100)
+        snapshot.records[2].model = usage.model
+        snapshot.records[2].provider = .claude
+        snapshot.records[2].models = [usage]
+        snapshot.records[2].tokens = AnalyticsTokens([usage])
+        snapshot.records[2].cost = 0.006
+        snapshot.records[2].costProvenance = .estimated
+        snapshot.records[2].canReprice = true
+        return snapshot
     }
 
     @Test func theAnalyticsPageShowsItsTotalsFiltersByDateAndLoadsNothing() async throws {
@@ -46,7 +55,7 @@ extension RenderingTests {
             """)
         #expect(first["runs"] as? String == "3")
         #expect(first["waste"] as? String == "—")
-        #expect(first["tokens"] as? String == "—")
+        #expect(first["tokens"] as? String == "1,100")
         #expect(first["error"] as? Bool == false)
         #expect(first["pressed"] as? String == "30 days")
         #expect(first["bots"] as? Bool == true)
@@ -111,12 +120,26 @@ extension RenderingTests {
         #expect(explorer["chips"] as? Int == 1)
         #expect(explorer["cards"] as? Int == 6)
 
+        let changedRange = try await read("""
+            [...document.querySelectorAll('.ins .in')].find(c => c.textContent.includes('Top models under')).querySelector('button').click();
+            const selectedRuns = value('Turns & runs');
+            const selectedChips = document.querySelectorAll('.chip').length;
+            const impact = document.querySelector('.impact').textContent;
+            [...document.querySelectorAll('button.preset')].find(b => b.textContent === 'All').click();
+            return { selectedRuns, selectedChips, impact, allRuns: value('Turns & runs'), chips: document.querySelectorAll('.chip').length };
+            """)
+        #expect(changedRange["selectedRuns"] as? String == "1")
+        #expect((changedRange["impact"] as? String)?.contains("potential savings") == true)
+        #expect(changedRange["allRuns"] as? String == "4")
+        #expect(changedRange["selectedChips"] as? Int == 1)
+        #expect(changedRange["chips"] as? Int == 0)
+
         // Optional screenshots of the same sample HTML the Core test writes.
         if let path = ProcessInfo.processInfo.environment["BOTCHU_ANALYTICS_PREVIEW"] {
             let sample = URL(fileURLWithPath: path)
             web.frame = CGRect(x: 0, y: 0, width: 1180, height: 1900)
             web.loadFileURL(sample, allowingReadAccessTo: sample.deletingLastPathComponent())
-            try await waitForPage(web, "document.querySelectorAll('.ins .in').length === 6")
+            try await waitForPage(web, "document.querySelectorAll('.ins .in').length === 6 && JSON.parse(document.getElementById('botchu-analytics-data').textContent).records.length > 4")
             for theme in ["light", "dark"] {
                 _ = try await web.callAsyncJavaScript("document.documentElement.dataset.theme = theme; return true;", arguments: ["theme": theme], in: nil, contentWorld: .page)
                 try await Task.sleep(for: .milliseconds(200))
