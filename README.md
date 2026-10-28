@@ -1385,7 +1385,17 @@ on that pull request's branch to continue in instead). The same command run agai
   - `Sources/BotChuCore/` — Foundation only, unit-tested: accounts and the command line each CLI
     runs with (`Accounts.swift`), generation choices, how a model is named (its full name and
     version, an alias's or default's once reported) and public OpenRouter model metadata
-    (`GenerationOptions.swift`, `ModelCatalog.swift`), the bot and message model, with the model a
+    (`GenerationOptions.swift`, `ModelCatalog.swift`), offline token market pricing
+    (`ModelUsage.swift`, `ModelPricing.swift`, `ModelPrices.generated.swift`): a dated USD snapshot
+    from models.dev's first-party/OpenRouter lists, LiteLLM first-party fallbacks and 1h cache prices,
+    and Sail's published Flex prices. Prices apply each request's total-input context tier, count
+    reasoning within output and 1h writes within cache writes, and leave unknown models or rates
+    unpriced. No prices are fetched at runtime. Refresh with
+    `scripts/update-model-prices.py --date YYYY-MM-DD`; to reproduce saved source JSON, add
+    `--models-dev FILE --litellm FILE` and their optional `--models-dev-etag`/`--litellm-etag` values.
+    The generated header records the date, ETags and content hashes; verify the hand-kept Sail
+    table against its linked pricing page when refreshing. These are token-only estimates, without
+    subscription charges, tool fees or account discounts. The bot and message model, with the model a
     conversation's CLI last reported running (`Models.swift`), the
     sections the sidebar and Agents group bots into, where a new bot goes, where a dragged one lands
     and what a search of them finds (`BotSections.swift`), skills: finding them, reading their frontmatter, which a bot uses,
