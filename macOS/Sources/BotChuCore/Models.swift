@@ -51,7 +51,7 @@ extension RunSettings {
     /// session only resumes on the account that made it.
     public var resumableSessionID: String? {
         guard sessionAccountID == accountID else { return nil }
-        if let sessionScope { return sessionScope == executionScope ? sessionID : nil }
+        if let sessionScope { return account.runtime.adapter.canResume(from: sessionScope, to: executionScope) ? sessionID : nil }
         // Sessions saved before provider support belonged to OpenRouter on Pi.
         guard account.kind != .pi || effectiveProviderID == ModelProvider.openRouter.id else { return nil }
         return sessionID

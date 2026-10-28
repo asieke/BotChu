@@ -133,7 +133,9 @@ extension AppModel {
 
     func modelCatalogScope(for account: Account) -> ModelCatalogScope? {
         NativeModelList.lists(account.kind)
-            ? ModelCatalogScope(accountID: account.id, command: settings.command(for: account), kind: account.kind, configurationDirectory: account.configurationDirectory) : nil
+            ? ModelCatalogScope(accountID: account.id, command: settings.command(for: account), kind: account.kind,
+                                configurationDirectory: account.configurationDirectory,
+                                legacyOpenRouterCredential: account.usesLegacyOpenRouterKey(providerID: "openrouter")) : nil
     }
 
     /// The list `settings`' pickers choose from in place of the starters, once read.
@@ -146,7 +148,7 @@ extension AppModel {
             var seen = Set(models.map(\.id))
             models += modelCatalog.models.filter { seen.insert($0.id).inserted }.map {
                 ModelOption(id: $0.id, name: $0.title,
-                            efforts: $0.supportsReasoning == true ? [.off, .minimal, .low, .medium, .high] : [], providerID: "openrouter")
+                            efforts: [], providerID: "openrouter", effortsKnown: $0.supportsReasoning == false)
             }
             if models.isEmpty { return GenerationOptions.models(for: .pi) }
         }
@@ -173,6 +175,9 @@ extension AppModel {
     func configureModelCatalogs(file: URL, live: Bool) {
         modelCatalog.configure(file: file, scopes: { [weak self] in
             self.map { model in model.settings.accounts.compactMap(model.modelCatalogScope(for:)) } ?? []
-        }, listModels: DevHooks.modelLists ?? (live ? { @Sendable scope in try await NativeModelList.list(scope) } : nil))
+        }, listModels: DevHooks.modelLists ?? (live ? { @Sendable [weak self] scope in
+            let key = scope.legacyOpenRouterCredential ? await self?.openRouterKey() : nil
+            return try await NativeModelList.list(scope, openRouterKey: key)
+        } : nil))
     }
 }

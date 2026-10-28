@@ -354,7 +354,7 @@ private struct ProviderProblemDetails: View {
                     if status == .missingCommand {
                         Button("Change Command…", action: changeCommand).buttonStyle(.borderedProminent)
                     } else if request.usesLegacyOpenRouterKey {
-                        // Only the built-in Pi profile uses the legacy OpenRouter key.
+                        // Profiles saved before provider support retain their legacy OpenRouter key.
                         Button("Open Settings") {
                             dismiss()
                             model.openSettings(.openRouter)

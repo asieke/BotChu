@@ -34,21 +34,33 @@ public struct Account: Identifiable, Codable, Hashable, Sendable {
     /// Pi owns the logins in this directory. Nil preserves an existing command/wrapper's config.
     /// New Pi profiles get their own directory; no credentials are saved in the profile itself.
     public var configurationDirectory: String?
+    /// Missing in old saves: every Pi profile then used BotChu's OpenRouter key. New profiles
+    /// explicitly use the runtime's own login; no credential value is stored here.
+    public var credentialSource: CredentialSource?
+    public enum CredentialSource: String, Codable, Sendable { case runtime, legacyOpenRouter }
 
-    public init(id: String, name: String, kind: AgentKind, defaultCommand: String, symbol: String, configurationDirectory: String? = nil) {
+    public init(id: String, name: String, kind: AgentKind, defaultCommand: String, symbol: String,
+                configurationDirectory: String? = nil, credentialSource: CredentialSource? = .runtime) {
         self.id = id
         self.name = name
         self.kind = kind
         self.defaultCommand = defaultCommand
         self.symbol = symbol
         self.configurationDirectory = configurationDirectory
+        self.credentialSource = kind == .pi ? credentialSource : nil
     }
 
     public var runtime: AgentKind { kind }
 
-    /// The one legacy credential belongs to the built-in Pi profile on OpenRouter only.
+    public var effectiveCredentialSource: CredentialSource {
+        kind == .pi ? credentialSource ?? .legacyOpenRouter : .runtime
+    }
+
+    /// Built-in and custom profiles saved before provider support keep the legacy credential,
+    /// but only while they use OpenRouter. Newly created profiles own their Pi login.
     public func usesLegacyOpenRouterKey(providerID: String?) -> Bool {
-        kind == .pi && id == "openrouter" && ModelProvider.effectiveID(providerID, runtime: kind) == ModelProvider.openRouter.id
+        kind == .pi && effectiveCredentialSource == .legacyOpenRouter
+            && ModelProvider.effectiveID(providerID, runtime: kind) == ModelProvider.openRouter.id
     }
 
     /// A copyable interactive login command. It contains configuration paths, never a credential.
@@ -75,7 +87,7 @@ public enum Accounts {
         Account(id: "codex-work", name: "Codex Work", kind: .codex, defaultCommand: "~/.local/bin/codex-work", symbol: "chevron.left.forwardslash.chevron.right"),
         Account(id: "google", name: "Google (Antigravity)", kind: .antigravity, defaultCommand: "agy", symbol: "g.circle"),
         Account(id: "muse", name: "Muse", kind: .muse, defaultCommand: "~/.local/bin/muse", symbol: "m.circle"),
-        Account(id: "openrouter", name: "Pi", kind: .pi, defaultCommand: "~/.local/bin/pi", symbol: "arrow.triangle.branch"),
+        Account(id: "openrouter", name: "Pi", kind: .pi, defaultCommand: "~/.local/bin/pi", symbol: "arrow.triangle.branch", credentialSource: .legacyOpenRouter),
         // BotChu's own helper, built beside the app; Settings runs the copy there (`Sail.helperCommand`).
         Account(id: "sail", name: "Sail Research", kind: .sail, defaultCommand: Sail.helperName, symbol: "sailboat"),
     ]
@@ -124,25 +136,15 @@ public enum CommandBuilder {
                                   openRouterDefault: String, sailDefault: String = "", catalog: [ModelOption]? = nil,
                                   openRouterKey: String? = nil, sailKey: String? = nil, liveInput: Bool = false,
                                   newID: () -> String = { UUID().uuidString.lowercased() }) -> Invocation {
-        var invocation = invocation(kind: settings.account.kind, prompt: prompt,
-            model: GenerationOptions.effectiveModel(settings.model, kind: settings.account.kind,
-                openRouterDefault: openRouterDefault, sailDefault: sailDefault, providerID: settings.providerID),
-            sessionID: sessionID, reasoningEffort: settings.reasoningEffort, fast: settings.fastMode == true,
-            openRouterKey: settings.usesLegacyOpenRouterKey ? openRouterKey : nil, sailKey: sailKey,
-            liveInput: liveInput, providerID: settings.effectiveProviderID, catalog: catalog, newID: newID)
-        invocation.environment.merge(settings.account.runtimeEnvironment) { _, new in new }
-        if settings.account.kind == .pi {
-            invocation.unsetEnvironment = settings.account.configurationDirectory != nil
-                ? AgentRun.modelCredentialNames.sorted()
-                : settings.usesLegacyOpenRouterKey ? [] : ["OPENROUTER_API_KEY"]
-        }
-        return invocation
+        settings.account.runtime.adapter.invocation(for: settings, prompt: prompt, sessionID: sessionID,
+            openRouterDefault: openRouterDefault, sailDefault: sailDefault, catalog: catalog,
+            openRouterKey: openRouterKey, sailKey: sailKey, liveInput: liveInput, newID: newID)
     }
 
     /// Whether the CLI takes a follow-up while a turn runs, once its current step ends (after the
     /// running tool call returns): Claude Code, with `--input-format stream-json`. The others hear follow-ups as the next turn, once the
     /// running one ends (see README.md, Queued messages).
-    public static func takesInputMidTurn(_ kind: AgentKind) -> Bool { kind == .claude }
+    public static func takesInputMidTurn(_ kind: AgentKind) -> Bool { kind.adapter.takesInputMidTurn }
 
     /// One user message for the stdin of a CLI that takes input mid-turn, or nil for the others.
     public static func inputLine(kind: AgentKind, text: String) -> String? {
@@ -251,9 +253,8 @@ public enum CommandBuilder {
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : GenerationOptions.modelArgument(trimmed, kind: kind, effort: reasoningEffort)
         }
-        let effort = reasoningEffort.flatMap {
-            GenerationOptions.efforts(for: kind, model: model ?? "", catalog: catalog, providerID: providerID).contains($0) ? $0.rawValue : nil
-        }
+        let effort = GenerationOptions.effectiveEffort(reasoningEffort, kind: kind, model: model ?? "",
+            catalog: catalog, providerID: providerID)?.rawValue
         return (model, effort)
     }
 
@@ -261,10 +262,7 @@ public enum CommandBuilder {
     /// of the model, as run reviews need (`toolFreeInvocation`). Antigravity has no such mode. Pi has
     /// `--no-tools`, but no real run has checked it yet, so reviews skip it as well.
     public static func runsToolFree(_ kind: AgentKind) -> Bool {
-        switch kind {
-        case .claude, .codex, .muse: true
-        case .antigravity, .pi, .sail: false
-        }
+        kind.adapter.runsToolFree
     }
 
     /// The Codex features a tool-free session turns off: running commands (the shell, unified exec

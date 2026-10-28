@@ -35,7 +35,10 @@ struct ModelMenu: View {
         GenerationOptions.efforts(for: settings.account.kind, model: data.effectiveID, catalog: app.nativeModels(for: settings), providerID: settings.providerID)
     }
 
-    private var selectedEffort: ReasoningEffort? { settings.reasoningEffort.flatMap { efforts.contains($0) ? $0 : nil } }
+    private var selectedEffort: ReasoningEffort? {
+        GenerationOptions.effectiveEffort(settings.reasoningEffort, kind: settings.account.kind, model: data.effectiveID,
+                                         catalog: app.nativeModels(for: settings), providerID: settings.providerID)
+    }
 
     /// Whether the Fast switch shows: a Codex model with the Fast tier (#249).
     private var offersFast: Bool {
@@ -50,7 +53,7 @@ struct ModelMenu: View {
                 switch tableCell {
                 case .model: modelButton
                 case .effort:
-                    if efforts.isEmpty {
+                    if efforts.isEmpty && selectedEffort == nil {
                         Text("—").foregroundStyle(.tertiary).padding(.leading, 6)
                             .accessibilityLabel("Reasoning effort is not supported by this model")
                     } else {
@@ -58,9 +61,9 @@ struct ModelMenu: View {
                     }
                 }
             } else if inInspector {
-                if settings.account.kind == .pi { InspectorRow("Provider") { providerMenu } }
+                if settings.account.runtime.adapter.hasProviderSelection { InspectorRow("Provider") { providerMenu } }
                 InspectorRow("Model") { modelButton }
-                InspectorRow("Reasoning", last: !offersFast) { effortButton }
+                InspectorRow(settings.account.runtime.adapter.hasProviderSelection ? "Effort" : "Reasoning", last: !offersFast) { effortButton }
                 if offersFast {
                     InspectorRow("Fast", last: true) {
                         Toggle("Fast", isOn: Binding(get: { fast }, set: { onFast?($0) }))
@@ -69,12 +72,12 @@ struct ModelMenu: View {
                     }
                 }
             } else if inForm {
-                if settings.account.kind == .pi { LabeledContent("Provider") { providerMenu } }
+                if settings.account.runtime.adapter.hasProviderSelection { LabeledContent("Provider") { providerMenu } }
                 LabeledContent("Model") { modelButton }
-                LabeledContent("Reasoning") { effortButton }
+                LabeledContent(settings.account.runtime.adapter.hasProviderSelection ? "Effort" : "Reasoning") { effortButton }
             } else {
                 HStack(spacing: 6) {
-                    if settings.account.kind == .pi { providerMenu }
+                    if settings.account.runtime.adapter.hasProviderSelection { providerMenu }
                     modelButton
                     effortButton
                     if offersFast { fastButton }
@@ -84,7 +87,7 @@ struct ModelMenu: View {
         .disabled(disabled)
         .task(id: settings.executionScope) {
             if settings.effectiveProviderID == "openrouter" { await app.modelCatalog.load() }
-            if settings.account.kind == .pi, let scope { await app.modelCatalog.refresh(scope) }
+            if settings.account.runtime.adapter.hasProviderSelection, let scope { await app.modelCatalog.refresh(scope) }
             if DevHooks.dataDir != nil, DevHooks.env["BOTCHU_OPEN"] != nil, tableCell == nil {
                 // Let the review window finish opening/resizing before anchoring its popover.
                 try? await Task.sleep(for: .seconds(2))
@@ -144,7 +147,7 @@ struct ModelMenu: View {
     private var effortButton: some View {
         Button { showsEffort.toggle() } label: {
             if inForm {
-                FormChoiceLabel(title: efforts.isEmpty ? "Not supported" : selectedEffort?.title ?? "Auto")
+                FormChoiceLabel(title: selectedEffort?.title ?? (efforts.isEmpty ? "Not supported" : "Auto"))
             } else if tableCell != nil {
                 HStack(spacing: 6) {
                     EffortGlyph(effort: selectedEffort)
@@ -152,11 +155,11 @@ struct ModelMenu: View {
                     tableChevron(active: showsEffort)
                 }
             } else if inInspector {
-                InspectorChoiceLabel(title: efforts.isEmpty ? "Not supported" : selectedEffort?.title ?? "Auto")
+                InspectorChoiceLabel(title: selectedEffort?.title ?? (efforts.isEmpty ? "Not supported" : "Auto"))
             } else {
                 HStack(spacing: 6) {
                     EffortGlyph(effort: selectedEffort)
-                    Text(efforts.isEmpty ? "No effort" : selectedEffort?.title ?? "Auto")
+                    Text(selectedEffort?.title ?? (efforts.isEmpty ? "No effort" : "Auto"))
                         .font(.system(size: 12, weight: .medium))
                         .lineLimit(1)
                     chevron
@@ -166,7 +169,7 @@ struct ModelMenu: View {
         .buttonStyle(GenerationButtonStyle(active: showsEffort, compact: inInspector, form: inForm, table: tableCell != nil))
         .fixedSize()
         .disabled(efforts.isEmpty)
-        .accessibilityLabel(efforts.isEmpty ? "Reasoning effort is not supported by this model"
+        .accessibilityLabel(efforts.isEmpty && selectedEffort == nil ? "Reasoning effort is not supported by this model"
                             : "Reasoning effort: \(selectedEffort?.title ?? "Automatic")")
         .help(disabled ? "Effort can change when this turn ends" : efforts.isEmpty
               ? "This model does not offer adjustable reasoning effort" : "Choose how much reasoning to use")

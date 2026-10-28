@@ -1,12 +1,14 @@
 import Foundation
 
 /// Pi's own RPC protocol, independent of Codex/Muse's JSON-RPC and of its turn stream parser.
-/// No model turn, credentials, extensions, project context or MCP connections are requested.
+/// No model turn, credential output, extensions, project context or MCP connections are requested.
 public enum PiModelList {
     public static func list(command: String, configurationDirectory: String? = nil, folder: String = NSHomeDirectory(),
+                            openRouterKey: String? = nil,
                             timeout: TimeInterval = NativeModelList.timeout) async throws -> [ModelOption] {
         try await Task.detached(priority: .utility) {
-            let environment = configurationDirectory.map { ["PI_CODING_AGENT_DIR": ($0 as NSString).expandingTildeInPath] } ?? [:]
+            var environment = configurationDirectory.map { ["PI_CODING_AGENT_DIR": ($0 as NSString).expandingTildeInPath] } ?? [:]
+            if let openRouterKey, !openRouterKey.isEmpty { environment["OPENROUTER_API_KEY"] = openRouterKey }
             let process: UsageProcess
             do {
                 process = try UsageProcess(command: command,
@@ -36,10 +38,22 @@ public enum PiModelList {
             guard let provider = entry["provider"] as? String, !provider.isEmpty,
                   let id = entry["id"] as? String, !id.isEmpty,
                   seen.insert(provider + "\0" + id).inserted else { return nil }
-            // Pi's basic levels work for reasoning models. Extended levels depend on the exact
-            // model adapter; a reasoning boolean alone is not evidence for xhigh or max.
-            let efforts: [ReasoningEffort] = entry["reasoning"] as? Bool == true ? [.off, .minimal, .low, .medium, .high] : []
+            let efforts = supportedEfforts(reasoning: entry["reasoning"] as? Bool == true,
+                                          map: entry["thinkingLevelMap"] as? [String: Any])
             return ModelOption(id: id, name: entry["name"] as? String ?? id, efforts: efforts, providerID: provider)
         }.sorted { ($0.providerID ?? "", $0.name) < ($1.providerID ?? "", $1.name) }
+    }
+
+    public static let thinkingLevels: [ReasoningEffort] = [.off, .minimal, .low, .medium, .high, .xhigh, .max]
+
+    /// Pi 1.4's getSupportedThinkingLevels: null disables a level, and extended levels require
+    /// an explicit mapping. A non-reasoning model has no adjustable effort in BotChu's UI.
+    static func supportedEfforts(reasoning: Bool, map: [String: Any]?) -> [ReasoningEffort] {
+        guard reasoning else { return [] }
+        return thinkingLevels.filter { level in
+            if map?[level.rawValue] is NSNull { return false }
+            if level == .xhigh || level == .max { return map?[level.rawValue] as? String != nil }
+            return true
+        }
     }
 }

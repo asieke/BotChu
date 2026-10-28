@@ -398,7 +398,7 @@ final class JobRuntime {
         let home = BotHome(workspace: bot.persistencePath)
         let what = "job “\(job.title)” run"
 
-        runner.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak runner] events in
+        runner.deliverEvents(parsedBy: account.runtime.adapter.parser()) { [weak self, weak runner] events in
             guard let self, let runner, self.runners[runID] === runner, let model = self.model else { return }
             var state = conversation.run
             if state?.hasOutput == false { state?.hasOutput = true }

@@ -1843,7 +1843,7 @@ final class AppModel {
 
                 // The CLI's lines are parsed off the main thread; their events arrive here in
                 // batches, a few times a second at most, and go into this conversation alone.
-                run.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak run] events in
+                run.deliverEvents(parsedBy: account.runtime.adapter.parser()) { [weak self, weak run] events in
                     guard let self, let run, self.runs[target] === run, self.runSettings(of: target) != nil else { return }
                     let conversation = self.conversation(target)
                     var state = conversation.run

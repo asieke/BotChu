@@ -26,6 +26,45 @@ import Testing
         #expect(profile.defaultCommand == "pi-old")
     }
 
+    @Test func oldCustomProfilesRetainTheirKeyAndSessionButNewProfilesOwnTheirLogin() throws {
+        let old = try JSONDecoder().decode(Account.self, from: Data(#"{"id":"old-pi","name":"Old Pi","kind":"pi","defaultCommand":"pi-old","symbol":"terminal"}"#.utf8))
+        var bot = pi()
+        bot.accountID = old.id; bot.accountProfile = old; bot.sessionAccountID = old.id
+        let restored = try JSONDecoder().decode(Bot.self, from: JSONEncoder().encode(bot))
+        #expect(restored.resumableSessionID == "legacy-session")
+        #expect(restored.usesLegacyOpenRouterKey)
+        #expect(restored.model == bot.model && restored.reasoningEffort == .high)
+        let launch = CommandBuilder.invocation(for: restored, prompt: "Hello", sessionID: restored.resumableSessionID,
+            openRouterDefault: "other", openRouterKey: "test-legacy-key")
+        #expect(launch.environment["OPENROUTER_API_KEY"] == "test-legacy-key")
+        #expect(launch.arguments.contains("legacy-session") && launch.arguments.contains(bot.model))
+        let task = BotTask(for: restored, repo: "owner/repo", checkout: "/tmp/repo", work: nil, brief: "Work")
+        let child = SubagentRun(rootBotID: UUID(), depth: 1, targetBot: restored, title: "Work", brief: "Work", workingDirectory: "/tmp/repo")
+        let job = JobRunsOn(restored).applied(to: restored)
+        let inherited: [any RunSettings] = [task, child, job]
+        for run in inherited {
+            #expect(CommandBuilder.invocation(for: run, prompt: "Hi", sessionID: nil, openRouterDefault: "other",
+                openRouterKey: "test-legacy-key").environment["OPENROUTER_API_KEY"] == "test-legacy-key")
+        }
+        let newProfile = Account(id: old.id, name: old.name, kind: .pi, defaultCommand: old.defaultCommand, symbol: old.symbol)
+        #expect(newProfile.effectiveCredentialSource == .runtime)
+        #expect(!newProfile.usesLegacyOpenRouterKey(providerID: "openrouter"))
+        bot.sessionScope = bot.executionScope
+        bot.selectAccount(newProfile)
+        #expect(bot.resumableSessionID == nil)
+    }
+
+    @Test func unknownPiModelsKeepSavedValidEffortsWithoutInventingCapabilities() {
+        let unavailable = [ModelOption(id: "custom/model", name: "Custom", efforts: [], providerID: "openrouter", effortsKnown: false)]
+        #expect(GenerationOptions.efforts(for: .pi, model: "custom/model", catalog: unavailable).isEmpty)
+        #expect(GenerationOptions.effectiveEffort(.max, kind: .pi, model: "custom/model", catalog: unavailable) == .max)
+        #expect(GenerationOptions.effectiveEffort(.ultra, kind: .pi, model: "custom/model", catalog: unavailable) == nil)
+        #expect(GenerationOptions.effectiveEffort(ReasoningEffort.none, kind: .pi, model: "custom/model", catalog: unavailable) == nil)
+        let known = [ModelOption(id: "custom/model", name: "Custom", efforts: [.low, .high], providerID: "openrouter")]
+        #expect(GenerationOptions.effectiveEffort(.max, kind: .pi, model: "custom/model", catalog: known) == nil)
+        #expect(GenerationOptions.effectiveEffort(.high, kind: .pi, model: "custom/model", catalog: known) == .high)
+    }
+
     @Test func changingProviderResetsGenerationAndSessionButKeepsBotIdentity() throws {
         var bot = pi()
         let original = bot
@@ -128,18 +167,21 @@ import Testing
     @Test func piProviderDefaultsCatalogsAndEffortsNeverBleedAcrossProviders() throws {
         let frame = try #require(JSONSerialization.jsonObject(with: Data(PiModelSamples.available.utf8)) as? [String: Any])
         let models = try PiModelList.parse(frame)
-        #expect(Set(models.compactMap(\.providerID)) == ["meta", "radius", "garcon"])
-        #expect(models.allSatisfy { !$0.efforts.contains(.max) && !$0.efforts.contains(.xhigh) })
+        #expect(Set(models.compactMap(\.providerID)) == ["meta", "radius", "openrouter"])
+        #expect(models.first { $0.providerID == "radius" && $0.id == "kimi-k3" }?.efforts == [.low, .high, .max])
+        #expect(models.first { $0.providerID == "radius" && $0.id == "claude-opus-5-5" }?.efforts == [.low, .medium, .high, .xhigh, .max])
+        #expect(models.first { $0.providerID == "meta" }?.efforts == [.minimal, .low, .medium, .high, .xhigh])
+        #expect(models.first { $0.id == "anthropic/claude-opus-4.6" }?.efforts == [.off, .low, .medium, .high, .max])
         let picker = ModelPickerData(kind: .pi, model: "", openRouterDefault: "openrouter/default",
                                     catalog: [CatalogModel(id: "wrong", name: "Wrong")], native: models, providerID: "radius")
         #expect(picker.effectiveID.isEmpty)
-        #expect(picker.choices.map(\.id) == ["", "kimi-k3"])
+        #expect(Set(picker.choices.map(\.id)) == ["", "balanced", "claude-opus-5-5", "kimi-k3"])
         #expect(picker.choices.last?.title == "Kimi K3")
         var bot = pi(); bot.selectProvider("radius")
         #expect(PiLaunch.problem(settings: bot, effectiveModel: picker.effectiveID) != nil)
         bot.model = "kimi-k3"; bot.reasoningEffort = .max
         let max = CommandBuilder.invocation(for: bot, prompt: "Hi", sessionID: nil, openRouterDefault: "other", catalog: models)
-        #expect(!max.arguments.contains("--thinking"))
+        #expect(max.arguments.contains("--thinking") && max.arguments.contains("max"))
         bot.reasoningEffort = .high
         let high = CommandBuilder.invocation(for: bot, prompt: "Hi", sessionID: "resume", openRouterDefault: "other", catalog: models)
         #expect(high.arguments.contains("--thinking") && high.arguments.contains("high") && high.arguments.contains("resume"))
@@ -191,7 +233,7 @@ import Testing
             #expect(failure.message.contains("host’s own login"))
         }
         let env = AgentRun.childEnvironment(["PI_CODING_AGENT_DIR": "/other/profile", "GEMINI_API_KEY": "test",
-                                             "META_API_KEY": "test", "OPENROUTER_API_KEY": "test", "PATH": "/bin", "GH_TOKEN": "tool-token"])
-        #expect(env == ["PATH": "/bin", "GH_TOKEN": "tool-token"])
+                                             "META_API_KEY": "test", "OPENROUTER_API_KEY": "test", "PATH": "/bin", "GH_TOKEN": "tool-token", "AWS_PROFILE": "tools"])
+        #expect(env == ["PATH": "/bin", "GH_TOKEN": "tool-token", "AWS_PROFILE": "tools"])
     }
 }

@@ -157,7 +157,7 @@ public final class AgentRun: @unchecked Sendable {
                                   "MOONSHOT_API_KEY", "OPENCODE_API_KEY", "KIMI_API_KEY", "META_API_KEY", "RADIUS_API_KEY",
                                   "CLOUDFLARE_API_KEY", "QWEN_TOKEN_PLAN_API_KEY", "QWEN_TOKEN_PLAN_CN_API_KEY", "XIAOMI_API_KEY",
                                   "XIAOMI_TOKEN_PLAN_CN_API_KEY", "XIAOMI_TOKEN_PLAN_AMS_API_KEY", "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
-                                  "AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE"]
+                                  "AWS_BEARER_TOKEN_BEDROCK"]
 
     private static let openRouterLaunchVariable = "BOTCHU_LAUNCH_OPENROUTER_API_KEY"
 

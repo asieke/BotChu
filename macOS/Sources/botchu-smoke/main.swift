@@ -118,7 +118,8 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
     let kind = bot.account.kind
     let fullPrompt = BotContext.prompt(for: prompt, preamble: preamble)
     let catalog: [ModelOption]? = kind == .pi
-        ? try? await PiModelList.list(command: command(for: bot.account), configurationDirectory: bot.account.configurationDirectory) : nil
+        ? try? await PiModelList.list(command: command(for: bot.account), configurationDirectory: bot.account.configurationDirectory,
+            openRouterKey: bot.account.usesLegacyOpenRouterKey(providerID: "openrouter") ? ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] : nil) : nil
     let effectiveModel = GenerationOptions.effectiveModel(bot.model, kind: kind,
         openRouterDefault: CommandBuilder.defaultOpenRouterModel, providerID: bot.providerID)
     if let problem = PiLaunch.problem(settings: bot, effectiveModel: effectiveModel) {
@@ -142,7 +143,7 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
         var pending = followUp
         let run = AgentRun(command: command(for: bot.account), invocation: invocation, directory: URL(fileURLWithPath: bot.workspace))
         // As the app does: parsed off the main thread, delivered in batches.
-        run.deliverEvents(parsedBy: StreamParsers.make(for: kind)) { events in
+        run.deliverEvents(parsedBy: kind.adapter.parser()) { events in
             for event in events {
                 switch event {
                 case .session(let reported):
@@ -243,8 +244,9 @@ Task {
             }
             let started = Date()
             do {
-                let scope = ModelCatalogScope(accountID: account.id, command: account.defaultCommand, kind: account.kind)
-                for model in try await NativeModelList.list(scope) {
+                let scope = ModelCatalogScope(accountID: account.id, command: account.defaultCommand, kind: account.kind,
+                    legacyOpenRouterCredential: account.usesLegacyOpenRouterKey(providerID: "openrouter"))
+                for model in try await NativeModelList.list(scope, openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]) {
                     print("    \(model.providerID.map { $0 + "/" } ?? "")\(model.id) · \(model.name) · \(model.efforts.map(\.rawValue).joined(separator: " "))")
                 }
                 print("    OK in \(Int(Date().timeIntervalSince(started)))s")
@@ -370,7 +372,7 @@ Task {
                       accountID: account.id, workspace: root.appendingPathComponent(account.id).path)
         if ProcessInfo.processInfo.environment["BOTCHU_SMOKE_CUSTOM_PROFILE"] == "1" {
             bot.selectAccount(Account(id: "custom-" + account.id, name: account.name + " profile", kind: account.kind,
-                                      defaultCommand: account.defaultCommand, symbol: account.symbol))
+                                      defaultCommand: account.defaultCommand, symbol: account.symbol, credentialSource: nil))
             // A custom profile must work after the same persistence round trip used by a bot.
             if let data = try? JSONEncoder().encode(bot), let restored = try? JSONDecoder().decode(Bot.self, from: data) { bot = restored }
         }

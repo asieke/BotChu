@@ -337,7 +337,7 @@ public struct IssueSnapshot: Equatable, Sendable {
             if subagents > 0 { counts.append("\(IssueSnapshot.count(subagents, "sub-agent")) running") }
 
             let kind = settings.account.kind
-            let family = kind.displayName + (kind == .pi ? " (OpenRouter)" : "")
+            let family = kind.displayName
                 + (Accounts.all.contains { $0.id == settings.accountID } ? ", a built-in account" : ", an added profile")
             let model = settings.model.trimmingCharacters(in: .whitespacesAndNewlines)
             let modelText = model.isEmpty ? "the account's default"

@@ -712,7 +712,7 @@ final class SubagentRuntime {
             var failure: String?
             var persistenceFailure: String?
             // Parsed off the main thread, in batches; the transcript is checkpointed off it too.
-            runner.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak runner] events in
+            runner.deliverEvents(parsedBy: account.runtime.adapter.parser()) { [weak self, weak runner] events in
                 guard let self, let runner, self.runners[id] === runner, self.run(id)?.phase.isActive == true else { return }
                 let live = self.live(id)
                 var state = live.state

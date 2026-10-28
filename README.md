@@ -195,7 +195,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     (older than the background's interval, or a later check failed; its bars and shares are
     dimmed), **Usage unavailable** or **Command not found**, a button that shows why, with **Try
     Again** (labelled with the time the profile's limit allows it) and, for a missing command,
-    **Change Command…**, or for the built-in Pi profile **Open Settings** (its OpenRouter key); a profile not read yet says Checking…, over empty tracks. Selecting a
+    **Change Command…**, or for a legacy Pi profile **Open Settings** (its OpenRouter key); a profile not read yet says Checking…, over empty tracks. Selecting a
     profile shows it on the right: its family and plan, its allowance as **Model & Usage** shows it, its
     **Connectors** (below), the agents set to
     it, each opening its Home, and its command, with Copy and Change… (Settings ▸ Accounts). A row's
@@ -271,7 +271,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     sailboat on a tile for Sail (not Sail's own mark).
   - **Runtime, profile, provider and model:** the bot's name, instructions, memory and workspace
     are its identity. Its profile selects the runtime (CLI protocol, tools and session handling)
-    and login. Pi then offers **Provider → Model → Reasoning**; fixed-provider runtimes show
+    and login. Pi then offers **Provider → Model → Effort**; fixed-provider runtimes show
     their own models directly. Pi's available providers and models come from that profile's own
     `get_available_models` RPC, without a model turn, extensions or MCP connections. Only model
     metadata is retained. Custom/retired model IDs remain selectable; a newly selected provider
@@ -280,18 +280,27 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     changes retain model/provider choices but start a fresh session; runtime changes also reset
     provider, model and effort. Compatible model/effort changes keep the session.
     The same settings travel with tasks, sub-agents and scheduled jobs, including job history.
-    Reasoning choices are model-specific: Pi's reasoning models offer off through high; unknown
-    models stay on Auto, and unverified `xhigh`/`max` are never sent just because Pi accepts the
-    flag. No OpenCode runtime adapter is implemented; another runtime would need its own tools,
-    protocol, session and authentication integration.
+    Effort choices follow the runtime's `thinkingLevelMap`, including Extra High and Max only where
+    supported; Radius's Kimi K3, for example, offers Low, High and Max. Custom model IDs retain a
+    saved valid Pi effort while metadata is unavailable, leaving validation to Pi; BotChu offers
+    no unverified new effort choices. Provider IDs come from the signed-in profile, including
+    `radius` and `kimi-coding` when configured (there is no built-in `kimi` ID). See Pi's
+    [provider documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/providers.md).
+    `RuntimeAdapter` owns provider/catalog capabilities, tool modes, invocation, stream parsing
+    and session compatibility. OpenCode can be added as a separate runtime with its own protocol;
+    implementing that runtime is future scope.
   - **Existing Pi data:** the built-in profile now displays **Pi**, while its saved ID and Keychain
     account remain `openrouter`. Old bots/tasks/jobs/sub-agents without a provider still mean
     OpenRouter. Existing compatible session IDs, model choices and effort values decode unchanged;
-    a saved effort not supported by the selected model is omitted at launch. The OpenRouter
+    a saved effort known to be unsupported by the selected model is omitted at launch. The OpenRouter
     Settings default remains the fallback only for that provider. Other providers use Pi's own
     profile authentication, and BotChu does not query OpenRouter's balance for them. Remote tasks
     use the host's own login; their usage view never substitutes this Mac's allowance. Old custom
-    profile commands retain their configuration; no login files or keys are migrated or copied.
+    profile commands retain their configuration and legacy OpenRouter credential ownership.
+    No login files or keys are migrated or copied. Pi can carry sessions across providers itself;
+    BotChu deliberately starts a fresh CLI session for a provider/profile change and carries the
+    visible chat into its preamble instead. SSH tasks use the host's own login and custom model
+    IDs; local provider catalogs and config paths are not applied to the host.
   - **Sail Research:** for long-running agent work, on Sail's Flex completion window, which queues
     requests for a lower price. Flex is taken only by background Responses requests (`background:
     true`, `metadata.completion_window: "flex"`), which can't stream, so pointing Pi's streaming
@@ -1791,7 +1800,7 @@ on that pull request's branch to continue in instead). The same command run agai
   - Antigravity: `agy -p … --output-format stream-json --dangerously-skip-permissions`, then `--conversation <id>`.
   - Muse: `muse exec --json --session-id <uuid>` (the same id resumes it).
   - Pi: `pi -p --mode json --provider <provider> --model <id> --session-id <uuid>`. The runtime owns
-    the provider login in its profile's config folder. Only the built-in `openrouter` profile,
+    the provider login in its profile's config folder. Every legacy Pi profile (built-in or custom),
     when its provider is OpenRouter on This Mac, receives `OPENROUTER_API_KEY` from the existing
     Keychain item. Credentials and local config folders are never forwarded over SSH; a remote
     profile command owns the host's login.

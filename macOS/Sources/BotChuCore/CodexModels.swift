@@ -9,18 +9,21 @@ public struct ModelCatalogScope: Hashable, Sendable {
     /// The profile's CLI family, which says how its list is read.
     public var kind: AgentKind
     public var configurationDirectory: String?
+    public var legacyOpenRouterCredential: Bool
 
-    public init(accountID: String, command: String, kind: AgentKind, configurationDirectory: String? = nil) {
+    public init(accountID: String, command: String, kind: AgentKind, configurationDirectory: String? = nil,
+                legacyOpenRouterCredential: Bool = false) {
         self.accountID = accountID
         self.command = command
         self.kind = kind
         self.configurationDirectory = configurationDirectory
+        self.legacyOpenRouterCredential = kind == .pi && legacyOpenRouterCredential
     }
 
     /// How the scope is saved: opaque, so `model-catalogs.json` holds no command.
     public var key: String {
         // Preserve existing native cache keys; Pi is a new catalog with explicit runtime scope.
-        ConnectorScope.profile(accountID: accountID, command: kind == .pi ? "pi\0\(configurationDirectory ?? "")\0\(command)" : command)
+        ConnectorScope.profile(accountID: accountID, command: kind == .pi ? "pi\0\(configurationDirectory ?? "")\0\(legacyOpenRouterCredential)\0\(command)" : command)
     }
 }
 
@@ -50,14 +53,16 @@ public struct ModelListFailure: Error, Equatable, Sendable {
 public enum NativeModelList {
     public static let timeout: TimeInterval = 20
 
-    public static func lists(_ kind: AgentKind) -> Bool { kind == .codex || kind == .muse || kind == .pi }
+    public static func lists(_ kind: AgentKind) -> Bool { kind.adapter.listsModels }
 
     /// The scope's models, run from `folder` (the home folder).
-    public static func list(_ scope: ModelCatalogScope, folder: String = NSHomeDirectory(), timeout: TimeInterval = timeout) async throws -> [ModelOption] {
+    public static func list(_ scope: ModelCatalogScope, folder: String = NSHomeDirectory(), timeout: TimeInterval = timeout,
+                            openRouterKey: String? = nil) async throws -> [ModelOption] {
         switch scope.kind {
         case .codex: try await CodexModelList.list(command: scope.command, folder: folder, timeout: timeout)
         case .muse: try await MuseModelList.list(command: scope.command, folder: folder, timeout: timeout)
-        case .pi: try await PiModelList.list(command: scope.command, configurationDirectory: scope.configurationDirectory, folder: folder, timeout: timeout)
+        case .pi: try await PiModelList.list(command: scope.command, configurationDirectory: scope.configurationDirectory, folder: folder,
+                                           openRouterKey: scope.legacyOpenRouterCredential ? openRouterKey : nil, timeout: timeout)
         case .claude, .antigravity, .sail: throw ModelListFailure.unsupported(scope.kind.displayName)
         }
     }
@@ -300,12 +305,13 @@ public enum NativeCatalogFile {
         /// Whether it has the Fast tier; nil in lists saved before #249, which offer it until read again.
         var fast: Bool?
         var providerID: String?
+        var effortsKnown: Bool?
     }
 
     public static func encode(_ catalogs: [String: NativeCatalog]) -> Data? {
         let file = File(version: version, catalogs: catalogs.sorted { $0.key < $1.key }.map { key, catalog in
             Catalog(key: key, checkedAt: catalog.checkedAt,
-                    models: catalog.models.map { Model(id: $0.id, name: $0.name, efforts: $0.efforts.map(\.rawValue), fast: $0.fast, providerID: $0.providerID) })
+                    models: catalog.models.map { Model(id: $0.id, name: $0.name, efforts: $0.efforts.map(\.rawValue), fast: $0.fast, providerID: $0.providerID, effortsKnown: $0.effortsKnown) })
         })
         return try? JSONEncoder().encode(file)
     }
@@ -315,7 +321,7 @@ public enum NativeCatalogFile {
         guard let file = try? JSONDecoder().decode(File.self, from: data), file.version == version else { return [:] }
         return Dictionary(file.catalogs.compactMap { catalog -> (String, NativeCatalog)? in
             let models = catalog.models.filter { !$0.id.isEmpty }.map {
-                ModelOption(id: $0.id, name: $0.name, efforts: $0.efforts.compactMap(ReasoningEffort.init), fast: $0.fast ?? true, providerID: $0.providerID)
+                ModelOption(id: $0.id, name: $0.name, efforts: $0.efforts.compactMap(ReasoningEffort.init), fast: $0.fast ?? true, providerID: $0.providerID, effortsKnown: $0.effortsKnown ?? true)
             }
             return models.isEmpty ? nil : (catalog.key, NativeCatalog(models: models, checkedAt: catalog.checkedAt))
         }) { $1 }

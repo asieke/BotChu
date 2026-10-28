@@ -17,18 +17,22 @@ public struct ModelOption: Identifiable, Equatable, Sendable {
     public let name: String
     public let efforts: [ReasoningEffort]
     public var providerID: String?
+    /// False when only a public model name/reasoning flag is known, without runtime capabilities.
+    public var effortsKnown: Bool
     /// A CLI alias that moves to newer versions, such as Claude Code's `opus`, not a pinned version.
     public var moving = false
     /// Whether it has Codex's Fast tier (#249).
     public var fast = false
 
-    public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false, fast: Bool = false, providerID: String? = nil) {
+    public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false, fast: Bool = false,
+                providerID: String? = nil, effortsKnown: Bool = true) {
         self.id = id
         self.name = name
         self.efforts = efforts
         self.moving = moving
         self.fast = fast
         self.providerID = providerID
+        self.effortsKnown = effortsKnown
     }
 }
 
@@ -112,6 +116,20 @@ public enum GenerationOptions {
         case .pi: return []
         case .sail: return [.low, .medium, .high]
         }
+    }
+
+    /// Preserve a saved custom Pi choice while metadata is unavailable. It must still be valid
+    /// Pi syntax; when the runtime lists the model, its exact capabilities take precedence.
+    public static func effectiveEffort(_ effort: ReasoningEffort?, kind: AgentKind, model: String,
+                                       catalog: [ModelOption]? = nil, providerID: String? = nil) -> ReasoningEffort? {
+        guard let effort else { return nil }
+        if kind == .pi {
+            let option = models(for: kind, catalog: catalog, providerID: providerID).first { $0.id == model }
+            if option == nil || option?.effortsKnown == false {
+                return PiModelList.thinkingLevels.contains(effort) ? effort : nil
+            }
+        }
+        return efforts(for: kind, model: model, catalog: catalog, providerID: providerID).contains(effort) ? effort : nil
     }
 
     /// Whether Fast can be turned on (#249): on Codex, for a model its list gives the Fast tier, and
@@ -241,9 +259,8 @@ extension RunSettings {
     /// `catalog`: the profile's own list, when read (#220), whose efforts the model offers.
     public mutating func selectModel(_ model: String, catalog: [ModelOption]? = nil) {
         self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let reasoningEffort, !GenerationOptions.efforts(for: account.kind, model: self.model, catalog: catalog, providerID: providerID).contains(reasoningEffort) {
-            self.reasoningEffort = nil
-        }
+        reasoningEffort = GenerationOptions.effectiveEffort(reasoningEffort, kind: account.kind, model: self.model,
+                                                             catalog: catalog, providerID: providerID)
         if fastMode == true, !GenerationOptions.offersFast(for: account.kind, model: self.model, catalog: catalog) {
             fastMode = nil
         }
