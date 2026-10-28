@@ -1652,6 +1652,9 @@ on that pull request's branch to continue in instead). The same command run agai
     task over once saved, collapsing status sections, a bot's tabs beside its
     chat (a click, the close button on hover, **+**, « and », the arrow keys, ⌘1 to ⌘9, the rail at
     the narrowest window and by the owner's choice, light and dark) and its row in the bot list,
+    its native 6-point status dots against the column and rail in both appearances, selected and
+    unselected, with and without window focus, as requests are resolved, completions are read and
+    more than four conversations are busy (#237),
     the sidebar's sections of bots (their menus, the alert that names them, collapsing and revealing, bots dropped in them, and changes that can't
     be saved, shown until Try Again or quitting saves them), Agents grouped under them and editing
     them with the same menus and alert, inspector tab navigation and
@@ -1825,6 +1828,9 @@ on that pull request's branch to continue in instead). The same command run agai
   to the window as before, and under the test runner WebKit counts every window as hidden either
   way. The screenshot test shows its window behind every other one, since the window server's
   picture needs it drawn. `BOTCHU_SHOW_TEST_WINDOWS=1` shows them all again, to watch a test.
+  `statusDotsKeepTheirColoursInNativeSelectedRows` uses native row emphasis and Reduce Motion for
+  stable pixels in SwiftPM's background helper; an AppKit application loop also exercises real
+  window focus and normal animation with visible windows.
 - Debug tests use `macOS/.build/`, release tests with testability use `macOS/.build/release-tests/`,
   and the app uses `macOS/.build/app/`. Each keeps its own build manifest: on Xcode's build system,
   even a debug test build can invalidate optimized Core when it shares the app's scratch directory.
