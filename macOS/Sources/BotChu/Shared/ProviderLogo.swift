@@ -11,7 +11,8 @@ import BotChuCore
 // without a logo do.
 
 /// The mark of an account's CLI family, so a profile added in Providers shows its family's: Claude's
-/// spark, OpenAI's knot for Codex, Google's G for Antigravity, Facebook's f for Muse, and π for Pi.
+/// spark, OpenAI's knot for Codex, Google's G for Antigravity, Facebook's f for Muse, π for Pi, and a
+/// sailboat for Sail.
 struct ProviderLogo: View {
     let kind: AgentKind
     var size: CGFloat = 14
@@ -45,6 +46,12 @@ struct ProviderLogo: View {
                 Text("π")
                     .font(.system(size: size * 0.62, weight: .bold, design: .rounded))
                     .foregroundStyle(Color(hex: dark ? "1C1C1E" : "FFFFFF"))
+            case .sail:
+                // Not Sail Research's mark: a sailboat symbol on a tile, as Pi's π is.
+                tile.fill(Color(hex: "0B3D91"))
+                Image(systemName: "sailboat.fill")
+                    .font(.system(size: size * 0.55, weight: .semibold))
+                    .foregroundStyle(.white)
             }
         }
         .frame(width: size, height: size)

@@ -835,12 +835,15 @@ extension BotHome {
 /// (`Job.runSettings`), never its agent's Home session, with its context and the job's instructions
 /// as the prompt, and its stdin closed, so nothing is written into it while it runs.
 public enum JobLaunch {
-    public static func invocation(for agent: any RunSettings, prompt: String, openRouterDefault: String, openRouterKey: String?) -> Invocation {
+    public static func invocation(for agent: any RunSettings, prompt: String, openRouterDefault: String, openRouterKey: String?,
+                                  sailDefault: String = "", sailKey: String? = nil) -> Invocation {
         let account = agent.account
         return CommandBuilder.invocation(kind: account.kind, prompt: prompt,
-                                         model: GenerationOptions.effectiveModel(agent.model, kind: account.kind, openRouterDefault: openRouterDefault),
+                                         model: GenerationOptions.effectiveModel(agent.model, kind: account.kind, openRouterDefault: openRouterDefault,
+                                                                                 sailDefault: sailDefault),
                                          sessionID: nil, reasoningEffort: agent.reasoningEffort,
-                                         openRouterKey: account.kind == .pi ? openRouterKey : nil, liveInput: false)
+                                         openRouterKey: account.kind == .pi ? openRouterKey : nil,
+                                         sailKey: account.kind == .sail ? sailKey : nil, liveInput: false)
     }
 
     /// The first line of a run's transcript: the account it started on, and why, when the job's own

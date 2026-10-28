@@ -750,7 +750,7 @@ struct AddProviderSheet: View {
             Text("New CLI Profile").font(.headline).padding(20)
             Form {
                 TextField("Profile name", text: $name, prompt: Text("Claude Research"))
-                Picker("CLI family", selection: $kind) { ForEach(AgentKind.allCases, id: \.self) { ProviderMenuLabel(title: $0.displayName, kind: $0).tag($0) } }
+                Picker("CLI family", selection: $kind) { ForEach(AgentKind.profileFamilies, id: \.self) { ProviderMenuLabel(title: $0.displayName, kind: $0).tag($0) } }
                 TextField("Command", text: $command, prompt: Text("~/.local/bin/claude-research"))
                     .font(.system(.body, design: .monospaced))
                     .onChange(of: command) { found = nil }

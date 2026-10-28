@@ -212,6 +212,8 @@ final class AppModel {
     @ObservationIgnored private var usageWatch: Task<Void, Never>?
     /// Usage views inject this lookup in tests so they never read the owner's Keychain.
     let openRouterKey: @MainActor () -> String?
+    /// The Sail key as Settings ▸ Sail shows it; tests replace it, so they never read the Keychain.
+    @ObservationIgnored var sailKey: @MainActor () -> String? = { Keychain.get(Keychain.sailAccount) }
     let modelCatalog = ModelCatalog()
 
     private let store: Store
@@ -1650,9 +1652,11 @@ final class AppModel {
                 let delegationInstructions = needsDelegationContext ? BotContext.subagentsSection(availableBots: delegation.roster) : nil
                 let contextSections = [preamble, delegationInstructions].compactMap { $0 }
                 let prompt = BotContext.prompt(for: text, preamble: contextSections.isEmpty ? nil : contextSections.joined(separator: "\n\n"), updates: updates)
-                let model = GenerationOptions.effectiveModel(current.model, kind: account.kind, openRouterDefault: settings.openRouterModel)
+                let model = GenerationOptions.effectiveModel(current.model, kind: account.kind, openRouterDefault: settings.openRouterModel,
+                                                             sailDefault: settings.sailModel)
                 // A CLI that takes input mid-turn keeps its stdin open for follow-ups (This Mac only).
                 let liveInput = CommandBuilder.takesInputMidTurn(account.kind) && !machine.isRemote
+                let sailKey = account.kind == .sail && !machine.isRemote ? Keychain.get(Keychain.sailAccount) : nil
                 var invocation = CommandBuilder.invocation(
                     kind: account.kind,
                     prompt: prompt,
@@ -1660,6 +1664,7 @@ final class AppModel {
                     sessionID: resume,
                     reasoningEffort: current.reasoningEffort,
                     openRouterKey: account.kind == .pi ? Keychain.get(Keychain.openRouterAccount) : nil,
+                    sailKey: sailKey,
                     liveInput: liveInput)
 
                 do {
@@ -1680,6 +1685,16 @@ final class AppModel {
                     runStates[target] = nil
                     pauseQueue(target)
                     append(ChatMessage(role: .error, text: "Add your OpenRouter API key in BotChu ▸ Settings first."), to: target)
+                    saveThread(target)
+                    return
+                }
+
+                // Sail's helper is built beside BotChu and its key never leaves this Mac.
+                if account.kind == .sail, let problem = SailLaunch.problem(remote: machine.isRemote, key: sailKey) {
+                    delegation.endCaller(context.id)
+                    runStates[target] = nil
+                    pauseQueue(target)
+                    append(ChatMessage(role: .error, text: problem), to: target)
                     saveThread(target)
                     return
                 }

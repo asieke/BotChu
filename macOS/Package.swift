@@ -9,6 +9,8 @@ let package = Package(
         .executableTarget(name: "BotChu", dependencies: ["BotChuCore"], resources: [.copy("Resources/ChatRenderer")]),
         // Runs real turns on an account from the command line (not shipped in the app).
         .executableTarget(name: "botchu-smoke", dependencies: ["BotChuCore"]),
+        // The Sail account's headless agent, shipped beside the app (`SailCommand`).
+        .executableTarget(name: "botchu-sail", dependencies: ["BotChuCore"]),
         .testTarget(name: "BotChuCoreTests", dependencies: ["BotChuCore"]),
         .testTarget(name: "BotChuRenderingTests", dependencies: ["BotChu"]),
     ],

@@ -2,8 +2,8 @@ import Foundation
 import Observation
 import BotChuCore
 
-/// Settings kept in `defaults` (domain `local.BotChu`); the OpenRouter key and the Telegram bot
-/// token are in the Keychain.
+/// Settings kept in `defaults` (domain `local.BotChu`); the OpenRouter and Sail keys and the
+/// Telegram bot token are in the Keychain.
 @MainActor @Observable
 final class AppSettings {
     private let defaults: UserDefaults
@@ -27,6 +27,9 @@ final class AppSettings {
 
     func resolvedMacName() async -> String { await macName.value }
     var openRouterModel: String { didSet { defaults.set(openRouterModel, forKey: "openRouterModel") } }
+    /// The Sail model a conversation on the Sail account runs when it doesn't choose one; empty
+    /// until the owner chooses, as Sail has no default of its own.
+    var sailModel: String { didSet { defaults.set(sailModel, forKey: "sailModel") } }
     /// Command overrides by account id; a missing or empty entry means the account's default.
     var commands: [String: String] { didSet { defaults.set(commands, forKey: "commands") } }
     /// The Codex account that draws pets for bots that don't run on Codex themselves.
@@ -77,6 +80,7 @@ final class AppSettings {
         }
         openRouterModel = (DevHooks.dataDir != nil ? DevHooks.env["BOTCHU_DEFAULT_MODEL"] : nil)
             ?? defaults.string(forKey: "openRouterModel") ?? CommandBuilder.defaultOpenRouterModel
+        sailModel = defaults.string(forKey: "sailModel") ?? ""
         commands = defaults.dictionary(forKey: "commands") as? [String: String] ?? [:]
         petAccountID = defaults.string(forKey: "petAccountID") ?? "codex-personal"
         petModelID = defaults.string(forKey: "petModelID") ?? PetVideo.defaultModel.id
@@ -101,7 +105,9 @@ final class AppSettings {
 
     func command(for account: Account) -> String {
         let override = commands[account.id]?.trimmingCharacters(in: .whitespaces) ?? ""
-        return override.isEmpty ? account.defaultCommand : override
+        guard override.isEmpty else { return override }
+        // The Sail helper built beside this copy of BotChu.
+        return account.kind == .sail ? Sail.helperCommand(besides: Bundle.main.executableURL) : account.defaultCommand
     }
 
     func host(_ id: UUID?) -> SSHHost? {

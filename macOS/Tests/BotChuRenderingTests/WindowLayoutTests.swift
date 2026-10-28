@@ -26,6 +26,7 @@ extension RenderingTests {
                              usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") }, openRouterKey: { nil })
         model.telegram.readToken = { nil }
         model.remoteQueue.readToken = { nil }
+        model.sailKey = { nil }
 
         // Restored at the old fixed minimum, with the status shown.
         let host = NSHostingView(rootView: ContentView().environment(model).defaultAppStorage(defaults))

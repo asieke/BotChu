@@ -545,6 +545,10 @@ final class SubagentRuntime {
             if account.kind == .pi && !machine.isRemote && (key?.isEmpty ?? true) {
                 throw DelegationFailure("Add your OpenRouter API key in BotChu Settings first.")
             }
+            let sailKey = account.kind == .sail && !machine.isRemote ? Keychain.get(Keychain.sailAccount) : nil
+            if account.kind == .sail, let problem = SailLaunch.problem(remote: machine.isRemote, key: sailKey) {
+                throw DelegationFailure(problem)
+            }
             let prompt = BotContext.subagentPreamble(bot: targetBot, run: record,
                 callerDescription: caller.parent.flatMap { run($0)?.targetBotName } ?? model.bot(target.botID)?.name ?? "Bot",
                 memory: Workspace.read(targetBot.workspace + "/MEMORY.md"), sharedMemory: Workspace.read(model.settings.sharedMemoryPath),
@@ -552,8 +556,9 @@ final class SubagentRuntime {
                 instructions: Workspace.read(BotDocument.instructions.url(for: targetBot).path),
                 team: Workspace.read(model.settings.teamPath), availableBots: roster, skills: model.activeSkills(of: targetBot))
             var invocation = CommandBuilder.invocation(kind: account.kind, prompt: prompt,
-                model: GenerationOptions.effectiveModel(record.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel),
-                sessionID: nil, reasoningEffort: record.reasoningEffort, openRouterKey: key)
+                model: GenerationOptions.effectiveModel(record.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
+                                                        sailDefault: model.settings.sailModel),
+                sessionID: nil, reasoningEffort: record.reasoningEffort, openRouterKey: key, sailKey: sailKey)
             invocation.environment.merge(context.environment) { _, new in new }
             let command = model.settings.host(record.hostID)?.command(for: account) ?? model.settings.command(for: account)
             let runner = machine.isRemote

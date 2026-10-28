@@ -388,7 +388,7 @@ public enum ConnectorSettings: String, Hashable, Sendable {
         switch kind {
         case .claude: self = .claudeAI
         case .codex: self = .chatGPT
-        case .antigravity, .muse, .pi: return nil
+        case .antigravity, .muse, .pi, .sail: return nil
         }
     }
 
@@ -532,7 +532,7 @@ public enum ConnectorCard: Equatable, Sendable {
         case .codex:
             if let host { return .notChecked(host: host) }
             return .profile(check)
-        case .antigravity, .muse, .pi:
+        case .antigravity, .muse, .pi, .sail:
             return .unavailable(kind)
         }
     }
@@ -667,7 +667,7 @@ public enum ConnectorClient {
         switch kind {
         case .claude: try await claude(command: command, folder: folder, timeout: timeout)
         case .codex: try await codex(command: command, folder: folder, timeout: timeout)
-        case .antigravity, .muse, .pi: throw ConnectorFailure("BotChu can’t ask \(kind.displayName) which connectors it has.")
+        case .antigravity, .muse, .pi, .sail: throw ConnectorFailure("BotChu can’t ask \(kind.displayName) which connectors it has.")
         }
     }
 

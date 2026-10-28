@@ -37,7 +37,7 @@ public enum BotContext {
         title and instructions, and ask for anything you need to get started.
         """
 
-    /// `AGENTS.md` (read by Codex, Pi, Muse and Antigravity; `CLAUDE.md` imports it). Tasks work on
+    /// `AGENTS.md` (read by Codex, Pi, Muse, Antigravity and the Sail agent; `CLAUDE.md` imports it). Tasks work on
     /// the owner's GitHub repositories, cloned into `repositoriesPath` on this Mac when they aren't
     /// checked out, or on one of the `machines` (Settings ▸ Hosts). `instructions` and `team` are
     /// the text of the bot's `INSTRUCTIONS.md` and the shared `TEAM.md`; the team section is left

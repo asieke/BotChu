@@ -61,7 +61,7 @@ public enum ImageDelivery {
         case .antigravity:
             // agy's streaming input accepts text blocks only. Its file reader opens image files.
             result.arguments[1] = prompt + "\n\nAttached images (open these files to inspect them):\n" + images.map(\.path).joined(separator: "\n")
-        case .codex, .muse:
+        case .codex, .muse, .sail:
             result.arguments.removeLast()
             for url in images { result.arguments += ["--image", url.path] }
             result.arguments += ["--", invocation.arguments.last ?? prompt]

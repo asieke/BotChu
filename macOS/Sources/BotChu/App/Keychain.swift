@@ -6,6 +6,8 @@ enum Keychain {
     static let service = "local.BotChu"
     @MainActor static var remoteQueueAccount: String { DevHooks.dataDir == nil ? "remote-queue" : "remote-queue-dev" }
     static let openRouterAccount = "openrouter"
+    /// The Sail Research key, an item of its own: never the OpenRouter key's.
+    static let sailAccount = "sail"
     /// The Telegram gateway's bot token. A review copy (`DevHooks`) has its own, so it never reads
     /// the real bot's messages.
     @MainActor static var telegramAccount: String { DevHooks.dataDir == nil ? "telegram" : "telegram-dev" }
