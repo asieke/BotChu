@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Everything BotChu tests: shell syntax, the unit and rendering tests, and a build into a throwaway
 # folder (so it never touches an installed or running copy). Needs full Xcode. Run directly:
-# only the prebuilt window phase takes the shared test gate.
+# only the prebuilt window phase takes the shared test gate. --fast leaves out the window tests,
+# Release and the app build; --changed adds the window and Release tests the change can reach.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 test_root=$PWD
@@ -16,10 +17,11 @@ tier=full
 case "${1:-}" in
   '') ;;
   --fast) tier=fast; shift ;;
-  *) echo "usage: scripts/test.sh [--fast]" >&2; exit 2 ;;
+  --changed) tier=changed; shift ;;
+  *) echo "usage: scripts/test.sh [--fast|--changed]" >&2; exit 2 ;;
 esac
-[ $# = 0 ] || { echo "usage: scripts/test.sh [--fast]" >&2; exit 2; }
-if [ "$tier" = full ] && test_inside_gate; then
+[ $# = 0 ] || { echo "usage: scripts/test.sh [--fast|--changed]" >&2; exit 2; }
+if [ "$tier" != fast ] && test_inside_gate; then
   echo "test: run scripts/test.sh directly, not inside gate.sh; it gates its own window tests" >&2
   exit 2
 fi
@@ -40,9 +42,9 @@ for f in macOS/build.sh macOS/install.sh macOS/test.sh; do
   [ -x "$f" ] || { echo "$f must exist and be executable" >&2; exit 1; }
 done
 
-if [ "$tier" = fast ]; then
-  test_step 'fast macOS tests' macOS/test.sh --fast
-  echo "test: ok (fast)"
+if [ "$tier" != full ]; then
+  test_step "$tier macOS tests" macOS/test.sh "--$tier"
+  echo "test: ok ($tier)"
   exit
 fi
 test_step 'test builds' macOS/test.sh --build
