@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>BotChu Analytics</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --page: light-dark(#f9f9f7, #0d0d0d);
+  --surface: light-dark(#fcfcfb, #1a1a19);
+  --text: light-dark(#0b0b0b, #f0efec);
+  --text-2: light-dark(#52514e, #c3c2b7);
+  --muted: light-dark(#75736d, #9a988f);
+  --grid: light-dark(#e1e0d9, #2c2c2a);
+  --axis: light-dark(#c3c2b7, #383835);
+  --border: light-dark(rgba(11, 11, 11, 0.10), rgba(255, 255, 255, 0.10));
+  --wash: light-dark(rgba(11, 11, 11, 0.05), rgba(255, 255, 255, 0.06));
+  --accent: light-dark(#2a78d6, #3987e5);
+  --s1: light-dark(#2a78d6, #3987e5);
+  --s2: light-dark(#eb6834, #d95926);
+  --s3: light-dark(#1baf7a, #199e70);
+  --s4: light-dark(#eda100, #c98500);
+  --s5: light-dark(#e87ba4, #d55181);
+  --s6: #008300;
+  --s7: light-dark(#6250d6, #9085e9);
+  --other: light-dark(#a8a69f, #6f6d68);
+  --finished: light-dark(#2a78d6, #3987e5);
+  --failed: #d03b3b;
+  --stopped: #ec835a;
+  --inprogress: light-dark(#a8a69f, #6f6d68);
+  --warn: #fab219;
+  --t-in: light-dark(#75736d, #8f8d86);
+  --t-cr: light-dark(#c8c6bd, #4a4945);
+  --t-cw: light-dark(#a09e96, #6a6863);
+  --t-out: light-dark(#3a3936, #d8d6cf);
+  --good: light-dark(#006300, #0ca30c);
+  --bad: light-dark(#b42f2f, #e66767);
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--page); color: var(--text); }
+body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px 32px; }
+header.top { display: flex; align-items: baseline; gap: 12px; padding: 24px 0 4px; }
+h1 { font-size: 22px; margin: 0; font-weight: 650; }
+h2 { font-size: 15px; margin: 0; font-weight: 600; }
+.made { color: var(--text-2); font-size: 12.5px; }
+button, select { font: inherit; font-size: 13px; color: var(--text); }
+.bar { position: sticky; top: 0; z-index: 5; background: var(--page); padding: 10px 0; display: grid; gap: 8px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.spacer { flex: 1; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); padding: 2px; }
+.seg button { border: 0; background: none; border-radius: 5px; padding: 3px 10px; cursor: pointer; }
+.seg button:hover { background: var(--wash); }
+.seg button[aria-pressed="true"] { background: var(--text); color: var(--surface); font-weight: 600; }
+.dates { color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+.pv { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); background: none; border: 0; padding: 2px 4px; }
+button.pv { cursor: pointer; border-radius: 5px; }
+button.pv:hover { background: var(--wash); }
+.sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.act { background: var(--c); }
+.est { background: repeating-linear-gradient(-45deg, var(--c) 0 3.5px, color-mix(in srgb, var(--c) 66%, var(--surface)) 3.5px 5px); }
+.unp { border: 1.5px dashed var(--muted); }
+select.add { appearance: none; width: 84px; border: 1px dashed var(--axis); background: var(--surface); border-radius: 13px; padding: 3px 12px; cursor: pointer; color: var(--text-2); }
+select.add:hover { border-color: var(--muted); color: var(--text); }
+.chip { display: inline-flex; align-items: center; gap: 6px; background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 13px; padding: 2px 3px 2px 10px; font-size: 13px; }
+.chip b { font-weight: 500; color: var(--text-2); }
+.chip button { border: 0; background: none; width: 20px; height: 20px; border-radius: 10px; cursor: pointer; color: var(--text-2); padding: 0; line-height: 20px; }
+.chip button:hover { background: var(--wash); color: var(--text); }
+.clear { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 3px 6px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+.head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; min-height: 26px; }
+.head .tot { margin-left: auto; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.head select, .ctl select { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 2px 6px; }
+.ctl { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
+section { margin-top: 16px; }
+.kpis { display: grid; grid-template-columns: 1.35fr repeat(5, minmax(0, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+.tile.go { font: inherit; color: inherit; text-align: left; cursor: pointer; display: flex; flex-direction: column; justify-content: flex-start; }
+.tile.go:hover { background: color-mix(in srgb, var(--text) 3%, var(--surface)); }
+.tile.go[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.tile .l { color: var(--text-2); font-size: 12.5px; }
+.tile .v { font-size: 24px; font-weight: 600; margin-top: 2px; white-space: nowrap; }
+.tile .d { color: var(--text-2); font-size: 12px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.up-bad, .down-bad { color: var(--bad); } .up-good, .down-good { color: var(--good); }
+.split { display: flex; gap: 2px; height: 8px; margin-top: 8px; }
+.split i { display: block; border-radius: 2px; min-width: 3px; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--text-2); margin-bottom: 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend em { font-style: normal; color: var(--text); font-variant-numeric: tabular-nums; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.axis { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.gl { stroke: var(--grid); shape-rendering: crispEdges; } .base { stroke: var(--axis); shape-rendering: crispEdges; }
+.hit { fill: transparent; } .hit:hover { fill: var(--wash); }
+.mix { display: flex; gap: 2px; height: 14px; margin: 4px 0 12px; }
+.mix i { border-radius: 2px; min-width: 2px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; font-variant-numeric: tabular-nums; }
+th { color: var(--text-2); font-weight: 500; font-size: 12px; }
+th:first-child, td:first-child { text-align: left; }
+.mixt td { padding: 5px 0; } .mixt td:first-child { display: flex; align-items: center; gap: 8px; }
+.mixt td.sub { padding-left: 20px; color: var(--text-2); }
+.mixt td.pc { color: var(--text-2); width: 52px; }
+th button { font-size: 12px; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; font-weight: 500; }
+th[aria-sort] button { color: var(--text); font-weight: 600; }
+th[aria-sort="descending"] button::after { content: " ↓"; } th[aria-sort="ascending"] button::after { content: " ↑"; }
+#ex tbody tr { cursor: pointer; } #ex tbody tr:hover { background: var(--wash); }
+#ex tr.child td:first-child { padding-left: 54px; color: var(--text-2); }
+#ex td:first-child { min-width: 210px; }
+.nm { display: inline-flex; align-items: center; gap: 8px; }
+.dot { width: 10px; height: 10px; border-radius: 5px; flex: none; }
+.tw { width: 20px; height: 20px; border: 0; background: none; cursor: pointer; color: var(--muted); border-radius: 4px; padding: 0; transition: transform .15s; }
+.tw:hover { background: var(--wash); color: var(--text); }
+.tw[aria-expanded="true"] { transform: rotate(90deg); }
+.tw.ph { visibility: hidden; }
+tfoot td { font-weight: 600; border-bottom: 0; border-top: 1px solid var(--axis); }
+.share { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.track { width: 120px; height: 8px; display: flex; gap: 0; background: var(--wash); border-radius: 2px; overflow: hidden; }
+.track i { display: block; height: 100%; }
+.na { color: var(--muted); }
+.ins { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.in { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: grid; grid-template-rows: auto auto 1fr auto; gap: 4px; min-width: 0; }
+.in .t { display: flex; gap: 8px; font-weight: 600; font-size: 13.5px; }
+.in .rk { color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
+.in .n { font-size: 22px; font-weight: 600; }
+.in .n small { font-size: 13px; font-weight: 500; color: var(--text-2); margin-left: 4px; }
+.in .f { color: var(--text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.in .go { justify-self: start; margin-top: 6px; border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+.in .go:hover { background: var(--wash); }
+.in .go[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600; }
+.meter { display: inline-block; width: 72px; height: 6px; border-radius: 3px; background: var(--grid); vertical-align: middle; margin-right: 6px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.meter.hot i { background: var(--warn); }
+.badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--border); color: var(--text-2); margin-left: 6px; }
+details.about { margin-top: 16px; }
+details.about summary { cursor: pointer; color: var(--text-2); font-size: 13px; }
+details.about dl { margin: 8px 0 0; } .about dt { font-weight: 600; margin-top: 8px; font-size: 13px; } .about dd { margin: 2px 0 0; color: var(--text-2); font-size: 13px; }
+.tip { position: fixed; z-index: 10; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .12); padding: 8px 10px; font-size: 12.5px; min-width: 180px; }
+.tip .r { display: flex; align-items: center; gap: 6px; } .tip .r em { margin-left: auto; padding-left: 16px; font-style: normal; font-variant-numeric: tabular-nums; }
+.tip b { display: block; margin-bottom: 4px; }
+@media (prefers-reduced-motion: reduce) { .tw { transition: none; } }
+@media (max-width: 1000px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } .grid2, .ins { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+    <rect width="5" height="5" fill="white"/><rect width="1.5" height="5" fill="black" fill-opacity=".34"/></pattern>
+  <mask id="est" maskUnits="userSpaceOnUse" x="-10" y="-10" width="5000" height="5000"><rect x="-10" y="-10" width="5000" height="5000" fill="url(#hatch)"/></mask>
+</defs></svg>
+<div class="wrap">
+<header class="top"><h1>BotChu Analytics</h1><span class="made">Oct 28, 2:05 PM · America/New_York</span></header>
+
+<div id="overview">
+<div class="bar">
+  <div class="row">
+    <div class="seg" id="range"><button data-r="7">7 days</button><button data-r="30">30 days</button><button data-r="90">90 days</button></div>
+    <span class="dates" id="dates"></span>
+    <span class="spacer"></span>
+    <span class="pv"><i class="sw act" style="--c:var(--text-2)"></i>$ Actual</span>
+    <span class="pv"><i class="sw est" style="--c:var(--text-2)"></i>≈$ Estimated · Oct 1, 2026 prices</span>
+    <button class="pv" id="unpriced"><i class="sw unp"></i><span></span></button>
+  </div>
+  <div class="row" id="filters"><select class="add" id="add" aria-label="Add filter"></select></div>
+</div>
+
+<div class="kpis" id="kpis"></div>
+<div class="grid2">
+  <div class="card">
+    <div class="head"><h2>Spend a day</h2><label class="ctl">by <select id="stack"></select></label></div>
+    <div class="legend" id="slegend"></div>
+    <div class="chart" id="schart"></div>
+  </div>
+  <div class="card">
+    <div class="head"><h2>Tokens</h2><span class="tot" id="ttot"></span></div>
+    <div class="mix" id="mixbar"></div>
+    <table class="mixt"><tbody id="mixrows"></tbody></table>
+    <div class="head" style="margin:16px 0 4px"><h2 style="font-size:13px">Cache hit by bot</h2></div>
+    <table class="mixt"><tbody id="cachebot"></tbody></table>
+  </div>
+</div>
+</div>
+
+<section id="insights">
+  <div class="head"><h2>Efficiency</h2></div>
+  <div class="ins" id="ins"></div>
+</section>
+
+<section class="card" id="explorer">
+  <div class="head"><h2>Breakdown</h2>
+    <label class="ctl" style="margin-left:auto">Group by <select id="g1"></select></label>
+    <label class="ctl">then <select id="g2"></select></label></div>
+  <div style="overflow-x:auto"><table id="ex"><thead></thead><tbody></tbody><tfoot></tfoot></table></div>
+</section>
+
+<section class="card" id="allowance">
+  <div class="head"><h2>Provider allowance</h2></div>
+  <div style="overflow-x:auto"><table>
+    <thead><tr><th>Profile</th><th style="text-align:left">Provider</th><th style="text-align:left">5-hour</th><th>Resets</th><th style="text-align:left">Weekly</th><th>Resets</th><th>Read</th></tr></thead>
+    <tbody>
+      <tr><td>Claude Personal</td><td style="text-align:left">Claude Code</td><td style="text-align:left"><span class="meter"><i style="width:37%"></i></span>37%</td><td>4:05 PM</td><td style="text-align:left"><span class="meter hot"><i style="width:81%"></i></span>81% ⚠</td><td>Oct 30</td><td>2:00 PM</td></tr>
+      <tr><td>Claude Work</td><td style="text-align:left">Claude Code</td><td style="text-align:left"><span class="meter"><i style="width:12%"></i></span>12%</td><td>5:40 PM</td><td style="text-align:left"><span class="meter"><i style="width:44%"></i></span>44%</td><td>Nov 1</td><td>1:58 PM</td></tr>
+      <tr><td>Codex Work</td><td style="text-align:left">Codex</td><td style="text-align:left" class="na">Reset since</td><td>2:04 PM</td><td style="text-align:left"><span class="meter"><i style="width:58%"></i></span>58%</td><td>Nov 2</td><td>8:31 AM<span class="badge">Stale</span></td></tr>
+      <tr><td>Google AI Pro</td><td style="text-align:left">Antigravity</td><td style="text-align:left"><span class="meter"><i style="width:9%"></i></span>9%</td><td>3:12 PM</td><td style="text-align:left" class="na">—</td><td class="na">—</td><td>1:47 PM</td></tr>
+      <tr><td>Muse</td><td style="text-align:left">Muse</td><td style="text-align:left" class="na">—</td><td class="na">—</td><td style="text-align:left" class="na">—</td><td class="na">—</td><td class="na">—</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<details class="about"><summary>About these numbers</summary><dl>
+  <dt>Spend</dt><dd>$ is what OpenRouter billed. ≈$ is the market-equivalent price of the tokens a subscription CLI reported, from the public price list dated Oct 1, 2026. A model with no price is never counted as $0: it shows as —, and its runs are counted under Unpriced.</dd>
+  <dt>Cache hit rate</dt><dd>Cache-read tokens ÷ (input + cache read + cache write).</dd>
+  <dt>Per finished task</dt><dd>Spend on a finished task's turns and sub-agent runs ÷ finished tasks.</dd>
+  <dt>Wasted spend</dt><dd>Spend on failed and stopped turns and runs. Retried is the part whose task ran again afterwards.</dd>
+  <dt>Efficiency</dt><dd>Model swaps price the same tokens at the other model's list price. Cache gaps price a bot's uncached input at the other bots' cache hit rate.</dd>
+  <dt>Days, durations and history</dt><dd>Calendar days in America/New_York. Unknown durations are left out of medians. Job histories keep their latest 50 runs, so older periods may show less than happened.</dd>
+</dl></details>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const Q = new URLSearchParams(location.search);
+if (Q.get('theme')) document.documentElement.dataset.theme = Q.get('theme');
+
+const D = {
+  bot: { l: 'Bot', v: ['Product Fox', '10x Engineer Bot', 'QA Duck', 'Pixel Designer', 'Research Assistant'] },
+  project: { l: 'Project', v: ['asieke/BotChu', 'asieke/GitChu', 'asieke/rowchuk', 'No project'] },
+  model: { l: 'Model', v: ['claude-opus-5-5', 'gpt-6-astra', 'claude-sonnet-5-5', 'gemini-3.5-pro', 'claude-haiku-5-5', 'gemini-3.5-flash', 'deepseek/deepseek-v4.1-flash', 'muse-local'] },
+  provider: { l: 'Provider', v: ['Claude Code', 'Codex', 'Antigravity', 'OpenRouter via pi', 'Sail', 'Muse'] },
+  account: { l: 'Account', v: ['Claude Personal', 'Claude Work', 'Codex Work', 'Codex Dev', 'Google AI Pro', 'OpenRouter', 'Sail', 'Muse'] },
+  kind: { l: 'Kind', v: ['Task turn', 'Sub-agent run', 'Home turn', 'Job run'] },
+  outcome: { l: 'Outcome', v: ['Finished', 'Failed', 'Stopped', 'In progress'] },
+};
+const OC = { Finished: 'var(--finished)', Failed: 'var(--failed)', Stopped: 'var(--stopped)', 'In progress': 'var(--inprogress)' };
+const ML = { 'claude-opus-5-5': 'Opus 5.5', 'gpt-6-astra': 'GPT-6 Astra', 'claude-sonnet-5-5': 'Sonnet 5.5', 'gemini-3.5-pro': 'Gemini 3.5 Pro',
+  'claude-haiku-5-5': 'Haiku 5.5', 'gemini-3.5-flash': 'Gemini 3.5 Flash', 'deepseek/deepseek-v4.1-flash': 'DeepSeek V4.1 Flash', 'muse-local': 'Muse Local' };
+const lab = (k, v) => k === 'model' ? ML[v] || v : v;
+const raw = (k, v) => k === 'model' ? ` title="${esc(v)}"` : '';
+const color = (k, v) => k === 'outcome' ? OC[v] : (i => i < 0 || i > 6 ? 'var(--other)' : `var(--s${i + 1})`)(D[k].v.indexOf(v));
+
+// ---- sample data (seeded) ----
+let sd = 11;
+const rnd = () => { sd = sd + 0x6D2B79F5 | 0; let t = Math.imul(sd ^ sd >>> 15, 1 | sd); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+const pick = w => { let r = rnd() * w.reduce((a, b) => a + b[1], 0); for (const [v, p] of w) if ((r -= p) < 0) return v; return w[0][0]; };
+const logn = (m, s) => m * Math.exp(s * Math.sqrt(-2 * Math.log(rnd() || 1e-9)) * Math.cos(2 * Math.PI * rnd()));
+const M = D.model.v, OPUS = M[0], SONNET = M[2], HAIKU = M[4], DS = M[6];
+const P = { [OPUS]: [5, 25, .5, 6.25], [SONNET]: [3, 15, .3, 3.75], [HAIKU]: [1, 5, .1, 1.25], [M[1]]: [2.5, 15, .25, 0],
+  [M[3]]: [2, 12, .2, 0], [M[5]]: [.3, 2.5, .03, 0], [DS]: [.2, .8, .02, 0] };
+const K = { e: 1, a: 1 };
+const costAt = (r, m) => { const p = P[m]; return p ? (r.i * p[0] + r.o * p[1] + r.cr * p[2] + r.cw * p[3]) / 1e6 * K[m === DS ? 'a' : 'e'] : null; };
+const BW = [['Product Fox', .28], ['10x Engineer Bot', .27], ['QA Duck', .2], ['Pixel Designer', .12], ['Research Assistant', .13]];
+const BM = {
+  'Product Fox': [[SONNET, .5], [OPUS, .3], [M[1], .1], [HAIKU, .1]],
+  '10x Engineer Bot': [[OPUS, .5], [M[1], .35], [SONNET, .15]],
+  'QA Duck': [[HAIKU, .35], [SONNET, .3], [DS, .2], [M[5], .15]],
+  'Pixel Designer': [[OPUS, .55], [M[3], .3], [SONNET, .15]],
+  'Research Assistant': [[M[3], .35], [DS, .3], [SONNET, .2], [M[7], .15]],
+};
+const BK = {
+  'Product Fox': [['Home turn', .35], ['Task turn', .45], ['Sub-agent run', .1], ['Job run', .1]],
+  '10x Engineer Bot': [['Task turn', .6], ['Sub-agent run', .3], ['Home turn', .05], ['Job run', .05]],
+  'QA Duck': [['Sub-agent run', .5], ['Task turn', .3], ['Job run', .2]],
+  'Pixel Designer': [['Sub-agent run', .6], ['Home turn', .3], ['Task turn', .1]],
+  'Research Assistant': [['Sub-agent run', .5], ['Job run', .3], ['Home turn', .2]],
+};
+const route = m => m.startsWith('claude') ? (m === SONNET && rnd() < .08 ? ['Sail', 'Sail'] : ['Claude Code', rnd() < .55 ? 'Claude Personal' : 'Claude Work'])
+  : m === M[1] ? ['Codex', rnd() < .6 ? 'Codex Work' : 'Codex Dev'] : m.startsWith('gemini') ? ['Antigravity', 'Google AI Pro']
+  : m === DS ? ['OpenRouter via pi', 'OpenRouter'] : ['Muse', 'Muse'];
+const OUT = { 'Home turn': 1600, 'Task turn': 6000, 'Sub-agent run': 4500, 'Job run': 2600 };
+const CR = { 'Home turn': 120e3, 'Task turn': 420e3, 'Sub-agent run': 260e3, 'Job run': 90e3 };
+const ctr = { 'asieke/BotChu': 236, 'asieke/GitChu': 61, 'asieke/rowchuk': 28 }, open = {};
+const R = [];
+const rec = (d, bot, model, kind, project, task, outcome, mult = 1) => {
+  const [provider, account] = route(model), low = bot === 'QA Duck';
+  const o = Math.round(logn(OUT[kind], .9) * mult);
+  R.push({ d, bot, model, kind, project, task, outcome, provider, account, o, rs: /gpt|gemini/.test(model) ? Math.round(o * .4) : 0,
+    i: Math.round(logn(9e3, .6) * (low ? 5 : 1) * mult), cr: Math.round(logn(CR[kind], .7) * (low ? .2 : 1) * mult),
+    cw: Math.round(logn(28e3, .6) * mult), dur: outcome === 'In progress' ? null : Math.max(.4, logn(outcome === 'Finished' ? 10 : 5, .7)) });
+};
+for (let d = 179; d >= 0; d--) {
+  const dow = new Date(2026, 9, 28 - d).getDay(), n = Math.round((dow === 0 || dow === 6 ? 4 : 10) * (.7 + rnd() * .6));
+  for (let j = 0; j < n; j++) {
+    const bot = pick(BW), model = pick(BM[bot]);
+    let kind = pick(BK[bot]);
+    const project = bot === 'Research Assistant' ? pick([['No project', .8], ['asieke/BotChu', .2]])
+      : pick([['asieke/BotChu', .45], ['asieke/GitChu', .25], ['asieke/rowchuk', .15], ['No project', .15]]);
+    if (project === 'No project' && kind === 'Task turn') kind = 'Home turn';
+    let task = null;
+    if (project !== 'No project' && (kind === 'Task turn' || kind === 'Sub-agent run')) {
+      const pool = (open[project] ||= []);
+      if (!pool.length || rnd() < .35) pool.push(`${project} #${++ctr[project]}`), pool.length > 3 && pool.shift();
+      task = pool[Math.floor(rnd() * pool.length)];
+    }
+    const outcome = d === 0 && rnd() < .2 ? 'In progress' : pick([['Finished', .8], ['Failed', .1], ['Stopped', .1]]);
+    rec(d, bot, model, kind, project, task, outcome);
+  }
+  if (d === 3) { // a fan-out that out-spent its parent
+    const t = `asieke/BotChu #${++ctr['asieke/BotChu']}`;
+    rec(3, 'Product Fox', SONNET, 'Task turn', 'asieke/BotChu', t, 'Finished', .6);
+    for (const b of ['10x Engineer Bot', 'Pixel Designer', 'QA Duck', '10x Engineer Bot', 'Pixel Designer']) rec(3, b, OPUS, 'Sub-agent run', 'asieke/BotChu', t, 'Finished', 2.2);
+    rec(3, 'Product Fox', SONNET, 'Task turn', 'asieke/BotChu', t, 'Finished', .5);
+  }
+}
+// scale input-side tokens so list prices land on ≈$1.2k estimated + ~$40 actual over 30 days
+{ const s = { e: [0, 0], a: [0, 0] };
+  for (const r of R) if (r.d < 30 && P[r.model]) { const p = P[r.model], g = s[r.model === DS ? 'a' : 'e']; g[0] += r.o * p[1] / 1e6; g[1] += (r.i * p[0] + r.cr * p[2] + r.cw * p[3]) / 1e6; }
+  const f = { e: (1214 - s.e[0]) / s.e[1], a: (40.12 - s.a[0]) / s.a[1] };
+  for (const r of R) { const x = f[r.model === DS ? 'a' : 'e']; r.i = Math.round(r.i * x); r.cr = Math.round(r.cr * x); r.cw = Math.round(r.cw * x); } }
+for (const r of R) { r.c = costAt(r, r.model); r.p = r.c == null ? 'u' : r.model === DS ? 'a' : 'e'; }
+const lastOf = {}; for (const r of R) if (r.task) lastOf[r.task] = r.outcome;
+{ const later = new Set(); for (let j = R.length - 1; j >= 0; j--) { const r = R[j]; r.retry = !!r.task && /Failed|Stopped/.test(r.outcome) && later.has(r.task); if (r.task) later.add(r.task); } }
+
+// ---- state ----
+const S = { range: 30, F: Q.get('state') === 'filtered' ? [{ k: 'model', v: OPUS }, { k: 'short', v: 1 }] : [], stack: 'model', g1: 'bot', g2: 'model', sort: ['sp', -1], open: null };
+const SPECIAL = { retry: () => 'Retried', short: () => 'Output < 2K tokens', task: v => 'Task: ' + v, price: () => 'Unpriced' };
+const test = (k, v, r) => k === 'retry' ? r.retry : k === 'short' ? r.o < 2000 : k === 'task' ? r.task === v : k === 'price' ? r.p === v : r[k] === v;
+const passF = (r, F) => { const by = {}; for (const f of F) (by[f.k] ||= []).push(f.v); return Object.entries(by).every(([k, vs]) => vs.some(v => test(k, v, r))); };
+const ranged = (off = 0) => R.filter(r => r.d >= off && r.d < off + S.range);
+const rows = () => ranged().filter(r => passF(r, S.F));
+
+// ---- format ----
+const nf = new Intl.NumberFormat('en-US');
+const usd = (x, est) => x == null ? '—' : (est ? '≈$' : '$') + (x >= 100 ? nf.format(Math.round(x)) : x.toFixed(2));
+const tok = x => x >= 1e9 ? (x / 1e9).toFixed(2) + 'B' : x >= 1e6 ? (x / 1e6).toFixed(1) + 'M' : x >= 1e3 ? Math.round(x / 1e3) + 'K' : String(x);
+const pct = (x, dp = 0) => x == null || !isFinite(x) ? '—' : (x * 100).toFixed(dp) + '%';
+const mins = m => m == null ? '—' : m < 60 ? Math.round(m) + ' min' : Math.floor(m / 60) + ' h ' + Math.round(m % 60) + ' min';
+const day = d => new Date(2026, 9, 28 - d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+function agg(rs) {
+  const a = { n: rs.length, fin: 0, fail: 0, stop: 0, i: 0, o: 0, rs: 0, cr: 0, cw: 0, e: 0, a: 0, u: 0, durs: [], tasks: new Set(), tc: 0 };
+  for (const r of rs) {
+    if (r.outcome === 'Finished') a.fin++; else if (r.outcome === 'Failed') a.fail++; else if (r.outcome === 'Stopped') a.stop++;
+    a.i += r.i; a.o += r.o; a.rs += r.rs; a.cr += r.cr; a.cw += r.cw;
+    if (r.p === 'e') a.e += r.c; else if (r.p === 'a') a.a += r.c; else a.u++;
+    if (r.dur != null) a.durs.push(r.dur);
+    if (r.task && lastOf[r.task] === 'Finished') { a.tasks.add(r.task); a.tc += r.c || 0; }
+  }
+  a.tok = a.i + a.o + a.cr + a.cw; a.sp = a.e + a.a; a.priced = a.n > a.u;
+  a.ch = (a.i + a.cr + a.cw) ? a.cr / (a.i + a.cr + a.cw) : null;
+  a.fr = (a.fin + a.fail + a.stop) ? a.fail / (a.fin + a.fail + a.stop) : null;
+  a.pt = a.tasks.size ? a.tc / a.tasks.size : null;
+  a.durs.sort((x, y) => x - y); const L = a.durs.length;
+  a.md = L ? (L % 2 ? a.durs[L >> 1] : (a.durs[L / 2 - 1] + a.durs[L / 2]) / 2) : null;
+  return a;
+}
+const money = a => a.priced ? usd(a.sp, a.e > 0) : '—';
+
+// ---- toolbar ----
+function renderBar() {
+  for (const b of document.querySelectorAll('#range button')) b.setAttribute('aria-pressed', +b.dataset.r === S.range);
+  $('#dates').textContent = `${day(S.range - 1)} – ${day(0)}`;
+  const box = $('#filters'), add = $('#add');
+  box.querySelectorAll('.chip,.clear').forEach(n => n.remove());
+  S.F.forEach((f, ix) => {
+    const c = document.createElement('span'); c.className = 'chip';
+    c.innerHTML = SPECIAL[f.k] ? `${esc(SPECIAL[f.k](f.v))}` : `<b>${D[f.k].l}</b>${esc(lab(f.k, f.v))}`;
+    const x = document.createElement('button'); x.textContent = '✕'; x.setAttribute('aria-label', 'Remove');
+    x.onclick = () => { S.F.splice(ix, 1); render(); }; c.append(x); box.insertBefore(c, add);
+  });
+  if (S.F.length > 1) { const c = document.createElement('button'); c.className = 'clear'; c.textContent = 'Clear all'; c.onclick = () => { S.F = []; render(); }; box.append(c); }
+  const u = ranged().filter(r => r.p === 'u').length;
+  $('#unpriced span').textContent = `— Unpriced · ${u}`;
+}
+$('#add').innerHTML = '<option value="">+ Filter</option>' + Object.entries(D).map(([k, d]) =>
+  `<optgroup label="${d.l}">${d.v.map(v => `<option value="${k}|${esc(v)}">${esc(lab(k, v))}</option>`).join('')}</optgroup>`).join('');
+$('#add').onchange = e => { const [k, v] = e.target.value.split('|'); e.target.value = ''; addF([{ k, v }]); };
+$('#range').onclick = e => { const r = e.target.dataset.r; if (r) { S.range = +r; render(); } };
+$('#unpriced').onclick = () => addF([{ k: 'price', v: 'u' }]);
+const WF = [{ k: 'outcome', v: 'Failed' }, { k: 'outcome', v: 'Stopped' }];
+const same = F => F.length === S.F.length && F.every(f => S.F.some(g => g.k === f.k && g.v === f.v));
+const toggleF = F => { S.F = same(F) ? [] : F.map(f => ({ ...f })); render(); };
+function addF(fs) { for (const f of fs) if (!S.F.some(g => g.k === f.k && g.v === f.v)) S.F.push(f); render(); }
+
+// ---- KPIs ----
+function renderKpis(rs) {
+  const a = agg(rs), prev = agg(ranged(S.range).filter(r => passF(r, S.F)));
+  const delta = (cur, old, upGood, pts) => {
+    if (cur == null || old == null || !old) return '<span class="na">—</span>';
+    const dv = pts ? (cur - old) * 100 : (cur / old - 1) * 100, up = dv >= 0;
+    return `<span class="${up ? 'up' : 'down'}-${up === upGood ? 'good' : 'bad'}">${up ? '▲' : '▼'} ${Math.abs(dv).toFixed(pts ? 1 : 0)}${pts ? ' pts' : '%'}</span> vs prior ${S.range}d`;
+  };
+  const waste = rs.filter(r => r.outcome === 'Failed' || r.outcome === 'Stopped'), w = agg(waste);
+  const tile = (l, v, d) => `<div class="tile"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
+  const tot = a.sp || 1;
+  $('#kpis').innerHTML =
+    `<div class="tile"><div class="l">Spend</div><div class="v">${money(a)}</div>
+      <div class="split">${a.a ? `<i class="act" style="--c:var(--text-2);flex:${a.a / tot}"></i>` : ''}${a.e ? `<i class="est" style="--c:var(--text-2);flex:${a.e / tot}"></i>` : ''}</div>
+      <div class="d">${a.a ? usd(a.a) : '$0'} actual · ${usd(a.e, true)} est.</div></div>` +
+    tile('Tokens', tok(a.tok), delta(a.tok, prev.tok, false)) +
+    tile('Cache hit rate', pct(a.ch), delta(a.ch, prev.ch, true, true)) +
+    tile('Per finished task', a.pt == null ? '—' : usd(a.pt, true), `${a.tasks.size} tasks finished`) +
+    `<button class="tile go" id="waste" aria-pressed="${same(WF)}"><div class="l">Wasted spend</div><div class="v">${money(w)}</div><div class="d">${a.fail} failed · ${a.stop} stopped</div></button>` +
+    tile('Turns & runs', nf.format(a.n), `${pct(a.fr == null ? null : a.fin / (a.fin + a.fail + a.stop))} finished`);
+  $('#waste').onclick = () => toggleF(WF);
+}
+
+// ---- spend a day (stacked columns; ≈$ hatched, $ solid) ----
+const SVGNS = 'http://www.w3.org/2000/svg';
+const colPath = (x, y, w, h, r) => (r = Math.min(r, w / 2, h), `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`);
+function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(v || 1))); for (const m of [1, 1.2, 1.6, 2, 2.4, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p; }
+function renderChart(rs) {
+  const k = S.stack, vals = D[k].v, days = [];
+  for (let d = S.range - 1; d >= 0; d--) days.push({ d, s: {} });
+  const by = Object.fromEntries(days.map(x => [x.d, x]));
+  const tot = {}, est = {};
+  for (const r of rs) if (r.p !== 'u') { const s = (by[r.d].s[r[k]] ||= { e: 0, a: 0 }); s[r.p] += r.c; tot[r[k]] = (tot[r[k]] || 0) + r.c; if (r.p === 'e') est[r[k]] = 1; }
+  const shown = vals.filter(v => tot[v] > 0);
+  $('#slegend').innerHTML = shown.map(v => `<span><i class="sw act" style="--c:${color(k, v)}"></i>${esc(lab(k, v))} <em>${usd(tot[v], est[v])}</em></span>`).join('');
+  const el = $('#schart'), W = el.clientWidth || 740, H = 316, L = 44, B = 22, T = 6, iw = W - L - 4, ih = H - B - T;
+  const max = niceMax(Math.max(1, ...days.map(x => Object.values(x.s).reduce((a, s) => a + s.e + s.a, 0))));
+  const bw = iw / days.length, cw = Math.max(3, Math.min(24, bw * .62));
+  let h = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="Spend a day">`;
+  for (let t = 0; t <= 4; t++) { const y = T + ih - ih * t / 4; h += `<line class="${t ? 'gl' : 'base'}" x1="${L}" x2="${W - 4}" y1="${y}" y2="${y}"/><text class="axis" x="${L - 6}" y="${y + 4}" text-anchor="end">$${max * t / 4}</text>`; }
+  const every = S.range <= 7 ? 1 : S.range <= 30 ? 7 : 14;
+  days.forEach((x, ix) => {
+    const cx = L + bw * ix + (bw - cw) / 2; let y = T + ih;
+    const segs = []; for (const v of shown) { const s = x.s[v]; if (!s) continue; if (s.a) segs.push([v, 'a', s.a]); if (s.e) segs.push([v, 'e', s.e]); }
+    segs.forEach(([v, p, c], si) => {
+      const sh = ih * c / max, top = si === segs.length - 1, gap = si && segs[si - 1][0] !== v ? 2 : 0, hh = Math.max(0, sh - gap);
+      y -= sh; if (hh < .3) return;
+      h += top ? `<path d="${colPath(cx, y, cw, hh, 3)}" style="fill:${color(k, v)}"${p === 'e' ? ' mask="url(#est)"' : ''}/>`
+        : `<rect x="${cx}" y="${y}" width="${cw}" height="${hh}" style="fill:${color(k, v)}"${p === 'e' ? ' mask="url(#est)"' : ''}/>`;
+    });
+    if ((days.length - 1 - ix) % every === 0) h += `<text class="axis" x="${cx + cw / 2}" y="${H - 6}" text-anchor="middle">${day(x.d)}</text>`;
+    h += `<rect class="hit" data-d="${x.d}" x="${L + bw * ix}" y="${T}" width="${bw}" height="${ih}"/>`;
+  });
+  el.innerHTML = h + '</svg>';
+  const tip = $('#tip');
+  el.querySelectorAll('.hit').forEach(n => {
+    n.onmousemove = e => {
+      const x = by[n.dataset.d], list = Object.entries(x.s).map(([v, s]) => [v, s.e + s.a, s.e > 0]).sort((a, b) => b[1] - a[1]);
+      const sum = list.reduce((a, b) => a + b[1], 0), est = list.some(l => l[2]);
+      tip.innerHTML = `<b>${day(x.d)} · ${usd(sum, est)}</b>` + list.map(([v, c, e]) => `<div class="r"><i class="sw ${e ? 'est' : 'act'}" style="--c:${color(k, v)}"></i>${esc(lab(k, v))}<em>${usd(c, e)}</em></div>`).join('');
+      tip.hidden = false; tip.style.left = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8) + 'px'; tip.style.top = (e.clientY + 14) + 'px';
+    };
+    n.onmouseleave = () => { tip.hidden = true; };
+  });
+}
+$('#stack').innerHTML = Object.entries(D).map(([k, d]) => `<option value="${k}">${d.l.toLowerCase()}</option>`).join('');
+$('#stack').onchange = e => { S.stack = e.target.value; render(); };
+
+// ---- token mix ----
+function renderCacheBot(rs) {
+  $('#cachebot').innerHTML = D.bot.v.map(b => [b, agg(rs.filter(r => r.bot === b))]).filter(x => x[1].n).map(([b, a]) =>
+    `<tr><td><i class="dot" style="background:${color('bot', b)}"></i>${esc(b)}</td><td><span class="meter"><i style="width:${(a.ch || 0) * 100}%;background:${color('bot', b)}"></i></span></td><td class="pc">${pct(a.ch)}</td></tr>`).join('');
+}
+function renderMix(rs) {
+  const a = agg(rs), parts = [['Input', a.i, '--t-in'], ['Cache read', a.cr, '--t-cr'], ['Cache write', a.cw, '--t-cw'], ['Output', a.o, '--t-out']];
+  $('#ttot').textContent = tok(a.tok);
+  $('#mixbar').innerHTML = parts.map(([l, v, c]) => v ? `<i style="flex:${v};background:var(${c})" title="${l}"></i>` : '').join('');
+  $('#mixrows').innerHTML = parts.map(([l, v, c]) => `<tr><td><i class="sw" style="background:var(${c})"></i>${l}</td><td>${tok(v)}</td><td class="pc">${pct(v / (a.tok || 1), 1)}</td></tr>`).join('') +
+    `<tr><td class="sub">Reasoning</td><td>${tok(a.rs)}</td><td class="pc">${pct(a.rs / (a.tok || 1), 1)}</td></tr>`;
+}
+
+// ---- efficiency insights (range only, ignores chips) ----
+function renderInsights() {
+  const rs = ranged(), out = [];
+  const swap = (sel, to) => { let now = 0, alt = 0; for (const r of sel) { now += r.c; alt += costAt(r, to); } return { now, alt, n: sel.length }; };
+  { const s = swap(rs.filter(r => r.model === OPUS && r.o < 2000), SONNET);
+    out.push({ t: 'Opus 5.5 under 2K output tokens', imp: s.now - s.alt, sfx: 'less on Sonnet 5.5', f: `${s.n} turns & runs · ${usd(s.now, true)} → ${usd(s.alt, true)}`, F: [{ k: 'model', v: OPUS }, { k: 'short', v: 1 }] }); }
+  { const s = swap(rs.filter(r => r.kind === 'Job run' && (r.model === OPUS || r.model === SONNET)), HAIKU);
+    out.push({ t: 'Job runs on Opus & Sonnet', imp: s.now - s.alt, sfx: 'less on Haiku 5.5', f: `${s.n} runs · ${usd(s.now, true)} → ${usd(s.alt, true)}`, F: [{ k: 'kind', v: 'Job run' }, { k: 'model', v: OPUS }, { k: 'model', v: SONNET }] }); }
+  { const w = rs.filter(r => r.retry), a = agg(w);
+    out.push({ t: 'Retried turns & runs', imp: a.sp, sfx: 'redone', f: `${a.fail} failed · ${a.stop} stopped · ${new Set(w.map(r => r.task)).size} tasks`, F: [{ k: 'retry', v: 1 }] }); }
+  { const bots = D.bot.v.map(b => [b, agg(rs.filter(r => r.bot === b))]).filter(x => x[1].n).sort((x, y) => x[1].ch - y[1].ch)[0];
+    const [b, a] = bots, team = agg(rs.filter(r => r.bot !== b)).ch; let save = 0;
+    for (const r of rs) if (r.bot === b && P[r.model]) { const den = r.i + r.cr + r.cw, move = Math.max(0, team * den - r.cr); save += Math.min(move, r.i) * (P[r.model][0] - P[r.model][2]) / 1e6 * K[r.model === DS ? 'a' : 'e']; }
+    out.push({ t: `${b} cache hit ${pct(a.ch)}`, imp: save, sfx: `less at ${pct(team)}`, f: `${tok(a.i)} uncached input · others ${pct(team)}`, F: [{ k: 'bot', v: b }] }); }
+  const tasks = {}; for (const r of rs) if (r.task) { const t = (tasks[r.task] ||= { p: 0, s: 0, n: 0, all: 0, turns: 0 }); r.kind === 'Sub-agent run' ? (t.s += r.c || 0, t.n++) : (t.p += r.c || 0, t.turns++); t.all += r.c || 0; }
+  { const [id, t] = Object.entries(tasks).filter(([, t]) => t.n && t.s > t.p).sort((a, b) => (b[1].s - b[1].p) - (a[1].s - a[1].p))[0] || [];
+    if (id) out.push({ t: `Sub-agents cost ${Math.round(t.s / Math.max(t.p, .01))}× their task`, imp: t.s - t.p, sfx: 'over the parent', f: `${id} · ${usd(t.s, true)} vs ${usd(t.p, true)}`, F: [{ k: 'task', v: id }] }); }
+  { const [id, t] = Object.entries(tasks).filter(([id]) => lastOf[id] === 'Finished').sort((a, b) => b[1].all - a[1].all).find(([id]) => !out.some(o => o.F[0].v === id)) || [];
+    if (id) out.push({ t: 'Costliest finished task', imp: t.all, sfx: 'spent', f: `${id} · ${t.turns} turns · ${t.n} sub-agents`, F: [{ k: 'task', v: id }] }); }
+  out.sort((a, b) => b.imp - a.imp);
+  $('#ins').innerHTML = out.slice(0, 6).map((o, ix) => `<div class="in"><div class="t"><span class="rk">${ix + 1}</span>${esc(o.t)}</div>
+    <div class="n">${usd(o.imp, true)}<small>${esc(o.sfx)}</small></div><div class="f">${esc(o.f)}</div>
+    <button class="go" data-ix="${ix}" aria-pressed="${same(o.F)}">${same(o.F) ? 'Filtered ✓' : 'Filter to these'}</button></div>`).join('');
+  $('#ins').querySelectorAll('.go').forEach(b => b.onclick = () => toggleF(out[b.dataset.ix].F));
+}
+
+// ---- explorer ----
+const COLS = [['n', 'Turns & runs'], ['fin', 'Finished'], ['fr', 'Failure rate'], ['tok', 'Tokens'], ['ch', 'Cache hit'], ['sp', 'Spend'], ['pt', 'Per finished task'], ['md', 'Median time'], ['sh', 'Share of spend']];
+const G = ['bot', 'project', 'model', 'provider', 'account', 'kind'];
+function cells(a, tot, k, v, c = k ? color(k, v) : 'var(--text-2)') {
+  const sh = tot ? a.sp / tot : 0;
+  return `<td>${nf.format(a.n)}</td><td>${nf.format(a.fin)}</td><td>${pct(a.fr, 1)}</td><td>${tok(a.tok)}</td><td>${pct(a.ch)}</td>
+    <td>${money(a)}</td><td>${a.pt == null ? '<span class="na">—</span>' : usd(a.pt, a.e > 0)}</td><td>${mins(a.md)}</td>
+    <td><span class="share"><span class="track">${a.a ? `<i class="act" style="--c:${c};width:${a.a / tot * 100}%"></i>` : ''}${a.e ? `<i class="est" style="--c:${c};width:${a.e / tot * 100}%"></i>` : ''}</span>${a.priced ? pct(sh) : '<span class="na">—</span>'}</span></td>`;
+}
+function groups(rs, k) {
+  const m = new Map(); for (const r of rs) { if (!m.has(r[k])) m.set(r[k], []); m.get(r[k]).push(r); }
+  const [key, dir] = S.sort, val = a => key === 'sh' ? a.sp : a[key];
+  return [...m].map(([v, l]) => [v, agg(l), l]).sort((x, y) => { const a = val(x[1]), b = val(y[1]); return a == null ? 1 : b == null ? -1 : (a - b) * dir; });
+}
+function renderExplorer(rs) {
+  $('#ex thead').innerHTML = `<tr><th>${D[S.g1].l}${S.g2 ? ' · ' + D[S.g2].l.toLowerCase() : ''}</th>` + COLS.map(([k, l]) =>
+    `<th${S.sort[0] === k ? ` aria-sort="${S.sort[1] < 0 ? 'descending' : 'ascending'}"` : ''}><button data-k="${k}">${l}</button></th>`).join('') + '</tr>';
+  const all = agg(rs), tot = all.sp, gs = groups(rs, S.g1);
+  if (S.open == null) S.open = new Set(gs.length ? [gs[0][0]] : []);
+  let h = '';
+  for (const [v, a, l] of gs) {
+    const op = S.g2 && S.open.has(v);
+    h += `<tr data-v="${esc(v)}"${raw(S.g1, v)}><td><span class="nm"><button class="tw${S.g2 ? '' : ' ph'}" aria-expanded="${!!op}" aria-label="Expand">▸</button><i class="dot" style="background:${color(S.g1, v)}"></i>${esc(lab(S.g1, v))}</span></td>${cells(a, tot, S.g1, v)}</tr>`;
+    if (op) for (const [cv, ca] of groups(l, S.g2))
+      h += `<tr class="child" data-v="${esc(v)}" data-cv="${esc(cv)}"${raw(S.g2, cv)}><td>${esc(lab(S.g2, cv))}</td>${cells(ca, tot, null, null, 'var(--muted)')}</tr>`;
+  }
+  $('#ex tbody').innerHTML = h;
+  $('#ex tfoot').innerHTML = `<tr><td>Total</td>${cells(all, tot, null)}</tr>`;
+}
+$('#ex').onclick = e => {
+  const th = e.target.closest('th button'); if (th) { const k = th.dataset.k; S.sort = [k, S.sort[0] === k ? -S.sort[1] : -1]; return render(); }
+  const tr = e.target.closest('tbody tr'); if (!tr) return;
+  if (e.target.closest('.tw')) { const v = tr.dataset.v; S.open.has(v) ? S.open.delete(v) : S.open.add(v); return render(); }
+  addF([{ k: S.g1, v: tr.dataset.v }, ...(tr.dataset.cv ? [{ k: S.g2, v: tr.dataset.cv }] : [])]);
+};
+function renderGroupCtl() {
+  $('#g1').innerHTML = G.map(k => `<option value="${k}"${k === S.g1 ? ' selected' : ''}>${D[k].l.toLowerCase()}</option>`).join('');
+  $('#g2').innerHTML = `<option value="">—</option>` + G.filter(k => k !== S.g1).map(k => `<option value="${k}"${k === S.g2 ? ' selected' : ''}>${D[k].l.toLowerCase()}</option>`).join('');
+}
+$('#g1').onchange = e => { S.g1 = e.target.value; if (S.g2 === S.g1) S.g2 = ''; S.open = null; render(); };
+$('#g2').onchange = e => { S.g2 = e.target.value; render(); };
+
+function render() {
+  const rs = rows();
+  $('#stack').value = S.stack;
+  renderBar(); renderKpis(rs); renderChart(rs); renderMix(rs); renderCacheBot(rs); renderInsights(); renderGroupCtl(); renderExplorer(rs);
+}
+addEventListener('resize', () => renderChart(rows()));
+render();
+</script>
+</body>
+</html>
