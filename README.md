@@ -131,15 +131,27 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     after the metadata PR merges and a sync reads the default branch again. BotChu needs write
     access for this flow; forks can be used through GitHub. The editor creates no commits directly
     on the default branch and never merges metadata PRs.
-  - **Agents:** a gallery of the existing bots, grouped under the sidebar's sections, in its order,
-    with Conversations first while any bot is in none, showing their
-    personality summary, provider, activity and task count, with **Open Chat**, **Edit…** and
-    **New Agent**. Sections are edited here with the sidebar's own menus: a card's folder button, or
-    a right click on it, moves its bot to a section, back to Conversations, or into a **New
-    Section…** it names; a heading's ⋯ button, or a right click on it, renames, moves or removes its
-    section. A change in either place shows in both and is saved in `index.json`. Search finds
-    bots by name, title or provider, within their sections, and a section, Conversations among
-    them, by its name, with all its bots. A bot’s own conversation continues to work without a
+  - **Agents:** a table of the agents for each of the sidebar's sections, in its order, with
+    Conversations first while any agent is in none, then the **Specialists** table with **New
+    Specialist** (#250); **New Agent** is at the top, whose count is the agents'. The tables share
+    their columns, whose labels sit on each heading's line: the bot (its pet, name and title), its
+    status (Idle, or a violet dot with Working or Thinking…), its account, model and reasoning
+    effort, an agent's open tasks and jobs (**Tasks · Jobs**; a specialist's is blank), then **Open
+    Chat** and a ⋯ menu; a double click also opens its chat. Account, model and effort change in
+    place, as in Edit Bot and also while a turn runs (from its next turn): they read as plain
+    values, with their chevrons shown while the row is hovered; the account is a menu, and model
+    and effort open the chat's own pickers. A new account of another kind resets the model and
+    effort; an effort shows Auto when none is chosen, and a dash when the model takes none. The
+    remote queue bot shows "Remote queue" and dashes. Narrower than 980 points, Tasks · Jobs goes
+    and the status moves into the name's cell (a dot after the name, and what it is doing for its
+    title while it works); under 780 the account shows only its mark, and under 680 the effort only
+    its glyph. Sections are edited here with the sidebar's own menus: a row's ⋯ menu, or a right
+    click on it, moves an agent to a section, back to Conversations, or into a **New Section…** it
+    names; a heading's ⋯ button, or a right click on it, renames, moves or removes its section. A
+    specialist's menu has no **New Task…**, **New Job…**, **Show Jobs** or **Move to Section**. A
+    change in either place shows in both and is saved in `index.json`. Search finds bots by name,
+    title or provider, within their sections, and a section, Conversations and Specialists among
+    them, by its name, with all its bots; tables with nothing found are left out. A bot’s own conversation continues to work without a
     project.
   - **Providers:** one table of CLI profiles, a row each, with their allowance windows in columns:
     the logo and name, with the CLI family below it, or what is wrong; the model groups the
@@ -509,7 +521,18 @@ on that pull request's branch to continue in instead). The same command run agai
     specialist and cannot own tasks; call it with botchu-subagent instead." Making an agent a
     specialist pauses each of its jobs that is on, saying why, and none of its jobs runs, scheduled or
     with Run Now; making it an agent again resumes only those, so a job paused for another reason
-    stays paused. Its open tasks are left to finish.
+    stays paused. Its open tasks are left to finish. In the app: the sidebar lists the specialists
+    last, in a **Specialists** section that starts collapsed (and opens when one is shown), whose
+    heading carries their dots while it is collapsed; a specialist's row has no **New Task…** or
+    **Move to Section** and can't be dragged into a section, and the heading has no menu and takes
+    no drops. A specialist keeps its section, which it is back in as an agent. New Bot and Edit Bot
+    have a segmented **Role** (Agent | Specialist), after Kind or first, for local bots; saving an
+    agent with jobs on as a specialist asks first ("Make <name> a Specialist?": "Its N scheduled
+    jobs pause until it's an Agent again."). Every place that picks a task's or a job's agent, or
+    offers a task (Start Task with, Continue with, Fix with, Review with, New Task in the menu bar,
+    the chat and the tasks' column, New Job), lists or offers agents only; a specialist's job
+    shows its owner in the job editor, and Jobs' agent filter keeps a specialist while it owns
+    (paused) jobs. Its status sidebar lists those jobs, without **New Job…**.
   - **Deliveries:** a bot hands the owner something on purpose with `botchu-inbox send` (the same
     helper under a third name, found from the conversation's environment as the others are): its
     `--purpose` (`needs-input`, a decision, access or information the bot can't go on without, with
@@ -584,8 +607,8 @@ on that pull request's branch to continue in instead). The same command run agai
     double-click): its runs, newest first, each with the time it was for and the time it started,
     how late that was, how long it took, what it ran on and its transcript, live while it runs (its
     task's conversation, below, with **Open Task**).
-    Opening Jobs or a history never runs anything. An agent's card in **Agents** counts its jobs
-    (opening Jobs filtered to it) and its menu has **New Job…**; its status sidebar's **Activity**
+    Opening Jobs or a history never runs anything. An agent's row in **Agents** counts its jobs
+    and its menu has **New Job…** and **Show Jobs** (Jobs filtered to it); its status sidebar's **Activity**
     lists them under its tasks, with **New Job…** and **All Jobs**. The editor sets the agent (chosen
     already from an agent's own places, and fixed once the job exists), the account, model and
     reasoning effort its runs use (**Same as** the agent, as they are when each run starts, until

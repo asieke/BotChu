@@ -58,12 +58,13 @@ private struct BotChuCommands: Commands {
             // was drawn; the actions look again when chosen.
             let tab = model.visibleBotID.map { model.tab(of: $0) }
             let remote = model.visibleBotID.flatMap(model.bot)?.isRemoteQueue == true
+            let ownsTasks = model.visibleBotID.flatMap(model.bot)?.canOwnTasks == true
             Button("Edit Bot…") { if let id = model.visibleBotID { model.edit(id) } }
                 .keyboardShortcut("e")
                 .disabled(model.visibleBotID == nil)
             Button("New Task…") { if let id = model.visibleBotID { model.newTask(for: id) } }
                 .keyboardShortcut("t")
-                .disabled(model.visibleBotID == nil || remote)
+                .disabled(!ownsTasks)
             Button("New Session") { if let id = model.visibleBotID { model.newSession(model.tab(of: id)) } }
                 .keyboardShortcut("k")
                 .disabled(remote || (tab.map { model.isRunning($0) } ?? true))

@@ -436,9 +436,9 @@ struct ProjectsTable: View {
         Button("Show Issues") { model.selectProject(row.id, tab: .issues) }.disabled(row.openIssues == 0)
         Divider()
         Menu("Start Task with") {
-            ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in Button("\(bot.emoji) \(bot.name)") { model.newTask(for: bot.id, repo: row.id) } }
+            ForEach(model.taskOwners) { bot in Button("\(bot.emoji) \(bot.name)") { model.newTask(for: bot.id, repo: row.id) } }
         }
-        .disabled(!model.bots.contains { !$0.isRemoteQueue })
+        .disabled(model.taskOwners.isEmpty)
     }
 }
 
@@ -556,9 +556,9 @@ struct WorkMenu: View {
 
     private func botMenu(_ title: String, action: @escaping (UUID) -> Void) -> some View {
         Menu(title) {
-            ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id) } }
+            ForEach(model.taskOwners) { bot in Button("\(bot.emoji) \(bot.name)") { action(bot.id) } }
         }
-        .disabled(!model.bots.contains { !$0.isRemoteQueue })
+        .disabled(model.taskOwners.isEmpty)
     }
 }
 

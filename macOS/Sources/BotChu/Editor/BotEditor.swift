@@ -10,6 +10,8 @@ struct BotEditor: View {
     @State private var autoWorkspace = ""
     @State private var confirmDelete = false
     @State private var confirmPet = false
+    /// How many scheduled jobs saving an agent as a specialist pauses, asked about before it saves (#250).
+    @State private var pausingJobs: Int?
     /// New Bot's Generate animated pet, off until the owner turns it on (#232).
     @State private var makesPet = false
     /// An existing bot's INSTRUCTIONS.md, edited here and saved with the bot. A new bot's
@@ -45,6 +47,14 @@ struct BotEditor: View {
                             Text("Local CLI").tag(Bot.Kind.localCLI)
                             Text("Remote queue").tag(Bot.Kind.remoteQueue)
                         }
+                    }
+                    // An agent owns tasks and jobs; a specialist is only called as a sub-agent (#250).
+                    if !bot.isRemoteQueue {
+                        Picker("Role", selection: $bot.role) {
+                            Text("Agent").tag(Bot.Role.agent)
+                            Text("Specialist").tag(Bot.Role.specialist)
+                        }
+                        .pickerStyle(.segmented)
                     }
                     HStack(spacing: 12) {
                         TextField("Emoji", text: $bot.emoji)
@@ -187,6 +197,13 @@ struct BotEditor: View {
             autoWorkspace = bot.name.trimmingCharacters(in: .whitespaces).isEmpty ? "" : model.defaultWorkspace(for: bot.name)
             bot.workspace = autoWorkspace
         }
+        .alert("Make \(bot.name) a Specialist?", isPresented: Binding(get: { pausingJobs != nil }, set: { if !$0 { pausingJobs = nil } }),
+               presenting: pausingJobs) { _ in
+            Button("Make Specialist") { finish(makingPet: false) }
+            Button("Cancel", role: .cancel) {}
+        } message: { count in
+            Text("Its \(count == 1 ? "scheduled job pauses" : "\(count) scheduled jobs pause") until it's an Agent again.")
+        }
         .confirmationDialog("Make a pet for \(bot.name)?", isPresented: $confirmPet) {
             Button("Make Pet (\(petCost))") {
                 model.setAppearance(bot.appearance ?? "", for: bot.id)
@@ -254,6 +271,14 @@ struct BotEditor: View {
     private var hasAppearance: Bool { !(bot.appearance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     private func save() {
+        // An agent made a specialist pauses its jobs: asked first, when it has any on.
+        if !isNew, bot.isSpecialist, original.canOwnTasks {
+            let jobs = model.jobsPausedBySpecialistSwitch(of: bot.id).count
+            if jobs > 0 {
+                pausingJobs = jobs
+                return
+            }
+        }
         finish(makingPet: isNew && PetVideo.makesPetOnCreate(optedIn: makesPet, appearance: bot.appearance))
     }
 

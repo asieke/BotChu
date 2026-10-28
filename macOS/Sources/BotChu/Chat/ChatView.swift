@@ -270,7 +270,7 @@ struct ChatToolbar: ViewModifier {
                 }
                 .help("How much tool work the chat shows: Compact (headers), Detailed (files and errors) or Raw (every call)")
                 // Once the bot has a task, New Task is the + in the tasks' column (#128).
-                if let id = model.visibleBotID, model.bot(id)?.isRemoteQueue != true, model.openTasks(of: id).isEmpty {
+                if let id = model.visibleBotID, model.bot(id)?.canOwnTasks == true, model.openTasks(of: id).isEmpty {
                     Button { model.newTask(for: id) } label: {
                         Label("New Task", systemImage: "plus.rectangle.on.rectangle")
                     }
