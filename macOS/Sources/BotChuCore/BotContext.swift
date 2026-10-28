@@ -58,6 +58,46 @@ public enum BotContext {
 
             \(playbook)
             """
+        // A specialist owns no tasks (#250): it is called as a sub-agent, so it gets no dispatch folder's instructions.
+        let tasksSection = bot.isSpecialist ? """
+            ## Role
+            You are a specialist: other bots call you as a sub-agent with `botchu-subagent`, and your owner talks \
+            with you here. You don't own tasks or scheduled jobs; to have work done as a Task, hand it to an agent \
+            with `botchu-task create`.
+
+
+            """ : """
+            ## Tasks
+            This conversation is your Home. You can also run tasks: work in one repository each, with its own \
+            conversation and CLI session, in a git worktree of the repository's checkout, so several run at once \
+            without sharing files. Each task appears under you in the sidebar, and your owner can start them there \
+            too. Here, plan, coordinate and keep track; leave longer work in a repository to a task, so this \
+            conversation stays free.
+
+            To start a task, write a JSON file into `.botchu/dispatch/` in this folder, such as \
+            `.botchu/dispatch/hello-world-12.json`:
+
+                {"repo": "octocat/hello-world", "issue": 12, "task": "Fix the crash on launch, then open a pull request."}
+
+            - `repo` (required): `owner/name` of one of your owner's GitHub repositories (`gh repo list`, and their \
+            organizations').
+            - `issue` or `pullRequest`: the number to work on, if any.
+            - `review`: a pull request's number, to review it rather than continue it; add `"comment": true` to post the \
+            review on GitHub as well.
+            - `task`: what to do, in your words; required without an issue or pull request.
+            - `machine` (optional): the computer to work on: \(names). Otherwise BotChu works where your owner \
+            chose for the repository, else on this Mac.
+            - `branch` and `title` (optional): otherwise BotChu names the branch from the issue's title or the task.
+            - `agent` (optional): another bot, by name, slug or ID, to hand the task to as its own (as \
+            `botchu-task create` does, which also tells you how it went).
+
+            BotChu takes the file within seconds, clones the repository if it isn't checked out there yet\(clonedInto), \
+            makes the task's worktree (over SSH on another computer), opens its conversation and starts it with your identity and \
+            memory, and tells you how your tasks are doing at the start of your next turn here. `.botchu/tasks/<id>/` \
+            holds each task's settings (`task.json`) and conversation (`thread.jsonl`): read them, never edit them.
+
+
+            """
         return """
         \(marker)
         # \(bot.emoji) \(bot.name)\(bot.title.isEmpty ? "" : "\n\n" + bot.title)
@@ -99,36 +139,7 @@ public enum BotContext {
         line (role, text, date; tool calls with their input and output), and `.botchu/logs/` logs each turn. \
         Search them when asked about earlier conversations. BotChu writes both: read them, never edit them.
 
-        ## Tasks
-        This conversation is your Home. You can also run tasks: work in one repository each, with its own \
-        conversation and CLI session, in a git worktree of the repository's checkout, so several run at once \
-        without sharing files. Each task appears under you in the sidebar, and your owner can start them there \
-        too. Here, plan, coordinate and keep track; leave longer work in a repository to a task, so this \
-        conversation stays free.
-
-        To start a task, write a JSON file into `.botchu/dispatch/` in this folder, such as \
-        `.botchu/dispatch/hello-world-12.json`:
-
-            {"repo": "octocat/hello-world", "issue": 12, "task": "Fix the crash on launch, then open a pull request."}
-
-        - `repo` (required): `owner/name` of one of your owner's GitHub repositories (`gh repo list`, and their \
-        organizations').
-        - `issue` or `pullRequest`: the number to work on, if any.
-        - `review`: a pull request's number, to review it rather than continue it; add `"comment": true` to post the \
-        review on GitHub as well.
-        - `task`: what to do, in your words; required without an issue or pull request.
-        - `machine` (optional): the computer to work on: \(names). Otherwise BotChu works where your owner \
-        chose for the repository, else on this Mac.
-        - `branch` and `title` (optional): otherwise BotChu names the branch from the issue's title or the task.
-        - `agent` (optional): another bot, by name, slug or ID, to hand the task to as its own (as \
-        `botchu-task create` does, which also tells you how it went).
-
-        BotChu takes the file within seconds, clones the repository if it isn't checked out there yet\(clonedInto), \
-        makes the task's worktree (over SSH on another computer), opens its conversation and starts it with your identity and \
-        memory, and tells you how your tasks are doing at the start of your next turn here. `.botchu/tasks/<id>/` \
-        holds each task's settings (`task.json`) and conversation (`thread.jsonl`): read them, never edit them.
-
-        ## Replies
+        \(tasksSection)## Replies
         Reply conversationally and concisely, in Markdown. You may use your tools whenever they help.
 
         \(subagentsSection(availableBots: availableBots))
@@ -396,7 +407,12 @@ public enum BotContext {
     }
 
     private static func delegationSection(availableBots: [BotRosterEntry]) -> String {
-        let roster = availableBots.map { "- `\($0.slug)` (\($0.name); \($0.id.uuidString.lowercased())) — \($0.title)" }.joined(separator: "\n")
+        let roster = availableBots.map {
+            "- `\($0.slug)` (\($0.name); \($0.id.uuidString.lowercased())) — \($0.title)\($0.isSpecialist ? " [specialist: sub-agent only]" : "")"
+        }.joined(separator: "\n")
+        // Specialists (#250) are only called as sub-agents: `botchu-task create` refuses them.
+        let specialists = availableBots.contains(where: \.isSpecialist) ? " Bots marked specialist are sub-agent only: call them with "
+            + "`botchu-subagent`, never `botchu-task create`, which refuses them." : ""
         return """
             <subagents>
             ## Other bots: Tasks and sub-agent runs
@@ -407,8 +423,8 @@ public enum BotContext {
             instructions:
             \(roster)
 
-            `botchu-subagent list` (or `botchu-task list`) prints the current roster. Use a UUID if names or slugs are \
-            ambiguous.
+            `botchu-subagent list` prints the current roster (`botchu-task list` only the bots that can own a Task). Use a \
+            UUID if names or slugs are ambiguous.
 
             ### Task: `botchu-task create`
             A Task is an independent, parent-level conversation that the named bot owns, a tab beside its chat in \
@@ -420,7 +436,7 @@ public enum BotContext {
             whether the Task was created and its first turn started. Running the same command again returns the same \
             Task, never a second one; `botchu-task status <request id>` checks a request made in this turn. A Task \
             can then run sub-agent runs of its own: for example, hand a batch of issues to one bot as one Task, \
-            whose turn spawns a sub-agent run per issue.
+            whose turn spawns a sub-agent run per issue.\(specialists)
 
             ### Sub-agent run: `botchu-subagent`
             A sub-agent run is child work of this turn: focused research, review, testing or implementation, shown in \

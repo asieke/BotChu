@@ -461,11 +461,15 @@ public struct Store: Sendable {
         /// The sidebar section the bot is in (`BotSections`); nil for none, and in indexes from
         /// before sections.
         public var section: String?
+        /// `specialist` for a specialist (#250); nil for an agent, and in indexes from before roles.
+        /// The bot's own bot.json is what it loads with; this keeps the role with a missing folder's entry.
+        public var role: Bot.Role?
 
-        public init(id: UUID, workspace: String, section: String? = nil) {
+        public init(id: UUID, workspace: String, section: String? = nil, role: Bot.Role? = nil) {
             self.id = id
             self.workspace = workspace
             self.section = section
+            self.role = role == .agent ? nil : role
         }
     }
 
@@ -521,7 +525,7 @@ public struct Store: Sendable {
     /// whose folders are missing: each bot once, in its first place.
     public static func entries(for bots: [Bot], sections: [UUID: String], missing: [Entry]) -> [Entry] {
         var listed = Set<UUID>()
-        return (bots.map { Entry(id: $0.id, workspace: $0.persistencePath, section: sections[$0.id]) } + missing)
+        return (bots.map { Entry(id: $0.id, workspace: $0.persistencePath, section: sections[$0.id], role: $0.isSpecialist ? .specialist : nil) } + missing)
             .filter { listed.insert($0.id).inserted }
     }
 

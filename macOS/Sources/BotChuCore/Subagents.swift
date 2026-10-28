@@ -428,6 +428,9 @@ public struct BotRosterEntry: Identifiable, Codable, Equatable, Sendable {
     /// A remote queue bot, which is messaged (`botchu-message`) rather than delegated to.
     public var remote: Bool?
     public var isRemote: Bool { remote == true }
+    /// A specialist (#250), which is only called as a sub-agent and never gets a Task.
+    public var specialist: Bool?
+    public var isSpecialist: Bool { specialist == true }
 
     public init(bot: Bot) {
         id = bot.id
@@ -436,6 +439,7 @@ public struct BotRosterEntry: Identifiable, Codable, Equatable, Sendable {
         title = bot.title
         emoji = bot.emoji
         remote = bot.isRemoteQueue ? true : nil
+        specialist = bot.isSpecialist ? true : nil
     }
 }
 
@@ -460,6 +464,14 @@ public enum SubagentResolver {
             throw SubagentError.invalid("Several BotChu agents match ‘\(query)’. Use the agent's UUID from \(list).")
         }
         return matches[0]
+    }
+
+    /// The bot a Task request names (`botchu-task create --agent`, a dispatch's `agent`), which must be
+    /// able to own it: a specialist is refused, while `resolve` still finds it for a sub-agent run.
+    public static func resolveTaskOwner(_ target: String, bots: [Bot], list: String = "botchu-task list") throws -> Bot {
+        let bot = try resolve(target, bots: bots.filter { !$0.isRemoteQueue }, list: list)
+        if let problem = bot.taskOwnershipProblem { throw SubagentError.invalid(problem) }
+        return bot
     }
 }
 

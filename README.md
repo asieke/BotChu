@@ -499,6 +499,17 @@ on that pull request's branch to continue in instead). The same command run agai
     rather than a second. "New subagent @bot" (or "delegate this to @bot as a sub-agent") is a
     **sub-agent run** (above): child work of the turn, in its Sub-agents inspector, with no tab of
     its own. A batch goes to one bot as one Task, whose turn spawns a sub-agent run per issue.
+  - **Agents and specialists (#250):** a local bot is an **agent**, which owns tasks and scheduled
+    jobs, or a **specialist**, which is only called as a sub-agent (`botchu-subagent`) and keeps its own
+    Home, instructions, personality, memory, skills, pet and account. Its role is kept in its
+    `bot.json` and in `index.json` (a bot saved before roles is an agent), and can be changed at any
+    time without losing anything. A specialist's `AGENTS.md` has no Tasks section, the bots' roster
+    marks it sub-agent only, `botchu-task list` leaves it out, and `botchu-task create --agent`, a
+    dispatch file (its own, or one naming it as `agent`) and a job's run refuse it: "“<name>” is a
+    specialist and cannot own tasks; call it with botchu-subagent instead." Making an agent a
+    specialist pauses each of its jobs that is on, saying why, and none of its jobs runs, scheduled or
+    with Run Now; making it an agent again resumes only those, so a job paused for another reason
+    stays paused. Its open tasks are left to finish.
   - **Deliveries:** a bot hands the owner something on purpose with `botchu-inbox send` (the same
     helper under a third name, found from the conversation's environment as the others are): its
     `--purpose` (`needs-input`, a decision, access or information the bot can't go on without, with
