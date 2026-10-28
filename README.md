@@ -1571,7 +1571,8 @@ on that pull request's branch to continue in instead). The same command run agai
     task over once saved, collapsing status sections, a bot's tabs beside its
     chat (a click, the close button on hover, **+**, « and », the arrow keys, ⌘1 to ⌘9, the rail at
     the narrowest window and by the owner's choice, light and dark) and its row in the bot list,
-    the sidebar's sections of bots (their menus, the alert that names them, collapsing and revealing, bots dropped in them, and changes that can't
+    whose dots are drawn as the column's and the rail's for each state, selected or not, focused or
+    not, as the states change (#237), the sidebar's sections of bots (their menus, the alert that names them, collapsing and revealing, bots dropped in them, and changes that can't
     be saved, shown until Try Again or quitting saves them), Agents grouped under them and editing
     them with the same menus and alert, inspector tab navigation and
     restored selection, conversation-scoped allowance reads that show the background's reading

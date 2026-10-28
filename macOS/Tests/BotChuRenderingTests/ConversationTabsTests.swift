@@ -371,6 +371,134 @@ extension RenderingTests {
         }
     }
 
+    /// #237: in the window itself, the selected bot's row in the sidebar's List draws each of its
+    /// conversations as the column and the rail beside its chat do: for the same state the same
+    /// colour, and a ring where theirs is one, in light and dark, with the row's selection plain
+    /// (the window or the list not focused) and emphasized (the list focused, as AppKit marks its
+    /// row). Through a request answered, a failed and a stopped turn cleared, a turn finished and
+    /// read, and more than four busy conversations, both follow the model without being made again.
+    @Test func aBotsRowInTheSidebarDrawsItsTabsAsTheColumnAndTheRailDo() async throws {
+        _ = NSApplication.shared
+        let oldAppearance = NSApp.appearance
+        defer { NSApp.appearance = oldAppearance }
+        let fixture = try TabsFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot, now = Date()
+        // Two more tasks, in memory, so six conversations can be busy at once.
+        for brief in ["Speed up the sync", "Tidy the docs"] {
+            model.tasks[bot.id, default: []].append(BotTask(for: bot, repo: "fixture/repo", checkout: fixture.root.path, work: nil, brief: brief))
+        }
+        let home = ChatTarget.home(bot.id)
+        let tasks = model.openTasks(of: bot.id).map { ChatTarget.task($0.id, of: bot.id) }
+        try #require(tasks.count == 5)
+        let question = Delivery.Question(text: "Which filter?", choices: ["Status", "Owner"])
+        let asking = Delivery(botID: bot.id, taskID: fixture.tasks[0].id, title: "Which filter first?", question: question, purpose: .needsInput)
+        try InboxFolder(home: BotHome(workspace: bot.workspace)).save(asking, contents: [:])
+        model.inbox.load(bots: [bot])
+        for _ in 0..<200 where model.inbox.all.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        let finished = [ChatMessage(role: .user, text: "Go", date: now.addingTimeInterval(-60)),
+                        ChatMessage(role: .assistant, text: "Done", date: now.addingTimeInterval(-30))]
+        model.conversation(home).replace(finished)
+        model.unread.insert(home)
+        model.runStates[tasks[0]] = RunState(startedAt: now.addingTimeInterval(-252), hasOutput: true, activity: .coding)
+        model.conversation(tasks[1]).replace([ChatMessage(role: .user, text: "Go"), ChatMessage(role: .error, text: "The CLI exited.")])
+        model.conversation(tasks[2]).replace([ChatMessage(role: .user, text: "Go"), ChatMessage(role: .assistant, text: "Partial")])
+        model.runStates[tasks[2]] = RunState(startedAt: now, preparing: true)
+        model.stop(tasks[2])
+        model.runStates[tasks[3]] = RunState(startedAt: now.addingTimeInterval(-4))
+        model.runStates[tasks[4]] = RunState(startedAt: now, preparing: true)
+        model.show(tasks[3])
+        // Every state but idle, one conversation each: four dots, the most urgent, then +2.
+        try #require(model.tabs(of: bot.id).map { model.tabState(of: $0).kind } == [.news, .needsInput, .failed, .stopped, .starting, .preparing])
+        try #require(model.botRowSummary(of: bot).more == 2)
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1700, height: 900),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let host = NSHostingView(rootView: ContentView().environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        try await settle(window)
+        func sidebarTable(in view: NSView) -> NSTableView? {
+            (view as? NSTableView) ?? view.subviews.lazy.compactMap(sidebarTable).first
+        }
+
+        func check(_ step: String) async throws {
+            let summary = model.botRowSummary(of: bot)
+            let busy = model.tabs(of: bot.id).map { model.tabState(of: $0).kind }.filter { $0 != .idle }
+            for collapsed in [false, true] {
+                fixture.defaults.set(collapsed, forKey: ConversationColumnSettings.collapsedKey)
+                for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                    window.appearance = NSAppearance(named: appearance)
+                    NSApp.appearance = NSAppearance(named: appearance)
+                    try await settle(window)
+                    try await Task.sleep(for: .milliseconds(150))
+                    // The tabs' dots, top to bottom, in the strip between the sidebar and the chat
+                    // that holds only them (an idle one's grey ring isn't coloured, so isn't among them).
+                    let sidebar = try #require(tabSplitViews(in: host).first?.arrangedSubviews.first)
+                    let strip = CGRect(x: sidebar.convert(sidebar.bounds, to: host).maxX, y: 0,
+                                       width: collapsed ? ConversationColumnLayout.railWidth : 32, height: host.bounds.height)
+                    let drawn = try Drawing(of: host)
+                    let tabs = drawn.dots(in: strip).sorted { $0.bounds.minY < $1.bounds.minY }
+                    let surface = "\(step), \(collapsed ? "rail" : "column"), \(appearance == .aqua ? "light" : "dark")"
+                    try #require(tabs.count == busy.count, "\(surface): the tabs' dots \(tabs.map(\.bounds)) for \(busy)")
+                    for (tab, kind) in zip(tabs, busy) {
+                        #expect(tab.isRing == [.preparing, .starting].contains(kind), "\(surface), \(kind): the tab's a ring \(tab.isRing)")
+                    }
+                    // What most of the tabs' dots sit on: the column's background, or a rail tile's cutout.
+                    let ground = try #require(Drawing.mostCommon(tabs.flatMap { drawn.colours(around: $0.centre, at: 4.6...5.4) }),
+                                              "\(surface): the column's ground")
+                    let table = try #require(sidebarTable(in: host))
+                    for emphasized in [false, true] {
+                        let label = "\(surface), \(emphasized ? "emphasized" : "plain") selection"
+                        let rowView = try #require(table.rowView(atRow: table.selectedRow, makeIfNecessary: false), "\(label): no selected row")
+                        rowView.isEmphasized = emphasized
+                        try await settle(window)
+                        try await Task.sleep(for: .milliseconds(150))
+                        // The row's dots are at its end, right of its face and name.
+                        let drawing = try Drawing(of: rowView)
+                        let row = drawing.dots(in: CGRect(x: rowView.bounds.width - 80, y: 0, width: 80, height: rowView.bounds.height))
+                            .sorted { $0.bounds.minX < $1.bounds.minX }
+                        try #require(row.count == summary.dots.count, "\(label): the row's dots \(row.map(\.bounds)) for \(summary.dots)")
+                        for (dot, kind) in zip(row, summary.dots) {
+                            let tab = tabs[try #require(busy.firstIndex(of: kind))]
+                            // The same colour, and a ring (its ground showing through) where the tab's
+                            // is one; the shapes are `StatusDot`'s for the same kind, as above.
+                            #expect(near(dot.ink, tab.ink), "\(label), \(kind): the row's \(dot.ink), the tab's \(tab.ink)")
+                            #expect(dot.isRing == tab.isRing, "\(label), \(kind): the row's a ring \(dot.isRing), the tab's \(tab.isRing)")
+                            // Emphasized, each sits on the column's own ground, as a tab's does: just
+                            // past its edges on either side (else the selection's colour). Measured
+                            // from the dot as drawn, as a test's window stops the pop a dot gives as
+                            // a turn ends part way, with the dot bigger.
+                            if emphasized {
+                                let beside = [drawing.color(x: dot.bounds.minX - 0.75, y: dot.centre.y),
+                                              drawing.color(x: dot.bounds.maxX + 0.75, y: dot.centre.y)]
+                                #expect(beside.allSatisfy { $0.map { near($0, ground) } ?? false },
+                                        "\(label), \(kind): beside it \(beside), the column's \(ground)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        try await check("every state")
+        // The request answered (Done), its task is working again; the failed turn retried and
+        // finished, and read; then five are busy, and the stopped one is the most urgent.
+        model.inbox.setDone(asking.id, true)
+        model.conversation(tasks[1]).replace(finished)
+        try #require(model.botRowSummary(of: bot).dots.first == .stopped && model.botRowSummary(of: bot).more == 1)
+        try await check("answered")
+        // Home shown, its finished turn is read; the stopped task's next turn finished, not yet seen.
+        model.show(home)
+        model.conversation(tasks[2]).replace(finished + [ChatMessage(role: .user, text: "Again"), ChatMessage(role: .assistant, text: "Done")])
+        model.unread.insert(tasks[2])
+        try #require(model.tabState(of: home).kind == .idle && model.tabState(of: tasks[2]).kind == .news)
+        try #require(model.botRowSummary(of: bot).more == 0)
+        try await check("read")
+    }
+
     /// #218: a conversation waits on the owner while a Needs input delivery it sent isn't answered
     /// or Done, whatever else it does, and reading it doesn't change that; the owner's Stop shows
     /// until the next turn, also once looked at; and both come back after a relaunch.
@@ -909,6 +1037,58 @@ private struct HoveredRow: View {
         return found
     }
 
+    /// The status dots in `rect`: each patch of coloured pixels no bigger than a dot, with the colour
+    /// most of its solid pixels have, and whether its middle is another colour (a ring's).
+    func dots(in rect: CGRect) -> [Dot] {
+        let minX = max(0, Int(rect.minX * scale)), maxX = min(rep.pixelsWide, Int((rect.maxX * scale).rounded(.up)))
+        let minY = max(0, Int(rect.minY * scale)), maxY = min(rep.pixelsHigh, Int((rect.maxY * scale).rounded(.up)))
+        guard minX < maxX, minY < maxY else { return [] }
+        let width = maxX - minX
+        var colours: [NSColor?] = []
+        for y in minY..<maxY {
+            for x in minX..<maxX {
+                let colour = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+                colours.append(colour.flatMap { $0.alphaComponent > 0.5 && $0.saturationComponent > 0.3 ? $0 : nil })
+            }
+        }
+        var seen = Set<Int>(), found: [Dot] = []
+        for start in colours.indices where colours[start] != nil && !seen.contains(start) {
+            var patch: [Int] = [], stack = [start]
+            seen.insert(start)
+            while let index = stack.popLast() {
+                patch.append(index)
+                let x = index % width
+                for next in [x > 0 ? index - 1 : nil, x < width - 1 ? index + 1 : nil, index - width, index + width] {
+                    guard let next, colours.indices.contains(next), colours[next] != nil, !seen.contains(next) else { continue }
+                    seen.insert(next)
+                    stack.append(next)
+                }
+            }
+            let xs = patch.map { $0 % width + minX }, ys = patch.map { $0 / width + minY }
+            let bounds = CGRect(x: CGFloat(xs.min()!) / scale, y: CGFloat(ys.min()!) / scale,
+                                width: CGFloat(xs.max()! - xs.min()! + 1) / scale, height: CGFloat(ys.max()! - ys.min()! + 1) / scale)
+            // Bigger is a selection or a face, smaller a speck of a glyph.
+            guard (3...12).contains(bounds.width), (3...12).contains(bounds.height),
+                  let ink = Drawing.mostCommon(patch.compactMap { colours[$0] }.filter { $0.alphaComponent > 0.95 }) else { continue }
+            let centre = CGPoint(x: bounds.midX, y: bounds.midY)
+            let middle = color(x: centre.x, y: centre.y)
+            found.append(Dot(bounds: bounds, ink: ink, isRing: middle.map { !Drawing.same($0, ink) } ?? true))
+        }
+        return found
+    }
+
+    /// The colour that most of `colours` have, to the byte.
+    static func mostCommon(_ colours: [NSColor]) -> NSColor? {
+        let counts = Dictionary(grouping: colours, by: key)
+        return counts.max { $0.value.count < $1.value.count }?.value.first
+    }
+
+    static func same(_ a: NSColor, _ b: NSColor) -> Bool { key(a) == key(b) }
+
+    private static func key(_ colour: NSColor) -> [Int] {
+        [colour.redComponent, colour.greenComponent, colour.blueComponent, colour.alphaComponent].map { Int(($0 * 255).rounded()) }
+    }
+
     /// The colours of the pixels whose middles are `distances` points from `centre`.
     func colours(around centre: CGPoint, at distances: ClosedRange<CGFloat>) -> [NSColor] {
         let reach = Int((distances.upperBound * scale).rounded(.up)) + 1
@@ -923,6 +1103,15 @@ private struct HoveredRow: View {
         }
         return found
     }
+}
+
+/// A status dot as drawn: where it is, its colour, and whether it is a ring.
+private struct Dot {
+    let bounds: CGRect
+    let ink: NSColor
+    let isRing: Bool
+
+    var centre: CGPoint { CGPoint(x: bounds.midX, y: bounds.midY) }
 }
 
 /// A bot with three open tasks, each an issue with a short title, and a second bot without any.
