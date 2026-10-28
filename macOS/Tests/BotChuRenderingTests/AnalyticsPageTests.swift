@@ -40,14 +40,13 @@ extension RenderingTests {
 
         // The last 30 days, at first.
         let first = try await read("""
-            return { runs: value('Turns & runs'), failed: value('Failed'), finished: value('Finished'), tokens: value('Tokens'),
+            return { runs: value('Turns & runs'), waste: value('Wasted spend'), tokens: value('Tokens'),
                      error: document.querySelector('.card.error') !== null, pressed: document.querySelector('button.preset[aria-pressed=true]').textContent,
-                     bots: [...document.querySelectorAll('td')].some(td => td.textContent === 'Product Fox') };
+                     bots: [...document.querySelectorAll('td')].some(td => td.textContent.includes('Product Fox')) };
             """)
         #expect(first["runs"] as? String == "3")
-        #expect(first["failed"] as? String == "1")
-        #expect(first["finished"] as? String == "2")
-        #expect(first["tokens"] as? String == "Unavailable")
+        #expect(first["waste"] as? String == "—")
+        #expect(first["tokens"] as? String == "—")
         #expect(first["error"] as? Bool == false)
         #expect(first["pressed"] as? String == "30 days")
         #expect(first["bots"] as? Bool == true)
@@ -70,11 +69,10 @@ extension RenderingTests {
             const again = document.querySelector('input[aria-label=Through]');
             again.value = '2026-10-20';
             again.dispatchEvent(new Event('change'));
-            return { runs: value('Turns & runs'), failed: value('Failed'), median: value('Median time'),
+            return { runs: value('Turns & runs'), median: document.querySelector('#ex tfoot td:nth-child(9)').textContent,
                      from: document.querySelector('input[aria-label=From]').value, through: document.querySelector('input[aria-label=Through]').value };
             """)
         #expect(day["runs"] as? String == "1")
-        #expect(day["failed"] as? String == "0")
         #expect(day["median"] as? String == "2 min")
         #expect(day["from"] as? String == "2026-10-20" && day["through"] as? String == "2026-10-20")
         // A range with nothing in it, and no kind of work included.
@@ -89,6 +87,46 @@ extension RenderingTests {
             """)
         #expect(empty["runs"] as? String == "0")
         #expect((empty["empty"] as? [String])?.contains("No turns or runs in this range.") == true)
+
+        // Filters, sort headers and details are usable without inline HTML from names.
+        let explorer = try await read("""
+            [...document.querySelectorAll('button.preset')].find(b => b.textContent === '30 days').click();
+            const picker = document.querySelector('select[aria-label="Add filter"]');
+            picker.value = JSON.stringify({ k: 'outcome', v: 'failed' });
+            picker.dispatchEvent(new Event('change'));
+            const failedRuns = value('Turns & runs');
+            const totals = document.querySelector('#ex tfoot td:nth-child(2)').textContent;
+            const closed = !document.querySelector('details.about').open;
+            document.querySelector('.chip button').click();
+            document.querySelector('#ex th button').click();
+            const sorted = document.querySelector('#ex th').getAttribute('aria-sort');
+            document.querySelector('#ex .row-filter').click();
+            return { failedRuns, totals, closed, sorted, chips: document.querySelectorAll('.chip').length,
+                     cards: document.querySelectorAll('.ins .in').length };
+            """)
+        #expect(explorer["failedRuns"] as? String == "1")
+        #expect(explorer["totals"] as? String == "1")
+        #expect(explorer["closed"] as? Bool == true)
+        #expect(explorer["sorted"] as? String == "ascending")
+        #expect(explorer["chips"] as? Int == 1)
+        #expect(explorer["cards"] as? Int == 6)
+
+        // Optional screenshots of the same sample HTML the Core test writes.
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_ANALYTICS_PREVIEW"] {
+            let sample = URL(fileURLWithPath: path)
+            web.frame = CGRect(x: 0, y: 0, width: 1180, height: 1900)
+            web.loadFileURL(sample, allowingReadAccessTo: sample.deletingLastPathComponent())
+            try await waitForPage(web, "document.querySelectorAll('.ins .in').length === 6")
+            for theme in ["light", "dark"] {
+                _ = try await web.callAsyncJavaScript("document.documentElement.dataset.theme = theme; return true;", arguments: ["theme": theme], in: nil, contentWorld: .page)
+                try await Task.sleep(for: .milliseconds(200))
+                let image = try await web.takeSnapshot(configuration: nil)
+                let tiff = try #require(image.tiffRepresentation)
+                let bitmap = try #require(NSBitmapImageRep(data: tiff))
+                let png = try #require(bitmap.representation(using: .png, properties: [:]))
+                try png.write(to: sample.deletingPathExtension().appendingPathExtension("\(theme).png"))
+            }
+        }
 
         // Its policy refuses every request the page could make.
         let blocked = try await web.callAsyncJavaScript("""

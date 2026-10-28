@@ -1362,11 +1362,13 @@ on that pull request's branch to continue in instead). The same command run agai
     names of bots, tasks, accounts, hosts and repositories never go into the app state.
   - **Analytics:** **View ▸ Open Analytics Dashboard** reads what BotChu has recorded (conversations'
     transcripts, tasks, jobs' histories, sub-agent runs, usage ledgers and saved allowance readings) off the main
-    thread, changing nothing, and opens a read-only page of it in the default browser: turns and runs
-    a day by outcome (finished, failed, stopped, in progress), median durations, failure rates and
-    time at work, by bot, provider account and project, for 7, 30 or 90 days, all or a range of days,
-    and for Home turns, task turns, job runs or sub-agent runs; then each profile's latest allowance
-    reading, apart. Days are this Mac's calendar days; a finished turn isn't taken as work that
+    thread, changing nothing, and opens a read-only spend explorer in the default browser: spend,
+    tokens, cache hit, wasted spend and cost per finished task, with spend stacked by bot, project,
+    model, provider, account, kind or outcome. Removable filters combine alternatives within each
+    dimension and intersect across dimensions. The breakdown has two grouping levels and sorts every
+    column; six efficiency cards rank potential savings, retried work, fan-out and finished-task spend
+    for the date range. Choose 7, 30 or 90 days, all or From/through dates. Each profile's latest
+    allowance follows the selected accounts. Days are this Mac's calendar days; a finished turn isn't taken as work that
     succeeded; durations BotChu can't know are left out rather than counted as zero. The usage ledger
     supplies each new turn's captured account/model, reported tokens and known spend: actual billing
     amendments first, then bundled-price or CLI estimates. Missing and unpriced usage stays distinct
