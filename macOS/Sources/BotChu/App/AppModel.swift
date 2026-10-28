@@ -633,7 +633,14 @@ final class AppModel {
         let roleChanged = bot.isSpecialist != bots[i].isSpecialist
         let providerChanged = bot.accountID == bots[i].accountID && bot.resolvedProvider != bots[i].resolvedProvider
         // The editor doesn't change what a turn reported while it was open.
-        bot.reportedModel = providerChanged ? nil : bots[i].reportedModel
+        if bot.executionScope == bots[i].executionScope {
+            bot.reportedModel = bots[i].reportedModel
+            bot.sessionID = bots[i].sessionID
+            bot.sessionAccountID = bots[i].sessionAccountID
+            bot.sessionScope = bots[i].sessionScope
+        } else {
+            bot.clearSession()
+        }
         bots[i] = bot
         save(bot)
         if providerChanged {
