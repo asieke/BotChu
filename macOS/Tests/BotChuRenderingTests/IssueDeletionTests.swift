@@ -100,7 +100,6 @@ extension RenderingTests {
         #expect(await gh.all == [["gh", "issue", "delete", "4", "--repo", orbit, "--yes"]])
         #expect(app.openItems?.map(\.number) == [3, 5])
         #expect(app.repositories?.first?.openIssues == 2)
-        #expect(app.openIssueStatus?["octocat/orbit"] == OpenIssueStatus(count: 2))
         try await Task.sleep(for: .milliseconds(350))
         #expect(window.attachedSheet == nil)
         #expect(try table().numberOfRows == 2)

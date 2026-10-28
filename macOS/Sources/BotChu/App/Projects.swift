@@ -35,7 +35,6 @@ extension AppModel {
         if projectRecords != state.records { projectRecords = state.records }
         if projectErrors != state.recordErrors { projectErrors = state.recordErrors }
         if openItems != state.openItems { openItems = state.openItems }
-        if openIssueStatus != state.issueStatus { openIssueStatus = state.issueStatus }
         let error = state.unreadableWork.isEmpty ? nil
             : "Couldn't read the open pull requests and issues of \(state.unreadableWork.map(TaskNaming.repoName).joined(separator: ", ")). Refresh to try again."
         if openItemsError != error { openItemsError = error }
@@ -96,18 +95,6 @@ extension AppModel {
     /// The repository's open issues, or pull requests, as read for Projects: most recently updated first.
     func openWork(of repo: String, pulls: Bool) -> [GitHubLookup.OpenItem] {
         (openItems ?? []).filter { $0.isPullRequest == pulls && $0.repo.caseInsensitiveCompare(repo) == .orderedSame }
-    }
-
-    /// The repository's open issues at a glance, from the saved catalog, as a task's Activity shows them.
-    func issuePreview(of repo: String) -> IssuePreview {
-        IssuePreview(repo: repo, statuses: openIssueStatus, items: openItems, syncing: projectsLoading, error: repositoriesError)
-    }
-
-    /// Shows the repository's open issues in the Projects sidebar, or one of them opened there. The
-    /// conversation shown stays selected, with its draft, for coming back to.
-    func showIssues(of repo: String, number: Int? = nil) {
-        selectProject(repositories?.first { $0.id.caseInsensitiveCompare(repo) == .orderedSame }?.id ?? repo, tab: .issues, item: number)
-        destination = .projects
     }
 
     /// The issues Fix All gives out: those no open task works on.
