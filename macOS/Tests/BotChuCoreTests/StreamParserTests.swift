@@ -592,3 +592,19 @@ extension TokenUsageSamples {
         #"{"event":"result","result":{"status":"SUCCESS","usage":{"input_tokens":9835,"output_tokens":966,"thinking_tokens":918,"cache_read_tokens":5520,"total_tokens":10801}}}"#,
     ]
 }
+
+// Captured new and resumed agy 1.4.9 turns, 2026-10-28, no tools.
+// The resumed step is 2316 input / 45 output but result is 9899 / 91: result usage
+// is cumulative for its UUID conversation, including the first turn's 7583 / 46.
+extension TokenUsageSamples {
+    static let antigravityResumed = [
+        [
+            #"{"event":"step_update","step_update":{"step_index":1,"step_type":"agent_response","usage":{"input_tokens":7583,"output_tokens":46,"thinking_tokens":41,"cache_read_tokens":0,"total_tokens":7629}}}"#,
+            #"{"event":"result","result":{"status":"SUCCESS","usage":{"input_tokens":7583,"output_tokens":46,"thinking_tokens":41,"cache_read_tokens":0,"total_tokens":7629},"num_turns":1}}"#,
+        ],
+        [
+            #"{"event":"step_update","step_update":{"step_index":4,"step_type":"agent_response","usage":{"input_tokens":2316,"output_tokens":45,"thinking_tokens":39,"cache_read_tokens":5529,"total_tokens":2361}}}"#,
+            #"{"event":"result","result":{"status":"SUCCESS","usage":{"input_tokens":9899,"output_tokens":91,"thinking_tokens":80,"cache_read_tokens":5529,"total_tokens":9990},"num_turns":2}}"#,
+        ],
+    ]
+}
