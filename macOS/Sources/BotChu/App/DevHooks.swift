@@ -129,12 +129,14 @@ enum DevHooks {
     }
 
     /// `BOTCHU_CODEX_MODELS`: `sample`, a Codex profile's list as its `model/list` gave it on 2026-10-27
-    /// (#220), after a second; `unavailable`, a check that times out.
-    static var codexModels: (@Sendable (String) async throws -> [ModelOption])? {
+    /// (#220), and a Muse profile's on 2026-10-28 (#248), after a second; `unavailable`, a check that
+    /// times out.
+    static var modelLists: (@Sendable (ModelCatalogScope) async throws -> [ModelOption])? {
         guard dataDir != nil, let fixture = env["BOTCHU_CODEX_MODELS"], ["sample", "unavailable"].contains(fixture) else { return nil }
-        return { _ in
+        return { scope in
             try await Task.sleep(for: .seconds(1))
-            if fixture == "unavailable" { throw CodexModelFailure("Codex didn’t list its models within 20 seconds.") }
+            if fixture == "unavailable" { throw ModelListFailure("\(scope.kind.displayName) didn’t list its models within 20 seconds.") }
+            if scope.kind == .muse { return GenerationOptions.models(for: .muse) }
             let all: [ReasoningEffort] = [.low, .medium, .high, .xhigh, .max, .ultra]
             return [("gpt-6.1-sol", "GPT-6.1-Sol"), ("gpt-6-astra", "GPT-6-Astra"), ("gpt-6.1-terra", "GPT-6.1 Terra"), ("gpt-6-sol", "GPT-6-Sol"),
                     ("gpt-6-luna", "GPT-6-Luna"), ("gpt-5.6-sol", "GPT-5.6-Sol"), ("gpt-5.6-terra", "GPT-5.6-Terra"), ("gpt-5.6-luna", "GPT-5.6-Luna")]

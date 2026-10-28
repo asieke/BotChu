@@ -761,17 +761,18 @@ on that pull request's branch to continue in instead). The same command run agai
     option. OpenRouter shows the actual model inherited from Settings (for example **Flint (free)**),
     and searches its public catalog of text models with tool support, with context sizes. Catalog
     requests contain no key or conversation data, are cached in memory for an hour, and preserve
-    current/custom choices when unavailable. A Codex profile on this Mac offers the models its own
-    CLI lists (app-server `model/list`, every page, visible rows only, with each model's efforts),
-    read through the profile's command in a bounded, read-only query that starts no turn and reads
-    no login. The list is shared by every picker set to that profile (Home and task chats, the
+    current/custom choices when unavailable. A Codex or Muse profile on this Mac offers the models
+    its own CLI lists (Codex app-server's `model/list`, every page, visible rows only; Muse's
+    `muse serve --no-session-log` `model/list` (#248), taken only from its account's catalog, not its
+    bundled fallback; each with the model's efforts), read through the profile's command in a
+    bounded, read-only query that starts no turn and reads no login. The list is shared by every picker set to that profile (Home and task chats, the
     **Runs on** card, the job editor and Quick tasks) and saved in `model-catalogs.json` by an opaque
     key of the profile and its command, so a changed command starts a new list. A list a day old is
     checked again at launch, on wake, hourly while BotChu runs and when a picker opens; the picker's
     footer says when it was checked, and its refresh button checks at once. Checks of a profile
     don't overlap and time out after 20 seconds; a failed or incomplete one keeps the last list,
     says so, and is retried after a minute, doubling up to an hour. Until a list is read, and for a
-    task on an SSH host, Codex offers BotChu's starter choices instead. A listed model isn't proof the
+    task on an SSH host, Codex and Muse offer BotChu's starter choices instead. A listed model isn't proof the
     account can run it, and a new list never changes a saved model, effort or session. Other
     providers offer starter choices; every provider labels an unspecified model as the account's
     default.
@@ -1767,7 +1768,8 @@ on that pull request's branch to continue in instead). The same command run agai
   sample results (every state, an action of each kind, Computer Use and System entries), a check
   that fails after the first, or one that always fails, without starting a CLI.
   `BOTCHU_CODEX_MODELS=sample` (or `unavailable`) gives Codex profiles the models their CLI listed
-  on 2026-10-27, or a list check that always fails, without starting a CLI.
+  on 2026-10-27, and Muse profiles theirs on 2026-10-28, or a list check that always fails, without
+  starting a CLI.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
   querying any account (`sample` is Providers as its mock's main state: Claude's Fable week,
   Codex profiles' credits and free resets, and the Pi profile a key with a spending limit);

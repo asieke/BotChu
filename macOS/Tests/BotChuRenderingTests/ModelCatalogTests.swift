@@ -29,6 +29,8 @@ extension RenderingTests {
         #expect(app.modelCatalog.listModels == nil)
         #expect(app.modelCatalog.models(for: work) == nil)
         #expect(app.modelCatalogScope(for: settings.account("claude-dev")) == nil)
+        // Muse lists its models too (#248).
+        #expect(app.modelCatalogScope(for: settings.account("muse"))?.kind == .muse)
 
         let calls = ListCalls()
         let listed = [ModelOption(id: "gpt-6.1-sol", name: "GPT-6.1-Sol", efforts: [.low, .medium, .high]),
