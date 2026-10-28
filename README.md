@@ -771,7 +771,11 @@ on that pull request's branch to continue in instead). The same command run agai
     and offers **Unlink** and **Refresh Projects**. Without a saved catalog, `#` offers **Load
     Projects**; a saved one stays searchable and says when it was synced. Suggestions come from what
     is saved, never from GitHub while you type; past the rows shown, the list ends with **+N more**.
-    The report and New Task sheets have no completion, and their **+** adds images with no words
+    New Task's and New Issue's text completes them too (#268), with every agent but the sheet's own
+    bot and the chosen repository first. The list floats over the sheet, just above the text, or
+    below the line being typed where there's no room above; Escape closes it rather than the sheet,
+    and ⌘↩ still submits. The task's first message, or the issue writer's request, carries what they
+    point at. The report sheet has no completion, and the sheets' **+** adds images with no words
     beside it.
   - **Images:** use the **+** button, paste an image (⌘V, such as a copied screenshot) or image
     files, or drop them into the message box. Copied text still pastes as text when its app adds a
@@ -1474,7 +1478,7 @@ on that pull request's branch to continue in instead). The same command run agai
     profile and text a turn starts with, `ToolsBoard.swift`, the Telegram gateway in the app,
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished turns and runs to the daily run reviews, `Evaluations.swift`),
-    `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills & Tools with Add Tools, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, selecting a reply's text across its blocks, `ReplySelection.swift`, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
+    `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills & Tools with Add Tools, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, selecting a reply's text across its blocks, `ReplySelection.swift`, and the composer, whose image-taking writing area the report, New Task and New Issue sheets share, with `@` and `#` completion in the chat's and the New Task and New Issue sheets', `MentionCompletion.swift`), `Inspector/` (the
     status sidebar, a bot's and a task's, with a bot's jobs and its run reviews), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (the
     in-window Settings page with its rail and pages, with the hosts, Telegram and run reviews), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the

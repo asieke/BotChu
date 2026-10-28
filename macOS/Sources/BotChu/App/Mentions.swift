@@ -7,11 +7,17 @@ import BotChuCore
 extension AppModel {
     /// What a conversation's message box completes `@` and `#` from.
     func mentionSources(for target: ChatTarget) -> MentionSources {
+        mentionSources(for: target.botID, favoring: task(target)?.repo)
+    }
+
+    /// What a sheet's text completes `@` and `#` from, for a conversation it starts (#268): every bot
+    /// but `botID`, and the projects with `repo`, the one chosen, first.
+    func mentionSources(for botID: UUID?, favoring repo: String?) -> MentionSources {
         MentionSources(
-            agents: { [weak self] in self?.mentionAgents(for: target) ?? [] },
+            agents: { [weak self] in self?.bots.filter { $0.id != botID }.map(BotRosterEntry.init) ?? [] },
             projects: { [weak self] in self?.projectCatalog ?? [] },
             catalog: { [weak self] in self?.mentionCatalog ?? MentionCatalogState() },
-            favoredRepo: task(target)?.repo,
+            favoredRepo: repo,
             status: { [weak self] in self?.referenceStatus($0) ?? .resolved },
             loadProjects: { [weak self] in Task { await self?.refreshProjects() } },
             openAgents: { [weak self] in self?.selectSidebar(.library(.agents)) })
@@ -19,7 +25,7 @@ extension AppModel {
 
     /// The agents `@` offers in a conversation: every configured bot but its own, in the sidebar's order.
     func mentionAgents(for target: ChatTarget) -> [BotRosterEntry] {
-        bots.filter { $0.id != target.botID }.map(BotRosterEntry.init)
+        mentionSources(for: target).agents()
     }
 
     /// The saved Projects catalog as `#` completion describes it.
@@ -32,6 +38,12 @@ extension AppModel {
     /// account's catalog.
     func referenceStatus(_ reference: MessageReference) -> ReferenceStatus {
         ReferenceStatus.of(reference, agentIDs: bots.map(\.id), repos: repositories?.map(\.nameWithOwner), login: projectsLogin)
+    }
+
+    /// What `references` point at, for `recipient` (`ReferenceContext`); nil without any.
+    func referenceContext(_ references: [MessageReference], for recipient: UUID?) -> String? {
+        ReferenceContext.section(for: references, recipient: recipient, agents: bots.map(BotRosterEntry.init),
+                                 projects: repositories == nil ? nil : projectCatalog, login: projectsLogin)
     }
 
     /// The text a message reaches its bot with: what its mentions point at (`ReferenceContext`), then
@@ -48,10 +60,7 @@ extension AppModel {
             plain.delivery = nil
             return InboxReply.prompt(deliveredText(of: plain, for: target), delivery: delivery)
         }
-        guard !message.mentions.isEmpty,
-              let section = ReferenceContext.section(for: message.mentions, recipient: target.botID, agents: bots.map(BotRosterEntry.init),
-                                                     projects: repositories == nil ? nil : projectCatalog, login: projectsLogin)
-        else { return message.text }
+        guard let section = referenceContext(message.mentions, for: target.botID) else { return message.text }
         return BotContext.prompt(for: message.text, preamble: nil, updates: section)
     }
 }

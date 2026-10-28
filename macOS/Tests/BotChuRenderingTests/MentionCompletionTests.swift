@@ -162,8 +162,8 @@ extension RenderingTests {
         #expect(sample.completer.popup == nil)
     }
 
-    /// The report and New Task boxes share the editor without completion.
-    @Test func sheetsHaveNoMentionCompletion() async throws {
+    /// Report a Bug's box shares the editor without completion.
+    @Test func reportABugHasNoMentionCompletion() async throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -180,6 +180,60 @@ extension RenderingTests {
         #expect(editor.completer == nil)
         #expect(box.text == "@qa #bot")
         #expect(editor.mentionReferences.isEmpty)
+    }
+
+    /// #268: New Task's and New Issue's text completes `@` and `#` as the message box does: Return
+    /// and Tab insert a suggestion, Escape closes the list and not the sheet, and Command-Return still
+    /// submits; with the list closed, Return starts a new line. The sheet's own bot isn't offered,
+    /// and its chosen repository comes first.
+    @Test func sheetTextCompletesMentionsAndKeepsTheSheetsKeys() async throws {
+        let sheet = try SheetSample()
+        defer { sheet.close() }
+        let editor = sheet.editor
+        let completer = try #require(editor.completer)
+        editor.insertText("Ask @qa", replacementRange: editor.selectedRange())
+        #expect(completer.popup?.suggestions.map(\.title) == ["QA Duck", "QA Duck"])
+        try await sheet.press(125, "\u{F701}")
+        #expect(completer.popup?.selected == 1)
+        try await sheet.press(126, "\u{F700}")
+        try await sheet.press(36, "\r")
+        #expect(sheet.draft.text == "Ask @QA Duck ")
+        #expect(sheet.draft.references == [MessageReference.agent(MentionSample.duck, at: 4)])
+        #expect(completer.popup == nil)
+
+        // The sheet's own bot (the engineer) isn't offered.
+        editor.insertText("and @", replacementRange: editor.selectedRange())
+        #expect(completer.popup?.suggestions.map(\.title) == ["QA Duck", "QA Duck"])
+        try await sheet.press(53, "\u{1B}")
+        #expect(completer.popup == nil)
+        #expect(sheet.cancels == 0)
+        #expect(sheet.draft.text == "Ask @QA Duck and @")
+
+        // The chosen repository first.
+        editor.insertText(" in #", replacementRange: editor.selectedRange())
+        #expect(completer.popup?.suggestions.map(\.subtitle) == ["asieke/GitChu", "asieke/BotChu"])
+        try await Task.sleep(for: .milliseconds(50))
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("sheet-mentions"))
+        }
+        try await sheet.press(48, "\t")
+        #expect(sheet.draft.text == "Ask @QA Duck and @ in #asieke/GitChu ")
+        #expect(sheet.draft.references.map(\.label) == ["@QA Duck", "#asieke/GitChu"])
+        #expect(sheet.submits == 0)
+
+        // With the list open, Command-Return submits and adds nothing; with it closed, Return is a new line.
+        editor.insertText("@qa", replacementRange: editor.selectedRange())
+        #expect(completer.isOpen)
+        try await sheet.press(36, "\r", .command)
+        #expect(sheet.submits == 1)
+        #expect(sheet.draft.text == "Ask @QA Duck and @ in #asieke/GitChu @qa")
+        try await sheet.press(53, "\u{1B}")
+        try await sheet.press(36, "\r")
+        #expect(sheet.draft.text == "Ask @QA Duck and @ in #asieke/GitChu @qa\n")
+        #expect(sheet.cancels == 0 && sheet.submits == 1)
+        // Escape with the list closed is the sheet's again.
+        try await sheet.press(53, "\u{1B}")
+        #expect(sheet.cancels == 1)
     }
 
     /// A sent message keeps its links, in its thread, and its bot hears what they point at, in a new
@@ -264,6 +318,77 @@ private func findMentionTextView(in view: NSView) -> ComposerTextView? {
     return view.subviews.lazy.compactMap { findMentionTextView(in: $0) }.first
 }
 
+/// A sheet's text as New Task and New Issue build it, between the sheet's title and its Cancel and
+/// Command-Return buttons, for the engineer with GitChu chosen.
+private struct MentionSheet: View {
+    let draft: MentionDraft
+    let images: DraftImages
+    let sources: MentionSources
+    let cancel: () -> Void
+    let submit: () -> Void
+    @State private var listOpen = false
+
+    var body: some View {
+        VStack {
+            Spacer()
+            DraftEditor(text: Binding(get: { draft.text }, set: { draft.text = $0 }), focused: .constant(true), images: images,
+                        placeholder: "What should 10x Engineer Bot do?", mentions: sources,
+                        references: Binding(get: { draft.references }, set: { draft.references = $0 }), listOpen: $listOpen)
+            HStack {
+                Spacer()
+                Button("Cancel", action: cancel).keyboardShortcut(listOpen ? nil : .cancelAction)
+                Button("Start Task", action: submit).keyboardShortcut(.return, modifiers: .command)
+            }
+        }
+        .padding(20)
+        .mentionPopups()
+        .frame(width: 560, height: 520)
+    }
+}
+
+/// `MentionSheet` in a window, whose keys go as AppKit sends them: to the window's key equivalents
+/// (the sheet's buttons) first, then to the text.
+@MainActor private final class SheetSample {
+    let window: NSWindow
+    let draft = MentionDraft()
+    let editor: ComposerTextView
+    private let counts = Counts()
+    var cancels: Int { counts.cancels }
+    var submits: Int { counts.submits }
+
+    private final class Counts { var cancels = 0, submits = 0 }
+
+    init() throws {
+        _ = NSApplication.shared
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let sources = MentionSample.sources(agents: [MentionSample.duck, MentionSample.twin], favoring: "asieke/GitChu")
+        let counts = counts
+        let host = NSHostingView(rootView: MentionSheet(draft: draft, images: DraftImages(), sources: sources,
+                                                        cancel: { counts.cancels += 1 }, submit: { counts.submits += 1 }))
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        editor = try #require(findMentionTextView(in: host))
+        window.makeFirstResponder(editor)
+    }
+
+    /// Lets SwiftUI apply what the text changed (the list opening or closing) before the next key,
+    /// as the display cycle would on screen.
+    func press(_ code: UInt16, _ characters: String, _ modifiers: NSEvent.ModifierFlags = []) async throws {
+        try await Task.sleep(for: .milliseconds(30))
+        window.updateConstraintsIfNeeded()
+        window.layoutIfNeeded()
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: window.windowNumber,
+                                     context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+        if !window.performKeyEquivalent(with: event) { editor.keyDown(with: event) }
+    }
+
+    func close() {
+        window.contentView = nil
+        window.close()
+    }
+}
+
 @MainActor @Observable private final class MentionDraft {
     var text = ""
     var references: [MessageReference] = []
@@ -315,18 +440,22 @@ private struct MentionBox: View {
         _ = NSApplication.shared
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let sources = MentionSources(
-            agents: { [Self.engineer, Self.duck, Self.twin] },
-            projects: { [ProjectCatalogEntry(name: "BotChu", repo: "asieke/BotChu", status: .active),
-                         ProjectCatalogEntry(name: "GitChu", repo: "asieke/GitChu", status: .paused)] },
-            catalog: { MentionCatalogState(login: "asieke", loaded: true, syncedAt: Date()) },
-            favoredRepo: nil, status: { _ in .resolved }, loadProjects: {}, openAgents: {})
         let sends = sends
-        let host = NSHostingView(rootView: MentionBox(draft: draft, completer: completer, sources: sources, send: { sends.count += 1 }))
+        let host = NSHostingView(rootView: MentionBox(draft: draft, completer: completer, sources: Self.sources(), send: { sends.count += 1 }))
         window.contentView = host
         host.layoutSubtreeIfNeeded()
         editor = try #require(findMentionTextView(in: host))
         window.makeFirstResponder(editor)
+    }
+
+    static func sources(agents: [BotRosterEntry]? = nil, favoring repo: String? = nil) -> MentionSources {
+        let agents = agents ?? [engineer, duck, twin]
+        return MentionSources(
+            agents: { agents },
+            projects: { [ProjectCatalogEntry(name: "BotChu", repo: "asieke/BotChu", status: .active),
+                         ProjectCatalogEntry(name: "GitChu", repo: "asieke/GitChu", status: .paused)] },
+            catalog: { MentionCatalogState(login: "asieke", loaded: true, syncedAt: Date()) },
+            favoredRepo: repo, status: { _ in .resolved }, loadProjects: {}, openAgents: {})
     }
 
     func key(_ code: UInt16, _ characters: String) -> NSEvent {

@@ -69,7 +69,8 @@ extension RenderingTests {
 
     /// New Task asks for the project and what to do, nothing else: a screenshot pasted into its box
     /// goes with the task's first message, ⌘Return starts it where the project lives, on the bot's
-    /// account, and the project is chosen first next time.
+    /// account, and the project is chosen first next time. A project chosen with `#` (the sheet's
+    /// own first) goes with the first message as a mention, which tells the bot what it is (#268).
     @Test func newTaskTakesAProjectAndABriefWithImages() async throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-new-task-\(UUID().uuidString)")
@@ -116,7 +117,18 @@ extension RenderingTests {
         window.makeKeyAndOrderFront(nil)
         try await Task.sleep(for: .milliseconds(400))
         let editor = try #require(window.firstResponder as? ComposerTextView)
-        editor.insertText("Fix the flaky login test", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.insertText("  Fix the flaky login test in #", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let completer = try #require(editor.completer)
+        #expect(completer.popup?.suggestions.map(\.subtitle) == ["fixture/project", "fixture/other"])
+        #expect(model.mentionSources(for: bot.id, favoring: nil).agents().isEmpty)
+        try await Task.sleep(for: .milliseconds(100))
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
+            DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("new-task-mentions"))
+        }
+        editor.keyDown(with: try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                           windowNumber: window.windowNumber, context: nil, characters: "\r",
+                                                           charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)))
+        #expect(editor.string == "  Fix the flaky login test in #fixture/project ")
         let pasteboard = StandInPasteboard()
         defer { pasteboard.restore() }
         let picture = NSImage(size: NSSize(width: 24, height: 16))
@@ -126,7 +138,7 @@ extension RenderingTests {
         #expect(editor.validateMenuItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")))
         editor.paste(nil)
         try await Task.sleep(for: .milliseconds(200))
-        #expect(editor.string == "Fix the flaky login test")
+        #expect(editor.string == "  Fix the flaky login test in #fixture/project ")
         if let path = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"] {
             DevHooks.snapshot(into: URL(fileURLWithPath: path).appendingPathComponent("new-task"))
         }
@@ -143,10 +155,12 @@ extension RenderingTests {
         }
         #expect(model.thread(target).filter { $0.role == .error }.isEmpty)
         #expect(task.repo == "fixture/project" && task.checkout == checkout && task.hostID == nil)
-        #expect(task.brief == "Fix the flaky login test" && task.work == nil && task.review == nil)
+        #expect(task.brief == "Fix the flaky login test in #fixture/project" && task.work == nil && task.review == nil)
         #expect(task.accountID == bot.accountID)
         let first = try #require(model.thread(target).first { $0.role == .user })
-        #expect(first.text == "Fix the flaky login test")
+        #expect(first.text == "Fix the flaky login test in #fixture/project")
+        #expect(first.mentions.map(\.label) == ["#fixture/project"] && first.mentions.first?.location == 28)
+        #expect(model.deliveredText(of: first, for: target).contains("is the GitHub repository fixture/project"))
         let image = try #require(first.images.first)
         #expect(first.images.count == 1)
         #expect(NSImage(contentsOf: home.imageURL(image)) != nil)
@@ -154,6 +168,7 @@ extension RenderingTests {
         let folder = try #require(model.task(target)?.folder)
         let argv = try JSONDecoder().decode([String].self, from: Data(contentsOf: URL(fileURLWithPath: folder).appendingPathComponent("argv.json")))
         #expect(argv.contains("--image"))
+        #expect(argv.last?.contains("<message_references>") == true)
         #expect(argv.contains(home.imageURL(image).path))
         #expect(defaults.string(forKey: "newTaskRepo") == "fixture/project")
         // Working where it lives by default isn't a choice to remember.

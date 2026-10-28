@@ -773,9 +773,10 @@ final class AppModel {
     }
 
     /// Records a task, opens its tab (when `show`), says so in its bot's Home, then makes its
-    /// worktree and sends its first message, with `images` (already in the bot's folder).
-    /// `saved` hears whether its record was saved, with the error when it wasn't.
-    func startTask(_ task: BotTask, for botID: UUID, show: Bool, images: [ImageAttachment] = [],
+    /// worktree and sends its first message, with `images` (already in the bot's folder) and the
+    /// brief's mentions, `references`. `saved` hears whether its record was saved, with the error
+    /// when it wasn't.
+    func startTask(_ task: BotTask, for botID: UUID, show: Bool, images: [ImageAttachment] = [], references: [MessageReference] = [],
                    saved: (@MainActor @Sendable (Error?) -> Void)? = nil) {
         guard let bot = bot(botID), bot.canOwnTasks else {
             saved?(CocoaError(.fileNoSuchFile))
@@ -787,7 +788,7 @@ final class AppModel {
         saveTask(task, of: botID, saved: saved)
         postReceipt(TaskReceipt.started(task), task: task.id, for: botID)
         if show { self.show(target) }
-        send(task.opening, to: target, images: images)
+        send(task.opening, to: target, images: images, references: references)
         summarizeNewTask(target)
     }
 
