@@ -100,7 +100,8 @@ running processes, terminates them 3 seconds later and kills them, with what the
 seconds after that, and waits for their exit before completing the child. A child whose CLI is
 still running 30 seconds after it said its turn ended is terminated, then killed 5 seconds later,
 and completes with its handoff and a note saying so (#145: Antigravity printed a handoff, then
-never exited and ignored Stop's signals, so the run stayed running until BotChu restarted). A
+never exited and ignored Stop's signals, so the run stayed running until BotChu restarted); one
+whose background tasks still run gets up to 2 hours for them (#255). A
 parent handoff waits for its descendants to finish stopping. Active records found on restart
 become stopped.
 

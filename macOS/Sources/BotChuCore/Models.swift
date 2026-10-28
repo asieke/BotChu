@@ -282,6 +282,10 @@ public enum AgentEvent: Equatable, Sendable {
     case inputTaken
     /// The connectors the CLI reported at the start of its turn (Claude Code's `system/init`).
     case connectors([Connector])
+    /// What each of the CLI's background tasks still running does, whenever that changes; empty
+    /// once none is (Claude Code's `system/background_tasks_changed`). Its turn can end while they
+    /// run: the CLI then waits for them and carries on with their results in a new turn (#255).
+    case backgroundTasks([BotActivity])
 }
 
 /// Applies a run's events to a thread. Kept free of UI so it can be tested.
@@ -293,7 +297,7 @@ public struct ThreadAssembler {
 
     public mutating func apply(_ event: AgentEvent, to messages: inout [ChatMessage]) {
         switch event {
-        case .model, .connectors:
+        case .model, .connectors, .backgroundTasks:
             break
         case .session, .finished:
             openTextID = nil
