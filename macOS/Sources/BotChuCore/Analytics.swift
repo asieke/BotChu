@@ -602,9 +602,10 @@ public struct AnalyticsBuilder {
         let summary = AnalyticsSummary(records, from: "", through: "9999", tasks: tasks)
         let measures = [
             AnalyticsMeasure(metric: "tokens", provenance: summary.tokens.total == nil ? .unavailable : .actual,
-                             value: summary.tokens.total.map(Double.init), note: AnalyticsMeasure.unrecorded[0].note),
+                             value: summary.tokens.total.map(Double.init),
+                             note: summary.tokens.total == nil ? AnalyticsMeasure.unrecorded[0].note : "Reported token buckets only; missing usage is not zero."),
             AnalyticsMeasure(metric: "cost", provenance: summary.costProvenance, value: summary.cost,
-                             note: AnalyticsMeasure.unrecorded[1].note),
+                             note: summary.cost == nil ? AnalyticsMeasure.unrecorded[1].note : "Known spend only; estimates use bundled rates or CLI-reported costs. Missing spend is not zero."),
         ]
         let unpriced = Set(records.filter { $0.costProvenance == .unpriced }.flatMap { record in
             record.models.filter { model in
@@ -750,7 +751,7 @@ public struct AnalyticsBuilder {
             }
             if let run = entry.jobRunID, entry.kind == .job { ledgerByJob[run, default: []].append(index) }
             if let run = entry.subagentRunID { ledgerBySubagent[run, default: []].append(index) }
-            if entry.messageID == nil && entry.messageIDs.isEmpty && entry.subagentRunID == nil {
+            if entry.messageID == nil && entry.messageIDs.isEmpty && entry.subagentRunID == nil && entry.kind != .subagent {
                 let key = LegacyStart(bot: entry.botID, task: entry.taskID, second: Int(entry.startedAt.timeIntervalSince1970.rounded(.down)))
                 ledgerByStart[key, default: []].append(index)
             }
@@ -816,7 +817,7 @@ public struct AnalyticsBuilder {
             candidates = (ledgerByJob[jobRunID] ?? []).map { ledger[$0] }
         } else {
             let exact = (messageID.flatMap { ledgerByMessage[$0] } ?? []).map { ledger[$0] }.filter {
-                $0.botID == botID && $0.taskID == taskID && $0.subagentRunID == nil
+                $0.botID == botID && $0.taskID == taskID && $0.subagentRunID == nil && $0.kind != .subagent
             }
             // ISO8601 ledger times have second precision. Never use a nearby timestamp to override
             // a recorded prompt identity, nor pick arbitrarily when legacy candidates are ambiguous.

@@ -532,8 +532,10 @@ import JavaScriptCore
         #expect(!page.contains("<img") && !page.contains("<!--") && !page.contains("\u{2028}"))
         // Nothing to load: no link, source, import or request, and a policy that allows none.
         #expect(page.contains(#"<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"#))
+        // SVG fragment masks/paint servers refer only to this document and load nothing.
+        let networkCheckedPage = page.replacingOccurrences(of: #"url\(#[A-Za-z0-9_-]+\)"#, with: "", options: .regularExpression)
         for pattern in ["<link", "src=\"", "src='", "url(", "@import", "fetch(", "XMLHttpRequest", "WebSocket", "EventSource", "sendBeacon", "<iframe", "<form"] {
-            #expect(!page.replacingOccurrences(of: "<img src=x", with: "").contains(pattern), "\(pattern) is in the page")
+            #expect(!networkCheckedPage.replacingOccurrences(of: "<img src=x", with: "").contains(pattern), "\(pattern) is in the page")
         }
         // The only address is the SVG namespace, which names markup and is never loaded.
         let pattern = try NSRegularExpression(pattern: #"[A-Za-z][A-Za-z0-9+.-]*://[^"'\s)]*"#)
@@ -612,7 +614,7 @@ import JavaScriptCore
                 builder.add(turns: turns, bot: bot, task: task)
                 if next(5) == 0 {
                     let phases: [SubagentPhase] = [.completed, .completed, .failed, .stopped]
-                    var run = SubagentRun(rootBotID: bot.id, depth: 1, targetBot: bots[next(3)], title: "", brief: "", workingDirectory: "/tmp",
+                    var run = SubagentRun(rootBotID: bot.id, rootTaskID: task?.id, depth: 1, targetBot: bots[next(3)], title: "", brief: "", workingDirectory: "/tmp",
                                           phase: phases[next(4)], createdAt: start)
                     run.startedAt = next(6) == 0 ? nil : start.addingTimeInterval(100)
                     run.finishedAt = start.addingTimeInterval(Double(200 + next(900)))
@@ -651,7 +653,38 @@ import JavaScriptCore
         builder.coverage.runReviews = 12
         builder.coverage.bots = 3
         builder.coverage.conversations = 40
-        return builder.snapshot()
+        var snapshot = builder.snapshot()
+        // Deterministic usage enriches the browser fixture without changing its established
+        // turn, run, duration or outcome totals. Some older records remain unavailable.
+        for i in snapshot.records.indices where snapshot.records[i].outcome != .skipped {
+            guard i % 13 != 0 else { continue }
+            let bot = snapshot.records[i].bot
+            let model = i % 17 == 0 ? "unlisted-model" : ["claude-opus-5-5", "gpt-6-astra", "gpt-6-luna"][bot % 3]
+            let provider: AgentKind = bot == 0 ? .claude : .codex
+            let modelUsage = ModelUsage(model: model, uncachedInput: 20_000 + i * 100,
+                                        cacheRead: (bot == 0 ? 2_000 : 80_000) + i * 50,
+                                        cacheWrite: bot == 0 ? 5_000 : 0, cacheWrite1h: 0,
+                                        output: 3_000 + i * 20, reasoning: bot == 0 ? nil : 1_000)
+            snapshot.records[i].model = model
+            snapshot.records[i].modelSource = .reported
+            snapshot.records[i].provider = provider
+            snapshot.records[i].providerID = bot == 0 ? "anthropic" : "openai"
+            snapshot.records[i].models = [modelUsage]
+            snapshot.records[i].tokens = AnalyticsTokens([modelUsage])
+            snapshot.records[i].canReprice = true
+            if i % 5 == 0 {
+                snapshot.records[i].cost = Double(1 + i % 20) / 10
+                snapshot.records[i].costProvenance = .actual
+            } else if let price = ModelPricing.price(modelUsage, provider: provider) {
+                snapshot.records[i].cost = price.usd
+                snapshot.records[i].costProvenance = .estimated
+            } else { snapshot.records[i].costProvenance = .unpriced }
+        }
+        snapshot.unpricedModelIDs = ["unlisted-model"]
+        let summary = AnalyticsSummary(snapshot.records, from: "", through: "9999", tasks: snapshot.tasks)
+        snapshot.measures = [AnalyticsMeasure(metric: "tokens", provenance: .actual, value: summary.tokens.total.map(Double.init), note: "Sample reported tokens"),
+                             AnalyticsMeasure(metric: "cost", provenance: summary.costProvenance, value: summary.cost, note: "Sample known spend")]
+        return snapshot
     }
 
     @Test func theSampleCoversEveryCase() throws {
