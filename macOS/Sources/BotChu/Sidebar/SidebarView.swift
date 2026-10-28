@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import BotChuCore
 
 struct SidebarView: View {
@@ -46,9 +47,19 @@ struct SidebarView: View {
                                 Divider()
                                 Button("Delete…", role: .destructive) { pendingDelete = bot }
                             }
+                            // Dragged to its place among the bots, in its section or another (#231).
+                            .itemProvider { BotDrag.provider(for: bot.id) }
+                    }
+                    // A bot dropped between these goes before the one below where it lands, or last.
+                    .onInsert(of: [BotDrag.contentType]) { index, providers in
+                        drop(providers, in: group, at: index)
                     }
                 } header: {
                     SidebarSectionHeader(group: group, rename: { naming.ask(.rename($0)) })
+                        // Dropped on a heading, collapsed or not, a bot goes last in its section.
+                        .onDrop(of: [BotDrag.contentType], isTargeted: nil) { providers in
+                            BotDrag.load(providers) { model.dropBot($0, inSection: group.name, before: nil) }
+                        }
                 }
             }
         }
@@ -99,6 +110,13 @@ struct SidebarView: View {
 
     private func reveal(_ title: String) {
         if collapsed.titles.contains(title) { collapsed.titles.remove(title) }
+    }
+
+    /// Puts a bot dropped at `index` among a section's bots, as the sidebar shows them, before the
+    /// bot shown there, or last after them. The bot to go before is read now, as the drop lands.
+    private func drop(_ providers: [NSItemProvider], in group: BotSections.Group, at index: Int) {
+        let next = group.botIDs.indices.contains(index) ? group.botIDs[index] : nil
+        _ = BotDrag.load(providers) { model.dropBot($0, inSection: group.name, before: next) }
     }
 }
 

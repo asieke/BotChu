@@ -104,15 +104,32 @@ public struct BotSections: Equatable, Sendable {
         guard order.contains(id), membership[id] != section else { return }
         order.removeAll { $0 == id }
         membership[id] = section
-        let end: Int
-        if let section {
-            // After the section's last bot; a new section's first bot goes last.
-            end = order.lastIndex { membership[$0] == section }.map { $0 + 1 } ?? order.endIndex
+        order.insert(id, at: end(of: section))
+    }
+
+    /// Puts a bot where a drag in the sidebar drops it: in the section `typed` names, or in none with
+    /// nil, just before its bot `next`, or last in it when `next` is nil or isn't one of its bots. A
+    /// bot dropped before itself stays where it is, an unknown bot changes nothing, and the sections
+    /// keep their order.
+    public mutating func move(_ id: UUID, to typed: String?, before next: UUID?) {
+        let section = typed.flatMap { sectionName($0) }
+        guard let from = order.firstIndex(of: id) else { return }
+        // Before itself is where it is: before the bot after it, or last when that one is elsewhere.
+        let next = next == id ? order.dropFirst(from + 1).first : next
+        order.remove(at: from)
+        membership[id] = section
+        if let next, membership[next] == section, let place = order.firstIndex(of: next) {
+            order.insert(id, at: place)
         } else {
-            // After the bots in no section, before the first section.
-            end = order.firstIndex { membership[$0] != nil } ?? order.endIndex
+            order.insert(id, at: end(of: section))
         }
-        order.insert(id, at: end)
+    }
+
+    /// Where a bot goes last in a section: after its last bot, or last of all for a new section's
+    /// first bot; for no section, after the bots in none, before the first section.
+    private func end(of section: String?) -> Int {
+        if let section { return order.lastIndex { membership[$0] == section }.map { $0 + 1 } ?? order.endIndex }
+        return order.firstIndex { membership[$0] != nil } ?? order.endIndex
     }
 
     /// Renames a section in place. A name another section has merges the two: this one's bots go
@@ -150,6 +167,15 @@ public struct BotSections: Equatable, Sendable {
     /// Whether a saved name, such as a missing bot's in `index.json`, stands for the section `name`.
     public static func matches(_ saved: String?, section name: String) -> Bool {
         saved.flatMap(tidy)?.caseInsensitiveCompare(name) == .orderedSame
+    }
+
+    /// What a bot's row carries while it is dragged in the sidebar: its id.
+    public static func dragPayload(_ id: UUID) -> Data { Data(id.uuidString.utf8) }
+
+    /// The bot a dragged sidebar row carries; nil for anything else, such as text from another app.
+    public static func draggedBot(_ payload: Data?) -> UUID? {
+        guard let payload, payload.count == 36, let text = String(data: payload, encoding: .utf8) else { return nil }
+        return UUID(uuidString: text)
     }
 
     /// A typed name with its runs of spaces and line breaks made single spaces and its ends trimmed,

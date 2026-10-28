@@ -260,6 +260,85 @@ extension RenderingTests {
         #expect(fixture.store.loadIndex().map(\.section) == [nil, "Research", "Building", "Research"])
     }
 
+    /// #231: a bot dragged in the sidebar goes where it is dropped, before another bot or last, in
+    /// its section or another, and Agents and a relaunch show the same order, with the missing bot's
+    /// entry. What is shown, drafts, running turns and collapsed sections stay as they were. A drop
+    /// that changes nothing saves nothing; one that can't be saved stays, with the banner, until Try Again.
+    @Test func draggedBotsGoWhereTheyAreDroppedAndStayThere() throws {
+        let fixture = try SidebarFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot, quiet = fixture.quiet
+        let task = ChatTarget.task(fixture.tasks[0].id, of: bot.id)
+        let gone = Store.Entry(id: UUID(), workspace: fixture.root.appendingPathComponent("gone").path, section: "Research")
+        model.missing = [gone]
+        model.show(task)
+        model.drafts[.home(bot.id)] = "Home draft"
+        model.runStates[task] = RunState(startedAt: Date(), hasOutput: true, activity: .coding)
+        fixture.defaults.set("Research", forKey: CollapsedSections.storageKey)
+
+        // Within Conversations, before the bot above it.
+        model.dropBot(quiet.id, inSection: nil, before: bot.id)
+        #expect(model.botSections.groups == [.init(name: nil, botIDs: [quiet.id, bot.id])])
+        #expect(fixture.store.loadIndex().map(\.id) == [quiet.id, bot.id, gone.id])
+        // On a collapsed section's heading it goes last there; then before the bot already in it.
+        model.moveBot(bot.id, toSection: "Research")
+        model.dropBot(quiet.id, inSection: "Research", before: nil)
+        #expect(model.botSections.groups == [.init(name: "Research", botIDs: [bot.id, quiet.id])])
+        model.dropBot(quiet.id, inSection: "Research", before: bot.id)
+        #expect(model.botSections.groups == [.init(name: "Research", botIDs: [quiet.id, bot.id])])
+        #expect(AgentsView.groups(in: model, matching: "") == model.botSections.groups)
+        #expect(fixture.store.loadIndex().map(\.id) == [quiet.id, bot.id, gone.id])
+        #expect(fixture.store.loadIndex().map(\.section) == ["Research", "Research", "Research"])
+        // Nothing else moved with it.
+        #expect(model.sidebarSelection == .bot(bot.id))
+        #expect(model.tab(of: bot.id) == task)
+        #expect(model.drafts[.home(bot.id)] == "Home draft")
+        #expect(model.isRunning(task))
+        #expect(fixture.defaults.string(forKey: CollapsedSections.storageKey) == "Research")
+        let relaunched = AppModel(store: fixture.store, settings: AppSettings(defaults: fixture.defaults),
+                                  usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
+        #expect(relaunched.botSections == model.botSections)
+        #expect(relaunched.missing == [gone])
+        #expect(AgentsView.groups(in: relaunched, matching: "") == model.botSections.groups)
+
+        // On itself, just above the bot after it, or a bot that isn't listed: nothing changes or is saved.
+        let index = fixture.store.root.appendingPathComponent("index.json")
+        let saved = try Data(contentsOf: index)
+        try FileManager.default.removeItem(at: index)
+        model.dropBot(quiet.id, inSection: "Research", before: quiet.id)
+        model.dropBot(quiet.id, inSection: "Research", before: bot.id)
+        model.dropBot(UUID(), inSection: nil, before: bot.id)
+        #expect(model.botSections.groups == [.init(name: "Research", botIDs: [quiet.id, bot.id])])
+        #expect(!FileManager.default.fileExists(atPath: index.path))
+        try saved.write(to: index)
+
+        // A drop that can't be saved shows at once, with why; Try Again saves it.
+        func lock(_ locked: Bool) throws { try FileManager.default.setAttributes([.immutable: locked], ofItemAtPath: index.path) }
+        defer { try? lock(false) }
+        try lock(true)
+        model.dropBot(bot.id, inSection: nil, before: nil)
+        #expect(model.botSections.groups == [.init(name: nil, botIDs: [bot.id]), .init(name: "Research", botIDs: [quiet.id])])
+        #expect(model.indexFailure?.item == .botIndex)
+        #expect(fixture.store.loadIndex().map(\.section) == ["Research", "Research", "Research"])
+        try lock(false)
+        model.saveIndex()
+        #expect(model.indexFailure == nil)
+        #expect(fixture.store.loadIndex().map(\.id) == [bot.id, quiet.id, gone.id])
+        #expect(fixture.store.loadIndex().map(\.section) == [nil, "Research", "Research"])
+    }
+
+    /// #231: a bot's row carries its bot to where it is dropped; anything else dropped carries none.
+    @Test func aDraggedBotRowCarriesItsBotOnly() async throws {
+        let id = UUID()
+        var dropped: [UUID] = []
+        let carried = BotDrag.load([BotDrag.provider(for: id)]) { dropped.append($0) }
+        let text = BotDrag.load([NSItemProvider(object: id.uuidString as NSString)]) { dropped.append($0) }
+        let nothing = BotDrag.load([]) { dropped.append($0) }
+        #expect(carried && !text && !nothing)
+        for _ in 0..<50 where dropped.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(dropped == [id])
+    }
+
     // Model and defaults changes only: no native clicks, so it can share the test process.
     @Test func sectionsShowAsHeadingsThatCollapseAndRevealTheShownBot() async throws {
         _ = NSApplication.shared

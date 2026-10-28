@@ -65,6 +65,114 @@ import Testing
         #expect(sections == before)
     }
 
+    /// #231: a bot dragged in the sidebar goes exactly where it is dropped, in its own section or
+    /// another, each bot once, and the sections keep their order with Conversations first.
+    @Test func aDroppedBotGoesExactlyWhereItIsDroppedWithinAndAcrossSections() {
+        var sections = BotSections(order: [a, b, c, d, e], membership: [c: "Engineering", d: "Engineering", e: "Product"])
+        // Within its section: before another bot, or last.
+        sections.move(b, to: nil, before: a)
+        #expect(sections.groups == [.init(name: nil, botIDs: [b, a]), .init(name: "Engineering", botIDs: [c, d]), .init(name: "Product", botIDs: [e])])
+        sections.move(c, to: "Engineering", before: nil)
+        #expect(sections.order == [b, a, d, c, e])
+        // Into another section, before one of its bots, or after its last.
+        sections.move(a, to: "Engineering", before: c)
+        #expect(sections.groups == [.init(name: nil, botIDs: [b]), .init(name: "Engineering", botIDs: [d, a, c]), .init(name: "Product", botIDs: [e])])
+        sections.move(d, to: "Product", before: nil)
+        #expect(sections.groups == [.init(name: nil, botIDs: [b]), .init(name: "Engineering", botIDs: [a, c]), .init(name: "Product", botIDs: [e, d])])
+        // Back among the bots in no section, first or last; Conversations is still first.
+        sections.move(e, to: nil, before: b)
+        sections.move(c, to: "Conversations", before: nil)
+        #expect(sections.groups == [.init(name: nil, botIDs: [e, b, c]), .init(name: "Engineering", botIDs: [a]), .init(name: "Product", botIDs: [d])])
+        // A section's name matches whatever its case. Its first bot leaving it keeps it in its place.
+        sections.move(b, to: "PRODUCT", before: d)
+        sections.move(e, to: "engineering", before: a)
+        sections.move(e, to: "Product", before: nil)
+        #expect(sections.groups == [.init(name: nil, botIDs: [c]), .init(name: "Engineering", botIDs: [a]), .init(name: "Product", botIDs: [b, d, e])])
+        #expect(sections.names == ["Engineering", "Product"])
+        #expect(sections.membership == [a: "Engineering", b: "Product", d: "Product", e: "Product"])
+        // Never a bot twice, nor one lost.
+        #expect(sections.order.count == 5 && Set(sections.order) == [a, b, c, d, e])
+    }
+
+    /// #231: dropping a bot on itself, just below itself or where it already is, or dropping a bot
+    /// that isn't listed, changes nothing; a bot to go before that isn't in the section puts it last.
+    @Test func dropsThatGoNowhereKeepEverythingWhereItIs() {
+        let start = BotSections(order: [a, b, c, d], membership: [c: "Engineering", d: "Engineering"])
+        var sections = start
+        sections.move(a, to: nil, before: a)
+        sections.move(a, to: nil, before: b)
+        sections.move(b, to: nil, before: b)
+        sections.move(b, to: nil, before: nil)
+        sections.move(c, to: "Engineering", before: c)
+        sections.move(c, to: "Engineering", before: d)
+        sections.move(d, to: "engineering", before: d)
+        sections.move(d, to: "Engineering", before: nil)
+        sections.move(e, to: "Engineering", before: c)
+        sections.move(e, to: nil, before: nil)
+        #expect(sections == start)
+        sections.move(a, to: "Engineering", before: b)
+        #expect(sections.groups == [.init(name: nil, botIDs: [b]), .init(name: "Engineering", botIDs: [c, d, a])])
+        sections.move(a, to: nil, before: e)
+        #expect(sections.groups == [.init(name: nil, botIDs: [b, a]), .init(name: "Engineering", botIDs: [c, d])])
+    }
+
+    /// #231: a dragged row carries its bot's id, and nothing else dropped there is taken for a bot.
+    @Test func aDraggedRowCarriesOnlyItsBotsID() {
+        #expect(BotSections.draggedBot(BotSections.dragPayload(a)) == a)
+        #expect(BotSections.draggedBot(Data(a.uuidString.lowercased().utf8)) == a)
+        #expect(BotSections.draggedBot(nil) == nil)
+        #expect(BotSections.draggedBot(Data()) == nil)
+        #expect(BotSections.draggedBot(Data("Scout".utf8)) == nil)
+        #expect(BotSections.draggedBot(Data("Scout researcher, Builder and Tester".utf8)) == nil)
+        #expect(BotSections.draggedBot(Data(" \(a.uuidString)".utf8)) == nil)
+        #expect(BotSections.draggedBot(Data(a.uuidString.utf8) + Data(b.uuidString.utf8)) == nil)
+    }
+
+    /// #231: a dropped order is kept in `index.json` with each bot's section and the missing bots'
+    /// entries, so a relaunch restores it. While the index can't be saved, the order stays as dropped
+    /// and the same save, retried once it can be, saves it.
+    @Test func aDroppedOrderIsKeptInTheIndexWithTheMissingBotsAndARetrySavesIt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-drops-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = Store(root: root.appendingPathComponent("support"))
+        let bots = ["Builder", "Scout", "Reviewer", "Tester"].map { Bot(name: $0, workspace: root.appendingPathComponent($0).path) }
+        for bot in bots { try BotHome(workspace: bot.workspace).save(bot) }
+        let builder = bots[0].id, scout = bots[1].id, reviewer = bots[2].id, tester = bots[3].id
+        let gone = Store.Entry(id: UUID(), workspace: root.appendingPathComponent("gone").path, section: "Engineering")
+        try store.saveIndex(bots.map { Store.Entry(id: $0.id, workspace: $0.workspace, section: $0.id == reviewer || $0.id == tester ? "Engineering" : nil) } + [gone])
+        let loaded = store.loadBots()
+        var layout = BotSections(order: loaded.bots.map(\.id), membership: loaded.sections)
+        func commit() -> SaveFailure? {
+            let ordered = layout.order.compactMap { id in loaded.bots.first { $0.id == id } }
+            return store.commitIndex(Store.entries(for: ordered, sections: layout.membership, missing: loaded.missing))
+        }
+
+        layout.move(tester, to: "Engineering", before: reviewer)
+        layout.move(builder, to: "Engineering", before: reviewer)
+        #expect(commit() == nil)
+        #expect(store.loadIndex().map(\.id) == [scout, tester, builder, reviewer, gone.id])
+        #expect(store.loadIndex().map(\.section) == [nil, "Engineering", "Engineering", "Engineering", "Engineering"])
+        let relaunched = store.loadBots()
+        #expect(BotSections(order: relaunched.bots.map(\.id), membership: relaunched.sections) == layout)
+        #expect(relaunched.missing == [gone])
+
+        // A folder where the index goes keeps it from being saved; the order stays as dropped.
+        try FileManager.default.removeItem(at: store.indexURL)
+        try FileManager.default.createDirectory(at: store.indexURL, withIntermediateDirectories: false)
+        layout.move(scout, to: "Engineering", before: nil)
+        let failure = try #require(commit())
+        #expect(failure.item == .botIndex)
+        #expect(failure.file == store.indexURL)
+        #expect(layout.groups == [.init(name: "Engineering", botIDs: [tester, builder, reviewer, scout])])
+        // Once it can be saved, the retry saves it, with the missing bot's entry.
+        try FileManager.default.removeItem(at: store.indexURL)
+        #expect(commit() == nil)
+        #expect(store.loadIndex().map(\.id) == [tester, builder, reviewer, scout, gone.id])
+        let retried = store.loadBots()
+        #expect(BotSections(order: retried.bots.map(\.id), membership: retried.sections) == layout)
+        #expect(retried.missing == [gone])
+    }
+
     @Test func renamingKeepsTheSectionsPlaceAndAnotherSectionsNameMergesThem() {
         var sections = BotSections(order: [a, b, c, d], membership: [a: "Engineering", b: "Engineering", c: "Product", d: "Research"])
         sections.rename("Product", to: " Design ")
