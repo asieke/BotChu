@@ -807,6 +807,7 @@ extension AnalyticsTests {
         #expect(rows.map { $0.tokens.uncachedInput } == [nil, 30, 50, nil, 15, nil, nil])
         #expect(rows[2].models.first?.model == "gpt-5-mini")
         #expect(rows[2].tokens.cacheRead == nil && rows[4].tokens.cacheRead == 15)
+        #expect(!rows[2].canReprice && rows[2].cost == nil && rows[2].costProvenance == .unpriced)
         #expect(rows[0].costProvenance == .unavailable && rows[3].costProvenance == .unavailable)
     }
 
@@ -868,6 +869,8 @@ extension AnalyticsTests {
         #expect(snapshot.records[2].taskID == task.id && snapshot.records[2].bot != snapshot.records[0].bot)
         let summary = AnalyticsSummary(snapshot.records, from: "", through: "9999", tasks: snapshot.tasks)
         #expect(summary.cost == 10 && summary.finishedTasks == 1 && summary.costPerFinishedTask == 6 && summary.wastedCost == 1)
+        let delegatedOnly = AnalyticsSummary(snapshot.records, from: "", through: "9999", kinds: [.subagent], tasks: snapshot.tasks)
+        #expect(delegatedOnly.finishedTasks == 1 && delegatedOnly.costPerFinishedTask == 3)
         let homeOnly = AnalyticsSummary(snapshot.records, from: "", through: "9999", kinds: [.home], tasks: snapshot.tasks)
         #expect(homeOnly.cost == nil && homeOnly.costPerFinishedTask == nil && homeOnly.wastedCost == nil)
     }
@@ -887,5 +890,34 @@ extension AnalyticsTests {
         #expect(build([entry]).cost == 0)
         var duplicate = entry; duplicate.id = UUID()
         #expect(build([entry, duplicate]).cost == nil)
+    }
+}
+
+extension AnalyticsTests {
+    @Test func cumulativeEntriesWithEqualSecondTimestampsKeepLedgerOrder() {
+        let bot = Bot(name: "Fast", accountID: "codex-work", workspace: "/tmp/fast")
+        let prompts = [message(.user, at: 0), message(.user, at: 0)]
+        let session = UUID().uuidString
+        var first = ledgerEntry(bot, prompt: prompts[0], provider: .codex, model: "gpt-5",
+                                usage: TurnUsage(models: [ModelUsage(model: "", uncachedInput: 100, output: 10)], cumulative: true), session: session)
+        var second = ledgerEntry(bot, prompt: prompts[1], provider: .codex, model: "gpt-5",
+                                 usage: TurnUsage(models: [ModelUsage(model: "", uncachedInput: 150, output: 20)], cumulative: true), session: session, resumed: true)
+        first.id = UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!
+        second.id = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        var b = builder(); b.bot(bot.id, name: bot.name); b.addLedger(entries: [first, second])
+        b.add(turns: prompts.map { AnalyticsTurn(start: $0.date, end: $0.date, outcome: .finished, messageID: $0.id) }, bot: bot, task: nil)
+        #expect(b.snapshot().records.map { $0.tokens.uncachedInput } == [100, 50])
+    }
+
+    @Test func anUnpricedModelDoesNotTurnPricedCompanionModelsIntoUnpricedIDs() {
+        let bot = Bot(name: "Mixed", accountID: "claude-personal", workspace: "/tmp/mixed")
+        let prompt = message(.user, at: 0)
+        let entry = ledgerEntry(bot, prompt: prompt, usage: TurnUsage(models: [
+            ModelUsage(model: "claude-sonnet-4-5", uncachedInput: 100, output: 10),
+            ModelUsage(model: "unknown-model", uncachedInput: 10, output: 1),
+        ]))
+        var b = builder(); b.bot(bot.id, name: bot.name); b.addLedger(entries: [entry])
+        b.add(turns: [AnalyticsTurn(start: base, end: base, outcome: .finished, messageID: prompt.id)], bot: bot, task: nil)
+        #expect(b.snapshot().records[0].cost == nil && b.snapshot().unpricedModelIDs == ["unknown-model"])
     }
 }

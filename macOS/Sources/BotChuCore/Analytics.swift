@@ -583,6 +583,11 @@ public struct AnalyticsBuilder {
     private var actualCosts: [UUID: Double] = [:]
     private var charged: Set<UUID> = []
     private var uncertainDeltas: Set<UUID> = []
+    private var ledgerByMessage: [UUID: [Int]] = [:]
+    private var ledgerByJob: [UUID: [Int]] = [:]
+    private var ledgerBySubagent: [UUID: [Int]] = [:]
+    private struct LegacyStart: Hashable { var bot: UUID; var task: UUID?; var second: Int }
+    private var ledgerByStart: [LegacyStart: [Int]] = [:]
 
     public init(zone: TimeZone, now: Date, accounts: [Account] = Accounts.all) {
         self.zone = zone
@@ -602,7 +607,10 @@ public struct AnalyticsBuilder {
                              note: AnalyticsMeasure.unrecorded[1].note),
         ]
         let unpriced = Set(records.filter { $0.costProvenance == .unpriced }.flatMap { record in
-            record.models.isEmpty ? [record.model ?? "Unknown"] : record.models.map { $0.model.isEmpty ? "Unknown" : $0.model }
+            record.models.filter { model in
+                guard let provider = record.provider else { return true }
+                return ModelPricing.price(model, provider: provider, backend: record.providerID ?? (provider == .pi ? "unknown" : nil)) == nil
+            }.map { $0.model.isEmpty ? "Unknown" : $0.model }
         }).sorted()
         return AnalyticsSnapshot(generatedAt: now, timeZone: zone.identifier, today: day(now), bots: bots, accounts: accounts,
                                  projects: projects, records: records, tasks: tasks, allowance: allowance, measures: measures, coverage: coverage, unpricedModelIDs: unpriced)
@@ -735,6 +743,18 @@ public struct AnalyticsBuilder {
         ledger = entries.enumerated().filter { seen.insert($0.element.id).inserted }
             .sorted { ($0.element.startedAt, $0.element.at, $0.offset) < ($1.element.startedAt, $1.element.at, $1.offset) }.map(\.element)
         usage = [:]; actualCosts = [:]; charged = []; uncertainDeltas = []
+        ledgerByMessage = [:]; ledgerByJob = [:]; ledgerBySubagent = [:]; ledgerByStart = [:]
+        for (index, entry) in ledger.enumerated() {
+            for message in Set(entry.messageIDs + [entry.messageID].compactMap { $0 }) {
+                ledgerByMessage[message, default: []].append(index)
+            }
+            if let run = entry.jobRunID, entry.kind == .job { ledgerByJob[run, default: []].append(index) }
+            if let run = entry.subagentRunID { ledgerBySubagent[run, default: []].append(index) }
+            if entry.messageID == nil && entry.messageIDs.isEmpty && entry.subagentRunID == nil {
+                let key = LegacyStart(bot: entry.botID, task: entry.taskID, second: Int(entry.startedAt.timeIntervalSince1970.rounded(.down)))
+                ledgerByStart[key, default: []].append(index)
+            }
+        }
         for amendment in amendments where amendment.actualCostUSD.isFinite && amendment.actualCostUSD >= 0 {
             actualCosts[amendment.amends] = amendment.actualCostUSD
         }
@@ -791,17 +811,22 @@ public struct AnalyticsBuilder {
         records[index].startedAt = start
         let candidates: [UsageLedger.Entry]
         if let subagentRunID {
-            candidates = ledger.filter { $0.subagentRunID == subagentRunID }
+            candidates = (ledgerBySubagent[subagentRunID] ?? []).map { ledger[$0] }
         } else if let jobRunID {
-            candidates = ledger.filter { $0.jobRunID == jobRunID && $0.kind == .job }
+            candidates = (ledgerByJob[jobRunID] ?? []).map { ledger[$0] }
         } else {
-            let conversation = ledger.filter { $0.botID == botID && $0.taskID == taskID && $0.subagentRunID == nil
-                && ($0.kind == .home || $0.kind == .task || $0.kind == .job) }
-            let exact = messageID.map { id in conversation.filter { $0.messageID == id || $0.messageIDs.contains(id) } } ?? []
+            let exact = (messageID.flatMap { ledgerByMessage[$0] } ?? []).map { ledger[$0] }.filter {
+                $0.botID == botID && $0.taskID == taskID && $0.subagentRunID == nil
+            }
             // ISO8601 ledger times have second precision. Never use a nearby timestamp to override
             // a recorded prompt identity, nor pick arbitrarily when legacy candidates are ambiguous.
-            candidates = exact.isEmpty ? conversation.filter { $0.messageID == nil && $0.messageIDs.isEmpty
-                && abs($0.startedAt.timeIntervalSince(start)) < 1 } : exact
+            if !exact.isEmpty { candidates = exact }
+            else {
+                let second = Int(start.timeIntervalSince1970.rounded(.down))
+                candidates = (-1...1).flatMap { offset in
+                    ledgerByStart[LegacyStart(bot: botID, task: taskID, second: second + offset)] ?? []
+                }.map { ledger[$0] }.filter { abs($0.startedAt.timeIntervalSince(start)) < 1 }
+            }
         }
         guard candidates.count == 1, let entry = candidates.first else { return }
         records[index].account = account(entry.accountID)
