@@ -657,7 +657,7 @@ private final class InboxFixture {
         var state = InboxState()
         let now = Delivery.stamp()
         state.answer(asking.id, at: now)
-        #expect(state[asking.id] == InboxState.Entry(read: true, done: true, repliedAt: now))
+        #expect(state[asking.id] == InboxState.Entry(read: true, done: true, repliedAt: now, doneAt: now))
         #expect(!state.needsAnswer(asking) && !state.isUnread(asking) && state.isAnswered(asking))
         #expect(InboxList.section(of: asking, state: state, now: now) == .done)
         // After a relaunch it is still answered and Done.

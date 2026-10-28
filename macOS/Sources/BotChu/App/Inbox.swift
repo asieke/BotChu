@@ -15,6 +15,8 @@ final class InboxModel {
     /// Every delivery, by ID.
     private(set) var deliveries: [UUID: Delivery] = [:]
     private(set) var state = InboxState()
+    /// Only unfinished and recently Done deliveries feed the ordinary list; all remain searchable.
+    private(set) var listIndex = InboxList.Index()
     private(set) var unreadCount = 0
     private(set) var unfinishedCount = 0
     @ObservationIgnored private var status = InboxStatus()
@@ -104,6 +106,7 @@ final class InboxModel {
     private func loaded(_ found: [UUID: Delivery]) {
         // What arrived meanwhile is newer than what was read.
         deliveries = found.merging(deliveries) { _, new in new }
+        listIndex = InboxList.Index(deliveries.values, state: state, now: .now)
         refreshStatus()
         isLoaded = true
         model?.notifier?.inboxLoaded()
@@ -169,6 +172,7 @@ final class InboxModel {
         deliveries[delivery.id] = delivery
         // Arriving in the conversation the owner is looking at, it is read there.
         state.received(delivery.id, renewed: renewed, shown: model.isShown(target))
+        listIndex.update(delivery, state: state, now: .now)
         refreshStatus()
         if renewed { saveState() }
         if isNew {
@@ -208,11 +212,16 @@ final class InboxModel {
     }
 
     func setDone(_ id: UUID, _ done: Bool) {
-        guard deliveries[id] != nil, state[id].done != done else { return }
-        state[id].done = done
-        if done { state[id].read = true }
+        guard let delivery = deliveries[id], state[id].done != done else { return }
+        state.setDone(id, done, at: .now)
+        listIndex.update(delivery, state: state, now: .now)
         refreshStatus()
         saveState()
+    }
+
+    /// The open Inbox reaches its next cutoff, or becomes visible after time away.
+    func expireDone(at date: Date) {
+        listIndex.expire(state: state, now: date)
     }
 
     /// The conversation is shown: what it delivered is read.
@@ -252,6 +261,7 @@ final class InboxModel {
         }
         let reading = isReading(id)
         state.answer(id, at: Delivery.stamp())
+        listIndex.update(delivery, state: state, now: .now)
         refreshStatus()
         saveState()
         if drafts[id] == text { drafts[id] = nil }
@@ -272,6 +282,7 @@ final class InboxModel {
         titles = titles.filter { $0.key.botID != id }
         if let selected, gone.contains(selected) { self.selected = nil }
         if !gone.isEmpty {
+            listIndex = InboxList.Index(deliveries.values, state: state, now: .now)
             refreshStatus()
             saveState()
         }

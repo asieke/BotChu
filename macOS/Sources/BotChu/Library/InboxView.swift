@@ -28,17 +28,19 @@ struct InboxView: View {
     /// owner leaves it.
     @State private var pinned: [UUID: InboxList.Section] = [:]
     @State private var showsDone = false
+    @State private var query = ""
     @State private var width: CGFloat = 1240
     @FocusState private var listFocused: Bool
     @State private var keys = InboxKeys()
 
     var body: some View {
         let inbox = model.inbox!
-        let deliveries = inbox.all
-        let groups = InboxList.groups(deliveries, state: inbox.state, now: .now, pinned: pinned)
-        let visible = InboxList.shown(groups, showsDone: showsDone)
+        let groups = groups(in: inbox, now: .now)
+        let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let visible = InboxList.shown(groups, showsDone: showsDone || searching)
+        let expiration = inbox.listIndex.nextExpiration(state: inbox.state)
         HStack(spacing: 0) {
-            InboxColumn(groups: groups, showsDone: $showsDone)
+            InboxColumn(groups: groups, showsDone: $showsDone, query: $query)
                 .frame(width: width >= 1180 ? 392 : 320)
                 .focusable()
                 .focused($listFocused)
@@ -48,7 +50,8 @@ struct InboxView: View {
                     InboxReader(delivery: delivery)
                         .id(id)
                 } else {
-                    InboxEmpty(deliveries: deliveries, done: groups.first { $0.section == .done }?.ids.count ?? 0) { showsDone = true }
+                    InboxEmpty(last: inbox.listIndex.latest, done: groups.first { $0.section == .done }?.ids.count ?? 0,
+                               searching: searching) { showsDone = true }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -59,7 +62,7 @@ struct InboxView: View {
             let modified = !press.modifiers.isDisjoint(with: [.command, .control, .option, .shift])
             guard let key = InboxList.Key(press.key.character, modified: modified), keys.reachInbox else { return .ignored }
             guard press.phase == .down || key.repeats else { return .handled }
-            if let move = InboxList.move(key, from: inbox.selected, in: groups, showsDone: showsDone) {
+            if let move = InboxList.move(key, from: inbox.selected, in: groups, showsDone: showsDone || searching) {
                 if let done = move.done { inbox.setDone(done, true) }
                 inbox.selected = move.selected
             }
@@ -75,8 +78,15 @@ struct InboxView: View {
             }
         }
         .onAppear {
+            refreshDate()
             inbox.isShowing = true
-            if inbox.selected.map({ !visible.contains($0) }) ?? true { inbox.selected = InboxList.first(groups) }
+            if let selected = inbox.selected, inbox.isDone(selected) {
+                // A card or notification can open any archived delivery directly.
+                showsDone = true
+                if searching, !groups.contains(where: { $0.ids.contains(selected) }) { query = "" }
+            } else if inbox.selected.map({ !visible.contains($0) }) ?? true {
+                inbox.selected = InboxList.first(groups)
+            }
             read(inbox.selected, in: groups)
             listFocused = true
         }
@@ -87,20 +97,42 @@ struct InboxView: View {
         .onChange(of: inbox.selected) { _, selected in
             // Choosing a Done delivery (from a notification or a card) opens Done to show it.
             if let selected, inbox.isDone(selected) { showsDone = true }
+            if let selected, searching, !groups.contains(where: { $0.ids.contains(selected) }) { query = "" }
             read(selected, in: groups)
             // The reader read before goes with its composer; the keys are the list's again.
-            listFocused = true
+            if !searching { listFocused = true }
+        }
+        .onChange(of: query) { _, _ in
+            if searching, inbox.selected.map({ !visible.contains($0) }) ?? true { inbox.selected = visible.first }
         }
         // Done while Done is closed: the selection moves on rather than staying hidden.
         .onChange(of: visible) { was, now in
             if let selected = inbox.selected, was.contains(selected), !now.contains(selected) {
-                inbox.selected = InboxList.selection(after: selected, was: was, now: now)
+                inbox.selected = InboxList.selection(after: selected, was: was, now: now) ?? (searching ? now.first : nil)
+            } else if inbox.selected == nil {
+                inbox.selected = InboxList.first(groups) ?? (searching ? now.first : nil)
             }
         }
-        // Deliveries read after the page showed: the first is chosen.
-        .onChange(of: deliveries.count) { _, _ in
-            if inbox.selected == nil { inbox.selected = InboxList.first(groups) }
+        .task(id: expiration) {
+            guard let expiration else { return }
+            do {
+                try await Task.sleep(for: .seconds(max(0, expiration.timeIntervalSinceNow)))
+                refreshDate()
+            } catch { /* A new cutoff or leaving the Inbox cancels this wait. */ }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshDate() }
+    }
+
+    private func groups(in inbox: InboxModel, now: Date) -> [InboxList.Group] {
+        let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        var candidates = searching ? inbox.deliveries : inbox.listIndex.deliveries
+        // Keep only this archived row while it is read, including when its 24 hours elapse.
+        if let id = inbox.selected, candidates[id] == nil { candidates[id] = inbox.delivery(id) }
+        return InboxList.groups(candidates.values, state: inbox.state, now: now, pinned: pinned, matching: query, retaining: inbox.selected)
+    }
+
+    private func refreshDate() {
+        model.inbox.expireDone(at: .now)
     }
 
     /// Reading a delivery: it is read, and keeps its place while it is.
@@ -156,30 +188,37 @@ private struct InboxColumn: View {
     @Environment(AppModel.self) private var model
     let groups: [InboxList.Group]
     @Binding var showsDone: Bool
+    @Binding var query: String
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(groups, id: \.section) { group in
-                        let done = group.section == .done
-                        InboxGroupHeading(section: group.section, count: group.ids.count, expanded: done ? $showsDone : nil)
-                        if !done || showsDone {
-                            ForEach(group.ids, id: \.self) { id in
-                                if let delivery = model.inbox.delivery(id) {
-                                    InboxRow(delivery: delivery, selected: model.inbox.selected == id)
-                                        .id(id)
+        let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        VStack(spacing: 0) {
+            LibrarySearch(text: $query, prompt: "Search Inbox and archive")
+                .padding(12)
+                .accessibilityIdentifier("inbox-search")
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(groups, id: \.section) { group in
+                            let done = group.section == .done
+                            InboxGroupHeading(section: group.section, count: group.ids.count, expanded: done && !searching ? $showsDone : nil)
+                            if !done || showsDone || searching {
+                                ForEach(group.ids, id: \.self) { id in
+                                    if let delivery = model.inbox.delivery(id) {
+                                        InboxRow(delivery: delivery, selected: model.inbox.selected == id)
+                                            .id(id)
+                                    }
                                 }
                             }
                         }
                     }
+                    .padding(.top, 2)
+                    .padding(.bottom, 12)
                 }
-                .padding(.top, 2)
-                .padding(.bottom, 12)
-            }
-            .scrollIndicators(.never)
-            .onChange(of: model.inbox.selected) { _, id in
-                if let id { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id) } }
+                .scrollIndicators(.never)
+                .onChange(of: model.inbox.selected) { _, id in
+                    if let id { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id) } }
+                }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
@@ -601,8 +640,9 @@ private struct InboxToolbar: View {
 /// Nothing left to read: when the last delivery came, and Done to open.
 private struct InboxEmpty: View {
     @Environment(AppModel.self) private var model
-    let deliveries: [Delivery]
+    let last: Delivery?
     let done: Int
+    let searching: Bool
     let showDone: () -> Void
 
     var body: some View {
@@ -618,18 +658,18 @@ private struct InboxEmpty: View {
 
     private var message: some View {
         VStack(spacing: 8) {
-            Image(systemName: "tray")
+            Image(systemName: searching ? "magnifyingglass" : "tray")
                 .font(.system(size: 40, weight: .light))
                 .foregroundStyle(Palette.secondaryText)
                 .padding(.bottom, 6)
-            Text("You’re all caught up")
+            Text(searching ? "No matching deliveries" : "You’re all caught up")
                 .font(.system(size: 17, weight: .semibold))
-            if let last = deliveries.first {
+            if !searching, let last {
                 Text("The last delivery came from \(model.bot(last.botID)?.name ?? "a bot") \(InboxTime.when(last.updatedAt)).")
                     .font(.system(size: 13))
                     .foregroundStyle(Palette.secondaryText)
             }
-            if done > 0 {
+            if !searching, done > 0 {
                 Button("Show Done", action: showDone)
                     .padding(.top, 8)
             }

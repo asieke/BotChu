@@ -610,7 +610,11 @@ on that pull request's branch to continue in instead). The same command run agai
     shown at zero). A 392-point list
     (320 in a narrower window) in the tasks column's idiom: **Needs input** (Needs input deliveries
     not answered since they were sent), **Today**, **Yesterday**, then each earlier day, newest first, with
-    **Done** collapsed at the end with its count. Reading never files a delivery as Done; only Done
+    **Done** collapsed at the end with its recent count. Done deliveries leave the list 24 hours
+    after being handled; **Search Inbox and archive** finds them again by title, note, question,
+    filename or GitHub link. Their saved files and Done state stay intact. A delivery opened from
+    its chat card or a notification remains readable even after that cutoff. Older Done records
+    use their reply time, or last delivery time when no reply was recorded. Reading never files a delivery as Done; only Done
     or a reply does, and Done means handled, never approval. A row has the sender's pet (a credited bot's on its
     corner), the sender, the conversation it came from (Home, a task or a job's run) and the time,
     the title (semibold while unread, with a blue dot), its purpose (**Needs input**, **For
@@ -632,7 +636,7 @@ on that pull request's branch to continue in instead). The same command run agai
     says so, with **Try Again**. Answered, the question says when. The toolbar opens the conversation (**Open Home**, **Open
     Task** or **Open Run**, ⌘O) and files the delivery as **Done** (E, or ⌃⌘A while typing); its menu marks it read or
     unread and finds the copies and the originals. With nothing left to read it says when the last
-    delivery came, with **Show Done**. In the sending conversation's chat, a delivery is a card with
+    delivery came, with **Show Done** when any recent Done deliveries remain. In the sending conversation's chat, a delivery is a card with
     **Show in Inbox** and its question's choices until it is answered, each sent as from the Inbox,
     and a reply from the Inbox shows under a "Reply from your Inbox" line.
   - **Jobs:** an agent can own scheduled jobs, saved instructions it runs on a schedule, such as a
@@ -1961,6 +1965,10 @@ on that pull request's branch to continue in instead). The same command run agai
   keystroke, the shown conversation's messages and opening a conversation not shown yet, and five
   more without indexes, as a first launch after the upgrade, with what each read, decoded, wrote and
   copied; and writes the table to the file. It asserts nothing about time and isn't part of `check`.
+- Inbox list preparation: `BOTCHU_INBOX_BENCHMARK=<file> swift test --package-path macOS --filter
+  inboxArchiveBenchmark` compares the former full sort/group with the cached visible candidates,
+  keeping 20 current deliveries while the Done archive grows from 100 to 10,000. It also measures
+  building that index at load; no window or provider is used, and it asserts nothing about time.
 - Markdown: `BOTCHU_MARKDOWN_BENCHMARK=<file> swift test --configuration release --package-path macOS
   --filter markdownBenchmark` times converting the next revision of prose, code, shell code with
   `$HOME`, equation-heavy, and table-and-diagram replies of 2 to 128 KB, gives a 128 KB reply 100
