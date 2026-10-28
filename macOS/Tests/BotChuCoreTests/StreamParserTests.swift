@@ -501,6 +501,17 @@ enum TokenUsageSamples {
         #expect(parser.parse(line: #"{"type":"agent_end"}"#) == [.finished])
     }
 
+    @Test func piRetainsMissingResponseIDsWithoutInventingUsage() throws {
+        let missing = #"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"stop"}}"#
+        let value = try #require(usage(.pi, [TokenUsageSamples.pi[0], missing, #"{"type":"agent_end"}"#]).first)
+        #expect(value.generationIDs == ["gen-sample-1", "unrecorded"])
+        #expect(usage(.pi, [missing, #"{"type":"agent_end"}"#]).isEmpty)
+        for id in ["", "private/path", "invalid space"] {
+            let line = "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"responseId\":\"\(id)\",\"usage\":{\"output\":1}}}"
+            #expect(usage(.pi, [line, #"{"type":"agent_end"}"#]).first?.generationIDs == ["unrecorded"])
+        }
+    }
+
     @Test func piSeparatesModelsAndIgnoresUserUsage() {
         let lines = [
             #"{"type":"message_end","message":{"role":"user","usage":{"input":900}}}"#,
@@ -508,7 +519,7 @@ enum TokenUsageSamples {
             #"{"type":"message_end","message":{"role":"assistant","model":"b","usage":{"output":4}}}"#,
             #"{"type":"agent_end"}"#,
         ]
-        #expect(usage(.pi, lines) == [TurnUsage(models: [ModelUsage(model: "a", uncachedInput: 3), ModelUsage(model: "b", output: 4)])])
+        #expect(usage(.pi, lines) == [TurnUsage(models: [ModelUsage(model: "a", uncachedInput: 3), ModelUsage(model: "b", output: 4)], generationIDs: ["unrecorded", "unrecorded"])])
     }
 
     @Test func missingMalformedAndExplicitZeroStayDistinct() {

@@ -75,12 +75,19 @@ enum UsageParsing {
         return models.isEmpty ? nil : TurnUsage(models: models)
     }
 
+    static func piResponseID(_ message: JSON) -> String {
+        guard let id = message["responseId"] as? String, !id.isEmpty, id.utf8.count <= 512,
+              id.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
+                  || [45, 46, 58, 95].contains($0) }) else { return "unrecorded" }
+        return id
+    }
+
     static func pi(_ message: JSON) -> TurnUsage? {
         guard let entry = message["usage"] as? JSON else { return nil }
         let model = ModelUsage(model: message["model"] as? String ?? "", uncachedInput: count(entry, "input"),
             cacheRead: count(entry, "cacheRead"), cacheWrite: count(entry, "cacheWrite"),
             output: count(entry, "output"), reasoning: count(entry, "reasoning"))
         return turn(model, cost: cost((entry["cost"] as? JSON)?["total"]),
-                    ids: (message["responseId"] as? String).map { $0.isEmpty ? [] : [$0] } ?? [])
+                    ids: [piResponseID(message)])
     }
 }

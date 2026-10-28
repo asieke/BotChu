@@ -88,6 +88,20 @@ import Testing
         #expect(fixture.requests.count == 3)
     }
 
+    @Test func parsedTurnWithOneMissingIDNeverBecomesPartlyActual() async throws {
+        var parser = PiParser()
+        _ = parser.parse(line: TokenUsageSamples.pi[0])
+        _ = parser.parse(line: #"{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}"#)
+        let events = parser.parse(line: #"{"type":"agent_end"}"#)
+        let usage = try #require(events.compactMap { if case .usage(let value) = $0 { value } else { nil } }.first)
+        let fixture = Fixture()
+        var candidate = fixture.candidate
+        candidate.generationIDs = usage.generationIDs
+        fixture.advance(60)
+        await fixture.scheduler().tick([candidate])
+        #expect(fixture.requests.isEmpty && fixture.credentialReads == 0 && fixture.amendments.isEmpty)
+    }
+
     @Test func expiredIncompleteAndUnsupportedIDsNeverReadCredentials() async {
         let fixture = Fixture()
         let scheduler = fixture.scheduler()
