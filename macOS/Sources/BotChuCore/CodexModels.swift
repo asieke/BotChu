@@ -1,15 +1,18 @@
 import Foundation
 
-/// A configured profile as its command runs it on this Mac, whose CLI lists its own models (#220).
-/// A changed command is another scope; a host's task has none, since a list read here says nothing
-/// about what the host can run.
+/// A configured profile as its command runs it on this Mac, whose CLI lists its own models (#220,
+/// Muse's #248). A changed command is another scope; a host's task has none, since a list read here
+/// says nothing about what the host can run.
 public struct ModelCatalogScope: Hashable, Sendable {
     public var accountID: String
     public var command: String
+    /// The profile's CLI family, which says how its list is read.
+    public var kind: AgentKind
 
-    public init(accountID: String, command: String) {
+    public init(accountID: String, command: String, kind: AgentKind) {
         self.accountID = accountID
         self.command = command
+        self.kind = kind
     }
 
     /// How the scope is saved: opaque, so `model-catalogs.json` holds no command.
@@ -28,19 +31,80 @@ public struct NativeCatalog: Equatable, Sendable {
     }
 }
 
-public struct CodexModelFailure: Error, Equatable, Sendable {
+public struct ModelListFailure: Error, Equatable, Sendable {
     public var message: String
     public init(_ message: String) { self.message = message }
 
-    static let unrecognized = CodexModelFailure("Codex listed its models in a form BotChu doesn’t recognize.")
-    static let unsupported = CodexModelFailure("This version of Codex can’t list its models.")
-    static let failed = CodexModelFailure("Codex couldn’t list its models. Check its sign-in and command.")
+    static func unrecognized(_ cli: String) -> Self { Self("\(cli) listed its models in a form BotChu doesn’t recognize.") }
+    static func unsupported(_ cli: String) -> Self { Self("This version of \(cli) can’t list its models.") }
+    static func failed(_ cli: String) -> Self { Self("\(cli) couldn’t list its models. Check its sign-in and command.") }
+}
+
+/// The CLIs that list their own models, each through its profile's command in a bounded, read-only
+/// JSON-RPC query that starts no model turn and reads no login.
+public enum NativeModelList {
+    public static let timeout: TimeInterval = 20
+
+    public static func lists(_ kind: AgentKind) -> Bool { kind == .codex || kind == .muse }
+
+    /// The scope's models, run from `folder` (the home folder).
+    public static func list(_ scope: ModelCatalogScope, folder: String = NSHomeDirectory(), timeout: TimeInterval = timeout) async throws -> [ModelOption] {
+        switch scope.kind {
+        case .codex: try await CodexModelList.list(command: scope.command, folder: folder, timeout: timeout)
+        case .muse: try await MuseModelList.list(command: scope.command, folder: folder, timeout: timeout)
+        case .claude, .antigravity, .pi, .sail: throw ModelListFailure.unsupported(scope.kind.displayName)
+        }
+    }
+
+    /// Starts `arguments` through `command` as a JSON-RPC host, initializes it and hands `body` its
+    /// calls; the host is stopped after, whatever happens. Off the main thread.
+    static func query(_ cli: String, command: String, arguments: [String], capabilities: [String: Any], folder: String,
+                      timeout: TimeInterval, _ body: @escaping @Sendable (_ call: (String, [String: Any]) throws -> [String: Any]) throws -> [ModelOption]) async throws -> [ModelOption] {
+        nonisolated(unsafe) let capabilities = capabilities
+        return try await Task.detached(priority: .utility) {
+            let started = Date()
+            let process: UsageProcess
+            do {
+                process = try UsageProcess(command: command, arguments: arguments, directory: URL(fileURLWithPath: folder, isDirectory: true),
+                                           timeout: timeout, frameLimit: 8 << 20)
+            } catch {
+                throw ModelListFailure("Could not start \(cli). Check the profile’s command in Settings.")
+            }
+            defer { process.stop() }
+            do {
+                _ = try process.call("initialize", ["clientInfo": ["name": "botchu", "title": "BotChu", "version": "1"],
+                                                    "capabilities": capabilities])
+                try process.send(["jsonrpc": "2.0", "method": "initialized"])
+                return try body { try call(process, cli, $0, $1) }
+            } catch let failure as ModelListFailure {
+                throw failure
+            } catch {
+                throw Date().timeIntervalSince(started) >= timeout - 1
+                    ? ModelListFailure("\(cli) didn’t list its models within \(Int(timeout)) seconds.") : ModelListFailure.failed(cli)
+            }
+        }.value
+    }
+
+    /// One JSON-RPC call, telling a CLI too old for the method from any other error.
+    private static func call(_ process: UsageProcess, _ cli: String, _ method: String, _ params: [String: Any]) throws -> [String: Any] {
+        let id = Int.random(in: 1_000...Int(Int32.max))
+        try process.send(["jsonrpc": "2.0", "id": id, "method": method, "params": params])
+        while true {
+            guard let frame = try process.next(), frame["id"] as? Int == id else { continue }
+            if let error = frame["error"] as? [String: Any] {
+                throw error["code"] as? Int == -32601 || (error["message"] as? String)?.contains("unknown variant") == true
+                    ? ModelListFailure.unsupported(cli) : ModelListFailure.failed(cli)
+            }
+            guard let result = frame["result"] as? [String: Any] else { throw ModelListFailure.unrecognized(cli) }
+            return result
+        }
+    }
 }
 
 /// Codex app-server's `model/list`, through the profile's own command: a bounded, read-only query
 /// that starts no model turn and reads no login. Codex keeps its own catalog and cache.
 public enum CodexModelList {
-    public static let timeout: TimeInterval = 20
+    public static let timeout = NativeModelList.timeout
     /// `model/list` pages read at most; a listing with more is incomplete and not used.
     static let pageLimit = 20
 
@@ -50,7 +114,7 @@ public enum CodexModelList {
         var models: [ModelOption] = []
         var seen = Set<String>()
         for page in pages {
-            guard let rows = page["data"] as? [[String: Any]] else { throw CodexModelFailure.unrecognized }
+            guard let rows = page["data"] as? [[String: Any]] else { throw ModelListFailure.unrecognized("Codex") }
             for row in rows where row["hidden"] as? Bool != true {
                 guard let id = [row["model"], row["id"]].lazy.compactMap({ ($0 as? String)?.trimmingCharacters(in: .whitespaces) })
                     .first(where: { !$0.isEmpty }), seen.insert(id).inserted else { continue }
@@ -70,58 +134,23 @@ public enum CodexModelList {
                 models.append(ModelOption(id: id, name: name, efforts: efforts, fast: tiers.contains("priority") || tiers.contains("fast")))
             }
         }
-        guard !models.isEmpty else { throw CodexModelFailure.unrecognized }
+        guard !models.isEmpty else { throw ModelListFailure.unrecognized("Codex") }
         return models
     }
 
     /// The profile's models, run from `folder` (the home folder).
     public static func list(command: String, folder: String = NSHomeDirectory(), timeout: TimeInterval = timeout) async throws -> [ModelOption] {
-        try await Task.detached(priority: .utility) { try read(command: command, folder: folder, timeout: timeout) }.value
-    }
-
-    private static func read(command: String, folder: String, timeout: TimeInterval) throws -> [ModelOption] {
-        let started = Date()
-        let process: UsageProcess
-        do {
-            process = try UsageProcess(command: command, arguments: ["app-server"], directory: URL(fileURLWithPath: folder, isDirectory: true),
-                                       timeout: timeout, frameLimit: 8 << 20)
-        } catch {
-            throw CodexModelFailure("Could not start Codex. Check the profile’s command in Settings.")
-        }
-        defer { process.stop() }
-        do {
-            _ = try process.call("initialize", ["clientInfo": ["name": "botchu", "title": "BotChu", "version": "1"],
-                                                "capabilities": ["experimentalApi": true]])
-            try process.send(["jsonrpc": "2.0", "method": "initialized"])
+        try await NativeModelList.query("Codex", command: command, arguments: ["app-server"], capabilities: ["experimentalApi": true],
+                                        folder: folder, timeout: timeout) { call in
             var pages: [[String: Any]] = []
             var cursor: String?
             repeat {
-                let page = try call(process, "model/list", cursor.map { ["cursor": $0] } ?? [:])
+                let page = try call("model/list", cursor.map { ["cursor": $0] } ?? [:])
                 pages.append(page)
                 cursor = (page["nextCursor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             } while cursor != nil && pages.count < pageLimit
-            if cursor != nil { throw CodexModelFailure("Codex listed more models than BotChu reads.") }
+            if cursor != nil { throw ModelListFailure("Codex listed more models than BotChu reads.") }
             return try parse(pages)
-        } catch let failure as CodexModelFailure {
-            throw failure
-        } catch {
-            throw Date().timeIntervalSince(started) >= timeout - 1
-                ? CodexModelFailure("Codex didn’t list its models within \(Int(timeout)) seconds.") : CodexModelFailure.failed
-        }
-    }
-
-    /// One JSON-RPC call, telling a Codex too old for the method from any other error.
-    private static func call(_ process: UsageProcess, _ method: String, _ params: [String: Any]) throws -> [String: Any] {
-        let id = Int.random(in: 1_000...Int(Int32.max))
-        try process.send(["jsonrpc": "2.0", "id": id, "method": method, "params": params])
-        while true {
-            guard let frame = try process.next(), frame["id"] as? Int == id else { continue }
-            if let error = frame["error"] as? [String: Any] {
-                throw error["code"] as? Int == -32601 || (error["message"] as? String)?.contains("unknown variant") == true
-                    ? CodexModelFailure.unsupported : CodexModelFailure.failed
-            }
-            guard let result = frame["result"] as? [String: Any] else { throw CodexModelFailure.unrecognized }
-            return result
         }
     }
 }
@@ -211,7 +240,7 @@ public struct NativeCatalogBook: Sendable {
     /// Records the check `token` started; returns whether the saved lists changed. The answer of a
     /// check no longer running for the scope (its profile went, or its command changed) is dropped.
     @discardableResult
-    public mutating func finish(_ scope: ModelCatalogScope, token: UUID, _ result: Result<[ModelOption], CodexModelFailure>,
+    public mutating func finish(_ scope: ModelCatalogScope, token: UUID, _ result: Result<[ModelOption], ModelListFailure>,
                                 now: Date = Date()) -> Bool {
         guard var entry = entries[scope.key], entry.running == token else { return false }
         entry.running = nil

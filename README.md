@@ -348,6 +348,17 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     the same CLI session; quitting mid-turn saves what the turn printed so far. A CLI's output is
     parsed off the main thread and reaches the window a few times a second, and each conversation
     is observed on its own, so turns running elsewhere don't slow the one shown.
+  - **Heartbeat (#261):** a turn of Home or a task that ends saying its work is still going ("the
+    tests are still running, I'll report back") while nothing runs there any more, or whose CLI
+    BotChu ended while its background tasks still ran, hears BotChu's heartbeat: a message asking it
+    to check the real state of that work and carry it on, or reply just `HEARTBEAT_OK` when nothing
+    is left (as OpenClaw's heartbeat). It goes out 2 minutes after the turn, then 10 and 30 minutes
+    after each reply that still says so, at most 3 in a row, and a Home waits while its tasks run.
+    Any other message to the conversation drops the heartbeat it waited to send. The conversation
+    shows it as a one-line note with the full message on hover; an acknowledgement shows as a note
+    instead of a reply, with no news dot nor a receipt in Home, and after the third BotChu says it
+    stopped checking in. Settings ▸ General ▸ **Check on bots that stop mid-work** turns it off.
+    The rule is `Heartbeat` in `Heartbeat.swift`, the timing `Heartbeats.swift`.
   - **Agent activity:** tool calls, of every CLI, are folded by what they are for. Consecutive
     read-only calls (reading, listing, searching, fetching, and shell commands known only to read,
     such as `cat`, `tail`, `sed -n`, `rg`, `find`, `ls` or `git status`) form one **Explored** group
@@ -777,17 +788,18 @@ on that pull request's branch to continue in instead). The same command run agai
     option. OpenRouter shows the actual model inherited from Settings (for example **Flint (free)**),
     and searches its public catalog of text models with tool support, with context sizes. Catalog
     requests contain no key or conversation data, are cached in memory for an hour, and preserve
-    current/custom choices when unavailable. A Codex profile on this Mac offers the models its own
-    CLI lists (app-server `model/list`, every page, visible rows only, with each model's efforts),
-    read through the profile's command in a bounded, read-only query that starts no turn and reads
-    no login. The list is shared by every picker set to that profile (Home and task chats, the
+    current/custom choices when unavailable. A Codex or Muse profile on this Mac offers the models
+    its own CLI lists (Codex app-server's `model/list`, every page, visible rows only; Muse's
+    `muse serve --no-session-log` `model/list` (#248), taken only from its account's catalog, not its
+    bundled fallback; each with the model's efforts), read through the profile's command in a
+    bounded, read-only query that starts no turn and reads no login. The list is shared by every picker set to that profile (Home and task chats, the
     **Runs on** card, the job editor and Quick tasks) and saved in `model-catalogs.json` by an opaque
     key of the profile and its command, so a changed command starts a new list. A list a day old is
     checked again at launch, on wake, hourly while BotChu runs and when a picker opens; the picker's
     footer says when it was checked, and its refresh button checks at once. Checks of a profile
     don't overlap and time out after 20 seconds; a failed or incomplete one keeps the last list,
     says so, and is retried after a minute, doubling up to an hour. Until a list is read, and for a
-    task on an SSH host, Codex offers BotChu's starter choices instead. A listed model isn't proof the
+    task on an SSH host, Codex and Muse offer BotChu's starter choices instead. A listed model isn't proof the
     account can run it, and a new list never changes a saved model, effort or session. Other
     providers offer starter choices; every provider labels an unspecified model as the account's
     default.
@@ -1079,17 +1091,8 @@ on that pull request's branch to continue in instead). The same command run agai
     actions stay visible while the selected area's content scrolls. Home's Activity lists only its
     **Closed tasks** (collapsed at first, with their count), each to open again with a click: the
     open ones are the tabs beside the chat. Home keeps Edit and New Session;
-    tasks keep Close Task and New Session. Task Activity includes the repository, computer and
-    linked issue, then the repository's open issues, from the saved Projects catalog: **Issues · N**,
-    GitHub's count of its open issues (pull requests aside), which stays in the heading when the
-    section is collapsed, then the five most recently updated, each a number and title that opens it
-    in the Projects sidebar, **View All Issues** (with the count when there are more), which opens
-    the repository's Issues there, and Refresh, which syncs Projects. Going to Projects keeps the task
-    and its draft to come back to. Until the count is read, the heading says why instead (reading,
-    not read, couldn't read, or unavailable for a repository `gh` doesn't list), never zero; an empty
-    repository shows **No open issues**, and a sync that fails keeps what was read, marked not
-    updated, with why, and Refresh tries again. Showing it checks the catalog is current, at most
-    every two minutes, like Projects. Home and task accounts can change in Model & Usage; Session keeps Finder, Terminal and
+    tasks keep Close Task and New Session. Task Activity shows the repository, computer and
+    the issue it works on, if any. Home and task accounts can change in Model & Usage; Session keeps Finder, Terminal and
     remote SSH controls. Branch names, review commits, generated pull request metadata and task
     authorship are managed internally and omitted from the task form, cards, headers, sidebar tooltips
     and new automatic progress notes. Explicitly choosing a pull request to continue or review is
@@ -1362,8 +1365,7 @@ on that pull request's branch to continue in instead). The same command run agai
     the saved Projects catalog, what a sync reads again and how it takes the answers, GitHub's REST
     answers, and the projects offline readers such as completion see (`ProjectCatalog.swift`), and the
     sync that keeps it on disk and in step with GitHub, with its ETags, probes, bounded requests and
-    coalesced refreshes, and deleting an issue with `gh` (`ProjectSync.swift`), a repository's open issues at a glance as a task's
-    Activity shows them, from that catalog (`IssuePreview.swift`),
+    coalesced refreshes, and deleting an issue with `gh` (`ProjectSync.swift`),
     an issue or pull request in full as the project sidebar shows it (`WorkDetail.swift`), the JSON store, with
     the index saved whole or a failure to show (`Store.swift`), with conversations' files read without losing
     what can't be read (`Transcript.swift`), the writer that saves files off the main thread, each
@@ -1425,7 +1427,7 @@ on that pull request's branch to continue in instead). The same command run agai
     `TelegramBridge.swift`, what mentions complete from and tell a bot, `Mentions.swift`, the runs
     of scheduled jobs, `JobRuntime.swift`, and handing finished turns and runs to the daily run reviews, `Evaluations.swift`),
     `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, selecting a reply's text across its blocks, `ReplySelection.swift`, and the composer, whose image-taking writing area the report and New Task sheets share, with `@` and `#` completion in the chat's alone, `MentionCompletion.swift`), `Inspector/` (the
-    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews, and a task's repository's open issues), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (the
+    status sidebar, a bot's and a task's, with a bot's jobs and its run reviews), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (the
     in-window Settings page with its rail and pages, with the hosts, Telegram and run reviews), and
     `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
@@ -1524,10 +1526,7 @@ on that pull request's branch to continue in instead). The same command run agai
     empty and failed results; a job's run as a task: in the agent's workspace on the run's account,
     model and effort, named after its job and time, what its tab and context say, the earlier runs'
     tasks a new run closes unless the owner took one over, and those that go with the runs the
-    history lets go; a task's glance at its repository's open issues: GitHub's count
-    whatever the preview and the read list hold, pull requests left out, loading, not read,
-    unavailable, zero and kept after a failed read, and another repository's answer never showing
-    under the one switched to; and run reviews, with stand-in reviewers (no test
+    history lets go; and run reviews, with stand-in reviewers (no test
     runs a real review): a stretch and its cursor, so that nothing is reviewed twice or missed; the
     signal gate (failures, stops, steering, failed tool calls, tool calls, time, Home's messages not
     steering); the review time once a day, missed days, time zone and daylight-saving changes; a
@@ -1613,9 +1612,7 @@ on that pull request's branch to continue in instead). The same command run agai
     closed), a sub-agent's handoff and a task's receipt that
     don't wait for run reviews, which review each bot's own work on its own account, Activity's run
     reviews (the summary line, news rows and counts line, in light and dark, and Review now) and
-    the review time in Settings, a task's Activity listing its repository's open issues:
-    one or all opened in Projects and back to the task with its draft, switching tasks, a failed
-    refresh keeping what was read, and no GitHub request from showing or updating it, a Task handed
+    the review time in Settings, a Task handed
     to another bot whose Home is idle, from Home, a task and a task on a host, that goes on after
     the asking turn (also a batch whose workers are its own sub-agent runs, stopped with it), asked
     for again, a bot or repository that can't be found, and a dispatch file in another bot's folder
@@ -1799,7 +1796,8 @@ on that pull request's branch to continue in instead). The same command run agai
   sample results (every state, an action of each kind, Computer Use and System entries), a check
   that fails after the first, or one that always fails, without starting a CLI.
   `BOTCHU_CODEX_MODELS=sample` (or `unavailable`) gives Codex profiles the models their CLI listed
-  on 2026-10-27, or a list check that always fails, without starting a CLI.
+  on 2026-10-27, and Muse profiles theirs on 2026-10-28, or a list check that always fails, without
+  starting a CLI.
   `BOTCHU_USAGE=sample` (or `stale`, `expired`, `unavailable`) reviews allowance states without
   querying any account (`sample` is Providers as its mock's main state: Claude's Fable week,
   Codex profiles' credits and free resets, and the Pi profile a key with a spending limit);

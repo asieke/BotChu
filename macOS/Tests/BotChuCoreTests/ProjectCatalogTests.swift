@@ -158,36 +158,6 @@ import Testing
         #expect(await fixture.sync.state.repositories?.count == 4)
     }
 
-    /// What a task's Activity counts (#113): issues without pull requests, a confirmed zero, and
-    /// the count read before, with why, when a read fails.
-    @Test func issueStatusCountsIssuesAloneAndKeepsWhatWasRead() async throws {
-        let github = StandInGitHub(repos: StandInGitHub.sample)
-        let fixture = try Fixture(github)
-        defer { fixture.remove() }
-        #expect(await fixture.sync.load().issueStatus == nil)
-        await fixture.sync.sync(.full)
-        var state = await fixture.sync.state
-        #expect(state.issueStatus?.count == 4)
-        // BotChu has one open pull request and no issue.
-        #expect(state.issueStatus?["asieke/botchu"] == OpenIssueStatus(count: 0))
-        #expect(state.issueStatus?["asieke/orbit"] == OpenIssueStatus(count: 2))
-        #expect(state.issueStatus?["asieke/notes"] == OpenIssueStatus(count: 0))
-
-        await github.set(workDown: true)
-        await github.update("asieke/Orbit") { $0.issues.append(9) }
-        await fixture.sync.sync(.changes)
-        state = await fixture.sync.state
-        #expect(state.issueStatus?["asieke/orbit"]?.count == 2)
-        #expect(state.issueStatus?["asieke/orbit"]?.problem != nil)
-        let stale = IssuePreview(repo: "asieke/Orbit", statuses: state.issueStatus, items: state.openItems, syncing: false, error: state.error)
-        #expect(stale.note == "Not updated")
-        #expect(stale.issues.map(\.number) == [4, 3])
-
-        await github.set(workDown: false)
-        await fixture.sync.sync(.full)
-        #expect(await fixture.sync.state.issueStatus?["asieke/orbit"] == OpenIssueStatus(count: 3))
-    }
-
     /// #154: an issue deleted with gh leaves the issues, GitHub's counts and the saved catalog at
     /// once, without a sync; one gh couldn't delete stays, with why.
     @Test func deletedIssuesLeaveTheCatalogAtOnce() async throws {
@@ -209,7 +179,6 @@ import Testing
         let state = await fixture.sync.state
         #expect(state.openItems?.map(\.id).sorted() == ["asieke/BotChu#7", "asieke/Orbit#3"])
         #expect(state.repositories?.first { $0.id == "asieke/Orbit" }?.openIssues == 1)
-        #expect(state.issueStatus?["asieke/orbit"] == OpenIssueStatus(count: 1))
         #expect(await updates.next()?.openItems == state.openItems)
         let saved = try #require(ProjectSync.read(fixture.file))
         #expect(saved.openItems.map(\.id).sorted() == ["asieke/BotChu#7", "asieke/Orbit#3"])

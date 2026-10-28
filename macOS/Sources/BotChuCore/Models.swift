@@ -206,6 +206,9 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     /// conversation shows it stopped until its next message (#218). Nil otherwise, and in threads
     /// saved before.
     public var stopped: Bool?
+    /// On BotChu's heartbeat message (`Heartbeat`), sent in the owner's place, its number in a row.
+    /// Nil otherwise, and in threads saved before.
+    public var heartbeat: Int?
 
     public init(
         id: UUID = UUID(), role: Role, text: String = "", date: Date = Date(), toolID: String? = nil,

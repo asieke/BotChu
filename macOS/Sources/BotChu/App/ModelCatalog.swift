@@ -10,14 +10,14 @@ final class ModelCatalog {
     private(set) var unavailable = false
     private var checkedAt: Date?
 
-    /// Each local Codex profile's own list (#220), shared by every picker set to it and saved between
-    /// launches in `model-catalogs.json`. A list a day old is checked again at launch, on wake, by the
-    /// hourly look while BotChu runs, and as a picker opens; Refresh models checks at once.
+    /// Each local Codex or Muse profile's own list (#220, #248), shared by every picker set to it and
+    /// saved between launches in `model-catalogs.json`. A list a day old is checked again at launch, on
+    /// wake, by the hourly look while BotChu runs, and as a picker opens; Refresh models checks at once.
     private(set) var native = NativeCatalogBook()
     /// What lists a profile's models; nil starts no check (tests, and review copies without
     /// `BOTCHU_CODEX_MODELS`), so the lists saved before, or the starters, stay.
-    @ObservationIgnored var listModels: (@Sendable (_ command: String) async throws -> [ModelOption])?
-    /// The local Codex profiles in Settings now, each with its command.
+    @ObservationIgnored var listModels: (@Sendable (ModelCatalogScope) async throws -> [ModelOption])?
+    /// The local profiles in Settings whose CLIs list their models, each with its command.
     @ObservationIgnored var scopes: @MainActor () -> [ModelCatalogScope] = { [] }
     @ObservationIgnored private var file: URL?
     @ObservationIgnored private let writes = DispatchQueue(label: "BotChu.model-catalogs", qos: .utility)
@@ -42,7 +42,7 @@ final class ModelCatalog {
     /// Reads the saved lists; with `listModels`, also looks for stale ones shortly after launch, on
     /// wake and hourly.
     func configure(file: URL?, scopes: @escaping @MainActor () -> [ModelCatalogScope],
-                   listModels: (@Sendable (String) async throws -> [ModelOption])?) {
+                   listModels: (@Sendable (ModelCatalogScope) async throws -> [ModelOption])?) {
         self.file = file
         self.scopes = scopes
         self.listModels = listModels
@@ -79,10 +79,10 @@ final class ModelCatalog {
     /// starts nothing; a failure keeps the list there was.
     func refresh(_ scope: ModelCatalogScope, force: Bool = false) async {
         guard let listModels, scopes().contains(scope), let token = native.begin(scope, force: force) else { return }
-        let result: Result<[ModelOption], CodexModelFailure>
-        do { result = .success(try await listModels(scope.command)) }
-        catch let failure as CodexModelFailure { result = .failure(failure) }
-        catch { result = .failure(CodexModelFailure("Codex couldn’t list its models.")) }
+        let result: Result<[ModelOption], ModelListFailure>
+        do { result = .success(try await listModels(scope)) }
+        catch let failure as ModelListFailure { result = .failure(failure) }
+        catch { result = .failure(ModelListFailure("\(scope.kind.displayName) couldn’t list its models.")) }
         if native.finish(scope, token: token, result) { save() }
     }
 
@@ -108,7 +108,8 @@ extension AppModel {
     }
 
     func modelCatalogScope(for account: Account) -> ModelCatalogScope? {
-        account.kind == .codex ? ModelCatalogScope(accountID: account.id, command: settings.command(for: account)) : nil
+        NativeModelList.lists(account.kind)
+            ? ModelCatalogScope(accountID: account.id, command: settings.command(for: account), kind: account.kind) : nil
     }
 
     /// The list `settings`' pickers choose from in place of the starters, once read.
@@ -120,6 +121,6 @@ extension AppModel {
     func configureModelCatalogs(file: URL, live: Bool) {
         modelCatalog.configure(file: file, scopes: { [weak self] in
             self.map { model in model.settings.accounts.compactMap(model.modelCatalogScope(for:)) } ?? []
-        }, listModels: DevHooks.codexModels ?? (live ? { try await CodexModelList.list(command: $0) } : nil))
+        }, listModels: DevHooks.modelLists ?? (live ? { @Sendable scope in try await NativeModelList.list(scope) } : nil))
     }
 }
