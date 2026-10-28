@@ -1,6 +1,6 @@
 import Foundation
 
-/// Public model metadata only. The catalog request never needs a key or reads a CLI's login.
+/// Model metadata shared by OpenRouter's public list and Sail's key-scoped list.
 public struct CatalogModel: Identifiable, Equatable, Sendable {
     public let id: String
     public let name: String
@@ -86,23 +86,25 @@ public struct ModelPickerData: Sendable {
     /// `resolved` is the model the CLI reported for this selection (`RunSettings.resolvedModel`).
     /// `native` is a Codex profile's own list once read (#220): it replaces the starters, which stand
     /// in only while it is nil; the selection and the default stay choices either way.
-    public init(kind: AgentKind, model: String, openRouterDefault: String, catalog: [CatalogModel] = [], native: [ModelOption]? = nil,
-                resolved: String? = nil) {
+    /// `catalog` is the list for this kind: OpenRouter's for Pi, Sail's for Sail.
+    public init(kind: AgentKind, model: String, openRouterDefault: String, sailDefault: String = "",
+                catalog: [CatalogModel] = [], native: [ModelOption]? = nil, resolved: String? = nil) {
         self.kind = kind
         let selectedID = model.trimmingCharacters(in: .whitespacesAndNewlines)
         self.selectedID = selectedID
-        self.effectiveID = GenerationOptions.effectiveModel(model, kind: kind, openRouterDefault: openRouterDefault)
-        let available = kind == .pi ? catalog : []
+        self.effectiveID = GenerationOptions.effectiveModel(model, kind: kind, openRouterDefault: openRouterDefault, sailDefault: sailDefault)
+        let usesSettingsDefault = kind == .pi || kind == .sail
+        let available = usesSettingsDefault ? catalog : []
         func label(_ id: String) -> ModelLabel {
             if let found = available.first(where: { $0.id == id }) { return ModelLabel(title: found.title, detail: found.detail) }
             return GenerationOptions.label(for: id, kind: kind, resolved: id == selectedID ? resolved : nil, catalog: native)
         }
         let current = label(effectiveID)
         self.title = current.title
-        self.detail = kind == .pi && selectedID.isEmpty ? "Default from Settings · \(current.detail)" : current.detail
-        let defaultID = GenerationOptions.effectiveModel("", kind: kind, openRouterDefault: openRouterDefault)
-        var choices = [Choice(id: "", title: kind == .pi || kind == .sail ? "Use default from Settings" : "Use account default",
-                              detail: kind == .pi ? label(defaultID).title : label("").detail)]
+        self.detail = usesSettingsDefault && selectedID.isEmpty && !effectiveID.isEmpty ? "Default from Settings · \(current.detail)" : current.detail
+        let defaultID = GenerationOptions.effectiveModel("", kind: kind, openRouterDefault: openRouterDefault, sailDefault: sailDefault)
+        var choices = [Choice(id: "", title: usesSettingsDefault ? "Use default from Settings" : "Use account default",
+                              detail: usesSettingsDefault && !defaultID.isEmpty ? label(defaultID).title : label("").detail)]
         var seen: Set<String> = [""]
         // Keep the current model reachable even if it is custom, retired, or the catalog is offline.
         for id in [selectedID, defaultID] where !id.isEmpty && seen.insert(id).inserted {

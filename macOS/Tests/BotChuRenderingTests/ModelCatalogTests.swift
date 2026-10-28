@@ -11,6 +11,103 @@ private actor ListCalls {
 }
 
 extension RenderingTests {
+    @Test func aSailListNeedsASavedKeyAndSurvivesAFailedRefresh() async {
+        let catalog = ModelCatalog()
+        let calls = ListCalls()
+        let listed = [CatalogModel(id: "sail/first", name: "First")]
+        let updated = [CatalogModel(id: "sail/second", name: "Second")]
+        catalog.listSailModels = { key in
+            #expect(key == "saved-test-key")
+            let count = await calls.next()
+            try await Task.sleep(for: .milliseconds(50))
+            if count == 2 { throw URLError(.notConnectedToInternet) }
+            return count == 1 ? listed : updated
+        }
+        for key: String? in [nil, "", " \n"] { await catalog.loadSail(key: key) }
+        #expect(await calls.count == 0)
+        #expect(catalog.models(for: .sail).isEmpty)
+
+        // Concurrent pickers share a request. A later failed request preserves its result.
+        async let first: Void = catalog.loadSail(key: "saved-test-key")
+        async let overlapping: Void = catalog.loadSail(key: "saved-test-key")
+        _ = await (first, overlapping)
+        #expect(await calls.count == 1)
+        #expect(catalog.models(for: .sail) == listed)
+        await catalog.loadSail(key: "saved-test-key")
+        #expect(await calls.count == 2)
+        #expect(catalog.models(for: .sail) == listed)
+        // The next opening retries immediately; no key still starts no request.
+        await catalog.loadSail(key: nil)
+        #expect(await calls.count == 2)
+        await catalog.loadSail(key: "saved-test-key")
+        #expect(await calls.count == 3)
+        #expect(catalog.models(for: .sail) == updated)
+        #expect(catalog.models(for: .pi).isEmpty)
+        #expect(catalog.models(for: AgentKind.codex).isEmpty)
+        #expect(catalog.models(for: AgentKind.muse).isEmpty)
+    }
+
+    @Test func sailModelsLoadOnlyWhenThePickerOpensAndCanBeSearched() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-sail-picker-\(UUID().uuidString)")
+        let domain = "BotChu.SailPickerTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: domain)
+        }
+        let settings = AppSettings(defaults: defaults)
+        settings.sailModel = "sail/default"
+        let app = AppModel(store: Store(root: root.appendingPathComponent("index")), settings: settings,
+                           usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") })
+        var keyReads = 0
+        var savedKey: String?
+        app.sailKey = { keyReads += 1; return savedKey }
+        let calls = ListCalls()
+        let listed = [CatalogModel(id: "sail/default", name: "Default Model"),
+                      CatalogModel(id: "sail/other", name: "Other Model")]
+        app.modelCatalog.listSailModels = { key in
+            #expect(key == "saved-test-key")
+            _ = await calls.next()
+            return listed
+        }
+        let bot = Bot(name: "Sail Test", accountID: "sail", workspace: root.appendingPathComponent("bot").path)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: ModelMenu(settings: bot, disabled: false, onModel: { _ in }, onEffort: { _ in }).environment(app))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(keyReads == 0)
+        #expect(await calls.count == 0)
+
+        var picked: String?
+        func openPicker() {
+            window.contentView = NSHostingView(rootView: SailPickerTestView(catalog: app.modelCatalog, sailKey: app.sailKey, select: { picked = $0 }))
+        }
+        openPicker()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(keyReads == 1)
+        #expect(await calls.count == 0)
+        // Saving a key and reopening fetches; the open picker updates as the shared list arrives.
+        savedKey = "saved-test-key"
+        openPicker()
+        for _ in 0..<100 where app.modelCatalog.sailModels.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(keyReads == 2)
+        #expect(await calls.count == 1)
+        #expect(app.modelCatalog.models(for: .sail) == listed)
+        try await Task.sleep(for: .milliseconds(150))
+        let editor = try #require(window.firstResponder as? NSTextView)
+        editor.insertText("other", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await Task.sleep(for: .milliseconds(50))
+        let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                windowNumber: window.windowNumber, context: nil, characters: "\r",
+                                                charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        window.sendEvent(enter)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(picked == "sail/other")
+    }
+
     /// A Codex profile's own list (#220), as the app keeps it and its pickers and Quick tasks use it.
     @Test func aCodexProfilesOwnListServesEveryPickerSetToIt() async throws {
         _ = NSApplication.shared
@@ -108,5 +205,18 @@ extension RenderingTests {
         settings.commands["codex-work"] = "codex --profile elsewhere"
         let changed = try #require(app.modelCatalogScope(for: settings.account("codex-work")))
         #expect(changed != work && app.modelCatalog.models(for: changed) == nil)
+    }
+}
+
+/// Rebuilds the picker's data from the observable catalog, as ModelMenu's popover does.
+private struct SailPickerTestView: View {
+    let catalog: ModelCatalog
+    let sailKey: @MainActor () -> String?
+    let select: (String) -> Void
+
+    var body: some View {
+        ModelPicker(data: ModelPickerData(kind: .sail, model: "", openRouterDefault: "openrouter/model", sailDefault: "sail/default",
+                                           catalog: catalog.models(for: .sail)),
+                    accountName: "Sail Test", catalog: catalog, disabled: false, select: select, sailKey: sailKey)
     }
 }

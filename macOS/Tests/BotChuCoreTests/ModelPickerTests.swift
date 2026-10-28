@@ -38,6 +38,53 @@ import Testing
         }
     }
 
+    @Test func sailNamesItsSettingsDefaultAndSearchesItsOwnList() {
+        let catalog = [CatalogModel(id: "sail/default", name: "Sail Default", contextLength: 128000),
+                       CatalogModel(id: "sail/other", name: "Other Model", contextLength: 1000000)]
+        let picker = ModelPickerData(kind: .sail, model: " \n", openRouterDefault: "openrouter/model",
+                                    sailDefault: " sail/default ", catalog: catalog)
+        #expect(picker.selectedID.isEmpty)
+        #expect(picker.effectiveID == "sail/default")
+        #expect(picker.title == "Sail Default")
+        #expect(picker.detail == "Default from Settings · sail/default · 128K context")
+        #expect(picker.choices.first == ModelPickerData.Choice(id: "", title: "Use default from Settings", detail: "Sail Default"))
+        #expect(picker.choices.map(\.id) == ["", "sail/default", "sail/other"])
+        #expect(picker.matching("OTHER sail").map(\.id) == ["sail/other"])
+        #expect(picker.matching("other").first?.detail == "sail/other · 1M context")
+    }
+
+    @Test func sailKeepsSelectedAndDefaultModelsWithoutDuplicates() {
+        let picker = ModelPickerData(kind: .sail, model: " sail/chosen ", openRouterDefault: "openrouter/model",
+                                    sailDefault: "sail/default", catalog: [
+                                        CatalogModel(id: "sail/chosen", name: "Chosen Model"),
+                                        CatalogModel(id: "sail/default", name: "Default Model"),
+                                        CatalogModel(id: "sail/chosen", name: "Duplicate")
+                                    ])
+        #expect(picker.selectedID == "sail/chosen")
+        #expect(picker.effectiveID == "sail/chosen")
+        #expect(picker.title == "Chosen Model")
+        #expect(picker.detail == "sail/chosen")
+        #expect(picker.choices.map(\.id) == ["", "sail/chosen", "sail/default"])
+        #expect(picker.choices.first?.detail == "Default Model")
+    }
+
+    @Test func sailWithoutACatalogKeepsCurrentAndSettingsChoices() {
+        let picker = ModelPickerData(kind: .sail, model: "custom/private-model", openRouterDefault: "openrouter/model",
+                                    sailDefault: "sail/default")
+        #expect(picker.title == "custom/private-model")
+        #expect(picker.choices.map(\.id) == ["", "custom/private-model", "sail/default"])
+        #expect(picker.choices.first?.detail == "sail/default")
+        #expect(picker.matching("CUSTOM private").map(\.id) == ["custom/private-model"])
+        let inherited = ModelPickerData(kind: .sail, model: "", openRouterDefault: "openrouter/model", sailDefault: "sail/default")
+        #expect(inherited.title == "sail/default")
+        #expect(inherited.detail == "Default from Settings · sail/default")
+        let unset = ModelPickerData(kind: .sail, model: "", openRouterDefault: "openrouter/model", sailDefault: " \n")
+        #expect(unset.effectiveID.isEmpty)
+        #expect(unset.title == "Default from Settings")
+        #expect(unset.choices.map(\.id) == [""])
+        #expect(unset.choices.first?.detail == "Settings ▸ Sail")
+    }
+
     @Test func offlineCustomSelectionAndInheritedDefaultRemainReachable() {
         let picker = ModelPickerData(kind: .pi, model: "custom/private-model", openRouterDefault: "recursive/flint-v1.0:free")
         #expect(picker.title == "custom/private-model")
