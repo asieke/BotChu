@@ -235,11 +235,17 @@ import Testing
 
         // Whether a model has Fast is kept; a list saved before #249 offers it until read again.
         let slow = NativeCatalog(models: [ModelOption(id: "plain", name: "Plain", efforts: [])], checkedAt: checkedAt)
-        let slowText = String(decoding: try #require(NativeCatalogFile.encode([scope.key: slow])), as: UTF8.self)
-        #expect(NativeCatalogFile.decode(Data(slowText.utf8))[scope.key]?.models.first?.fast == false)
-        let older = slowText.replacingOccurrences(of: #","fast":false"#, with: "")
-        #expect(older != slowText)
-        #expect(NativeCatalogFile.decode(Data(older.utf8))[scope.key]?.models.first?.fast == true)
+        let slowData = try #require(NativeCatalogFile.encode([scope.key: slow]))
+        #expect(NativeCatalogFile.decode(slowData)[scope.key]?.models.first?.fast == false)
+        // The same file without the key, whatever order the encoder wrote it in.
+        var file = try #require(JSONSerialization.jsonObject(with: slowData) as? [String: Any])
+        var catalogs = try #require(file["catalogs"] as? [[String: Any]])
+        var models = try #require(catalogs[0]["models"] as? [[String: Any]])
+        #expect(models[0].removeValue(forKey: "fast") != nil)
+        catalogs[0]["models"] = models
+        file["catalogs"] = catalogs
+        let older = try JSONSerialization.data(withJSONObject: file)
+        #expect(NativeCatalogFile.decode(older)[scope.key]?.models.first?.fast == true)
     }
 
     @Test func thePickerSaysHowTheListStands() {
