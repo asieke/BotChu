@@ -4,6 +4,12 @@ import Foundation
 /// so each run gets a fresh one. Lines that are not JSON (warnings some CLIs print) are ignored.
 public protocol StreamParser {
     mutating func parse(line: String) -> [AgentEvent]
+    /// A fatal interactive wait: deliver the failure, then terminate the headless process.
+    var requiresTermination: Bool { get }
+}
+
+public extension StreamParser {
+    var requiresTermination: Bool { false }
 }
 
 public enum StreamParsers {
@@ -319,15 +325,17 @@ public struct AntigravityParser: StreamParser {
     }
 }
 
-/// `muse exec --json`: a log of records, of which BotChu reads the reply text, tool results and the
-/// run's end.
+/// `muse exec --json`: reply text, tool progress/results, and the run’s end.
+/// Approval waits cannot be answered headlessly and must end the process.
 public struct MuseParser: StreamParser {
     private var streamed = false
     private var sentSession = false
+    public private(set) var requiresTermination = false
 
     public init() {}
 
     public mutating func parse(line: String) -> [AgentEvent] {
+        guard !requiresTermination else { return [] }
         guard let obj = decode(line), let type = obj["payload_type"] as? String else { return [] }
         var events: [AgentEvent] = []
         if !sentSession, let stream = obj["stream"] as? JSON, stream["kind"] as? String == "session",
@@ -337,6 +345,18 @@ public struct MuseParser: StreamParser {
         }
         let payload = obj["payload"] as? JSON ?? [:]
         switch type {
+        case "approval.requested", "approval_wait.effect.started":
+            requiresTermination = true
+            events.append(.failed("Muse is waiting for an approval BotChu can't show"))
+        case "task.lifecycle.side_effect_intent":
+            // Real 1.4.14 stdout provides the call correlation before execution, but not its
+            // arguments. The result enriches this same row with input and arguments later.
+            if let intent = payload["event"] as? JSON,
+               let operation = intent["operation"] as? String, operation.hasPrefix("tool:"),
+               let key = intent["idempotency_key"] as? String, key.hasPrefix("tool:"),
+               operation.count > 5, key.count > 5 {
+                events.append(.toolStarted(id: String(key.dropFirst(5)), name: String(operation.dropFirst(5)), input: ""))
+            }
         case "run.output.delta":
             if let text = payload["text"] as? String {
                 streamed = true

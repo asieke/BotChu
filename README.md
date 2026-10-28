@@ -1764,7 +1764,10 @@ on that pull request's branch to continue in instead). The same command run agai
   - Claude: `claude -p … --output-format stream-json --verbose --include-partial-messages --dangerously-skip-permissions`, `--session-id` then `--resume`.
   - Codex: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`, then `codex exec resume <thread id>`.
   - Antigravity: `agy -p … --output-format stream-json --dangerously-skip-permissions`, then `--conversation <id>`.
-  - Muse: `muse exec --json --session-id <uuid>` (the same id resumes it).
+  - Muse: `muse exec --json --yolo --session-id <uuid>` (the same id resumes it).
+    `--yolo` disables approvals and Muse’s sandbox for this run, matching the other headless
+    CLIs: BotChu has no approval UI. Tool progress is shown before results; a pending approval
+    record fails visibly and terminates the process.
   - Pi: `pi -p --mode json --provider openrouter --model <id> --session-id <uuid>`, with `OPENROUTER_API_KEY` from the Keychain.
   - Sail: `botchu-sail --session-id <uuid> --model <id>`, then with `--resume`, with `SAIL_API_KEY`
     from the Keychain; it prints its own JSON lines (`SailEvent`), on this Mac only.
