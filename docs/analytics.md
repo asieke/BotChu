@@ -4,7 +4,8 @@
 runs, how they ended and how long they took, by bot, provider account and project, with each
 profile's latest allowance beside them (#233). BotChu reads the records it already keeps, off the main
 thread and without changing them, writes one page into its own data folder, and opens it in the
-default browser. Nothing new is recorded for it, and nothing serves it.
+default browser. Nothing serves it. A separate passive usage ledger captures new executions for
+later token/cost reporting; this dashboard's ledger integration is separate.
 
 The code is `macOS/Sources/BotChuCore/Analytics.swift` (reading the records into a snapshot, and
 `AnalyticsSummary`), `AnalyticsDashboard.swift` (the page and writing it) and the app's
@@ -13,7 +14,7 @@ The code is `macOS/Sources/BotChuCore/Analytics.swift` (reading the records into
 ## Data inventory
 
 What exists on disk, for each bot in `index.json` (in its workspace's `.botchu/`), and how long it is
-kept. Only these records are read; totals for a period can't be higher than what they still hold.
+kept. Totals for a period can't be higher than what the sources read by the dashboard still hold.
 
 | Source | File | What the dashboard uses | Kept |
 | --- | --- | --- | --- |
@@ -24,6 +25,44 @@ kept. Only these records are read; totals for a period can't be higher than what
 | Sub-agent runs | `subagents/<id>/run.json` and `tasks/<id>/subagents/<id>/run.json` | phase, created, started, finished, the bot it ran as, account, the task it was delegated from | until Clear Run removes it; one a relaunch interrupted becomes stopped |
 | Allowance | `usage.json` beside `index.json` | each profile's latest reading: windows, share used, reset, when read, whether its check failed | the latest reading only; one unchecked for a week is dropped |
 | Run reviews | `evaluations/<id>.json` | only counted, as excluded | the newest 50 a bot |
+| Usage ledger | `usage/<yyyy-MM>.jsonl` | immutable turn/run account, CLI family and backend, model provenance, outcome and reported usage; dashboard integration is separate | until the bot is deleted; Clear Run, task/job history pruning and account switches do not remove it |
+
+### Usage ledger format
+
+The ledger passively records each Home/task CLI invocation and each job/sub-agent execution. It
+does no pricing or network work. Appending, encoding and combining usage reports run on the bot's
+serialized `StorageQueue` lane; turn completion only submits captured values. Files are partitioned
+by completion month in UTC, with a 0700 folder and 0600 files. A damaged or torn line does not hide
+later lines. Repeated entry IDs are read once (the first complete entry wins).
+Stopped or failed preparation, including a reserved sub-agent stopped before launch, retains an
+explicitly unmeasured outcome. Skipped jobs have no execution and do not add a ledger entry.
+
+Each entry holds `id`, `at`, `startedAt`, `kind`, `botID`, optional `taskID`, `jobRunID` and
+`subagentRunID`, captured `accountID`, `provider` (CLI family), `providerID` (backend), `model` and
+`modelSource` (`reported`, `requested`, `unreported`), `outcome`, `usage`, `sessionID` and `resumed`.
+`remote` and `usesLegacyOpenRouterKey` freeze execution/key ownership at launch without recording
+any host, path or key; reconciliation never infers historical ownership from today's settings.
+Missing usage is JSON `null`, distinct from reported zero counts or cost. No prompt, reply, error
+text, tool input/output, workspace path, credentials or CLI auth file is read or copied into it.
+Only UUID session identities are retained, canonically lowercased; paths and arbitrary session IDs
+are dropped. A cumulative report without a usable identity cannot safely be differenced. A resumed
+session's first ledger reading is a baseline; a genuinely new session can count its initial totals.
+
+`messageID` identifies the owning transcript prompt exactly, and `messageIDs` includes all live
+follow-ups the CLI actually acknowledged. Claude can accept a follow-up during tools and emit
+multiple results in one process. The ledger aggregates all those result reports once for the
+invocation, without guessing which prompt caused which tokens. A reader may apply its captured
+account/model to every covered transcript segment, but must charge usage only once to the owning
+record; the other segments have no separately measured usage, not measured zero. Existing
+transcript turn counts remain unchanged. `startedAt` is execution start, not the queued prompt's date.
+Sub-agent entries live in the root/calling bot's ledger beside its sub-agent archive; their `botID`
+is the executing target bot and `taskID` is the root task. Join them by `subagentRunID`. Reconciliation
+must defer while either the ledger owner or the executing bot is streaming.
+
+Reconciliation appends `{"amends":"<entry UUID>","actualCostUSD":0.12}`. This represents the
+actual **whole invocation** cost, only when every generation is supported and resolved. Partial
+costs must not replace an estimate. The latest valid, nonnegative finite amendment wins, including
+a reported zero; repeated identical amendments are not written again, including after relaunch.
 
 Not read: message text, briefs, tool calls and output beyond their dates and durations, the turn log
 (`logs/<date>.log`, whose lines aren't tied to a conversation and hold commands and errors), task
@@ -124,7 +163,8 @@ on macOS).
 
 ### Tokens, cost and allowance
 
-BotChu records no token counts or costs per turn or run, so both are **Unavailable**
+BotChu now captures reported token counts and costs in its usage ledger, but this dashboard does
+not yet read them, so both are **Unavailable**
 (`AnalyticsMeasure.unrecorded`), never shown as 0. A measure says whether it is `actual` (reported by
 a provider), `estimated` (shown with ≈ and "Estimated") or `unavailable`; none is estimated today, and
 pet-making's cost estimates stay in the bot's log. Provider allowance is shown apart: each profile's
@@ -173,6 +213,12 @@ for a running conversation, retries, every job and sub-agent outcome, missing an
 runs across midnight and both daylight-saving changes, empty data, unreadable files, the content
 exclusions, the escaped data block, the policy and the file permissions. On macOS it also runs the
 page's own script in JavaScriptCore against `AnalyticsSummary`.
+
+`swift test --package-path macOS --filter UsageLedgerTests` covers capture, damaged-line recovery,
+amendment retries, privacy and the storage handoff. `BOTCHU_LEDGER_BENCHMARK=/tmp/ledger.csv` with
+`--filter usageLedgerEnqueueBenchmark` measures turn-end submission against empty and 100,000-line
+histories without asserting load-sensitive timing thresholds. The ledger never reads history on
+the main actor and does not change `ResponsivenessTests`.
 
 `BOTCHU_ANALYTICS_SAMPLE=/tmp/analytics.html swift test --package-path macOS --filter theSampleCoversEveryCase`
 writes a page of two months of sample data to look at in a browser.

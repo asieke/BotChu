@@ -47,6 +47,7 @@ final class JobRuntime {
     /// Finished runs' transcripts until their last save is written, so their history shows them.
     @ObservationIgnored private var saving: [UUID: [ChatMessage]] = [:]
     @ObservationIgnored private var runners: [UUID: AgentRun] = [:]
+    @ObservationIgnored private var usageCaptures: [UUID: (capture: UsageLedger.Capture, home: BotHome)] = [:]
     /// Runs whose helpers and mailbox are being prepared, before their CLI starts.
     @ObservationIgnored private var preparing: [UUID: Task<Void, Never>] = [:]
     /// Runs whose report is being saved in the Inbox, and those whose report couldn't be, as noted.
@@ -260,6 +261,8 @@ final class JobRuntime {
             }
             runner.stop()
         }
+        for pending in usageCaptures.values { pending.capture.finish(.stopped, in: pending.home, queue: model?.storage ?? .shared) }
+        usageCaptures.removeAll()
     }
 
     // MARK: Running
@@ -305,11 +308,17 @@ final class JobRuntime {
         let account = agent.account
         let startedAt = launch.run.startedAt ?? Date()
         let task = JobTasks.task(for: agent, job: job, run: launch.run, startedAt: startedAt)
+        let modelChoice = agent.effectiveModel(openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel)
+        let promptMessage = ChatMessage(role: .user, text: job.prompt)
+        usageCaptures[runID] = (UsageLedger.Capture(.init(startedAt: startedAt, kind: .job, botID: bot.id,
+            taskID: task.id, jobRunID: runID, messageID: promptMessage.id, accountID: account.id, provider: account.kind,
+            providerID: agent.resolvedProvider, remote: false, usesLegacyOpenRouterKey: agent.usesLegacyOpenRouterKey(remote: false),
+            model: modelChoice.isEmpty ? nil : modelChoice, modelSource: modelChoice.isEmpty ? .unreported : .requested,
+            outcome: .failed)), BotHome(workspace: bot.persistencePath))
         guard let target = model.startJobTask(task, for: bot.id) else {
             return finish(runID, outcome: .failed, summary: "The agent is gone, so the run didn't start.")
         }
         targets[runID] = target
-        let modelChoice = agent.effectiveModel(openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel)
         engine.amend(runID) {
             $0.taskID = task.id
             $0.accountID = account.id
@@ -320,7 +329,7 @@ final class JobRuntime {
         }
         let conversation = model.conversation(target)
         conversation.append(ChatMessage(role: .note, text: JobLaunch.startNote(account: account, agent: bot.name, unavailable: unavailable)))
-        conversation.append(ChatMessage(role: .user, text: job.prompt))
+        conversation.append(promptMessage)
         conversation.run = RunState(startedAt: startedAt)
         model.saveThread(target)
         refresh()
@@ -399,6 +408,7 @@ final class JobRuntime {
             conversation.stream { messages in
                 for event in events {
                     outcome.record(event)
+                    self.usageCaptures[runID]?.capture.record(event)
                     switch event {
                     case .session(let id): session = CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: id)
                     case .model(let id): reported = id
@@ -498,6 +508,10 @@ final class JobRuntime {
     /// Records how a run ended, saves its transcript (its task's conversation, which is idle again),
     /// delivers its `report` to the Inbox, tells Home when it should hear, and starts what waited for it.
     private func finish(_ runID: UUID, outcome: JobOutcome, quiet: Bool = false, summary: String, report: String? = nil) {
+        if let pending = usageCaptures.removeValue(forKey: runID) {
+            pending.capture.finish(outcome == .succeeded ? .finished : outcome == .stopped || outcome == .interrupted ? .stopped : .failed,
+                                   in: pending.home, queue: model?.storage ?? .shared)
+        }
         // Its task is idle before the engine looks for what to start next, so a run waiting for the
         // agent isn't held up by it.
         let target = targets.removeValue(forKey: runID)

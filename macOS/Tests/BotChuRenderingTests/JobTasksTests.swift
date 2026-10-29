@@ -22,7 +22,7 @@ extension RenderingTests {
             pathlib.Path(__file__).with_suffix('.prompt').write_text(sys.argv[-1])
             print(json.dumps({"type":"thread.started", "thread_id":"job-prepared"}), flush=True)
             print(json.dumps({"type":"item.completed", "item":{"type":"agent_message", "text":"Fresh job prepared"}}), flush=True)
-            print(json.dumps({"type":"turn.completed"}), flush=True)
+            print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":14,"cached_input_tokens":4,"output_tokens":3}}), flush=True)
             """#.write(to: script, atomically: true, encoding: .utf8)
         settings.commands["codex-dev"] = "/usr/bin/python3 \(Shell.quote(script.path))"
         let gate = SessionPreparationTestGate()
@@ -46,6 +46,9 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(app.jobs.job(job.id)?.runs.last?.outcome == .stopped)
         #expect(!FileManager.default.fileExists(atPath: script.deletingPathExtension().appendingPathExtension("prompt").path))
+        let stoppedUsage = try #require(UsageLedger.read(in: BotHome(workspace: bot.workspace)).entries.first)
+        #expect(stoppedUsage.kind == .job && stoppedUsage.jobRunID == stopped.id)
+        #expect(stoppedUsage.outcome == .stopped && stoppedUsage.usage == nil)
 
         // A later job can reuse preparation; a disk edit before its next run invalidates it.
         for instruction in ["FIRST-JOB-INSTRUCTION", "SECOND-JOB-INSTRUCTION", "SECOND-JOB-INSTRUCTION"] {
@@ -62,6 +65,13 @@ extension RenderingTests {
             #expect(prompt.contains(instruction))
         }
         #expect(app.sessionPreparation.statistics.reused > 0)
+        await storage.settle()
+        let usage = try UsageLedger.read(in: BotHome(workspace: bot.workspace)).entries
+        #expect(usage.count == 4)
+        #expect(usage.dropFirst().allSatisfy {
+            $0.kind == .job && $0.accountID == "codex-dev" && $0.outcome == .finished
+                && $0.taskID != nil && $0.messageID != nil && $0.usage?.models.first?.uncachedInput == 10
+        })
     }
 
     /// A job's run as a task of its agent (#146), as the app runs it: Run Now starts a stand-in

@@ -258,6 +258,7 @@ final class AppModel {
     @ObservationIgnored private var toolSessions: [ChatTarget: [String: String]] = [:]
     @ObservationIgnored private var contextSessions: [ChatTarget: [String: UUID]] = [:]
     @ObservationIgnored private var runs: [ChatTarget: AgentRun] = [:]
+    @ObservationIgnored private var usageCaptures: [ChatTarget: (capture: UsageLedger.Capture, home: BotHome)] = [:]
     /// The heartbeat each conversation waits to send (`Heartbeats.swift`), dropped by any message to it.
     @ObservationIgnored var pendingHeartbeats: [ChatTarget: PendingHeartbeat] = [:]
     /// What each running CLI that takes input mid-turn has been given and has taken back.
@@ -1711,13 +1712,22 @@ final class AppModel {
         let id = bot.id
         let account = current.account
         let resume = current.resumableSessionID
+        let requestedModel = current.effectiveModel(openRouterDefault: settings.openRouterModel, sailDefault: settings.sailModel)
+        let usageHome = BotHome(workspace: bot.persistencePath)
+        let usageCapture = UsageLedger.Capture(.init(startedAt: Date(), kind: task == nil ? .home : .task,
+            botID: id, taskID: target.taskID, messageID: thread(target).last(where: { $0.role == .user })?.id,
+            accountID: account.id, provider: account.kind, providerID: current.resolvedProvider,
+            remote: task?.isRemote == true, usesLegacyOpenRouterKey: current.usesLegacyOpenRouterKey(remote: task?.isRemote == true),
+            model: requestedModel.isEmpty ? nil : requestedModel, modelSource: requestedModel.isEmpty ? .unreported : .requested,
+            outcome: .failed, sessionID: resume, resumed: resume != nil))
         let directory: String
         var machine = Machine.thisMac
         if let task {
-            guard let folder = task.folder else { return }
+            guard let folder = task.folder else { usageCapture.finish(.failed, in: usageHome, queue: storage); return }
             switch self.machine(of: task) {
             case .success(let found): machine = found
             case .failure(let failure):
+                usageCapture.finish(.failed, in: usageHome, queue: storage)
                 append(ChatMessage(role: .error, text: failure.message), to: target)
                 saveThread(target)
                 return
@@ -1729,9 +1739,17 @@ final class AppModel {
         let ticket = UUID()
         waiting[target] = ticket
         runStates[target] = RunState(preparing: true)
+        usageCaptures[target] = (usageCapture, usageHome)
         let historyLast = history.last?.id
         Task { [self] in
-            defer { if waiting[target] == ticket { waiting[target] = nil } }
+            var launched = false
+            defer {
+                if waiting[target] == ticket { waiting[target] = nil }
+                if !launched {
+                    usageCapture.finish(.stopped, in: usageHome, queue: storage)
+                    if usageCaptures[target]?.capture === usageCapture { usageCaptures[target] = nil }
+                }
+            }
             // Read the requested recap/receipt history before taking the latest preparation snapshot.
             let historyHome = BotHome(workspace: bot.persistencePath)
             let history = (try? await storage.perform(historyHome.conversationLane(task: target.taskID), label: "resume context") {
@@ -1785,7 +1803,7 @@ final class AppModel {
                 let prompt = BotContext.prompt(for: text, preamble: contextSections.isEmpty ? nil : contextSections.joined(separator: "\n\n"), updates: updates)
                 await preparePiModels(for: current)
                 guard waiting[target] == ticket, !Task.isCancelled else { delegation.endCaller(context.id); return }
-                let model = current.effectiveModel(openRouterDefault: settings.openRouterModel, sailDefault: settings.sailModel)
+                let model = requestedModel
                 // A CLI that takes input mid-turn keeps its stdin open for follow-ups (This Mac only).
                 let liveInput = CommandBuilder.takesInputMidTurn(account.kind) && !machine.isRemote
                 let sailKey = account.kind == .sail && !machine.isRemote ? Keychain.get(Keychain.sailAccount) : nil
@@ -1803,6 +1821,7 @@ final class AppModel {
                 do {
                     invocation = try ImageDelivery.attaching(imageURLs, to: invocation, kind: account.kind, prompt: prompt)
                 } catch {
+                    usageCapture.finish(.failed, in: usageHome, queue: storage)
                     delegation.endCaller(context.id)
                     runStates[target] = nil
                     pauseQueue(target)
@@ -1817,6 +1836,7 @@ final class AppModel {
                     machine: machine, folder: directory, environment: invocation.environment)
                 guard waiting[target] == ticket, !Task.isCancelled else { delegation.endCaller(context.id); return }
                 if let problem = readinessProblem {
+                    usageCapture.finish(.failed, in: usageHome, queue: storage)
                     delegation.endCaller(context.id)
                     runStates[target] = nil
                     pauseQueue(target)
@@ -1827,6 +1847,7 @@ final class AppModel {
 
                 // Sail's helper is built beside BotChu and its key never leaves this Mac.
                 if account.kind == .sail, let problem = SailLaunch.problem(remote: machine.isRemote, key: sailKey) {
+                    usageCapture.finish(.failed, in: usageHome, queue: storage)
                     delegation.endCaller(context.id)
                     runStates[target] = nil
                     pauseQueue(target)
@@ -1844,6 +1865,7 @@ final class AppModel {
                 let home = BotHome(workspace: bot.persistencePath)
                 let what = task.map { "\($0.title) turn" } ?? "turn"
                 let startedAt = Date()
+                usageCapture.started(at: startedAt)
                 let turnStart = conversation(target).historyStart + thread(target).count
                 let turnPrompt = thread(target).last(where: { $0.role == .user })
                 var lastCheckpoint = Date()
@@ -1874,6 +1896,7 @@ final class AppModel {
                             // repeats its whole reply as a failure); the "Stopped" note says it.
                             if run.stopped, case .failed = event { continue }
                             outcome.record(event)
+                            usageCapture.record(event)
                             switch event {
                             case .session(let reported):
                                 sessions.append(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: reported))
@@ -1886,6 +1909,7 @@ final class AppModel {
                                 if self.inputs[target]?.ledger.taken() == true {
                                     // A follow-up reached the CLI: it joins the transcript here.
                                     if let message = self.messageQueues[target]?.acknowledge() {
+                                        usageCapture.include(messageID: message.id)
                                         assembler.apply(event, to: &messages)
                                         messages.append(message)
                                         delivered = true
@@ -1937,6 +1961,9 @@ final class AppModel {
                 }
                 run.onExit = { [weak self, weak run] status, stderr in
                     guard let self, let run, self.runs[target] === run else { return }
+                    usageCapture.finish(run.stopped ? .stopped : (!outcome.ended || outcome.failure != nil ? .failed : .finished),
+                                        in: usageHome, queue: self.storage)
+                    self.usageCaptures[target] = nil
                     self.runs[target] = nil
                     self.inputs[target] = nil
                     self.delegation.endCaller(context.id)
@@ -2024,6 +2051,7 @@ final class AppModel {
                                         arguments: invocation.arguments, prompt: prompt, resuming: resume, what: what,
                                         directory: task == nil ? nil : machine.isRemote ? "\(place): \(directory)" : directory), in: home)
                     try run.start()
+                    launched = true
                     if let resume {
                         delegationSessions[target, default: []].insert(resume)
                         toolSessions[target, default: [:]][resume] = toolText
@@ -2046,6 +2074,7 @@ final class AppModel {
                             : "\(account.name) hasn't started yet. If macOS is asking whether BotChu may access a folder, allow it: the CLI reads its settings from there."), to: target)
                     }
                 } catch {
+                    usageCapture.finish(.failed, in: usageHome, queue: storage)
                     delegation.endCaller(context.id)
                     runStates[target] = nil
                     pauseQueue(target)
@@ -2055,6 +2084,7 @@ final class AppModel {
                 }
             } catch {
                 guard waiting[target] == ticket else { return }
+                usageCapture.finish(.failed, in: usageHome, queue: storage)
                 waiting[target] = nil
                 runStates[target] = nil
                 pauseQueue(target)
@@ -2216,6 +2246,10 @@ final class AppModel {
             run.flushOutput()
             saveUnfinishedTurn(target)
         }
+        // Shutdown can finish before onExit gets another main-actor turn. Captures are shared
+        // with those callbacks, so their later finish is harmless and storage can be drained now.
+        for pending in usageCaptures.values { pending.capture.finish(.stopped, in: pending.home, queue: storage) }
+        usageCaptures.removeAll()
         delegation.stopAll()
         evaluator.stopAll()
         jobs?.stopAll()
