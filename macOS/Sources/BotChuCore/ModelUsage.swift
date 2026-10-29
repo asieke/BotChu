@@ -4,6 +4,7 @@ import Foundation
 /// `cacheWrite1h` is a subset of `cacheWrite`; `reasoning` is a subset of `output`.
 /// `uncachedInput`, `cacheRead` and `cacheWrite` are disjoint input buckets.
 public struct ModelUsage: Codable, Equatable, Sendable {
+    public var sailCompletionWindow: SailCompletionWindow?
     public var model: String
     public var uncachedInput: Int?
     public var cacheRead: Int?
@@ -14,8 +15,9 @@ public struct ModelUsage: Codable, Equatable, Sendable {
 
     public init(model: String, uncachedInput: Int? = nil, cacheRead: Int? = nil,
                 cacheWrite: Int? = nil, cacheWrite1h: Int? = nil, output: Int? = nil,
-                reasoning: Int? = nil) {
+                reasoning: Int? = nil, sailCompletionWindow: SailCompletionWindow? = nil) {
         self.model = model
+        self.sailCompletionWindow = sailCompletionWindow
         self.uncachedInput = uncachedInput
         self.cacheRead = cacheRead
         self.cacheWrite = cacheWrite

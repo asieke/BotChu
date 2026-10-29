@@ -221,7 +221,7 @@ struct RunsOnCard: View {
             ModelMenu(settings: settings, disabled: model.isRunning(target),
                       onModel: { model.setModel($0, for: target) },
                       onEffort: { model.setReasoningEffort($0, for: target) },
-                      onFast: { model.setFastMode($0, for: target) }, onProvider: { model.setProvider($0, for: target) }, inInspector: true)
+                      onFast: { model.setFastMode($0, for: target) }, onProvider: { model.setProvider($0, for: target) }, onSailCompletionWindow: { model.setSailCompletionWindow($0, for: target) }, inInspector: true)
                 .id(target)
         }
     }

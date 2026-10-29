@@ -401,15 +401,15 @@ public enum AnalyticsDashboard {
         (snapshot.tasks || []).forEach(function (t) {
           if (t.id) taskMap[t.id] = t;
         });
-        function resolve(raw, r) {
+        function resolve(raw, r, window) {
           if (!raw) return null;
-          var cacheKey = JSON.stringify([raw, r.provider, r.providerID]);
+          var cacheKey = JSON.stringify([raw, r.provider, r.providerID, window || "flex"]);
           if (resolved.has(cacheKey)) return resolved.get(cacheKey);
           var sources =
             r.provider === "pi"
               ? [r.providerID || "unknown"]
               : r.provider === "sail"
-                ? ["sail"]
+                ? [!window || window === "flex" ? "sail" : "sail-" + window]
                 : ["anthropic", "openai", "google"];
           var candidates = [raw.trim()],
             normalized = candidates[0];
@@ -428,7 +428,7 @@ public enum AnalyticsDashboard {
           for (var candidate of candidates)
             for (var source of sources) {
               var ids =
-                source === "openrouter" || source === "sail"
+                source === "openrouter" || source.startsWith("sail")
                   ? [candidate, candidate.replace(new RegExp("^" + source + "/"), "")]
                   : [candidate, candidate.split("/").pop()];
               var found = prices.find(function (p) {
@@ -647,7 +647,7 @@ public enum AnalyticsDashboard {
           var now = 0,
             alternative = 0;
           for (var usage of r.models) {
-            var p = resolve(usage.model, r),
+            var p = resolve(usage.model, r, usage.sailCompletionWindow),
               q = mode === "swap" && p ? nextModel(p) : p;
             if (!p || !q) return null;
             var changed = Object.assign({}, usage);

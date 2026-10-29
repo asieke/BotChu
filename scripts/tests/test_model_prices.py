@@ -50,6 +50,13 @@ class ModelPriceGeneratorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             prices.rates({"input": -1})
 
+    def test_sail_windows_have_separate_verified_rates(self):
+        entries = prices.build_entries({}, {})
+        model = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+        for source, expected in [("sail", "0.05"), ("sail-balanced", "0.07"), ("sail-asap", "0.09")]:
+            self.assertEqual(entries[source + "/" + model][0]["input"], prices.Decimal(expected))
+        self.assertNotIn("sail-asap/Qwen/Qwen3.6-35B-A3B", entries)
+
     def test_generated_bytes_are_independent_of_input_order(self):
         models = {"openai": {"models": {key: {"cost": {"input": 1, "output": 2}} for key in ["z", "a"]}}}
         first = prices.generate(prices.build_entries(models, {}), "2026-10-28", [("source", "https://example.test", '"etag"', "hash")])

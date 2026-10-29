@@ -458,7 +458,7 @@ public struct PiParser: StreamParser {
     }
 }
 
-/// BotChu's own Sail helper (`botchu-sail`, `SailEvent`). Each submission is a "Sail Flex" row
+/// BotChu's own Sail helper (`botchu-sail`, `SailEvent`). Each submission is a "Sail" row
 /// that stays running while Sail queues and runs it, and says when it ended; one BotChu stopped
 /// waiting for stays running until the run ends, then reads as interrupted, never cancelled.
 public struct SailParser: StreamParser {

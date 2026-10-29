@@ -64,7 +64,7 @@ struct ProvidersView: View {
         .sheet(isPresented: $adding) { AddProviderSheet().environment(model) }
         // Every profile, not only the ones the search shows, at the shorter interval while shown;
         // the cache decides when a check is due.
-        .task(id: requests) { await board.watch(requests, usage: model.usage, openRouterKey: model.openRouterKey) }
+        .task(id: requests) { await board.watch(requests, usage: model.usage, keys: model.usageKeys) }
         // The selected profile; closing the sidebar deselects it.
         .inspector(isPresented: Binding(get: { model.providerSelection != nil }, set: { if !$0 { model.providerSelection = nil } })) {
             Group {
@@ -92,7 +92,7 @@ struct ProvidersView: View {
         Task {
             await withTaskGroup(of: Void.self) { group in
                 for request in requests {
-                    group.addTask { await model.usageBoard.refresh(request, usage: model.usage, openRouterKey: model.openRouterKey, for: .manual) }
+                    group.addTask { await model.usageBoard.refresh(request, usage: model.usage, keys: model.usageKeys, for: .manual) }
                 }
             }
             refreshing = false
@@ -180,7 +180,7 @@ private struct ProvidersTable: View {
 
     @ViewBuilder private func menu(_ account: Account) -> some View {
         let request = model.usageRequest(for: account)
-        Button("Refresh") { Task { await model.usageBoard.refresh(request, usage: model.usage, openRouterKey: model.openRouterKey, for: .manual) } }
+        Button("Refresh") { Task { await model.usageBoard.refresh(request, usage: model.usage, keys: model.usageKeys, for: .manual) } }
         Button("Copy Command") { copy(request.command) }
         Button("Change Command…", action: changeCommand)
         // Home and the Tasks started after use the profile; Tasks under way keep theirs.
@@ -346,7 +346,7 @@ private struct ProviderProblemDetails: View {
                     Button(waiting ? "Try Again at \(next!.formatted(date: .omitted, time: .shortened))" : "Try Again") {
                         Task {
                             if status == .missingCommand { await model.usageBoard.check(request.command) }
-                            await model.usageBoard.refresh(request, usage: model.usage, openRouterKey: model.openRouterKey, for: .manual)
+                            await model.usageBoard.refresh(request, usage: model.usage, keys: model.usageKeys, for: .manual)
                         }
                     }
                     .disabled(waiting || checking)
@@ -514,6 +514,8 @@ private struct ProviderCreditsCell: View {
         case .spend: "dollarsign.circle"
         case .credits: "creditcard"
         case .resets: "arrow.counterclockwise"
+        case .balance: "wallet.pass"
+        case .burn: "flame"
         }
     }
 }
@@ -589,12 +591,12 @@ private struct AvatarGap: View {
     private(set) var found: [String: Bool] = [:]
 
     /// Reads each profile's usage now and every minute, until the table goes.
-    func watch(_ requests: [UsageRequest], usage: UsageCache, openRouterKey: @escaping @MainActor () -> String?) async {
+    func watch(_ requests: [UsageRequest], usage: UsageCache, keys: @escaping @MainActor (UsageRequest) -> UsageKeys) async {
         await withTaskGroup(of: Void.self) { group in
             for request in requests {
                 group.addTask {
                     while !Task.isCancelled {
-                        await self.refresh(request, usage: usage, openRouterKey: openRouterKey)
+                        await self.refresh(request, usage: usage, keys: keys)
                         do { try await Task.sleep(for: .seconds(60)) } catch { break }
                     }
                 }
@@ -606,13 +608,12 @@ private struct AvatarGap: View {
     }
 
     /// Shows what the cache has, then checks if that is due for who asks (`UsageCheck`).
-    func refresh(_ request: UsageRequest, usage: UsageCache, openRouterKey: @MainActor () -> String?, for check: UsageCheck = .providers) async {
+    func refresh(_ request: UsageRequest, usage: UsageCache, keys: @MainActor (UsageRequest) -> UsageKeys, for check: UsageCheck = .providers) async {
         await sync(request, usage: usage)
         guard !checking.contains(request), await usage.isDue(request, for: check) else { return }
         checking.insert(request)
         defer { checking.remove(request) }
-        let key = request.usesLegacyOpenRouterKey ? openRouterKey() : nil
-        states[request] = await usage.read(request, openRouterKey: key, for: check)
+        states[request] = await usage.read(request, keys: keys(request), for: check)
     }
 
     /// What the cache last read for the profile, also when something else read it.

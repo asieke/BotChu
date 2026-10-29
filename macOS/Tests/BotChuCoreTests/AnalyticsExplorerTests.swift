@@ -37,6 +37,22 @@ struct AnalyticsExplorerTests {
     var E=BotChuAnalytics.createExplorer(fixture),from='2026-10-01',through='2026-10-28';
     """#
 
+    @Test func sailComparisonsUseEachResponsesWindow() throws {
+        let c = try context()
+        let prices = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ModelPricing.catalog))
+        c.setObject(prices, forKeyedSubscript: "windowPrices" as NSString)
+        c.evaluateScript("""
+            var m='deepseek-ai/DeepSeek-V4.1-Flash-1017';
+            var r=record('home',0,1000000,0,1,'finished','10',null);
+            r.provider='sail';r.model=m;
+            r.models=['asap','balanced','flex'].map(w=>({model:m,sailCompletionWindow:w,uncachedInput:1000000,cacheRead:0,output:0}));
+            fixture.prices=windowPrices;fixture.records=[r];E=BotChuAnalytics.createExplorer(fixture);
+            """)
+        // Moving all uncached input into the cache saves .084 + .065 + .046 dollars.
+        #expect(abs(c.evaluateScript("E.comparison(r,'cache',1)").toDouble() - 0.195) < 1e-12)
+        #expect(c.exception == nil)
+    }
+
     @Test func everyInsightFiltersToItsExactDollarMetric() throws {
         let context = try context()
         let value = try #require(context.evaluateScript("JSON.stringify(E.insights(from,through).map(c=>({id:c.id,value:c.value,filtered:E.metric(E.range(from,through).filter(r=>E.matches(r,c.filters)),c.spec)})))").toString())

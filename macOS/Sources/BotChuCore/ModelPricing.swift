@@ -16,7 +16,7 @@ public enum ModelPricing {
         ModelPrices.entries.keys.sorted().compactMap { key in
             guard let entry = ModelPrices.entries[key], let slash = key.firstIndex(of: "/") else { return nil }
             let source = String(key[..<slash]), model = String(key[key.index(after: slash)...])
-            let kind: AgentKind = source == "openrouter" ? .pi : source == "sail" ? .sail : source == "anthropic" ? .claude : source == "google" ? .antigravity : .codex
+            let kind: AgentKind = source == "openrouter" ? .pi : source.hasPrefix("sail") ? .sail : source == "anthropic" ? .claude : source == "google" ? .antigravity : .codex
             return AnalyticsModelPrice(source: source, model: model,
                                        displayName: ModelPickerData(kind: kind, model: model, openRouterDefault: "").title,
                                        rates: .init(entry.rates), tiers: entry.tiers.map { .init(aboveInput: $0.aboveInput, rates: .init($0.rates)) })
@@ -28,7 +28,7 @@ public enum ModelPricing {
     /// contribute nothing; completely absent usage is not a measured zero. Reasoning is already
     /// included in output, and one-hour writes are already included in total cache writes.
     public static func price(_ usage: ModelUsage, provider: AgentKind, providerID: String? = nil) -> PricedCost? {
-        guard let (model, entry) = resolve(usage.model, provider: provider, providerID: providerID) else { return nil }
+        guard let (model, entry) = resolve(usage.model, provider: provider, providerID: providerID, completionWindow: usage.sailCompletionWindow ?? .flex) else { return nil }
         return price(usage, provider: provider, model: model, entry: entry, providerID: providerID)
     }
 
@@ -66,11 +66,11 @@ public enum ModelPricing {
                           snapshotDate: ModelPrices.snapshotDate)
     }
 
-    private static func resolve(_ raw: String, provider: AgentKind, providerID: String?) -> (String, ModelPrice)? {
+    private static func resolve(_ raw: String, provider: AgentKind, providerID: String?, completionWindow: SailCompletionWindow) -> (String, ModelPrice)? {
         let sources: [String]
         switch provider {
         case .pi: sources = [ModelProvider.effectiveID(providerID, runtime: .pi)!]
-        case .sail: sources = ["sail"]
+        case .sail: sources = [completionWindow.priceSource]
         case .claude, .codex, .antigravity, .muse: sources = ["anthropic", "openai", "google"]
         }
         var candidates = [raw.trimmingCharacters(in: .whitespacesAndNewlines)]
@@ -90,7 +90,7 @@ public enum ModelPricing {
             for source in sources {
                 // Keep OpenRouter/Sail publisher namespaces: they are part of their model IDs.
                 let ids: [String]
-                if source == "openrouter" || source == "sail" {
+                if source == "openrouter" || source.hasPrefix("sail") {
                     ids = [candidate, candidate.hasPrefix(source + "/") ? String(candidate.dropFirst(source.count + 1)) : candidate]
                 } else {
                     ids = [candidate, candidate.split(separator: "/", maxSplits: 1).last.map(String.init) ?? candidate]

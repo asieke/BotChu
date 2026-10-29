@@ -14,6 +14,7 @@ public enum SailCommand {
         public var resume = false
         public var model: String?
         public var effort: String?
+        public var completionWindow: SailCompletionWindow = .flex
         public var images: [String] = []
         public var stateDirectory: String?
         public var prompt = ""
@@ -37,6 +38,11 @@ public enum SailCommand {
             case "--resume": options.resume = true
             case "--model": options.model = try value(argument)
             case "--effort": options.effort = try value(argument)
+            case "--completion-window":
+                guard let window = SailCompletionWindow(rawValue: try value(argument)) else {
+                    throw SailFailure(.malformed, "Completion window must be asap, balanced, or flex.")
+                }
+                options.completionWindow = window
             case "--image": options.images.append(try value(argument))
             case "--state-dir": options.stateDirectory = try value(argument)
             case "--":
@@ -86,7 +92,7 @@ public enum SailCommand {
         let sources = handleSignals ? installSignalHandlers(live: live, write: write) : []
         defer { sources.forEach { $0.cancel() } }
         let turn = SailAgent.Turn(sessionID: options.sessionID ?? UUID().uuidString.lowercased(), resume: options.resume,
-                                  model: options.model ?? "", effort: options.effort, prompt: options.prompt, images: images)
+                                  model: options.model ?? "", effort: options.effort, completionWindow: options.completionWindow, prompt: options.prompt, images: images)
         return await agent.run(turn) { write($0.line) } ? 0 : 1
     }
 

@@ -225,7 +225,8 @@ Task {
             print("== \(account.name) usage")
             do {
                 let reading = try await ProviderUsageClient.read(UsageRequest(account: account, command: account.defaultCommand),
-                    openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"])
+                    openRouterKey: ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"],
+                    sailKey: ProcessInfo.processInfo.environment[Sail.keyVariable])
                 for window in reading.windows {
                     let percent = window.usedPercent.map { "\($0.formatted(.number.precision(.fractionLength(1))))% used" } ?? "not reported"
                     let reset = window.resetsAt?.formatted(.iso8601) ?? window.resetDescription ?? "not reported"
@@ -238,6 +239,7 @@ Task {
                           + "Weekly \(group.long.map { "\($0.percentText) in \($0.timeLeft ?? $0.reset)" } ?? "—")")
                 }
                 for badge in reading.badges(at: .now) { print("    \(badge.text)") }
+                for fact in reading.facts { print("    \(fact.label): \(fact.value)") }
                 if let note = reading.note { print("    \(note)") }
                 print("    Plan: \(reading.planLabel ?? "not reported")")
                 print("    OK")
@@ -391,6 +393,7 @@ Task {
         if let provider = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_PROVIDER"] { bot.selectProvider(provider) }
         bot.selectModel(ProcessInfo.processInfo.environment["BOTCHU_SMOKE_MODEL"] ?? "")
         bot.reasoningEffort = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_EFFORT"].flatMap(ReasoningEffort.init(rawValue:))
+        bot.sailCompletionWindow = ProcessInfo.processInfo.environment["BOTCHU_SMOKE_SAIL_WINDOW"].flatMap(SailCompletionWindow.init(rawValue:))
         if ProcessInfo.processInfo.environment["BOTCHU_SMOKE_FAST"] == "1" { bot.fastMode = true }
         print("== \(account.name)")
         let started = Date()

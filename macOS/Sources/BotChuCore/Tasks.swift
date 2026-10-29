@@ -95,6 +95,7 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var model: String
     public var providerID: String?
     public var reasoningEffort: ReasoningEffort?
+    public var sailCompletionWindow: SailCompletionWindow?
     public var fastMode: Bool?
     public var sessionID: String?
     public var sessionAccountID: String?
@@ -158,6 +159,7 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
         self.providerID = bot.providerID
         self.accountProfile = bot.accountProfile
         self.fastMode = bot.fastMode
+        self.sailCompletionWindow = bot.sailCompletionWindow
     }
 
     public var isRemote: Bool { hostID != nil }

@@ -18,11 +18,13 @@ public struct UsageRequest: Hashable, Sendable, Codable {
     }
 
     /// A profile's request wherever its allowance shows, so Providers, the background checks and a
-    /// conversation's Model & Usage share one reading. Only a Pi profile's reading depends on the
-    /// OpenRouter key, so saving another key (`openRouterKeyRevision`) starts only its readings afresh.
-    public init(account: Account, command: String, openRouterKeyRevision: Int, providerID: String? = nil, remote: Bool = false) {
-        self.init(account: account, command: command, credentialRevision: !remote && account.usesLegacyOpenRouterKey(providerID: providerID) ? openRouterKeyRevision : 0, providerID: providerID, remote: remote)
+    /// conversation's Model & Usage share one reading. Each permitted local key has its own revision;
+    /// remote and Pi-owned credentials never use either local key or revision.
+    public init(account: Account, command: String, openRouterKeyRevision: Int, sailKeyRevision: Int = 0, providerID: String? = nil, remote: Bool = false) {
+        self.init(account: account, command: command, credentialRevision: remote ? 0 : account.kind == .sail ? sailKeyRevision : account.usesLegacyOpenRouterKey(providerID: providerID) ? openRouterKeyRevision : 0, providerID: providerID, remote: remote)
     }
+
+    public var usesSailKey: Bool { remote != true && account.kind == .sail }
 
     public var usesLegacyOpenRouterKey: Bool { remote != true && account.usesLegacyOpenRouterKey(providerID: providerID) }
 
@@ -54,7 +56,7 @@ public enum UsageCheck: Sendable {
 }
 
 public enum ProviderUsageClient {
-    public static func read(_ request: UsageRequest, openRouterKey: String? = nil) async throws -> ProviderUsage {
+    public static func read(_ request: UsageRequest, openRouterKey: String? = nil, sailKey: String? = nil) async throws -> ProviderUsage {
         if request.remote == true {
             throw UsageFailure("This conversation uses the host’s own login. Check its provider’s dashboard for allowance.")
         }
@@ -68,8 +70,11 @@ public enum ProviderUsageClient {
             return try await OpenRouterUsage.read(key: key)
         }
         if request.account.kind == .sail {
-            // Nothing is inferred: Sail's own dashboard has its usage and billing.
-            throw UsageFailure("Sail doesn’t report usage to BotChu. Its dashboard (app.sailresearch.com) has usage and billing.")
+            // Sail's Usage API reports the balance, for the same key its inference uses.
+            guard let key = sailKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else {
+                throw UsageFailure("Add your Sail API key in Settings ▸ Sail to see its allowance.")
+            }
+            return try await SailUsage.read(key: key)
         }
         return try await Task.detached(priority: .utility) { try readCLI(request) }.value
     }
@@ -332,6 +337,45 @@ private final class OpenRouterUsage: NSObject, URLSessionTaskDelegate, @unchecke
             let seconds = http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init)
             throw UsageFailure("OpenRouter is limiting usage checks. Try again later.", retryAfter: max(300, seconds ?? 300))
         default: throw UsageFailure("OpenRouter usage is unavailable (HTTP \(http.statusCode)).")
+        }
+    }
+}
+
+/// Sail's Usage API (`GET /v2/usage/summary`), read with the same key the account's inference uses,
+/// as its docs describe (checked 2026-10-28). An organization may make about 60 usage requests a
+/// minute across all its keys, so a 429's `Retry-After` is honoured through the cache's backoff.
+/// Tests inject a loopback URL directly; production always uses Sail's HTTPS endpoint.
+final class SailUsage: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+
+    static let url = Sail.usageURL
+
+    static func read(key: String, url: URL = SailUsage.url) async throws -> ProviderUsage {
+        let delegate = SailUsage()
+        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "range", value: "30d")]
+        guard let address = components?.url else { throw UsageFailure.unrecognized }
+        var request = URLRequest(url: address, timeoutInterval: 30)
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let data: Data, response: URLResponse
+        do { (data, response) = try await session.data(for: request) }
+        catch { throw UsageFailure("Could not reach Sail. Try refreshing later.") }
+        guard let http = response as? HTTPURLResponse else { throw UsageFailure.unrecognized }
+        switch http.statusCode {
+        case 200:
+            guard data.count <= 1_048_576 else { throw UsageFailure.unrecognized }
+            return try UsageParser.sail(data)
+        case 401, 403: throw UsageFailure("Check your Sail API key in Settings ▸ Sail, then refresh.")
+        case 429:
+            let seconds = http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init).flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+            throw UsageFailure("Sail is limiting usage checks. Try again later.", retryAfter: max(300, seconds ?? 300))
+        default: throw UsageFailure("Sail usage is unavailable (HTTP \(http.statusCode)).")
         }
     }
 }

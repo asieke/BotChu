@@ -55,7 +55,7 @@ extension RenderingTests {
         let remoteRequest = app.usageRequest(for: task)
         #expect(remoteRequest.remote == true && remoteRequest.command.isEmpty)
         #expect(!remoteRequest.usesLegacyOpenRouterKey)
-        await app.usageBoard.refresh(remoteRequest, usage: app.usage, openRouterKey: app.openRouterKey)
+        await app.usageBoard.refresh(remoteRequest, usage: app.usage, keys: app.usageKeys)
         #expect(keyReads == 0)
 
         // Bot model/effort edits apply to the next turn; provider changes wait for this one.

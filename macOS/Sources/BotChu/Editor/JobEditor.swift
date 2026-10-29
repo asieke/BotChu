@@ -217,6 +217,10 @@ private struct RunsOnRows: View {
                       var selection = shown
                       selection.selectProvider(provider)
                       job.runsOn = JobRunsOn(selection)
+                  }, onSailCompletionWindow: { window in
+                      var selection = shown
+                      selection.sailCompletionWindow = window
+                      job.runsOn = JobRunsOn(selection)
                   }, inForm: true)
             // There's no choosing a model for an account BotChu can't run.
             .disabled(unavailable?.isAccount ?? false)

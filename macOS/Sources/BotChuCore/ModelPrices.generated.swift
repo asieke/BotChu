@@ -4,7 +4,7 @@
 // ETag: "\"fa100e2d48dcd4da54f907daa12fb084\"" SHA-256: fa100e2d48dcd4da54f907daa12fb0847cd0bf84bc3a7df3ac979ff1c354aab2
 // LiteLLM: https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
 // ETag: "\"ce0000e3d2af6b2084d5d27af76e5bf14e36567ed37773d90a617e47f262542f\"" SHA-256: b4f5c74b960d3f08d8cd335123b429ea33c00a43cf45f5aba90d8d30d2097e90
-// Sail Flex: https://docs.sailresearch.com/pricing (manually verified 2026-10-28).
+// Sail completion windows: https://docs.sailresearch.com/pricing (manually verified 2026-10-29).
 
 enum ModelPrices {
     static let snapshotDate = "2026-10-28"
@@ -569,6 +569,24 @@ enum ModelPrices {
         "openrouter/~x-ai/grok-latest": .init(.init(2, 6, 0.5, nil, nil), tiers: [.init(aboveInput: 200000, rates: .init(4, 12, 1, nil, nil))]),
         "openrouter/~z-ai/glm-flash-latest": .init(.init(0.0285, 0.0923, 0.0285, nil, nil)),
         "openrouter/~z-ai/glm-latest": .init(.init(0.0699, 1.4, 0.0689, nil, nil)),
+        "sail-asap/deepseek-ai/DeepSeek-V4-Flash-0731": .init(.init(0.09, 0.18, 0.02, 0.09, nil)),
+        "sail-asap/deepseek-ai/DeepSeek-V4-Pro-0813": .init(.init(0.92, 2.77, 0.04, 0.92, nil)),
+        "sail-asap/deepseek-ai/DeepSeek-V4.1-Flash-1017": .init(.init(0.09, 0.3, 0.006, 0.09, nil)),
+        "sail-asap/google/gemma-4-12B-it": .init(.init(0.3, 2, 0.15, 0.3, nil)),
+        "sail-asap/google/gemma-4-31B-it": .init(.init(0.4, 0.6, 0.2, 0.4, nil)),
+        "sail-asap/moonshotai/Kimi-K3": .init(.init(1.5, 10, 0.2, 1.5, nil)),
+        "sail-asap/nvidia/Gemma-4-31B-IT-NVFP4": .init(.init(0.14, 0.4, 0.07, 0.14, nil)),
+        "sail-asap/zai-org/GLM-5.3": .init(.init(0.98, 3.08, 0.18, 0.98, nil)),
+        "sail-asap/zai-org/GLM-5.3-Flash": .init(.init(0.11, 0.35, 0.02, 0.11, nil)),
+        "sail-balanced/deepseek-ai/DeepSeek-V4-Flash-0731": .init(.init(0.07, 0.14, 0.02, 0.07, nil)),
+        "sail-balanced/deepseek-ai/DeepSeek-V4-Pro-0813": .init(.init(0.74, 2.22, 0.03, 0.74, nil)),
+        "sail-balanced/deepseek-ai/DeepSeek-V4.1-Flash-1017": .init(.init(0.07, 0.22, 0.005, 0.07, nil)),
+        "sail-balanced/google/gemma-4-12B-it": .init(.init(0.1, 2, 0.07, 0.1, nil)),
+        "sail-balanced/google/gemma-4-31B-it": .init(.init(0.12, 0.6, 0.08, 0.12, nil)),
+        "sail-balanced/moonshotai/Kimi-K3": .init(.init(1.2, 8, 0.15, 1.2, nil)),
+        "sail-balanced/nvidia/Gemma-4-31B-IT-NVFP4": .init(.init(0.11, 0.32, 0.06, 0.11, nil)),
+        "sail-balanced/zai-org/GLM-5.3": .init(.init(0.5, 2.5, 0.12, 0.5, nil)),
+        "sail-balanced/zai-org/GLM-5.3-Flash": .init(.init(0.08, 0.28, 0.02, 0.08, nil)),
         "sail/Qwen/Qwen3.6-35B-A3B": .init(.init(0.05, 0.4, 0.02, 0.05, nil)),
         "sail/deepseek-ai/DeepSeek-V4-Flash-0731": .init(.init(0.05, 0.09, 0.01, 0.05, nil)),
         "sail/deepseek-ai/DeepSeek-V4-Pro-0813": .init(.init(0.46, 1.39, 0.02, 0.46, nil)),

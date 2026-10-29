@@ -29,9 +29,8 @@ extension RenderingTests {
         settings.customAccounts = [account]
         #expect(AppSettings(defaults: defaults).accounts.last == account)
         var keyReads = 0
-        let app = AppModel(store: store, settings: settings, usage: UsageCache { _, key in
-            let hasKey = key != nil
-            #expect(!hasKey)
+        let app = AppModel(store: store, settings: settings, usage: UsageCache { _, keys in
+            #expect(keys == UsageKeys(), "A Codex profile needs no key")
             return ProviderUsage(windows: [UsageWindow(id: "session", title: "5-hour", usedPercent: 24, resetsAt: .now.addingTimeInterval(7200)), UsageWindow(id: "week", title: "Weekly", usedPercent: 68, resetsAt: .now.addingTimeInterval(259200))])
         }, openRouterKey: { keyReads += 1; return nil }, projectGitHub: ProjectGitHub { _, _ in
             Issue.record("Library fixtures must not request GitHub")
@@ -40,6 +39,7 @@ extension RenderingTests {
             Issue.record("Library fixtures must not request GitHub")
             return .success(GitHubLookup.OpenWork(items: []))
         })
+        app.sailKey = { nil }
         // The open pull requests and issues as saved, which Projects shows without syncing.
         let url = URL(string: "https://github.com/octocat/BotChu/pull/7")!
         let openItems: [GitHubLookup.OpenItem] = [

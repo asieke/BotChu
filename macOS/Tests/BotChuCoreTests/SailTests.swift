@@ -7,7 +7,7 @@ private typealias S = SailSamples
 // MARK: Requests
 
 @Suite struct SailRequestTests {
-    @Test func everyRequestIsABackgroundFlexRequestWithTheWholeConversation() throws {
+    @Test func defaultRequestIsBackgroundFlexWithTheWholeConversation() throws {
         let input: [SailJSON] = [SailRequest.userMessage("Hi"), ["role": "assistant", "content": "Hello"], SailRequest.userMessage("Again")]
         let body = SailRequest.body(model: S.model, instructions: "Be brief.", input: input, tools: SailToolbox.definitions, effort: "high")
         #expect(body["model"] == .string(S.model))
@@ -168,8 +168,8 @@ private typealias S = SailSamples
         } catch let failure as SailFailure {
             #expect(failure.kind == .flex)
             #expect(failure.message.contains("big/model"))
-            #expect(failure.message.contains("Settings ▸ Sail"))
-            #expect(failure.message.contains("doesn't move work to a faster, pricier completion window"))
+            #expect(failure.message.contains("conversation's model menu"))
+            #expect(failure.message.contains("does not change the window automatically"))
         }
         let key = SailFixture([("POST", "/v1/responses", .http(401, #"{"error":{"message":"Invalid API key"}}"#))])
         await #expect(throws: SailFailure(.key, status: 401, "Sail refused the API key (HTTP 401: Invalid API key). Check it in BotChu ▸ Settings ▸ Sail.")) {
@@ -484,7 +484,7 @@ private typealias S = SailSamples
         #expect(!(await harness.run(fixture, SailAgent.Turn(sessionID: "s14", resume: false, model: S.model, prompt: "Go"))))
         guard case .failed(let message)? = harness.events.all.last else { Issue.record("No failure"); return }
         #expect(message.hasPrefix("Sail won't run \(S.model) on Flex (response resp_1 failed: Flex is not available for this model)."))
-        #expect(message.contains("Choose a model that takes Flex"))
+        #expect(message.contains("Choose another completion window or model"))
     }
 
     @Test func aRefusedSubmissionLeavesNothingPendingAndAnUnreachableOneIsKept() async throws {
@@ -737,17 +737,17 @@ private typealias S = SailSamples
             .failed("Sail cancelled response resp_2."),
         ].map(\.line) + ["not json"]
         #expect(lines.flatMap { parser.parse(line: $0) } == [
-            .toolStarted(id: "k1", name: "Sail Flex", input: "Submitting to Sail Flex · m"),
-            .toolStarted(id: "k1", name: "Sail Flex", input: "Queued on Sail Flex · resp_1 · m"),
+            .toolStarted(id: "k1", name: "Sail", input: "Submitting to Sail Flex · m"),
+            .toolStarted(id: "k1", name: "Sail", input: "Queued on Sail Flex · resp_1 · m"),
             .session("s1"),
-            .toolStarted(id: "k1", name: "Sail Flex", input: "Completed on Sail Flex · resp_1 · 4 min"),
-            .toolFinished(id: "k1", name: "Sail Flex", output: "Completed on Sail Flex · resp_1 · 4 min", isError: false),
+            .toolStarted(id: "k1", name: "Sail", input: "Completed on Sail Flex · resp_1 · 4 min"),
+            .toolFinished(id: "k1", name: "Sail", output: "Completed on Sail Flex · resp_1 · 4 min", isError: false),
             .model("m-2026"),
             .text("Running ls."),
             .toolStarted(id: "call_1", name: "bash", input: "ls", arguments: #"{"command":"ls"}"#),
             .toolFinished(id: "call_1", name: "bash", output: "a.txt\n", isError: false, exitCode: 0),
-            .toolStarted(id: "k2", name: "Sail Flex", input: "Cancelled by Sail · resp_2"),
-            .toolFinished(id: "k2", name: "Sail Flex", output: "Cancelled by Sail · resp_2", isError: true),
+            .toolStarted(id: "k2", name: "Sail", input: "Cancelled by Sail · resp_2"),
+            .toolFinished(id: "k2", name: "Sail", output: "Cancelled by Sail · resp_2", isError: true),
             .failed("Sail cancelled response resp_2."),
         ])
         // One row per submission, reading as how it ended.
@@ -755,7 +755,7 @@ private typealias S = SailSamples
         var messages: [ChatMessage] = []
         var again = StreamParsers.make(for: .sail)
         for line in lines { for event in again.parse(line: line) { assembler.apply(event, to: &messages) } }
-        let rows = messages.filter { $0.toolName == "Sail Flex" }
+        let rows = messages.filter { $0.toolName == "Sail" }
         #expect(rows.map(\.toolInput) == ["Completed on Sail Flex · resp_1 · 4 min", "Cancelled by Sail · resp_2"])
         #expect(rows.map(\.toolState) == [.done, .failed])
     }
@@ -801,12 +801,129 @@ private typealias S = SailSamples
         #expect(GenerationOptions.efforts(for: .sail, model: "any") == [.low, .medium, .high])
     }
 
-    @Test func usageIsNeverInferred() async {
+    @Test func usageNeedsTheSailKeyAndNothingInferred() async {
+        // Without its key the reading says which key to add, and never falls back to a made-up number.
         do {
             _ = try await ProviderUsageClient.read(UsageRequest(account: Accounts.account(id: "sail"), command: "botchu-sail"), openRouterKey: "or-key")
-            Issue.record("Sail has no usage reading")
+            Issue.record("Sail needs its own key")
         } catch {
-            #expect((error as? UsageFailure)?.message.contains("dashboard") == true)
+            #expect((error as? UsageFailure)?.message.contains("Settings ▸ Sail") == true)
+        }
+        // The OpenRouter key never stands in for Sail's, and Sail's reading never asks for it.
+        do {
+            _ = try await ProviderUsageClient.read(UsageRequest(account: Accounts.account(id: "sail"), command: "botchu-sail"), sailKey: " ")
+            Issue.record("A blank Sail key is no key")
+        } catch {
+            #expect((error as? UsageFailure)?.message.contains("Settings ▸ Sail") == true)
+        }
+    }
+}
+
+// MARK: Usage
+
+/// Synthetic summary fixtures shaped as Sail's docs describe: fractional US cents and plan limits.
+@Suite struct SailUsageTests {
+    @Test func aBalanceAndItsBurnReadAsDollars() throws {
+        let reading = try UsageParser.sail(Data(S.usageSummary().utf8), now: S.start)
+        #expect(reading.windows.isEmpty, "A balance is no window: no share of a limit is made up")
+        let balance = try #require(reading.balance)
+        // Sail reports fractional cents: 5498.0166062 cents is $54.98, and the cents keep their fraction.
+        #expect(abs((balance.credit ?? 0) - 54.980166062) < 1e-9)
+        #expect(abs((balance.spent ?? 0) - 0.019833938) < 1e-9)
+        #expect(abs((balance.perDay ?? 0) - 0.002833419714285714) < 1e-9)
+        #expect(balance.daysLeft == nil)
+        #expect(balance.period == "7d")
+        #expect(balance.unused == false)
+        #expect(balance.creditText == "$54.98")
+        // A rate under a cent a day says so rather than reading "$0.00/day".
+        #expect(balance.burnText == "<$0.01/day")
+        #expect(reading.note == "Your Sail plan limits usage history to 7d.")
+        // What Providers' Credits column and the inspector list.
+        #expect(reading.badges(at: S.start).map { $0.id } == ["balance", "burn"])
+        #expect(reading.badges(at: S.start).map { $0.text } == ["$54.98 left", "<$0.01/day"])
+        #expect(reading.badges(at: S.start).first?.kind == .balance)
+        #expect(reading.facts.map { $0.label } == ["Credit balance", "Burn rate"])
+        #expect(reading.facts.map { $0.value } == ["$54.98", "<$0.01/day"])
+        // No window, so Providers says the balance in its note instead of drawing a meter.
+        #expect(ProviderRow(request: UsageRequest(account: Accounts.account(id: "sail"), command: "botchu-sail"),
+                           state: UsageState(reading: reading, checkedAt: S.start), checking: false, found: true, newest: nil, now: S.start).note != nil)
+    }
+
+    @Test func anOrganizationWithoutBillingSaysNothingRatherThanZero() throws {
+        // `has_metronome_customer: false` comes with zeroed fields: that is no reading, not a $0 balance.
+        let body = #"{"available":true,"has_metronome_customer":false,"balance":0,"period_spend":0,"burn_rate":0}"#
+        #expect(throws: UsageFailure.self) { try UsageParser.sail(Data(body.utf8)) }
+        // A balance lookup that failed still leaves the spend it did report.
+        let unavailable = try UsageParser.sail(Data(#"{"available":true,"has_metronome_customer":true,"balance_unavailable":true,"period_spend":250}"#.utf8))
+        #expect(unavailable.balance?.credit == nil)
+        #expect(unavailable.balance?.spent == 2.5)
+        #expect(unavailable.note == nil, "Only a plan's shortening is noted")
+        // Nothing billed in the range says so, rather than a burn rate of nothing.
+        let empty = try UsageParser.sail(Data(#"{"available":true,"empty":true,"has_metronome_customer":true,"balance":5498,"period_spend":0,"burn_rate":0}"#.utf8))
+        #expect(empty.balance?.unused == true)
+        #expect(empty.balance?.creditText == "$54.98")
+        #expect(empty.balance?.burnText == nil)
+        // A plan shortening to the period it asked for is not limited, and says no note.
+        let period = try UsageParser.sail(Data(#"{"has_metronome_customer":true,"range":"period","effective_range":"period","plan_limited":true,"balance":100}"#.utf8))
+        #expect(period.note == nil)
+        // Days the provider won't give, above a year, are left out rather than hinted at.
+        // A balance of 1,000,000 cents at 1 cent a day is 1,000,000 days: too far to hint at.
+        let far = try UsageParser.sail(Data(#"{"has_metronome_customer":true,"balance":1000000,"burn_rate":1}"#.utf8))
+        #expect(far.balance?.daysLeft == nil)
+        #expect(far.balance?.burnText == "$0.01/day")
+        #expect(throws: UsageFailure.self) { try UsageParser.sail(Data("<html>Bad gateway</html>".utf8)) }
+    }
+
+    @Test func malformedBalancesCannotCrashOrMasqueradeAsKnownZero() throws {
+        for days in ["1e100", "-5", "366", "null"] {
+            let reading = try UsageParser.sail(Data("{\"balance\":100,\"days_remaining\":\(days),\"burn_rate\":-1}".utf8))
+            #expect(reading.balance?.daysLeft == nil)
+            #expect(reading.balance?.perDay == nil)
+        }
+        #expect(throws: UsageFailure.self) { try UsageParser.sail(Data(#"{"available":false,"balance":0}"#.utf8)) }
+        #expect(throws: UsageFailure.self) { try UsageParser.sail(Data(#"{"period_spend":-5}"#.utf8)) }
+        let overdraft = try UsageParser.sail(Data(#"{"balance":-100}"#.utf8))
+        #expect(overdraft.balance?.credit == -1)
+        let unexpected = try UsageParser.sail(Data(#"{"balance":100,"effective_range":"private response text"}"#.utf8))
+        #expect(unexpected.balance?.period == nil)
+    }
+
+    @Test func changingOneKeyInvalidatesOnlyItsLocalReadings() {
+        let sail = Accounts.account(id: "sail"), pi = Accounts.account(id: "openrouter")
+        let first = UsageRequest(account: sail, command: "", openRouterKeyRevision: 1, sailKeyRevision: 2)
+        #expect(first != UsageRequest(account: sail, command: "", openRouterKeyRevision: 1, sailKeyRevision: 3))
+        #expect(first == UsageRequest(account: sail, command: "", openRouterKeyRevision: 9, sailKeyRevision: 2))
+        #expect(UsageRequest(account: pi, command: "", openRouterKeyRevision: 1, sailKeyRevision: 2)
+            == UsageRequest(account: pi, command: "", openRouterKeyRevision: 1, sailKeyRevision: 3))
+        for account in [sail, pi] {
+            let remote = UsageRequest(account: account, command: "", openRouterKeyRevision: 1, sailKeyRevision: 2, remote: true)
+            #expect(remote.credentialRevision == 0)
+            #expect(UsageKeys(for: remote, from: UsageKeys(openRouter: "OR", sail: "Sail")) == UsageKeys())
+        }
+        let native = Account(id: "native", name: "Native", kind: .pi, defaultCommand: "pi", symbol: "terminal")
+        #expect(UsageKeys(for: UsageRequest(account: native, command: "", providerID: "radius"),
+            from: UsageKeys(openRouter: "OR", sail: "Sail")) == UsageKeys())
+    }
+
+    @Test func theCachePassesTheKeysToItsReading() async throws {
+        let reads = SailLog<UsageKeys>()
+        let cache = UsageCache { _, keys in
+            reads.add(keys)
+            return try UsageParser.sail(Data(S.usageSummary().utf8))
+        }
+        let request = UsageRequest(account: Accounts.account(id: "sail"), command: "botchu-sail")
+        let state = await cache.read(request, keys: UsageKeys(openRouter: "or-key", sail: "sail-key"))
+        #expect(state.error == nil)
+        #expect(abs((state.reading?.balance?.credit ?? 0) - 54.980166062) < 1e-9)
+        #expect(reads.all == [UsageKeys(sail: "sail-key")])
+    }
+
+    @Test func onlyTheAccountsOwnKeyIsHandedToACheck() {
+        let all = UsageKeys(openRouter: "or-key", sail: "sail-key")
+        #expect(UsageKeys(for: UsageRequest(account: Accounts.account(id: "sail"), command: ""), from: all) == UsageKeys(openRouter: nil, sail: "sail-key"))
+        #expect(UsageKeys(for: UsageRequest(account: Accounts.account(id: "openrouter"), command: ""), from: all) == UsageKeys(openRouter: "or-key", sail: nil))
+        for kind in [AgentKind.claude, .codex, .antigravity, .muse] {
+            #expect(UsageKeys(for: UsageRequest(account: Account(id: "test", name: "Test", kind: kind, defaultCommand: "test", symbol: "terminal"), command: ""), from: all) == UsageKeys(), "\(kind.rawValue) needs no key")
         }
     }
 }
@@ -839,7 +956,7 @@ private typealias S = SailSamples
             let ok = await harness.run(fixture, .init(sessionID: "s", resume: false, model: SailSamples.model, prompt: "Go"))
             #expect(ok == !fails)
             let usages = harness.events.all.compactMap { if case .usage(let usage) = $0 { usage } else { nil } }
-            #expect(usages == [TurnUsage(models: [ModelUsage(model: SailSamples.model, uncachedInput: 2400, output: 68)])])
+            #expect(usages == [TurnUsage(models: [ModelUsage(model: SailSamples.model, uncachedInput: 2400, output: 68, sailCompletionWindow: .flex)])])
             #expect(harness.events.all.dropLast().last == .usage(usages[0]))
         }
     }

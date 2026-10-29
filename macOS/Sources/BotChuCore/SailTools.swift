@@ -265,7 +265,9 @@ enum SailCommandRunner {
                 return
             }
             live?.started(process)
-            DispatchQueue.global().async {
+            // A blocking pipe reader needs its own thread: global workers can all be waiting
+            // for child exits, starving this reader until the termination drain deadline expires.
+            Thread.detachNewThread {
                 let handle = pipe.fileHandleForReading
                 while true {
                     let chunk = handle.availableData

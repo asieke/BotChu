@@ -284,6 +284,7 @@ extension RunSettings {
             model = ""
             reasoningEffort = nil
             fastMode = nil
+            sailCompletionWindow = nil
         }
         if executionScope != oldScope { invalidateSession(previous: oldScope) }
     }

@@ -21,7 +21,8 @@ public struct TurnUsage: Codable, Equatable, Sendable {
 /// Adds only reported buckets; absent usage must never become a fabricated zero.
 struct TurnUsageAccumulator {
     private(set) var value: TurnUsage?
-    private var overflowingBuckets: [String: Set<WritableKeyPath<ModelUsage, Int?>>] = [:]
+    private struct ModelKey: Hashable { let model: String; let window: SailCompletionWindow? }
+    private var overflowingBuckets: [ModelKey: Set<WritableKeyPath<ModelUsage, Int?>>] = [:]
     private var overflowingCost = false
 
     mutating func add(_ usage: TurnUsage) {
@@ -30,12 +31,13 @@ struct TurnUsageAccumulator {
         guard !usage.cumulative, value?.cumulative != true else { value = usage; return }
         guard var total = value else { value = usage; return }
         for model in usage.models {
-            if let index = total.models.firstIndex(where: { $0.model == model.model }) {
+            let modelKey = ModelKey(model: model.model, window: model.sailCompletionWindow)
+            if let index = total.models.firstIndex(where: { $0.model == model.model && $0.sailCompletionWindow == model.sailCompletionWindow }) {
                 for key in [\ModelUsage.uncachedInput, \.cacheRead, \.cacheWrite, \.cacheWrite1h, \.output, \.reasoning] {
-                    if let count = model[keyPath: key], overflowingBuckets[model.model]?.contains(key) != true {
+                    if let count = model[keyPath: key], overflowingBuckets[modelKey]?.contains(key) != true {
                         let (sum, overflow) = (total.models[index][keyPath: key] ?? 0).addingReportingOverflow(count)
                         total.models[index][keyPath: key] = overflow ? nil : sum
-                        if overflow { overflowingBuckets[model.model, default: []].insert(key) }
+                        if overflow { overflowingBuckets[modelKey, default: []].insert(key) }
                     }
                 }
             } else { total.models.append(model) }
