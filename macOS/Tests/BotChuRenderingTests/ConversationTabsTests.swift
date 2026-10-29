@@ -587,8 +587,8 @@ extension RenderingTests {
     }
 
     /// #192: a new task's summary is asked for once, in the background, on the Quick tasks profile
-    /// and model, only once they are chosen; a reply that isn't a label of three or four words
-    /// leaves the task named as before. A saved one is in its task.json.
+    /// and model, only once they are chosen; an invalid reply gets one correction (#315),
+    /// then leaves the task named as before if still invalid. A saved one is in its task.json.
     @Test func aNewTasksSummaryIsAskedForOnceOnTheQuickTasksProfile() async throws {
         let fixture = try TabsFixture()
         defer { fixture.cleanUp() }
@@ -612,14 +612,15 @@ extension RenderingTests {
         model.summarizeNewTask(targets[1])
         #expect(model.summaryRuns.count == 2)
         await model.lastSummaryRun?.value
-        #expect(jobs.all.map(\.account.id) == ["claude-dev", "claude-dev"])
+        #expect(jobs.all.map(\.account.id) == ["claude-dev", "claude-dev", "claude-dev"])
+        #expect(jobs.all.last?.prompt.contains("exactly THREE words") == true)
         #expect(jobs.all.allSatisfy { $0.model == "haiku" })
         #expect(model.task(targets[0])?.summary == "Typo fix in README")
         #expect(model.task(targets[1])?.summary == nil)
         #expect(model.conversationTab(of: targets[1])?.label == "Add a filter bar")
         // Once: never asked again.
         model.summarizeNewTask(targets[0])
-        #expect(model.summaryRuns.isEmpty && jobs.all.count == 2)
+        #expect(model.summaryRuns.isEmpty && jobs.all.count == 3)
         let home = BotHome(workspace: bot.workspace)
         for _ in 0..<100 where home.loadTasks().first(where: { $0.id == targets[0].taskID })?.summary == nil {
             try await Task.sleep(for: .milliseconds(20))
