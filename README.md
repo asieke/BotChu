@@ -1138,27 +1138,32 @@ on that pull request's branch to continue in instead). The same command run agai
     stay on this Mac. Memory capture tells bots that multi-step workflows go in a skill of their
     own, not in `MEMORY.md`; they change shared skills only when you ask. **Skills & Tools** in the sidebar has two
     tabs of tables, as Providers is laid out (#246). **Skills** lists one row a skill: its name over its description, which
-    bots have it, the tools it declares and its number of files (which goes first in a narrow window), with a search;
-    selecting a row opens its sidebar with the description, a shared skill's switch for each bot, its declared tools and its
+    bots have it, **Uses** (its tools) and its number of files (which goes first in a narrow window), with a search;
+    selecting a row opens its sidebar with the description, a shared skill's switch for each bot, its used tools and its
     folder. **New Skill** makes one, shared or for one bot (its **File** row shows `skills/<name>/SKILL.md`), from a template
     and opens it in the Markdown editor, as do a row's **Edit…** and double-click; a shared skill's **Bots** menu and
     switches turn it on or off for each bot (kept in `bot.json` as `disabledSkills`; every shared skill is on until turned
     off), and its menu shows it in Finder or puts its folder in the Trash. **Shared Folder** opens the bots folder's
-    `skills/`. A skill declares the command-line tools it needs in its frontmatter, `cli-tools: [gh, jq]` (or a `- gh`
-    list); only that links a skill to a tool, never a mention in its text. Its sidebar adds or removes one (rewriting just
-    that line), and each declared tool's chip says how it stands, **Enabled**, **Off**, **Not approved** or **Not
-    installed**, and opens it in Tools, or Add Tools when it isn't approved. A skill never approves a tool.
+    `skills/`. BotChu detects tools from the first word of each fenced command line and inline code span, plus executable
+    paths in inline code (`~/.local/bin/kalshi` becomes `kalshi`). Approved tools, catalog commands and executables found
+    on This Mac count; system commands in `/bin`, `/sbin`, `/usr/bin` and `/usr/sbin` (including links to them) and
+    `botchu-*` helpers are left out of inference. Plain prose is not searched. Frontmatter `cli-tools: [gh, jq]` (or a
+    `- gh` list) overrides detection, including `cli-tools: []` for none. Detection never changes a skill's file.
+    Its sidebar adds or removes a tool by saving that explicit override, and each tool's chip says **Enabled**, **Off**,
+    **Not approved** or **Not installed**. The chip opens it in Tools, or Add Tools when it isn't approved; the sidebar's
+    inline **Approve** approves it directly, through the same global policy as Add Tools.
     BotChu creates no skill on its own; an example, `aside-web-browsing`, is in
     [docs/skills](docs/skills/aside-web-browsing/SKILL.md), to copy into that folder.
   - **Tools** (Skills & Tools' second tab, #246): the command-line tools you approve for agents on This Mac, one global
     list for every bot, in `tools.json` beside `index.json`. Its table groups **Command line** (approved tools: name,
-    status, the skills that declare each, and an **On** switch), **SSH destinations**, and **BotChu**'s own helpers
+    status, **Used by** (skills), read-only **Bots** (bots with an active skill using it), and an **On** switch), **SSH destinations**, and **BotChu**'s own helpers
     (`botchu-subagent`, `-task`, `-inbox`, `-message`, always on); selecting a row opens its sidebar. **Add Tools…** (with
     how many wait) lists candidates, none of them approved until you tick them and press **Approve**: tools of a curated
     catalog of service and infrastructure CLIs (`gh`, `glab`, `aws`, `gcloud`, `az`, `vercel`, `netlify`, `fly`,
     `heroku`, `wrangler`, `supabase`, `firebase`, `railway`, `doctl`, `stripe`, `op`, `docker`, `kubectl`, `helm`,
     `terraform`, `ngrok`, `aside`) found in the login shell's `PATH` and the usual install folders, and commands skills
-    declare that are installed. BotChu looks for these names only, without running them; it never imports `PATH` or
+    use that are installed. The Bots column respects shared skills' switches and private skills that replace shared ones;
+    tool access still stays global. BotChu looks for these names or explicit executable paths only, without running them; it never imports `PATH` or
     scans the Mac. **Ignore** keeps a candidate apart (under **Ignored**, with **Restore**); **Choose Executable…** adds
     any other executable you pick, which BotChu never runs; shells, git and SSH can't be added, as nothing restricts them.
     An approved catalog tool is checked with its own version command (and `gh` with `gh auth status --json hosts`, for
@@ -1175,7 +1180,7 @@ on that pull request's branch to continue in instead). The same command run agai
     permitted", and its session is told which tools it has and that the catalog's others are blocked. It isn't a
     sandbox otherwise: commands outside the catalog, copies made elsewhere before the turn or downloaded, a service's
     API reached another way, connectors, and turns on SSH hosts are untouched, and a turn keeps the profile it
-    started with. Turning a tool off can break a script that calls it; the skills that declare it show it **Off**.
+    started with. Turning a tool off can break a script that calls it; the skills that use it show it **Off**.
     Muse runs its shell in its own macOS sandbox, which macOS won't nest, so while Enforce is on a Muse turn on This Mac
     stops with that reason instead of running with every shell command failing. Without Enforce, the switches only
     choose what sessions are told. A `tools.json` that can't be read stops turns on This Mac, with the reason on the
@@ -1441,7 +1446,7 @@ on that pull request's branch to continue in instead). The same command run agai
     conversation's CLI last reported running (`Models.swift`), the
     sections the sidebar and Agents group bots into, where a new bot goes, where a dragged one lands
     and what a search of them finds (`BotSections.swift`), skills: finding them, reading their frontmatter, which a bot uses,
-    and making one (`Skills.swift`), the tool catalog, policy and SSH destinations, where tools are, skills' declared
+    and making one (`Skills.swift`), the tool catalog, policy and SSH destinations, where tools are, skills' detected or declared
     tools and what sessions are told (`Tools.swift`), the profile that blocks tools in a turn (`ToolSandbox.swift`) and
     tools' bounded version and sign-in checks (`ToolProbe.swift`), one stream parser per
     CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
@@ -1722,7 +1727,7 @@ on that pull request's branch to continue in instead). The same command run agai
     columns and its 56- and 74-point rows in every state, from wide to its narrowest, sorting by
     Weekly, the selected profile's sidebar, a problem's popover, and removing an added profile from
     its row's menu after confirming, Skills & Tools' two tables in both appearances, wide and narrow, with their
-    sidebars and the links between a skill's declared tools and a tool's skills, provider logos in both
+    sidebars, inline approval and links between skills' used tools and tools' active bots, provider logos in both
     appearances and in account menus, the report
     sheet, with a stand-in screenshot (taken of its window before the sheet opens, removed, not
     taken again on a retry, new for the next report, and a report without one when it can't be

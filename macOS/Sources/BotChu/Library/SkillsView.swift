@@ -3,7 +3,7 @@ import BotChuCore
 
 /// Skills & Tools (#246): the skills, and the command-line tools agents have on This Mac, as two
 /// tabs of native tables with the selection in a sidebar, as Providers has. A skill links to the
-/// tools its frontmatter declares (`cli-tools:`), and each tool to the skills that declare it.
+/// tools its code uses (overridden by `cli-tools:`), and each tool to the skills that use it.
 struct SkillsView: View {
     @Environment(AppModel.self) private var model
     @State private var entries: [SkillEntry] = []
@@ -19,12 +19,13 @@ struct SkillsView: View {
 
     private var matches: [SkillEntry] {
         entries.filter { entry in
-            skillQuery.isEmpty || [entry.skill.name, entry.skill.description, entry.bot?.name ?? "", entry.skill.declaredTools.joined(separator: " ")]
+            skillQuery.isEmpty || [entry.skill.name, entry.skill.description, entry.bot?.name ?? "", entry.skill.usedTools(in: model.tools.inventory()).joined(separator: " ")]
                 .joined(separator: " ").localizedCaseInsensitiveContains(skillQuery)
         }
     }
 
-    private var declarations: [(skill: String, tools: [String])] { entries.map { ($0.id, $0.skill.declaredTools) } }
+    private var declarations: [(skill: String, tools: [String])] { entries.map { ($0.id, $0.skill.usedTools(in: model.tools.inventory())) } }
+    private var toolCommands: [String] { Array(Set(entries.flatMap { $0.skill.toolCommands })).sorted() }
     private var skillNames: [String: String] { Dictionary(entries.map { ($0.id, $0.skill.name) }, uniquingKeysWith: { first, _ in first }) }
 
     var body: some View {
@@ -39,7 +40,7 @@ struct SkillsView: View {
                         .help("Open the skills every bot shares, in the bots folder")
                     Button { creating = true } label: { Label("New Skill", systemImage: "plus") }.buttonStyle(.borderedProminent)
                 } else {
-                    ToolsHeadingActions(candidates: candidates.open, inventory: inventory, refresh: { refreshTools(force: true) })
+                    ToolsHeadingActions(candidates: candidates.open, inventory: inventory, refresh: { Task { await refreshTools(force: true) } })
                 }
             }
             HStack(spacing: 12) {
@@ -73,7 +74,7 @@ struct SkillsView: View {
             } else if toolGroups.isEmpty {
                 LibraryEmpty(title: "No matching tools", subtitle: "Try a command or what it is.", symbol: "terminal")
             } else {
-                ToolsTable(groups: toolGroups, skillNames: skillNames, wide: width >= 720)
+                ToolsTable(groups: toolGroups, skillNames: skillNames, entries: entries, wide: width >= 720)
             }
         }
         .onGeometryChange(for: Double.self) { Double($0.size.width) } action: { width = $0 }
@@ -83,7 +84,7 @@ struct SkillsView: View {
         .onChange(of: model.bots) { reload() }
         // Where tools are, looked for (never run) when the page opens and skills change; then the
         // approved catalog tools' checks, when due.
-        .task(id: declarations.flatMap(\.tools)) { refreshTools(force: false) }
+        .task(id: toolCommands) { await refreshTools(force: false) }
         .inspector(isPresented: inspectorShown) {
             Group {
                 if model.skillsTab == .skills, let entry = entries.first(where: { $0.id == model.skillSelection }) {
@@ -125,17 +126,14 @@ struct SkillsView: View {
 
     private func reload() { entries = model.skillEntries() }
 
-    private func refreshTools(force: Bool) {
-        let names = Array(Set(declarations.flatMap(\.tools).filter { ToolCatalog.tool(command: $0) == nil }.map { $0.lowercased() })).sorted()
-        Task {
-            await model.tools.refresh(declaring: names)
-            await model.tools.checkAll(force: force)
-        }
+    private func refreshTools(force: Bool) async {
+        await model.tools.refresh(declaring: toolCommands)
+        await model.tools.checkAll(force: force)
     }
 }
 
 /// The skills, one row each: its name over its description, which bots have it, the tools it
-/// declares and how each stands, and its files. Double-click edits; Bots and Delete are in its menu
+/// uses and how each stands, and its files. Double-click edits; Bots and Delete are in its menu
 /// and sidebar, as the gallery's cards had them.
 private struct SkillsTable: View {
     @Environment(AppModel.self) private var model
@@ -164,8 +162,8 @@ private struct SkillsTable: View {
             .width(min: 180, ideal: 320)
             TableColumn("Bots") { (entry: SkillEntry) in SkillBotsCell(entry: entry).environment(model) }
                 .width(min: 90, ideal: 140)
-            TableColumn("Tools") { (entry: SkillEntry) in
-                SkillToolChips(tools: entry.skill.declaredTools, inventory: inventory).environment(model)
+            TableColumn("Uses") { (entry: SkillEntry) in
+                SkillToolChips(tools: entry.skill.usedTools(in: inventory), inventory: inventory).environment(model)
             }
             .width(min: 100, ideal: 180)
             TableColumn("Files") { (entry: SkillEntry) in
@@ -200,6 +198,18 @@ private struct SkillBotsCell: View {
 }
 
 enum SkillBots {
+    /// Bots with at least one of these skills active. Use the same resolution as sessions:
+    /// private skills replace shared skills with the same slug; remote queues have no local skills.
+    static func users(of ids: [String], entries: [SkillEntry], bots: [Bot]) -> [Bot] {
+        let ids = Set(ids)
+        let shared = entries.filter { $0.bot == nil }.map(\.skill)
+        let own = Dictionary(grouping: entries.filter { $0.bot != nil }, by: { $0.bot!.id })
+        return bots.filter { bot in
+            !bot.isRemoteQueue && Skills.active(for: bot, shared: shared, own: (own[bot.id] ?? []).map(\.skill))
+                .contains { ids.contains($0.id) }
+        }
+    }
+
     /// The bots that keep a shared skill on.
     @MainActor static func users(of skill: Skill, in model: AppModel) -> [Bot] {
         model.bots.filter { !$0.isRemoteQueue && $0.usesSharedSkill(skill.slug) }
@@ -213,7 +223,7 @@ enum SkillBots {
     }
 }
 
-/// A skill's declared tools as chips that say how each stands; each opens its tool, or Add Tools.
+/// A skill's used tools as chips that say how each stands; each opens its tool, or Add Tools.
 private struct SkillToolChips: View {
     @Environment(AppModel.self) private var model
     let tools: [String]
@@ -269,7 +279,7 @@ private struct SkillBotsMenu: View {
     }
 }
 
-/// The selected skill in the sidebar: its description, bots, declared tools and how each stands,
+/// The selected skill in the sidebar: its description, bots, used tools and how each stands,
 /// and its files, with Edit and the rest of its card's actions.
 private struct SkillInspector: View {
     @Environment(AppModel.self) private var model
@@ -361,28 +371,12 @@ private struct SkillInspector: View {
     }
 
     private var tools: some View {
-        let declared = skill.declaredTools
-        return InspectorSection("Tools", trailing: declared.isEmpty ? nil : "\(declared.count)", preferenceKey: "skill.tools") {
+        let used = skill.usedTools(in: inventory)
+        return InspectorSection("Uses", trailing: used.isEmpty ? nil : "\(used.count)", preferenceKey: "skill.tools") {
             InspectorCard {
                 // Each opens its tool, or Add Tools for one not approved, as Providers' agent rows open their agent.
-                ForEach(declared, id: \.self) { name in
-                    let dependency = inventory.dependency(name)
-                    Button { model.showTool(declared: name) } label: {
-                        HStack(spacing: 8) {
-                            ToolChip(name: name, dependency: dependency)
-                            Spacer(minLength: 4)
-                            state(dependency).lineLimit(1).fixedSize()
-                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.secondaryText)
-                        }
-                        .font(.system(size: 12))
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 36)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .overlay(alignment: .bottom) { Rectangle().fill(Palette.rowDivider).frame(height: 1) }
-                    .contextMenu { Button("Remove from Skill") { setTools(declared.filter { $0 != name }) } }
-                    .accessibilityIdentifier("skill-tool-\(name)")
+                ForEach(used, id: \.self) { name in
+                    SkillToolRow(name: name, inventory: inventory, remove: { setTools(used.filter { $0 != name }) })
                 }
                 HStack(spacing: 8) {
                     TextField("Declare a tool", text: $declaring, prompt: Text("Declare a tool"))
@@ -400,20 +394,11 @@ private struct SkillInspector: View {
         }
     }
 
-    @ViewBuilder private func state(_ dependency: ToolDependency) -> some View {
-        switch dependency {
-        case .enabled: Label("Enabled", systemImage: "checkmark").foregroundStyle(Palette.secondaryText)
-        case .off: Label("Off", systemImage: "nosign").foregroundStyle(Palette.secondaryText)
-        case .notApproved: Label("Not approved", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Palette.warning)
-        case .missing: Label("Not installed", systemImage: "questionmark").foregroundStyle(Palette.secondaryText)
-        }
-    }
-
     private func declare() {
         let name = declaring.trimmingCharacters(in: .whitespaces)
         guard Skills.isToolName(name) else { return }
-        let declared = skill.declaredTools
-        if !declared.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) { setTools(declared + [name]) }
+        let used = skill.usedTools(in: inventory)
+        if !used.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) { setTools(used + [name]) }
         declaring = ""
     }
 
@@ -426,6 +411,52 @@ private struct SkillInspector: View {
             changed()
         } catch {
             problem = "Couldn’t save \(Skills.fileName): \(error.localizedDescription)"
+        }
+    }
+}
+
+/// One used tool in a skill's sidebar. Approval is a separate action from opening the tool,
+/// and only editing the list writes the skill's explicit override.
+struct SkillToolRow: View {
+    @Environment(AppModel.self) private var model
+    let name: String
+    let inventory: ToolInventory
+    let remove: () -> Void
+
+    var body: some View {
+        let dependency = inventory.dependency(name)
+        HStack(spacing: 8) {
+            Button { model.showTool(declared: name) } label: {
+                HStack(spacing: 8) {
+                    ToolChip(name: name, dependency: dependency)
+                    Spacer(minLength: 4)
+                    state(dependency).lineLimit(1)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if let candidate = inventory.candidate(for: name) {
+                Button("Approve") { model.tools.approve([candidate]) }
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("approve-skill-tool-\(name)")
+            } else {
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.secondaryText)
+            }
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 12)
+        .frame(minHeight: 36)
+        .overlay(alignment: .bottom) { Rectangle().fill(Palette.rowDivider).frame(height: 1) }
+        .contextMenu { Button("Remove from Skill", action: remove) }
+        .accessibilityIdentifier("skill-tool-\(name)")
+    }
+
+    @ViewBuilder private func state(_ dependency: ToolDependency) -> some View {
+        switch dependency {
+        case .enabled: Label("Enabled", systemImage: "checkmark").foregroundStyle(Palette.secondaryText)
+        case .off: Label("Off", systemImage: "nosign").foregroundStyle(Palette.secondaryText)
+        case .notApproved: Label("Not approved", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Palette.warning)
+        case .missing: Label("Not installed", systemImage: "questionmark").foregroundStyle(Palette.secondaryText)
         }
     }
 }

@@ -28,6 +28,84 @@ import Testing
 
     // MARK: Frontmatter
 
+    @Test func toolsAreInferredFromCodeButNotProseOrFrontmatter() {
+        let text = """
+            ---
+            name: workflow
+            description: Use `aws` for this.
+            ---
+            Plain prose mentions docker and netlify.
+            ```sh
+            gh issue list
+            $ vercel deploy
+            # stripe status
+            botchu-subagent list
+            cat notes.txt
+            ```
+            ~~~shell
+            jq . result.json
+            ~~~
+            Use `aside open https://example.com` and ``gsutil ls``.
+            The executable is `~/.local/bin/kalshi`; also `path: /custom/kalshi`.
+            Repeat `gh pr list`. This span names only its first word: `echo stripe`.
+            """
+        let inventory = ToolInventory(policy: ToolPolicy(), catalogLocations: [:], declaredLocations: [
+            "kalshi": ToolLocation(path: "/custom/kalshi", realPath: "/custom/kalshi"),
+            "jq": ToolLocation(path: "/opt/homebrew/bin/jq", realPath: "/opt/homebrew/Cellar/jq/1/bin/jq"),
+            "cat": ToolLocation(path: "/bin/cat", realPath: "/bin/cat"),
+        ])
+        let workflow = skill("workflow", text)
+        #expect(workflow.declaredTools.isEmpty)
+        #expect(Set(workflow.usedTools(in: inventory)) == ["gh", "vercel", "jq", "aside", "gsutil", "kalshi"])
+        #expect(workflow.usedTools(in: inventory).count == 6)
+        #expect(workflow.toolCommands.contains("~/.local/bin/kalshi"))
+        #expect(workflow.toolCommands.contains("/custom/kalshi"))
+        #expect(workflow.text == text)
+    }
+
+    @Test func inferenceExcludesSystemPathsAndLinksToSystemCommands() {
+        let paths = ["cat": "/bin/cat", "git": "/usr/bin/git", "ls": "/bin/ls", "find": "/usr/bin/find",
+                     "mount": "/sbin/mount", "diskutil": "/usr/sbin/diskutil"]
+        var locations = paths.mapValues { ToolLocation(path: $0, realPath: $0) }
+        locations["cat-link"] = ToolLocation(path: "/custom/cat-link", realPath: "/bin/cat")
+        let inventory = ToolInventory(policy: ToolPolicy(), catalogLocations: [:], declaredLocations: locations)
+        let body = "```sh\n" + (Array(paths.keys) + ["cat-link", "not-installed", "botchu-task"]).joined(separator: "\n") + "\n```"
+        #expect(skill("system-only", body).usedTools(in: inventory).isEmpty)
+    }
+
+    @Test func approvedToolsAndCatalogAliasesCountEvenWhenNotInstalled() {
+        let policy = ToolPolicy(tools: [ApprovedTool(id: "path:/custom/acme", name: "acme", enabled: false),
+                                        ApprovedTool(id: "path:/custom/botchu-test", name: "botchu-test")])
+        let inventory = ToolInventory(policy: policy, catalogLocations: [:])
+        #expect(skill("approved", "Run `acme check`, `flyctl status` and `botchu-test`.").usedTools(in: inventory) == ["acme", "flyctl"])
+    }
+
+    @Test func aPresentToolsDeclarationOverridesInferenceIncludingAnEmptyList() {
+        for declaration in ["cli-tools: [jq]", "cli-tools:\n  - jq", "CLI-TOOLS: jq"] {
+            let text = "---\n\(declaration)\n---\n```sh\ngh issue list\n```\nUse `aside open`."
+            #expect(skill("override", text).usedTools(in: ToolInventory(policy: ToolPolicy(), catalogLocations: [:])) == ["jq"])
+            #expect(Skills.toolCommands(in: text) == ["jq"])
+        }
+        for declaration in ["cli-tools: []", "cli-tools:", "cli-tools: [../invalid]"] {
+            let text = "---\n\(declaration)\n---\nUse `gh issue list`."
+            #expect(skill("override", text).usedTools.isEmpty)
+        }
+    }
+
+    @Test func codeDelimitersAndQuotedCommandsDoNotLeakIntoProse() {
+        let text = """
+            ````sh
+            '/custom/kalshi' markets
+            ```
+            gh issue list
+            ````
+            prose about aws
+            Use ``aside
+            open``. Ignore `echo gh`, and this unmatched `stripe.
+            """
+        #expect(Skills.toolCommands(in: text) == ["/custom/kalshi", "gh", "aside", "echo"])
+    }
+
     @Test func readsTheScalarsSkillsUse() {
         let text = """
             ---
@@ -91,6 +169,7 @@ import Testing
         let url = repo.appendingPathComponent("docs/skills/aside-web-browsing/SKILL.md")
         let example = Skill(slug: "aside-web-browsing", text: try String(contentsOf: url, encoding: .utf8), scope: .shared, url: url)
         #expect(example.name == "aside-web-browsing")
+        #expect(example.usedTools.contains("aside"))
         #expect(example.description.hasPrefix("Browse the web, research live sites"))
         #expect(example.description.hasSuffix("or authenticated web context."))
         #expect(!example.description.contains("\n"))

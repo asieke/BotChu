@@ -54,12 +54,21 @@ import BotChuCore
         ToolInventory(policy: policy, catalogLocations: catalogLocations, declaredLocations: declaredLocations, declarations: declarations)
     }
 
-    /// Looks for the catalog's commands and the ones skills declare, without running any.
+    /// Looks for the catalog's commands and the ones skills mention or declare, without running any.
     func refresh(declaring names: [String] = []) async {
         let found = await locate(names)
+        guard !Task.isCancelled else { return }
         catalogLocations = found.catalog
         declaredLocations = found.declared
         locatedAt = Date()
+    }
+
+    /// The same explicit approval action from Add Tools or a skill's sidebar.
+    func approve(_ candidates: [ToolCandidate]) {
+        change { policy in
+            for candidate in candidates { policy.approve(candidate) }
+        }
+        Task { await checkAll() }
     }
 
     /// Changes the policy and saves it. A policy that couldn't be read is replaced only by a

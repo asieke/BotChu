@@ -30,7 +30,7 @@ struct ToolRow: Identifiable, Hashable {
     let name: String
     let title: String
     let status: Status
-    /// The skills that declare it, by id.
+    /// The skills that use it, by id.
     let skills: [String]
     let enabled: Bool
     /// Whether a turn started now blocks it.
@@ -75,12 +75,13 @@ struct ToolRow: Identifiable, Hashable {
 }
 
 /// The Tools tab's table: the approved tools, the SSH destinations and BotChu's helpers, each
-/// group under its heading, with what each is, its status, the skills that declare it and its
-/// switch. Narrow, Skills goes first.
+/// group under its heading, with what each is, its status, the skills and bots using it and its
+/// global switch. Narrow, Used by goes first; Bots is read-only.
 struct ToolsTable: View {
     @Environment(AppModel.self) private var model
     let groups: [(title: String, rows: [ToolRow])]
     let skillNames: [String: String]
+    let entries: [SkillEntry]
     let wide: Bool
 
     var body: some View {
@@ -89,14 +90,21 @@ struct ToolsTable: View {
         visibility[visibility: "skills"] = wide ? .visible : .hidden
         return Table(of: ToolRow.self, selection: selection, columnCustomization: .constant(visibility)) {
             TableColumn("Tool") { (row: ToolRow) in ToolNameCell(row: row) }
-                .width(min: 150, ideal: 220)
+                .width(min: 150, ideal: wide ? 220 : 180)
             TableColumn("Status") { (row: ToolRow) in ToolStatusCell(row: row) }
-                .width(min: 110, ideal: 170)
-            TableColumn("Skills") { (row: ToolRow) in
+                .width(min: 110, ideal: wide ? 170 : 130)
+            TableColumn("Used by") { (row: ToolRow) in
                 SkillChips(ids: row.skills, names: skillNames) { model.showSkill($0) }
             }
             .width(min: 120)
             .customizationID("skills")
+            TableColumn("Bots") { (row: ToolRow) in
+                let names = SkillBots.users(of: row.skills, entries: entries, bots: model.bots).map(\.name)
+                Text(names.isEmpty ? "—" : names.joined(separator: ", "))
+                    .font(.system(size: 12)).foregroundStyle(names.isEmpty ? .tertiary : .secondary)
+                    .lineLimit(1).help(names.joined(separator: ", "))
+            }
+            .width(min: 90, ideal: wide ? 150 : 110)
             TableColumn("On") { (row: ToolRow) in ToolSwitch(row: row).environment(model) }
                 .width(44)
         } rows: {
@@ -548,7 +556,7 @@ private struct ToolDetails: View {
             }
         }
         if !row.skills.isEmpty {
-            InspectorSection("Skills", trailing: "\(row.skills.count)", preferenceKey: "tool.skills") {
+            InspectorSection("Used by", trailing: "\(row.skills.count)", preferenceKey: "tool.skills") {
                 InspectorCard(padded: true) {
                     FlowLayout(spacing: 6) {
                         ForEach(row.skills, id: \.self) { id in
@@ -662,7 +670,7 @@ struct FlowChips: View {
     }
 }
 
-/// Add Tools: the catalog tools found on This Mac and the commands skills declare, none of them
+/// Add Tools: the catalog tools found on This Mac and the commands skills use, none of them
 /// approved until the owner checks them and presses Approve; an executable the owner chooses; an
 /// SSH destination by its alias. Ignored candidates stay apart until restored.
 struct AddToolsSheet: View {
@@ -830,11 +838,8 @@ struct AddToolsSheet: View {
 
     private func approve() {
         let approving = rows.filter { chosen.contains($0.id) }
-        model.tools.change { policy in
-            for candidate in approving { policy.approve(candidate) }
-        }
+        model.tools.approve(approving)
         if let last = approving.last { model.toolSelection = last.id }
-        Task { await model.tools.checkAll() }
         dismiss()
     }
 }
