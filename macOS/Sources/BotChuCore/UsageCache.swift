@@ -27,7 +27,10 @@ public struct UsageState: Equatable, Sendable, Codable {
 
 /// The keys an allowance check may need, read only for the account being checked: Pi's OpenRouter
 /// key, Sail's, and nothing else. Kept out of the request, which is what a reading is filed under.
-public struct UsageKeys: Equatable, Sendable {
+public struct UsageKeys: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    public var description: String { "UsageKeys(openRouter: \(openRouter == nil ? "absent" : "present"), sail: \(sail == nil ? "absent" : "present"))" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { Mirror(self, children: [:]) }
     public var openRouter: String?
     public var sail: String?
 

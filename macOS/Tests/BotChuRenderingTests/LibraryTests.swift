@@ -39,6 +39,7 @@ extension RenderingTests {
             Issue.record("Library fixtures must not request GitHub")
             return .success(GitHubLookup.OpenWork(items: []))
         })
+        app.sailKey = { nil }
         // The open pull requests and issues as saved, which Projects shows without syncing.
         let url = URL(string: "https://github.com/octocat/BotChu/pull/7")!
         let openItems: [GitHubLookup.OpenItem] = [

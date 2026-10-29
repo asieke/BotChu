@@ -93,6 +93,7 @@ extension RenderingTests {
             #expect(usesExpectedKey)
             return await readings.read(request.account.id)
         }, openRouterKey: { keyReads += 1; return "test-openrouter-key" })
+        model.sailKey = { nil }
         let connectorChecks = InspectorConnectorProbe()
         model.connectorBoard.checkProfile = { kind, command, folder in
             await connectorChecks.check(kind, command, folder)

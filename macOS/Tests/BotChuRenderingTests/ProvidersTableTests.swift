@@ -35,11 +35,11 @@ extension RenderingTests {
                                            defaultCommand: "botchu-missing-\(UUID().uuidString.prefix(8))", symbol: "terminal")]
         let claudeWork = FailAfterFirst()
         // A Sail profile shows its balance in Credits & resets, with no window to meter.
-        settings.customAccounts = [Account(id: "custom-sail", name: "Sail Lab", kind: .sail, defaultCommand: "botchu-sail", symbol: "sailboat")]
+        settings.customAccounts += [Account(id: "custom-sail", name: "Sail Lab", kind: .sail, defaultCommand: "botchu-sail", symbol: "sailboat")]
         let usage = UsageCache { request, keys in
             // Only the account's own key reaches its check: none for the CLI profiles.
             let expected = request.account.kind == .pi ? UsageKeys(openRouter: "test-openrouter-key") : UsageKeys()
-            #expect(keys == expected)
+            #expect(keys == expected, "Only fixture credentials reach the injected usage cache")
             let now = Date()
             switch request.account.id {
             case "custom-sail":
@@ -80,6 +80,7 @@ extension RenderingTests {
         var keyReads = 0
         let app = AppModel(store: Store(root: root.appendingPathComponent("index")), settings: settings, usage: usage,
                            openRouterKey: { keyReads += 1; return "test-openrouter-key" })
+        app.sailKey = { nil }
         // Five agents on Codex Personal, more than its column holds, and one on Claude Dev.
         app.bots = ["Danny", "Racoon", "Duck", "Fox", "Owl"].map { Bot(name: $0, emoji: "🦊", accountID: "codex-personal", workspace: root.appendingPathComponent($0).path) }
             + [Bot(name: "Scout", emoji: "🔭", accountID: "claude-dev", workspace: root.appendingPathComponent("scout").path)]
@@ -172,7 +173,7 @@ extension RenderingTests {
         app.providerSelection = nil
         try await Task.sleep(for: .milliseconds(600))
         rows = try await loadedTable()
-        let custom = rows.numberOfRows - 1
+        let custom = try #require(settings.accounts.firstIndex { $0.id == "custom-long" })
         // Its second line, Command not found, opens what went wrong, with Try Again and Change Command.
         let cell = rows.frameOfCell(atColumn: 0, row: custom)
         let problem = rows.convert(NSPoint(x: cell.minX + 28 + 10 + 30, y: cell.midY + (rows.isFlipped ? 8 : -8)), to: nil)
@@ -204,7 +205,7 @@ extension RenderingTests {
         let content = try #require(dialog.contentView)
         try #require(providersButtons(in: content).first { $0.title == "Remove Profile" }).performClick(nil)
         try await Task.sleep(for: .milliseconds(500))
-        #expect(settings.customAccounts.isEmpty)
+        #expect(settings.customAccounts.map(\.id) == ["custom-sail"])
         #expect(try await loadedTable().numberOfRows == settings.accounts.count)
     }
 

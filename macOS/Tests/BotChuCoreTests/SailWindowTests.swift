@@ -104,6 +104,16 @@ import Testing
         }
     }
 
+    @Test func credentialDiagnosticsNeverExposeValues() {
+        let keys = UsageKeys(openRouter: "router-secret", sail: "sail-secret")
+        #expect(!String(describing: keys).contains("secret"))
+        #expect(!String(reflecting: keys).contains("secret"))
+        #expect(Mirror(reflecting: keys).children.isEmpty)
+        var output = ""
+        dump(keys, to: &output)
+        #expect(!output.contains("secret"))
+    }
+
     @Test func refusalNamesTheChosenWindow() {
         let failure = SailHTTP.submissionFailure(status: 400, data: Data(#"{"error":{"message":"Unsupported completion_window"}}"#.utf8),
                                                  model: "model", completionWindow: .asap)
