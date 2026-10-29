@@ -73,13 +73,28 @@ extension RenderingTests {
         let app = fixture.app
         let task = try #require(app.task(fixture.target))
         let shared = app.settings.sharedMemoryPath
+        try FileManager.default.createDirectory(atPath: (shared as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try "Shared memory fixture".write(toFile: shared, atomically: true, encoding: .utf8)
         app.setWorkspaceRoot(fixture.root.path + "/future-repos")
         app.setBotsRoot(fixture.root.path + "/future-bots")
         #expect(app.settings.repoLocations[task.repo]?.path == task.checkout)
         #expect(app.task(fixture.target)?.checkout == task.checkout)
         #expect(app.bot(fixture.bot.id)?.workspace == fixture.bot.workspace)
         #expect(app.settings.sharedMemoryPath == shared)
+        app.editSharedDocument(.memory)
+        #expect(app.documentEditor?.url.path == shared)
+        #expect(app.workspaceProblem(app.settings.sharedDocumentsRoot, for: UUID()) != nil)
         #expect(!FileManager.default.fileExists(atPath: app.settings.expandedReposRoot))
+    }
+
+    @Test func storageMoveCannotRelocateItsOwnApplicationData() async throws {
+        let fixture = try SensitiveInputFixture()
+        defer { fixture.cleanUp() }
+        let move = StorageMove(source: fixture.root.path, destination: fixture.root.path + "-moved", kind: .bot)
+        await #expect(throws: StorageMove.Problem.self) { try await fixture.app.moveStorage([move]) }
+        #expect(!fixture.app.storageMovePending)
+        #expect(FileManager.default.fileExists(atPath: fixture.bot.workspace))
+        #expect(!FileManager.default.fileExists(atPath: move.destination))
     }
 
     @Test func janitorSetupUsesExistingJobsAndPreservesPolicy() async throws {

@@ -574,7 +574,7 @@ final class AppModel {
 
     /// Opens a file every bot shares, in the bots folder, as Settings does.
     func editSharedDocument(_ document: SharedDocument) {
-        documentEditor = DocumentEditorRequest(shared: document, botsRoot: settings.botsRoot)
+        documentEditor = DocumentEditorRequest(shared: document, botsRoot: settings.sharedDocumentsRoot)
     }
 
     /// Why a bot can't use `path` as its workspace, or nil when it can.
@@ -584,6 +584,7 @@ final class AppModel {
             return "Finish or stop this bot's turns before moving its workspace."
         }
         return Workspace.problem(with: path, for: id, among: bots, botsRoot: settings.expandedBotsRoot)
+            ?? Workspace.problem(with: path, for: id, among: bots, botsRoot: settings.sharedDocumentsRoot)
     }
 
     /// The default workspace for a new bot named `name`: its slug under the bots folder, numbered

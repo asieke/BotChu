@@ -3,7 +3,11 @@ import BotChuCore
 
 extension AppModel {
     func setBotsRoot(_ path: String) {
-        if settings.sharedRootOverride == nil { settings.sharedRootOverride = settings.botsRoot }
+        let shared = [settings.sharedMemoryPath, settings.teamPath,
+                      Skills.sharedFolder(besideSharedMemory: settings.sharedMemoryPath).path]
+        if settings.sharedRootOverride == nil, shared.contains(where: { FileManager.default.fileExists(atPath: $0) }) {
+            settings.sharedRootOverride = settings.botsRoot
+        }
         settings.botsRoot = path
     }
 
@@ -50,7 +54,13 @@ extension AppModel {
         guard Set(plan.map(\.destination)).count == plan.count else {
             throw StorageMove.Problem("Two folders have the same destination. Choose separate destinations first.")
         }
-        for move in plan { try move.validate() }
+        for move in plan {
+            let source = URL(fileURLWithPath: move.source).resolvingSymlinksInPath().path
+            guard !StorageMove.contains(store.root.resolvingSymlinksInPath().path, under: source) else {
+                throw StorageMove.Problem("This folder contains BotChu’s application data. Choose its bot or repository folders separately.")
+            }
+            try move.validate()
+        }
         for a in plan {
             guard !plan.contains(where: { $0 != a && (StorageMove.contains(a.source, under: $0.source)
                 || StorageMove.contains(a.destination, under: $0.source)) }) else {
