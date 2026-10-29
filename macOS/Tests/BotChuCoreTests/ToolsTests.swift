@@ -171,6 +171,52 @@ import Testing
 
     // MARK: Locating
 
+    @Test func skillExecutablePathsOutsideTheSearchPathAreFoundWithoutRunningThem() throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = try tool("kalshi", in: root)
+        let document = root.appendingPathComponent("notes")
+        try "not a tool".write(to: document, atomically: true, encoding: .utf8)
+        let locator = ToolLocator(directories: ["/usr/bin", "/bin"])
+        let locations = locator.firstLocations(of: ["cat", "git", "ls", executable.path, document.path, root.path])
+        #expect(locations["kalshi"]?.path == executable.path)
+        #expect(locations["notes"] == nil)
+        #expect(locations[root.lastPathComponent] == nil)
+        let text = "```sh\ncat x\ngit status\nls\n```\nExecutable: `\(executable.path)`."
+        let skill = Skill(slug: "kalshi-cli", text: text, scope: .bot, url: root.appendingPathComponent("SKILL.md"))
+        #expect(skill.usedTools(in: ToolInventory(policy: ToolPolicy(), catalogLocations: [:], declaredLocations: locations)) == ["kalshi"])
+    }
+
+    @Test func inferredToolsConnectSkillsAndApprovalWithoutWritingTheSkillOrEnforcing() throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = try tool("kalshi", in: root)
+        let source = "---\nname: kalshi-cli\n---\n```sh\nkalshi markets\n```\n"
+        let url = root.appendingPathComponent("SKILL.md")
+        try source.write(to: url, atomically: true, encoding: .utf8)
+        let skill = Skill(slug: "kalshi-cli", text: source, scope: .bot, url: url)
+        var policy = ToolPolicy()
+        let locations = ["kalshi": location(executable.path)]
+        let detected = skill.usedTools(in: ToolInventory(policy: policy, catalogLocations: [:], declaredLocations: locations))
+        let inventory = { ToolInventory(policy: policy, catalogLocations: [:], declaredLocations: locations,
+                                        declarations: [("kalshi-cli", detected), ("kalshi-backtest", detected)]) }
+        #expect(inventory().dependency("kalshi") == .notApproved)
+        let candidate = try #require(inventory().candidates().open.first)
+        #expect(candidate.skills == ["kalshi-cli", "kalshi-backtest"])
+        policy.ignore(candidate.id)
+        // Inline approval can also restore an ignored candidate, through the same policy action.
+        #expect(inventory().candidate(for: "kalshi") == candidate)
+        policy.approve(try #require(inventory().candidate(for: "kalshi")))
+        let approved = try #require(policy.approved(candidate.id))
+        #expect(inventory().dependency("kalshi") == .enabled)
+        #expect(inventory().skills(declaring: approved) == ["kalshi-cli", "kalshi-backtest"])
+        #expect(inventory().candidate(for: "kalshi") == nil)
+        #expect(inventory().candidates().open.isEmpty)
+        #expect(policy.ignored.isEmpty)
+        #expect(!policy.isEnforced && inventory().blockedLocations().isEmpty)
+        #expect(try String(contentsOf: url, encoding: .utf8) == source)
+    }
+
     @Test func theLocatorFindsExecutablesWithoutRunningThem() throws {
         let one = try folder(), two = try folder()
         try tool("aws", in: two)
@@ -365,14 +411,16 @@ import Testing
         #expect(Skills.declaredTools(in: "cli-tools: [gh]").isEmpty)
     }
 
-    @Test func declarationsAreSetInPlaceAddedAndRemoved() {
+    @Test func declarationsAreSetInPlaceAddedAndKeptEmptyToOverrideInference() {
         let text = "---\nname: a\ncli-tools:\n- gh\n- jq\ndescription: x\n---\nBody"
         let replaced = Skills.settingDeclaredTools(["aws"], in: text)
         #expect(replaced == "---\nname: a\ncli-tools: [aws]\ndescription: x\n---\nBody")
-        #expect(Skills.settingDeclaredTools([], in: replaced) == "---\nname: a\ndescription: x\n---\nBody")
+        #expect(Skills.settingDeclaredTools([], in: replaced) == "---\nname: a\ncli-tools: []\ndescription: x\n---\nBody")
         #expect(Skills.settingDeclaredTools(["gh"], in: "---\nname: a\n---\nBody") == "---\nname: a\ncli-tools: [gh]\n---\nBody")
         #expect(Skills.settingDeclaredTools(["gh"], in: "Body") == "---\ncli-tools: [gh]\n---\nBody")
-        #expect(Skills.settingDeclaredTools([], in: "Body") == "Body")
+        #expect(Skills.settingDeclaredTools([], in: "Body") == "---\ncli-tools: []\n---\nBody")
+        let removed = Skills.settingDeclaredTools([], in: "Run `gh pr list`.")
+        #expect(Skills.toolCommands(in: removed).isEmpty)
         #expect(Skills.settingDeclaredTools(["gh"], in: "---\r\nname: a\r\n---\r\nBody") == "---\r\nname: a\r\ncli-tools: [gh]\r\n---\r\nBody")
         // The rest of the frontmatter still reads as before.
         let skill = Skill(slug: "a", text: replaced, scope: .shared, url: URL(fileURLWithPath: "/b/skills/a/SKILL.md"))

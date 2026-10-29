@@ -92,7 +92,7 @@ public struct ToolPolicy: Codable, Equatable, Sendable {
 
     public func approved(_ id: String) -> ApprovedTool? { tools.first { $0.id == id } }
 
-    /// The approved tool a skill's declared name means: a catalog tool by any of its commands, or
+    /// The approved tool a skill's used command means: a catalog tool by any of its commands, or
     /// an approved executable by its name.
     public func approved(declared name: String) -> ApprovedTool? {
         if let catalog = ToolCatalog.tool(command: name) { return approved(ApprovedTool.catalogID(catalog.id)) }
@@ -304,7 +304,7 @@ public struct ToolLocation: Codable, Hashable, Sendable {
 }
 
 /// A tool the owner can approve in Add Tools: a catalog tool found on This Mac, or a command a
-/// skill declares. Being found or declared never approves it.
+/// skill uses. Being found or used never approves it.
 public struct ToolCandidate: Identifiable, Hashable, Sendable {
     public let id: String
     public let name: String
@@ -312,7 +312,7 @@ public struct ToolCandidate: Identifiable, Hashable, Sendable {
     /// Where it is on This Mac.
     public let path: String?
     public let catalog: CatalogTool?
-    /// The skills that declare it, by name.
+    /// The skills that use it, by name or id as supplied to the inventory.
     public let skills: [String]
 
     public init(id: String, name: String, title: String, path: String?, catalog: CatalogTool?, skills: [String]) {
@@ -325,7 +325,7 @@ public struct ToolCandidate: Identifiable, Hashable, Sendable {
     }
 }
 
-/// What a skill declares it needs (`cli-tools:` in its frontmatter), and how each stands.
+/// How a tool a skill uses stands, whether inferred or declared in `cli-tools:`.
 public enum ToolDependency: Equatable, Sendable {
     /// Approved and on.
     case enabled
@@ -339,14 +339,14 @@ public enum ToolDependency: Equatable, Sendable {
 
 /// The tools in their policy: the rows of Tools, the candidates of Add Tools, the dependencies of
 /// skills, the paths a turn blocks and the catalog agents are told about. Made from the policy,
-/// where the commands are on This Mac and the skills' declarations; reads no files itself.
+/// where the commands are on This Mac and the skills' used tools; reads no files itself.
 public struct ToolInventory: Sendable {
     public let policy: ToolPolicy
     /// Where each catalog tool's commands are, by catalog id.
     public let catalogLocations: [String: [ToolLocation]]
-    /// Where each declared command outside the catalog is, by lowercased name.
+    /// Where each command mentioned or declared by skills is, by lowercased name.
     public let declaredLocations: [String: ToolLocation]
-    /// Each skill's name and the commands it declares.
+    /// Each skill's name or id and its used commands (inferred or explicitly declared).
     public let declarations: [(skill: String, tools: [String])]
 
     public init(policy: ToolPolicy, catalogLocations: [String: [ToolLocation]], declaredLocations: [String: ToolLocation] = [:],
@@ -358,7 +358,7 @@ public struct ToolInventory: Sendable {
     }
 
     /// The candidates not approved, and those the owner ignored. Catalog tools count once found on
-    /// This Mac; declared ones once found there too (a declared command not found is `missing`).
+    /// This Mac; other used commands once found there too (a declared command not found is `missing`).
     public func candidates() -> (open: [ToolCandidate], ignored: [ToolCandidate]) {
         var all: [ToolCandidate] = []
         for tool in ToolCatalog.tools {
@@ -384,14 +384,27 @@ public struct ToolInventory: Sendable {
         return (all.filter { !ignored.contains($0.id) }, all.filter { ignored.contains($0.id) })
     }
 
-    /// How a skill's declared command stands.
+    /// How a skill's used command stands.
     public func dependency(_ name: String) -> ToolDependency {
         if let approved = policy.approved(declared: name) { return approved.enabled ? .enabled : .off }
         if let catalog = ToolCatalog.tool(command: name) { return catalogLocations[catalog.id]?.isEmpty == false ? .notApproved : .missing }
         return declaredLocations[name.lowercased()] == nil ? .missing : .notApproved
     }
 
-    /// The skills that declare an approved tool or a catalog tool.
+    /// A skill's tool ready for inline approval, including an ignored candidate. Catalog tools
+    /// can be approved before installation; other commands need an executable on This Mac.
+    public func candidate(for name: String) -> ToolCandidate? {
+        guard policy.approved(declared: name) == nil else { return nil }
+        if let catalog = ToolCatalog.tool(command: name) {
+            return ToolCandidate(id: ApprovedTool.catalogID(catalog.id), name: catalog.id, title: catalog.title,
+                                 path: catalogLocations[catalog.id]?.first?.path, catalog: catalog, skills: skills(declaring: catalog))
+        }
+        guard let location = declaredLocations[name.lowercased()] else { return nil }
+        return ToolCandidate(id: ApprovedTool.pathID(location.path), name: name, title: "", path: location.path, catalog: nil,
+                             skills: declarations.filter { $0.tools.contains { $0.caseInsensitiveCompare(name) == .orderedSame } }.map(\.skill))
+    }
+
+    /// The skills that use an approved tool or a catalog tool, including its command aliases.
     public func skills(declaring tool: ApprovedTool) -> [String] {
         if let catalog = tool.catalog { return skills(declaring: catalog) }
         return declarations.filter { $0.tools.contains { $0.caseInsensitiveCompare(tool.name) == .orderedSame } }.map(\.skill)
@@ -529,11 +542,25 @@ public struct ToolLocator: Sendable {
         return found
     }
 
-    /// The first place each name is installed, by lowercased name.
+    /// The first place each command is installed, by lowercased name. Skill code can also name
+    /// an absolute or home-relative executable outside PATH; only that exact file is checked.
     public func firstLocations(of names: [String], fileManager: FileManager = .default) -> [String: ToolLocation] {
         var found: [String: ToolLocation] = [:]
-        for name in names where found[name.lowercased()] == nil {
-            if let location = locations(of: name, fileManager: fileManager).first { found[name.lowercased()] = location }
+        for command in names {
+            let name = (command as NSString).lastPathComponent.lowercased()
+            let location: ToolLocation?
+            if command.hasPrefix("/") || command.hasPrefix("~/") {
+                let path = (command as NSString).expandingTildeInPath
+                var isDirectory: ObjCBool = false
+                guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue,
+                      fileManager.isExecutableFile(atPath: path) else { continue }
+                location = ToolLocation(path: path, realPath: Self.realPath(path) ?? path)
+            } else {
+                location = locations(of: command, fileManager: fileManager).first
+            }
+            if let location, found[name] == nil || (found[name]?.isSystemCommand == true && !location.isSystemCommand) {
+                found[name] = location
+            }
         }
         return found
     }
@@ -556,16 +583,107 @@ public struct ToolLocator: Sendable {
 
 extension Skill {
     /// The commands the skill declares it needs, from `cli-tools:` in its frontmatter: a list
-    /// (`[gh, jq]`, or `- gh` lines) or names separated by commas or spaces. Only these link a
-    /// skill to tools; its text is never searched for them.
+    /// (`[gh, jq]`, or `- gh` lines) or names separated by commas or spaces. When present, even
+    /// empty, this overrides the tools inferred from code in the body.
     public var declaredTools: [String] {
         Skills.declaredTools(in: text)
+    }
+
+    /// Commands to look for on This Mac, including executable paths written in code. This is
+    /// discovery only: neither reading a skill nor finding a command changes its file or policy.
+    public var toolCommands: [String] { Skills.toolCommands(in: text) }
+
+    /// The tools used on This Mac with its current PATH. The app supplies its cached inventory
+    /// instead, so drawing the tables does no filesystem work and includes approved tools.
+    public var usedTools: [String] {
+        let locator = ToolLocator(loginPath: ProcessInfo.processInfo.environment["PATH"])
+        return usedTools(in: ToolInventory(policy: ToolPolicy(), catalogLocations: [:],
+                                          declaredLocations: locator.firstLocations(of: toolCommands)))
+    }
+
+    public func usedTools(in inventory: ToolInventory) -> [String] {
+        if Skills.frontmatter(of: text).fields[Skills.toolsKey] != nil { return declaredTools }
+        var seen = Set<String>()
+        return toolCommands.compactMap { command in
+            let name = (command as NSString).lastPathComponent
+            guard Skills.isToolName(name), !name.lowercased().hasPrefix("botchu-"),
+                  inventory.policy.approved(declared: name) != nil || ToolCatalog.tool(command: name) != nil
+                    || inventory.declaredLocations[name.lowercased()].map({ !$0.isSystemCommand }) == true,
+                  seen.insert(name.lowercased()).inserted else { return nil }
+            return name
+        }
+    }
+}
+
+extension ToolLocation {
+    /// System utilities (including links to them) aren't inferred as a skill's tools.
+    var isSystemCommand: Bool {
+        [path, realPath].contains { path in
+            let path = (path as NSString).standardizingPath
+            return ["/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/"].contains { path.hasPrefix($0) }
+        }
     }
 }
 
 extension Skills {
     /// The frontmatter key that declares a skill's command-line tools.
     public static let toolsKey = "cli-tools"
+
+    /// First words of fenced command lines and inline code spans, plus executable paths within
+    /// inline code. Plain prose and frontmatter aren't searched. This intentionally isn't a shell
+    /// interpreter: only explicit command tokens are candidates, and none is ever executed.
+    public static func toolCommands(in text: String) -> [String] {
+        let parsed = frontmatter(of: text)
+        if parsed.fields[toolsKey] != nil { return declaredTools(in: text) }
+        var commands: [String] = []
+        var prose: [String] = []
+        var fence: (marker: Character, count: Int)?
+        for line in parsed.body.components(separatedBy: .newlines) {
+            let line = line.trimmingCharacters(in: .whitespaces)
+            if let open = fence {
+                let run = line.prefix { $0 == open.marker }
+                if run.count >= open.count, line.dropFirst(run.count).trimmingCharacters(in: .whitespaces).isEmpty {
+                    fence = nil
+                } else if let word = firstCommandWord(line) {
+                    commands.append(word)
+                }
+            } else if let marker = line.first, marker == "`" || marker == "~", line.prefix(while: { $0 == marker }).count >= 3 {
+                fence = (marker, line.prefix(while: { $0 == marker }).count)
+                prose.append("")
+            } else {
+                prose.append(line)
+            }
+        }
+        let inline = prose.joined(separator: "\n")
+        // Equal-length backtick delimiters also cover double-backtick and multiline spans.
+        let spans = try! NSRegularExpression(pattern: #"(?<!`)(`+)(?!`)([\s\S]*?)(?<!`)\1(?!`)"#)
+        let paths = try! NSRegularExpression(pattern: #"(?:^|[\s\"'])(~?/[^\s\"'`<>|;&]+)"#)
+        for match in spans.matches(in: inline, range: NSRange(inline.startIndex..., in: inline)) {
+            guard let range = Range(match.range(at: 2), in: inline) else { continue }
+            let code = String(inline[range])
+            if let word = firstCommandWord(code) { commands.append(word) }
+            for path in paths.matches(in: code, range: NSRange(code.startIndex..., in: code)) {
+                if let range = Range(path.range(at: 1), in: code) { commands.append(String(code[range])) }
+            }
+        }
+        var seen = Set<String>()
+        return commands.filter {
+            let name = ($0 as NSString).lastPathComponent
+            return isToolName(name) && !name.lowercased().hasPrefix("botchu-") && seen.insert($0).inserted
+        }
+    }
+
+    private static func firstCommandWord(_ code: String) -> String? {
+        var code = code.trimmingCharacters(in: .whitespacesAndNewlines)[...]
+        if code.hasPrefix("$ ") { code = code.dropFirst(2).drop(while: { $0.isWhitespace }) }
+        guard let first = code.first, first != "#" else { return nil }
+        if first == "\"" || first == "'" {
+            let rest = code.dropFirst()
+            guard let end = rest.firstIndex(of: first) else { return nil }
+            return String(rest[..<end])
+        }
+        return String(code.prefix { !$0.isWhitespace && !";|&<>".contains($0) })
+    }
 
     public static func declaredTools(in text: String) -> [String] {
         let lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
@@ -602,20 +720,20 @@ extension Skills {
     }
 
     /// `text` with its `cli-tools:` set to `tools`: replaced where it is, added at the end of the
-    /// frontmatter, or removed when `tools` is empty. A file without frontmatter gets one.
+    /// frontmatter. An empty list stays explicit to override inference. A file without
+    /// frontmatter gets one. Only an owner's edit calls this; inference never writes a file.
     public static func settingDeclaredTools(_ tools: [String], in text: String) -> String {
-        let value = tools.isEmpty ? nil : "\(toolsKey): [\(tools.joined(separator: ", "))]"
+        let value = "\(toolsKey): [\(tools.joined(separator: ", "))]"
         let newline = text.contains("\r\n") ? "\r\n" : "\n"
         var lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
         guard lines.first?.trimmingCharacters(in: .whitespaces) == "---",
               let end = lines.indices.dropFirst().first(where: { ["---", "..."].contains(lines[$0].trimmingCharacters(in: .whitespaces)) })
         else {
-            guard let value else { return text }
             return ["---", value, "---", ""].joined(separator: newline) + text
         }
         if let (start, stop) = toolsLines(in: lines) {
-            if let value { lines.replaceSubrange(start..<stop, with: [value]) } else { lines.removeSubrange(start..<stop) }
-        } else if let value {
+            lines.replaceSubrange(start..<stop, with: [value])
+        } else {
             lines.insert(value, at: end)
         }
         return lines.joined(separator: newline)
