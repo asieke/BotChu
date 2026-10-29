@@ -105,6 +105,25 @@ public enum Skills {
 
     // MARK: Making one
 
+    /// The exact destination shown by New Skill and named in the request to its writer.
+    public static func file(named name: String, in folder: URL) -> URL {
+        folder.appendingPathComponent(slug(name), isDirectory: true).appendingPathComponent(fileName)
+    }
+
+    /// A visible Home request. Resolving the destination and composing it writes nothing.
+    public static func writingRequest(name: String, description: String, in folder: URL) -> String {
+        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let purpose = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return """
+            Write a reusable skill named "\(title)" at this exact path:
+            \(file(named: title, in: folder).path)
+
+            What it does: \(purpose.isEmpty ? title : purpose)
+
+            Create the skill's folder and write SKILL.md with YAML frontmatter containing name: \(slug(title)) and a description of when to use it, followed by clear, actionable steps. Write the complete skill, not an empty template.
+            """
+    }
+
     /// A folder name for a skill called `name`: lowercase letters, digits and hyphens, as the
     /// frontmatter's `name` is in other agents' skills.
     public static func slug(_ name: String) -> String {

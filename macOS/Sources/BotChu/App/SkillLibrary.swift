@@ -12,6 +12,7 @@ struct SkillEntry: Identifiable, Hashable {
 /// in its workspace's.
 extension AppModel {
     var sharedSkillsFolder: URL { Skills.sharedFolder(besideSharedMemory: settings.sharedMemoryPath) }
+    var skillWriters: [Bot] { bots.filter { !$0.isRemoteQueue } }
 
     /// The shared skills, then each bot's own in sidebar order, or only `botID`'s.
     func skillEntries(of botID: UUID? = nil) -> [SkillEntry] {
@@ -31,14 +32,15 @@ extension AppModel {
         documentEditor = DocumentEditorRequest(skill: entry.skill, bot: entry.bot)
     }
 
-    /// Makes a skill from the template, shared or `bot`'s own.
-    func createSkill(name: String, description: String, for bot: Bot?) throws -> SkillEntry {
-        guard bot?.isRemoteQueue != true else { throw CocoaError(.featureUnsupported) }
-        let folder = bot.map(Skills.folder(of:)) ?? sharedSkillsFolder
-        let url = try Skills.create(name: name, description: description, in: folder)
-        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        let skill = Skill(slug: url.deletingLastPathComponent().lastPathComponent, text: text, scope: bot == nil ? .shared : .bot, url: url)
-        return SkillEntry(skill: skill, bot: bot)
+    /// The bot writes the skill; BotChu sends an ordinary visible message in its Home.
+    @discardableResult
+    func askToWriteSkill(name: String, description: String, for botID: UUID, shared: Bool) -> Bool {
+        guard let bot = bot(botID), !bot.isRemoteQueue,
+              !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        let folder = shared ? sharedSkillsFolder : Skills.folder(of: bot)
+        let target = ChatTarget.home(bot.id)
+        show(target)
+        return send(Skills.writingRequest(name: name, description: description, in: folder), to: target)
     }
 
     /// Puts the skill's folder in the Trash. A shared skill's slug no longer stays turned off for

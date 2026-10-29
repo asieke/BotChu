@@ -10,8 +10,7 @@ struct SkillsView: View {
     @State private var skillQuery = ""
     @State private var toolQuery = ""
     @State private var creating = false
-    /// A skill just made, opened in the editor once New Skill has closed.
-    @State private var created: SkillEntry?
+    @State private var addingDestination = false
     @State private var pendingDelete: SkillEntry?
     @State private var error: String?
     @State private var sortOrder = [KeyPathComparator(\SkillEntry.skill.name, comparator: .localizedStandard)]
@@ -35,13 +34,17 @@ struct SkillsView: View {
         let toolCount = model.tools.policy.tools.count + model.tools.policy.destinations.count + 1
         VStack(alignment: .leading, spacing: 0) {
             LibraryHeading(title: "Skills & Tools") {
-                if model.skillsTab == .skills {
-                    Button { model.revealSkill(nil) } label: { Label("Shared Folder", systemImage: "folder") }
-                        .help("Open the skills every bot shares, in the bots folder")
-                    Button { creating = true } label: { Label("New Skill", systemImage: "plus") }.buttonStyle(.borderedProminent)
-                } else {
-                    ToolsHeadingActions(candidates: candidates.open, inventory: inventory, refresh: { Task { await refreshTools(force: true) } })
+                if model.skillsTab == .tools {
+                    ToolsHeadingActions(inventory: inventory, refresh: { Task { await refreshTools(force: true) } })
                 }
+                Menu {
+                    SkillsAddMenuItems(candidates: candidates.open.count, newSkill: { creating = true },
+                                       addDestination: { addingDestination = true })
+                } label: {
+                    Label("Add a skill or tool", systemImage: "plus").labelStyle(.iconOnly)
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .accessibilityIdentifier("skills-tools-add")
             }
             HStack(spacing: 12) {
                 Picker("Show", selection: Binding(get: { model.skillsTab }, set: { model.skillsTab = $0 })) {
@@ -96,15 +99,14 @@ struct SkillsView: View {
             }
             .inspectorColumnWidth(min: 280, ideal: 320, max: 480)
         }
-        .sheet(isPresented: $creating, onDismiss: {
-            reload()
-            if let created { model.editSkill(created) }
-            created = nil
-        }) {
-            NewSkillSheet { created = $0 }.environment(model)
+        .sheet(isPresented: $creating) {
+            NewSkillSheet().environment(model)
         }
         .sheet(isPresented: Binding(get: { model.addingTools }, set: { model.addingTools = $0 })) {
             AddToolsSheet(candidates: candidates.open, ignored: candidates.ignored, skillNames: skillNames).environment(model)
+        }
+        .sheet(isPresented: $addingDestination) {
+            AddSSHDestinationSheet().environment(model)
         }
         .confirmationDialog("Delete \(pendingDelete?.skill.name ?? "skill")?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
                             presenting: pendingDelete) { entry in
@@ -129,6 +131,23 @@ struct SkillsView: View {
     private func refreshTools(force: Bool) async {
         await model.tools.refresh(declaring: toolCommands)
         await model.tools.checkAll(force: force)
+    }
+}
+
+/// The heading's additions are the same on either tab.
+struct SkillsAddMenuItems: View {
+    @Environment(AppModel.self) private var model
+    let candidates: Int
+    let newSkill: () -> Void
+    let addDestination: () -> Void
+
+    var body: some View {
+        Button("New Skill…", systemImage: "wand.and.stars", action: newSkill)
+        Button("Approve Tools…", systemImage: "terminal") { model.addingTools = true }
+            .badge(candidates)
+        Button("Add SSH Destination…", systemImage: "network", action: addDestination)
+        Divider()
+        Button("Shared Folder", systemImage: "folder") { model.revealSkill(nil) }
     }
 }
 
@@ -461,44 +480,52 @@ struct SkillToolRow: View {
     }
 }
 
-/// Names a new skill and where it goes, then opens it in the editor.
+/// Asks a local bot to write a skill in its Home, without creating a template first.
 struct NewSkillSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    let onCreate: (SkillEntry) -> Void
     @State private var name = ""
     @State private var description = ""
     @State private var botID: UUID?
-    @State private var error: String?
+    @State private var shared = false
+
+    init(botID: UUID? = nil) { _botID = State(initialValue: botID) }
+
+    private var bots: [Bot] { model.skillWriters }
+    private var bot: Bot? { bots.first { $0.id == botID } }
+    private var file: String {
+        let folder = shared ? model.sharedSkillsFolder : bot.map(Skills.folder(of:))
+        return folder.map { Skills.file(named: name, in: $0).path } ?? "skills/\(Skills.slug(name))/SKILL.md"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("New Skill").font(.title2.weight(.semibold))
             Form {
                 TextField("Name", text: $name, prompt: Text("Aside web browsing"))
-                TextField("When to use it", text: $description, prompt: Text("Browse live sites with the aside CLI…"), axis: .vertical)
+                TextField("What it does", text: $description, prompt: Text("Browse live sites with the aside CLI…"), axis: .vertical)
                     .lineLimit(2...4)
-                Picker("For", selection: $botID) {
-                    Text("Every bot (shared)").tag(UUID?.none)
-                    ForEach(model.bots.filter { !$0.isRemoteQueue }) { bot in Text("\(bot.emoji) \(bot.name) only").tag(Optional(bot.id)) }
+                Picker("Bot", selection: $botID) {
+                    Text("Choose a bot").tag(UUID?.none)
+                    ForEach(bots) { bot in Text("\(bot.emoji) \(bot.name)").tag(Optional(bot.id)) }
                 }
-                // Where it is saved, in the bots folder or the bot's workspace as For says (#232).
+                Toggle("Share with every bot", isOn: $shared)
                 LabeledContent("File") {
-                    Text(verbatim: "skills/\(Skills.slug(name))/SKILL.md")
+                    Text(verbatim: file)
                         .font(.system(.body, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .help(file)
                 }
             }
             .formStyle(.grouped)
-            if let error { Text(error).font(.caption).foregroundStyle(.red) }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Create", action: create)
                     .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || bot == nil)
             }
         }
         .padding(20)
@@ -506,11 +533,8 @@ struct NewSkillSheet: View {
     }
 
     private func create() {
-        do {
-            onCreate(try model.createSkill(name: name, description: description, for: botID.flatMap(model.bot)))
+        if let bot, model.askToWriteSkill(name: name, description: description, for: bot.id, shared: shared) {
             dismiss()
-        } catch {
-            self.error = error.localizedDescription
         }
     }
 }

@@ -394,10 +394,9 @@ extension AppModel {
 }
 
 /// The Tools tab's heading controls: when This Mac was last looked at, Check Again, whether the
-/// policy is enforced, and Add Tools with how many candidates wait.
+/// policy is enforced. The shared + menu lives in SkillsView.
 struct ToolsHeadingActions: View {
     @Environment(AppModel.self) private var model
-    let candidates: [ToolCandidate]
     let inventory: ToolInventory
     let refresh: () -> Void
     @State private var confirmingEnforce = false
@@ -426,16 +425,6 @@ struct ToolsHeadingActions: View {
         } message: {
             Text(Self.enforceMessage(blocked: Self.blockedNames(inventory)))
         }
-        Button { model.addingTools = true } label: {
-            HStack(spacing: 6) {
-                Label("Add Tools…", systemImage: "plus")
-                if !candidates.isEmpty {
-                    Text("\(candidates.count)").font(.caption.weight(.semibold)).monospacedDigit()
-                        .padding(.horizontal, 6).padding(.vertical, 1).background(.white.opacity(0.25), in: Capsule())
-                }
-            }
-        }
-        .buttonStyle(.borderedProminent)
     }
 
     /// The installed catalog tools a turn would block once the policy is enforced.
@@ -684,7 +673,6 @@ struct AddToolsSheet: View {
     @State private var picked: [ToolCandidate] = []
     @State private var showsIgnored = false
     @State private var addingDestination = false
-    @State private var alias = ""
     @State private var problem: String?
 
     private var rows: [ToolCandidate] { picked.filter { pick in !candidates.contains { $0.id == pick.id } } + candidates }
@@ -761,7 +749,9 @@ struct AddToolsSheet: View {
             HStack {
                 Button("Choose Executable…", action: chooseExecutable)
                 Button("Add SSH Destination…") { addingDestination = true }
-                    .popover(isPresented: $addingDestination, arrowEdge: .top) { destinationForm }
+                    .popover(isPresented: $addingDestination, arrowEdge: .top) {
+                        AddSSHDestinationSheet(onAdd: { dismiss() }).environment(model)
+                    }
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(chosen.isEmpty ? "Approve" : "Approve \(chosen.count)", action: approve)
@@ -787,37 +777,6 @@ struct AddToolsSheet: View {
         .lineLimit(1)
     }
 
-    private var destinationForm: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("Alias", text: $alias, prompt: Text("sshwork"))
-                .textFieldStyle(.roundedBorder)
-                .font(.system(.body, design: .monospaced))
-                .frame(width: 220)
-                .onSubmit(addDestination)
-            if !alias.isEmpty, let problem = model.tools.policy.problem(addingDestination: alias) {
-                Text(problem).font(.caption).foregroundStyle(.red)
-            }
-            HStack {
-                Spacer()
-                Button("Add", action: addDestination).keyboardShortcut(.defaultAction)
-                    .disabled(model.tools.policy.problem(addingDestination: alias) != nil)
-            }
-        }
-        .padding(14)
-    }
-
-    private func addDestination() {
-        guard model.tools.policy.problem(addingDestination: alias) == nil else { return }
-        var added: SSHDestination?
-        model.tools.change { added = $0.addDestination(alias) }
-        addingDestination = false
-        alias = ""
-        if let added {
-            model.toolSelection = ToolRow.sshID(added)
-            dismiss()
-        }
-    }
-
     private func chooseExecutable() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -841,5 +800,46 @@ struct AddToolsSheet: View {
         model.tools.approve(approving)
         if let last = approving.last { model.toolSelection = last.id }
         dismiss()
+    }
+}
+
+/// The same destination form opens directly from + or from Approve Tools.
+struct AddSSHDestinationSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    var onAdd: () -> Void = {}
+    @State private var alias = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Add SSH Destination").font(.title2.weight(.semibold))
+            TextField("Alias", text: $alias, prompt: Text("sshwork"))
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+                .onSubmit(addDestination)
+            if !alias.isEmpty, let problem = model.tools.policy.problem(addingDestination: alias) {
+                Text(problem).font(.caption).foregroundStyle(.red)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Add", action: addDestination)
+                    .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                    .disabled(model.tools.policy.problem(addingDestination: alias) != nil)
+            }
+        }
+        .padding(20).frame(width: 320)
+    }
+
+    private func addDestination() {
+        guard model.tools.policy.problem(addingDestination: alias) == nil else { return }
+        var added: SSHDestination?
+        model.tools.change { added = $0.addDestination(alias) }
+        if let added {
+            model.skillsTab = .tools
+            model.toolSelection = ToolRow.sshID(added)
+            dismiss()
+            onAdd()
+        }
     }
 }
