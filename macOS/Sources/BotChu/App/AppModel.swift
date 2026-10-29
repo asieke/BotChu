@@ -408,10 +408,13 @@ final class AppModel {
         UsageRequest(account: account, command: settings.command(for: account), openRouterKeyRevision: settings.usageCredentialRevision)
     }
 
+    /// A conversation's allowance follows its selected backend and host, never another login.
     func usageRequest(for run: any RunSettings) -> UsageRequest {
-        UsageRequest(account: run.account, command: settings.command(for: run.account),
-                     openRouterKeyRevision: settings.usageCredentialRevision, providerID: run.effectiveProviderID,
-                     remote: (run as? BotTask)?.isRemote == true || (run as? SubagentRun)?.hostID != nil)
+        let task = run as? BotTask
+        let remote = task?.isRemote == true || (run as? SubagentRun)?.hostID != nil
+        let command = remote ? "" : settings.command(for: run.account)
+        return UsageRequest(account: run.account, command: command, openRouterKeyRevision: settings.usageCredentialRevision,
+                            providerID: run.resolvedProvider, remote: remote)
     }
 
     /// Every profile's usage request.
@@ -628,6 +631,7 @@ final class AppModel {
         }
         let moved = bot.workspace != bots[i].workspace
         let roleChanged = bot.isSpecialist != bots[i].isSpecialist
+        let providerChanged = bot.accountID == bots[i].accountID && bot.resolvedProvider != bots[i].resolvedProvider
         // The editor doesn't change what a turn reported while it was open.
         if bot.executionScope == bots[i].executionScope {
             bot.reportedModel = bots[i].reportedModel
@@ -639,6 +643,10 @@ final class AppModel {
         }
         bots[i] = bot
         save(bot)
+        if providerChanged {
+            append(ChatMessage(role: .note, text: "New session · provider changed to \(bot.resolvedProvider ?? "default")."), to: .home(bot.id))
+            saveThread(.home(bot.id))
+        }
         // Its AGENTS.md says whether it runs tasks, so it is written again with the role.
         prepareWorkspace(bot)
         // A specialist's jobs pause, and an agent's that paused for it resume; its open tasks go on (#250).
@@ -655,24 +663,29 @@ final class AppModel {
         }
     }
 
+    func setProvider(_ provider: String, ofBot botID: UUID) {
+        setProvider(provider, for: .home(botID))
+    }
+
+    func setProvider(_ provider: String, for target: ChatTarget) {
+        guard !isRunning(target) else { return }
+        var reset = false
+        change(target) { reset = $0.selectProvider(provider) }
+        if reset {
+            append(ChatMessage(role: .note, text: "New session · provider changed to \(provider)."), to: target)
+            saveThread(target)
+        }
+    }
+
     func setModel(_ selected: String, for target: ChatTarget) {
         guard !isRunning(target) else { return }
         let catalog = runSettings(of: target).flatMap(nativeModels(for:))
         change(target) { $0.selectModel(selected, catalog: catalog) }
     }
 
-    func setProvider(_ id: String, for target: ChatTarget) {
-        guard !isRunning(target) else { return }
-        change(target) { $0.selectProvider(id) }
-    }
-
-    func setProvider(_ id: String, ofBot botID: UUID) {
-        editRunSettings(of: botID) { $0.selectProvider(id) }
-    }
-
     func setReasoningEffort(_ effort: ReasoningEffort?, for target: ChatTarget) {
         guard !isRunning(target), let current = runSettings(of: target) else { return }
-        let effective = GenerationOptions.effectiveModel(current.model, kind: current.account.kind, openRouterDefault: settings.openRouterModel, providerID: current.providerID)
+        let effective = current.effectiveModel(openRouterDefault: settings.openRouterModel)
         if let effort, !GenerationOptions.efforts(for: current.account.kind, model: effective, catalog: nativeModels(for: current), providerID: current.providerID).contains(effort) { return }
         change(target) { $0.reasoningEffort = effort }
     }
@@ -708,7 +721,7 @@ final class AppModel {
 
     func setReasoningEffort(_ effort: ReasoningEffort?, ofBot botID: UUID) {
         guard let bot = bot(botID) else { return }
-        let effective = GenerationOptions.effectiveModel(bot.model, kind: bot.account.kind, openRouterDefault: settings.openRouterModel, providerID: bot.providerID)
+        let effective = bot.effectiveModel(openRouterDefault: settings.openRouterModel)
         if let effort, !GenerationOptions.efforts(for: bot.account.kind, model: effective, catalog: nativeModels(for: bot), providerID: bot.providerID).contains(effort) { return }
         editRunSettings(of: botID) { $0.reasoningEffort = effort }
     }
@@ -1771,16 +1784,20 @@ final class AppModel {
                 let contextSections = [preamble, delegationInstructions, toolInstructions].compactMap { $0 }
                 let prompt = BotContext.prompt(for: text, preamble: contextSections.isEmpty ? nil : contextSections.joined(separator: "\n\n"), updates: updates)
                 await preparePiModels(for: current)
-                guard !Task.isCancelled, runStates[target] != nil else { delegation.endCaller(context.id); return }
-                let model = GenerationOptions.effectiveModel(current.model, kind: account.kind, openRouterDefault: settings.openRouterModel,
-                                                             sailDefault: settings.sailModel, providerID: current.providerID)
+                guard waiting[target] == ticket, !Task.isCancelled else { delegation.endCaller(context.id); return }
+                let model = current.effectiveModel(openRouterDefault: settings.openRouterModel, sailDefault: settings.sailModel)
                 // A CLI that takes input mid-turn keeps its stdin open for follow-ups (This Mac only).
                 let liveInput = CommandBuilder.takesInputMidTurn(account.kind) && !machine.isRemote
                 let sailKey = account.kind == .sail && !machine.isRemote ? Keychain.get(Keychain.sailAccount) : nil
-                let key = current.usesLegacyOpenRouterKey && !machine.isRemote ? openRouterKey() : nil
-                var invocation = CommandBuilder.invocation(for: current, prompt: prompt, sessionID: resume,
-                    openRouterDefault: settings.openRouterModel, sailDefault: settings.sailModel, catalog: nativeModels(for: current),
-                    openRouterKey: key, sailKey: sailKey, liveInput: liveInput)
+                let key = current.usesLegacyOpenRouterKey(remote: machine.isRemote) ? openRouterKey() : nil
+                var invocation = current.invocation(
+                    prompt: prompt,
+                    model: model,
+                    sessionID: resume,
+                    remote: machine.isRemote,
+                    openRouterKey: key,
+                    sailKey: sailKey,
+                    liveInput: liveInput, catalog: nativeModels(for: current))
                 invocation.toolProfile = toolProfile
 
                 do {
@@ -1795,17 +1812,11 @@ final class AppModel {
                 }
                 invocation.environment.merge(context.environment) { _, new in new }
 
-                // On a host, the OpenRouter key stays here: the CLI there uses that machine's own.
-                if current.usesLegacyOpenRouterKey, !machine.isRemote, key?.isEmpty ?? true {
-                    delegation.endCaller(context.id)
-                    runStates[target] = nil
-                    pauseQueue(target)
-                    append(ChatMessage(role: .error, text: "Add your OpenRouter API key in BotChu ▸ Settings first."), to: target)
-                    saveThread(target)
-                    return
-                }
-
-                if let problem = PiLaunch.problem(settings: current, effectiveModel: model) {
+                let command = effectiveCommand(for: account, task: task)
+                let readinessProblem = await current.runtimeAdapter.readiness(command: command, provider: current.provider, model: model,
+                    machine: machine, folder: directory, environment: invocation.environment)
+                guard waiting[target] == ticket, !Task.isCancelled else { delegation.endCaller(context.id); return }
+                if let problem = readinessProblem {
                     delegation.endCaller(context.id)
                     runStates[target] = nil
                     pauseQueue(target)
@@ -1825,18 +1836,6 @@ final class AppModel {
                 }
 
                 // On a host, its own command for the account when it has one.
-                let command = effectiveCommand(for: account, task: task)
-                let authProblem = await account.runtime.adapter.authenticationProblem(account: account,
-                    providerID: current.providerID, command: command, machine: machine, folder: directory, openRouterKey: key)
-                guard !Task.isCancelled, waiting[target] == ticket else { delegation.endCaller(context.id); return }
-                if let authProblem {
-                    delegation.endCaller(context.id)
-                    runStates[target] = nil
-                    pauseQueue(target)
-                    append(ChatMessage(role: .error, text: authProblem), to: target)
-                    saveThread(target)
-                    return
-                }
                 let connectorScope = ConnectorScope(accountID: account.id, command: command, folder: directory, hostID: task?.hostID)
                 let run = machine.isRemote
                     ? AgentRun(command: command, invocation: invocation, on: machine, folder: directory)
@@ -1854,7 +1853,7 @@ final class AppModel {
 
                 // The CLI's lines are parsed off the main thread; their events arrive here in
                 // batches, a few times a second at most, and go into this conversation alone.
-                run.deliverEvents(parsedBy: account.runtime.adapter.parser()) { [weak self, weak run] events in
+                run.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak run] events in
                     guard let self, let run, self.runs[target] === run, self.runSettings(of: target) != nil else { return }
                     let conversation = self.conversation(target)
                     var state = conversation.run

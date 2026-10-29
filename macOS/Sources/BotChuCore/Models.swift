@@ -24,6 +24,11 @@ public protocol RunSettings {
 extension RunSettings {
     public var account: Account { accountProfile.flatMap { $0.id == accountID ? $0 : nil } ?? Accounts.account(id: accountID) }
 
+    /// Compatibility spelling; providerID remains the persisted field shipped with provider support.
+    public var provider: String? {
+        get { providerID }
+        set { providerID = newValue }
+    }
     public var effectiveProviderID: String? { ModelProvider.effectiveID(providerID, runtime: account.kind) }
     public var modelProvider: ModelProvider? { effectiveProviderID.map(ModelProvider.init) }
     public var executionScope: RunSessionScope { RunSessionScope(account: account, providerID: providerID) }

@@ -182,7 +182,10 @@ extension RenderingTests {
         let target = ChatTarget.home(original.id)
         app.runStates[target] = RunState()
         defer { app.runStates.removeAll() }
-        // The Agents table can change next-turn settings while the current turn finishes.
+        // Providers wait for the current turn; late reports are still rejected after a switch.
+        app.setProvider("radius", ofBot: original.id)
+        #expect(app.bot(original.id)?.effectiveProviderID == "openrouter")
+        app.runStates[target] = nil
         app.setProvider("radius", ofBot: original.id)
         app.recordSession("late-session", accountID: "openrouter", scope: original.executionScope, for: target)
         app.recordReportedModel("late-model", requested: original.model, accountID: "openrouter", scope: original.executionScope, for: target)
@@ -205,8 +208,15 @@ extension RenderingTests {
         #expect(app.bot(original.id)?.reasoningEffort == nil)
         app.setReasoningEffort(.high, for: target)
         #expect(app.bot(original.id)?.reasoningEffort == .high)
+        // An editor opened before the live turn reports its session must not restore stale IDs.
+        var editor = try #require(app.bot(original.id))
         app.recordSession("radius-session", accountID: "openrouter", scope: changed.executionScope, for: target)
+        app.recordReportedModel("resolved-model", requested: "same", accountID: "openrouter", scope: changed.executionScope, for: target)
+        editor.name = "Edited while session reported"
+        app.update(editor)
         #expect(app.bot(original.id)?.resumableSessionID == "radius-session")
+        #expect(app.bot(original.id)?.sessionScope == changed.executionScope)
+        #expect(app.bot(original.id)?.resolvedModel == "resolved-model")
         await app.storage.settle()
         #expect(home.loadBot()?.providerID == "radius")
         #expect(home.loadBot()?.resumableSessionID == "radius-session")

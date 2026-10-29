@@ -2,7 +2,7 @@ import SwiftUI
 import BotChuCore
 
 /// The model and effort, and Codex's Fast switch where `onFast` is given, scoped to this
-/// conversation's (or job's) profile. Only runtimes with multiple providers show that choice.
+/// conversation's (or job's) account. None changes its provider.
 struct ModelMenu: View {
     @Environment(AppModel.self) private var app
     let settings: any RunSettings
@@ -28,22 +28,17 @@ struct ModelMenu: View {
     private var scope: ModelCatalogScope? { app.modelCatalogScope(for: settings) }
     private var data: ModelPickerData {
         ModelPickerData(kind: settings.account.kind, model: settings.model, openRouterDefault: app.settings.openRouterModel,
-                        sailDefault: app.settings.sailModel, catalog: app.catalogModels(for: settings),
-                        native: app.nativeModels(for: settings), resolved: settings.resolvedModel, providerID: settings.providerID)
+                        sailDefault: app.settings.sailModel, catalog: app.modelCatalog.models(for: settings.account.kind),
+                        native: app.nativeModels(for: settings), resolved: settings.resolvedModel, provider: settings.resolvedProvider)
     }
     private var efforts: [ReasoningEffort] {
         GenerationOptions.efforts(for: settings.account.kind, model: data.effectiveID, catalog: app.nativeModels(for: settings), providerID: settings.providerID)
     }
 
-    private var selectedEffort: ReasoningEffort? {
-        GenerationOptions.effectiveEffort(settings.reasoningEffort, kind: settings.account.kind, model: data.effectiveID,
-                                         catalog: app.nativeModels(for: settings), providerID: settings.providerID)
-    }
-
     /// Whether the Fast switch shows: a Codex model with the Fast tier (#249).
     private var offersFast: Bool {
         onFast != nil && GenerationOptions.offersFast(for: settings.account.kind, model: data.effectiveID,
-                                                      catalog: app.modelCatalog.models(for: scope))
+                                                      catalog: app.nativeModels(for: settings))
     }
     private var fast: Bool { settings.fastMode == true }
 
@@ -51,9 +46,13 @@ struct ModelMenu: View {
         Group {
             if let tableCell {
                 switch tableCell {
-                case .model: modelButton
+                case .model:
+                    HStack(spacing: 4) {
+                        if settings.runtimeAdapter.offersProviders { providerButton }
+                        modelButton
+                    }
                 case .effort:
-                    if efforts.isEmpty && selectedEffort == nil {
+                    if efforts.isEmpty {
                         Text("—").foregroundStyle(.tertiary).padding(.leading, 6)
                             .accessibilityLabel("Reasoning effort is not supported by this model")
                     } else {
@@ -61,9 +60,9 @@ struct ModelMenu: View {
                     }
                 }
             } else if inInspector {
-                if settings.account.runtime.adapter.hasProviderSelection { InspectorRow("Provider") { providerMenu } }
+                if settings.runtimeAdapter.offersProviders { InspectorRow("Provider") { providerButton } }
                 InspectorRow("Model") { modelButton }
-                InspectorRow(settings.account.runtime.adapter.hasProviderSelection ? "Effort" : "Reasoning", last: !offersFast) { effortButton }
+                InspectorRow("Reasoning", last: !offersFast) { effortButton }
                 if offersFast {
                     InspectorRow("Fast", last: true) {
                         Toggle("Fast", isOn: Binding(get: { fast }, set: { onFast?($0) }))
@@ -72,12 +71,12 @@ struct ModelMenu: View {
                     }
                 }
             } else if inForm {
-                if settings.account.runtime.adapter.hasProviderSelection { LabeledContent("Provider") { providerMenu } }
+                if settings.runtimeAdapter.offersProviders { LabeledContent("Provider") { providerButton } }
                 LabeledContent("Model") { modelButton }
-                LabeledContent(settings.account.runtime.adapter.hasProviderSelection ? "Effort" : "Reasoning") { effortButton }
+                LabeledContent("Reasoning") { effortButton }
             } else {
                 HStack(spacing: 6) {
-                    if settings.account.runtime.adapter.hasProviderSelection { providerMenu }
+                    if settings.runtimeAdapter.offersProviders { providerButton }
                     modelButton
                     effortButton
                     if offersFast { fastButton }
@@ -85,9 +84,8 @@ struct ModelMenu: View {
             }
         }
         .disabled(disabled)
-        .task(id: settings.executionScope) {
-            if settings.effectiveProviderID == "openrouter" { await app.modelCatalog.load() }
-            if settings.account.runtime.adapter.hasProviderSelection, let scope { await app.modelCatalog.refresh(scope) }
+        .task(id: scope) {
+            if settings.runtimeAdapter.offersProviders, let scope { await app.modelCatalog.refresh(scope) }
             if DevHooks.dataDir != nil, DevHooks.env["BOTCHU_OPEN"] != nil, tableCell == nil {
                 // Let the review window finish opening/resizing before anchoring its popover.
                 try? await Task.sleep(for: .seconds(2))
@@ -106,10 +104,29 @@ struct ModelMenu: View {
         }
     }
 
-    private var providerMenu: some View {
-        ModelProviderMenu(providers: app.providers(for: settings), selected: settings.effectiveProviderID ?? "openrouter",
-                          select: { onProvider?($0) })
-            .disabled(onProvider == nil)
+    private var providerButton: some View {
+        Menu {
+            let discovered = settings.runtimeAdapter.providers(in: app.modelCatalog.models(for: scope) ?? [])
+            let providers = Array(Set(discovered + [settings.resolvedProvider].compactMap { $0 })).sorted()
+            ForEach(providers, id: \.self) { provider in
+                Button { onProvider?(provider) } label: {
+                    if provider == settings.resolvedProvider { Label(ModelProvider(id: provider).name, systemImage: "checkmark") }
+                    else { Text(ModelProvider(id: provider).name) }
+                }
+            }
+            if discovered.isEmpty { Text("No authenticated providers found") }
+            if let scope {
+                Divider()
+                Button("Refresh providers and models") { Task { await app.modelCatalog.refresh(scope, force: true) } }
+            }
+        } label: {
+            Text(settings.modelProvider?.name ?? "Provider").font(.system(size: 12, weight: .medium))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(onProvider == nil)
+        .accessibilityLabel("Provider: \(settings.resolvedProvider ?? "Choose")")
+        .help("Changing provider starts a new session and clears model and effort")
     }
 
     private var modelButton: some View {
@@ -118,7 +135,7 @@ struct ModelMenu: View {
                 FormChoiceLabel(title: data.title)
             } else if tableCell != nil {
                 HStack(spacing: 4) {
-                    Text(settings.modelProvider.map { "\($0.name) · \(data.title)" } ?? data.title).lineLimit(1).truncationMode(.middle)
+                    Text(data.title).lineLimit(1).truncationMode(.middle)
                     tableChevron(active: showsModels)
                 }
             } else if inInspector {
@@ -138,8 +155,7 @@ struct ModelMenu: View {
         .help(disabled ? "Model can change when this turn ends" : modelHelp)
         .popover(isPresented: $showsModels, arrowEdge: .top) {
             ModelPicker(data: data, accountName: settings.account.name, catalog: app.modelCatalog,
-                        disabled: disabled, select: onModel, scope: scope, sailKey: app.sailKey,
-                        providers: app.providers(for: settings), onProvider: onProvider)
+                        disabled: disabled, select: onModel, scope: scope, sailKey: app.sailKey)
         }
 
     }
@@ -147,19 +163,19 @@ struct ModelMenu: View {
     private var effortButton: some View {
         Button { showsEffort.toggle() } label: {
             if inForm {
-                FormChoiceLabel(title: selectedEffort?.title ?? (efforts.isEmpty ? "Not supported" : "Auto"))
+                FormChoiceLabel(title: efforts.isEmpty ? "Not supported" : settings.reasoningEffort?.title ?? "Auto")
             } else if tableCell != nil {
                 HStack(spacing: 6) {
-                    EffortGlyph(effort: selectedEffort)
-                    if !compact { Text(selectedEffort?.title ?? "Auto").lineLimit(1) }
+                    EffortGlyph(effort: settings.reasoningEffort)
+                    if !compact { Text(settings.reasoningEffort?.title ?? "Auto").lineLimit(1) }
                     tableChevron(active: showsEffort)
                 }
             } else if inInspector {
-                InspectorChoiceLabel(title: selectedEffort?.title ?? (efforts.isEmpty ? "Not supported" : "Auto"))
+                InspectorChoiceLabel(title: efforts.isEmpty ? "Not supported" : settings.reasoningEffort?.title ?? "Auto")
             } else {
                 HStack(spacing: 6) {
-                    EffortGlyph(effort: selectedEffort)
-                    Text(selectedEffort?.title ?? (efforts.isEmpty ? "No effort" : "Auto"))
+                    EffortGlyph(effort: settings.reasoningEffort)
+                    Text(efforts.isEmpty ? "No effort" : settings.reasoningEffort?.title ?? "Auto")
                         .font(.system(size: 12, weight: .medium))
                         .lineLimit(1)
                     chevron
@@ -169,12 +185,12 @@ struct ModelMenu: View {
         .buttonStyle(GenerationButtonStyle(active: showsEffort, compact: inInspector, form: inForm, table: tableCell != nil))
         .fixedSize()
         .disabled(efforts.isEmpty)
-        .accessibilityLabel(efforts.isEmpty && selectedEffort == nil ? "Reasoning effort is not supported by this model"
-                            : "Reasoning effort: \(selectedEffort?.title ?? "Automatic")")
+        .accessibilityLabel(efforts.isEmpty ? "Reasoning effort is not supported by this model"
+                            : "Reasoning effort: \(settings.reasoningEffort?.title ?? "Automatic")")
         .help(disabled ? "Effort can change when this turn ends" : efforts.isEmpty
               ? "This model does not offer adjustable reasoning effort" : "Choose how much reasoning to use")
         .popover(isPresented: $showsEffort, arrowEdge: .top) {
-            EffortPicker(efforts: efforts, selected: selectedEffort, disabled: disabled, select: onEffort)
+            EffortPicker(efforts: efforts, selected: settings.reasoningEffort, disabled: disabled, select: onEffort)
         }
     }
 

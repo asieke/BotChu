@@ -721,10 +721,16 @@ final class SubagentRuntime {
                                                  machine: machine, hostID: record.hostID)
             guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
             let account = record.account
-            let key = record.usesLegacyOpenRouterKey && !machine.isRemote ? model.openRouterKey() : nil
-            if record.usesLegacyOpenRouterKey && !machine.isRemote && (key?.isEmpty ?? true) {
-                throw DelegationFailure("Add your OpenRouter API key in BotChu Settings first.")
-            }
+            await model.preparePiModels(for: record)
+            guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
+            let key = record.usesLegacyOpenRouterKey(remote: machine.isRemote) ? model.openRouterKey() : nil
+            let command = record.runtimeAdapter.command(local: model.settings.command(for: account),
+                host: model.settings.host(record.hostID)?.command(for: account), remote: machine.isRemote)
+            let chosenModel = record.effectiveModel(openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel)
+            let readinessProblem = await record.runtimeAdapter.readiness(command: command, provider: record.provider, model: chosenModel,
+                machine: machine, folder: record.workingDirectory, environment: machine.isRemote ? [:] : account.runtimeEnvironment.merging(key.map { ["OPENROUTER_API_KEY": $0] } ?? [:]) { _, value in value })
+            guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
+            if let problem = readinessProblem { throw DelegationFailure(problem) }
             let sailKey = account.kind == .sail && !machine.isRemote ? Keychain.get(Keychain.sailAccount) : nil
             if account.kind == .sail, let problem = SailLaunch.problem(remote: machine.isRemote, key: sailKey) {
                 throw DelegationFailure(problem)
@@ -745,21 +751,10 @@ final class SubagentRuntime {
                 memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, soul: snapshot.soul,
                 instructions: snapshot.instructions, team: snapshot.team, availableBots: roster, skills: snapshot.skills,
                 tools: machine.isRemote ? nil : model.tools.instructions())
-            await model.preparePiModels(for: record)
-            guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
-            let selectedModel = GenerationOptions.effectiveModel(record.model, kind: account.kind, openRouterDefault: model.settings.openRouterModel,
-                                                                 sailDefault: model.settings.sailModel, providerID: record.providerID)
-            if let problem = PiLaunch.problem(settings: record, effectiveModel: selectedModel) { throw DelegationFailure(problem) }
-            var invocation = CommandBuilder.invocation(for: record, prompt: prompt, sessionID: nil,
-                openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel,
-                catalog: model.nativeModels(for: record), openRouterKey: key, sailKey: sailKey)
+            var invocation = record.invocation(prompt: prompt, model: chosenModel, sessionID: nil, remote: machine.isRemote,
+                openRouterKey: key, sailKey: sailKey, catalog: model.nativeModels(for: record))
             invocation.environment.merge(context.environment) { _, new in new }
             invocation.toolProfile = prepared.toolProfile
-            let command = model.settings.host(record.hostID)?.command(for: account) ?? model.settings.command(for: account)
-            let authProblem = await account.runtime.adapter.authenticationProblem(account: account,
-                providerID: record.providerID, command: command, machine: machine, folder: record.workingDirectory, openRouterKey: key)
-            guard run(id)?.phase.isActive == true, !Task.isCancelled else { endCaller(context.id); return }
-            if let authProblem { throw DelegationFailure(authProblem) }
             let runner = machine.isRemote
                 ? AgentRun(command: command, invocation: invocation, on: machine, folder: record.workingDirectory)
                 : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: record.workingDirectory))
@@ -768,7 +763,7 @@ final class SubagentRuntime {
             var failure: String?
             var persistenceFailure: String?
             // Parsed off the main thread, in batches; the transcript is checkpointed off it too.
-            runner.deliverEvents(parsedBy: account.runtime.adapter.parser()) { [weak self, weak runner] events in
+            runner.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak runner] events in
                 guard let self, let runner, self.runners[id] === runner, self.run(id)?.phase.isActive == true else { return }
                 let live = self.live(id)
                 var state = live.state

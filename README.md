@@ -217,7 +217,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     Run it in Terminal and use Pi's `/login`. Added profiles appear in bot/task account pickers, host command overrides, and Settings;
     Codex profiles can also draw pets. Bots and tasks retain a copy of their custom profile’s CLI
     runtime, command and config folder across relaunches. Command overrides remain editable in Settings.
-    Only the built-in Pi profile on OpenRouter uses the legacy key in Settings; additional Pi
+    Existing Pi profiles on OpenRouter retain the legacy key in Settings; newly added Pi
     profiles use their own Pi login, including for OpenRouter; their config folder and credential
     exclusions apply after the login shell starts. Muse is checked with its existing brief request, at most
     hourly by itself.
@@ -273,7 +273,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     are its identity. Its profile selects the runtime (CLI protocol, tools and session handling)
     and login. Pi then offers **Provider → Model → Effort**; fixed-provider runtimes show
     their own models directly. Pi's available providers and models come from that profile's own
-    `get_available_models` RPC, without a model turn, extensions or MCP connections. Only model
+    `get_available_models` RPC, including providers installed by that profile, without a model turn. Only model
     metadata is retained. Custom/retired model IDs remain selectable; a newly selected provider
     needs an explicit model before it can run. Provider changes clear the model and effort and
     start a fresh CLI session, keeping the chat's history and bot identity. Same-runtime profile
@@ -289,7 +289,7 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     Before a Pi turn, `auth check --provider <id> --json --no-refresh` checks the selected profile
     without requesting credentials or refreshing OAuth. A missing login names the provider before
     starting a model turn. On SSH this check runs on the host without local keys or config paths.
-    Older wrappers without this command still handle authentication through their normal turn.
+    An unavailable or unrecognized readiness response blocks the turn without showing raw auth output.
     `RuntimeAdapter` owns provider/catalog capabilities, authentication readiness, tool modes, invocation, stream parsing
     and session compatibility. OpenCode can be added as a separate runtime with its own protocol;
     implementing that runtime is future scope.
@@ -303,8 +303,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     profile commands retain their configuration and legacy OpenRouter credential ownership.
     No login files or keys are migrated or copied. Pi can carry sessions across providers itself;
     BotChu deliberately starts a fresh CLI session for a provider/profile change and carries the
-    visible chat into its preamble instead. SSH tasks use the host's own login and custom model
-    IDs; local provider catalogs and config paths are not applied to the host.
+    visible chat into its preamble instead. Provider changes wait until that conversation's turn ends.
+    SSH tasks discover providers/models on the host through its own Pi command; local provider
+    catalogs and config paths are not applied to the host.
   - **Sail Research:** for long-running agent work, on Sail's Flex completion window, which queues
     requests for a lower price. Flex is taken only by background Responses requests (`background:
     true`, `metadata.completion_window: "flex"`), which can't stream, so pointing Pi's streaming
@@ -735,8 +736,7 @@ on that pull request's branch to continue in instead). The same command run agai
     job leaves its runs' tasks, as it leaves the tasks it asked for. Runs from before runs were tasks
     keep their transcripts in the history, and a run that never started (its agent's folder gone, or
     in a review copy) has only its reason there. A job's own choice is saved with it, and a
-    job saved before jobs had one runs on its agent's. When its account is gone from Providers, or
-    OpenRouter's catalog no longer lists its OpenRouter model, its runs use the agent's account,
+    job saved before jobs had one runs on its agent's. When its account is gone from Providers, its runs use the agent's account,
     model and effort instead, never another provider, and the editor (which shows the choice as
     unavailable), the job's row, its history and the run's first line say so; it keeps the choice for
     when the account is back. A CLI's own models and custom IDs run as chosen: one the CLI rejects

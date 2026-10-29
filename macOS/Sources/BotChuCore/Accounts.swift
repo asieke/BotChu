@@ -37,6 +37,11 @@ public struct Account: Identifiable, Codable, Hashable, Sendable {
     /// Missing in old saves: every Pi profile then used BotChu's OpenRouter key. New profiles
     /// explicitly use the runtime's own login; no credential value is stored here.
     public var credentialSource: CredentialSource?
+    public typealias CredentialOwnership = CredentialSource
+    public var credentialOwnership: CredentialSource? {
+        get { credentialSource }
+        set { credentialSource = newValue }
+    }
     public enum CredentialSource: String, Codable, Sendable { case runtime, legacyOpenRouter }
 
     public init(id: String, name: String, kind: AgentKind, defaultCommand: String, symbol: String,
@@ -48,6 +53,12 @@ public struct Account: Identifiable, Codable, Hashable, Sendable {
         self.symbol = symbol
         self.configurationDirectory = configurationDirectory
         self.credentialSource = kind == .pi ? credentialSource : nil
+    }
+
+    public init(id: String, name: String, kind: AgentKind, defaultCommand: String, symbol: String,
+                credentialOwnership: CredentialOwnership?) {
+        self.init(id: id, name: name, kind: kind, defaultCommand: defaultCommand, symbol: symbol,
+                  credentialSource: credentialOwnership)
     }
 
     public var runtime: AgentKind { kind }

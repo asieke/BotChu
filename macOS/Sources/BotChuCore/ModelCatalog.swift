@@ -92,14 +92,15 @@ public struct ModelPickerData: Sendable {
     /// in only while it is nil; the selection and the default stay choices either way.
     /// `catalog` is the list for this kind: OpenRouter's for Pi, Sail's for Sail.
     public init(kind: AgentKind, model: String, openRouterDefault: String, sailDefault: String = "",
-                catalog: [CatalogModel] = [], native: [ModelOption]? = nil, resolved: String? = nil, providerID: String? = nil) {
+                catalog: [CatalogModel] = [], native: [ModelOption]? = nil, resolved: String? = nil, providerID: String? = nil, provider: String? = nil) {
         self.kind = kind
+        let providerID = providerID ?? provider
         self.providerID = ModelProvider.effectiveID(providerID, runtime: kind)
         let selectedID = model.trimmingCharacters(in: .whitespacesAndNewlines)
         self.selectedID = selectedID
         self.effectiveID = GenerationOptions.effectiveModel(model, kind: kind, openRouterDefault: openRouterDefault, sailDefault: sailDefault, providerID: providerID)
         let usesSettingsDefault = (kind == .pi && self.providerID == "openrouter") || kind == .sail
-        let available = usesSettingsDefault ? catalog : []
+        let available = kind == .sail ? catalog : []
         let native = kind == .pi ? native.map { GenerationOptions.models(for: kind, catalog: $0, providerID: providerID) } : native
         func label(_ id: String) -> ModelLabel {
             if kind == .pi, id.isEmpty, ModelProvider.effectiveID(providerID, runtime: kind) != "openrouter" {

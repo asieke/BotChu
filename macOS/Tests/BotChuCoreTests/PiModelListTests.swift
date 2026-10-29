@@ -3,8 +3,8 @@ import Testing
 @testable import BotChuCore
 
 @Suite struct PiModelListTests {
-    @Test(arguments: [false, true])
-    func catalogUsesPiProtocolAndProfileDirectoryWithoutStartingATurn(legacy: Bool) async throws {
+    @Test(arguments: [false, true], [false, true])
+    func catalogUsesPiProtocolAndProfileDirectoryWithoutStartingATurn(legacy: Bool, remote: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-pi-list-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -26,15 +26,16 @@ import Testing
         time.sleep(60)
         """#.write(to: script, atomically: true, encoding: .utf8)
         let command = "/usr/bin/python3 " + [script.path, log.path, fixture.path].map(Shell.quote).joined(separator: " ")
-        let scope = ModelCatalogScope(accountID: "test", command: command, kind: .pi, configurationDirectory: profile, legacyOpenRouterCredential: legacy)
+        let scope = ModelCatalogScope(accountID: "test", command: command, kind: .pi, configurationDirectory: profile, legacyOpenRouterCredential: legacy,
+            machine: remote ? FakeSSH.machine : .thisMac, folder: root.path)
         let models = try await NativeModelList.list(scope, timeout: 10, openRouterKey: "test-only-key")
         #expect(models.count == 6)
         let asked = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: log)) as? [String: Any])
-        #expect(asked["directory"] as? String == profile)
-        #expect(asked["keyMatches"] as? Bool == legacy)
-        #expect((asked["request"] as? [String: String]) == ["id": "botchu-catalog", "type": "get_available_models"])
-        #expect(asked["args"] as? [String] == ["--mode", "rpc", "--no-session", "--no-extensions", "--no-mcp", "--no-skills",
-                                             "--no-prompt-templates", "--no-context-files", "--offline"])
+        if remote { #expect(asked["directory"] as? String != profile) }
+        else { #expect(asked["directory"] as? String == profile) }
+        #expect(asked["keyMatches"] as? Bool == (legacy && !remote))
+        #expect((asked["request"] as? [String: String]) == ["id": "botchu-models", "type": "get_available_models"])
+        #expect(asked["args"] as? [String] == ["--mode", "rpc", "--no-session"])
     }
 
     @Test func catalogFailureDoesNotExposeRawProviderErrors() throws {

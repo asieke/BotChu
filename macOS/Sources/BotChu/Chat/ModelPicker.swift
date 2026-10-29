@@ -12,8 +12,6 @@ struct ModelPicker: View {
     var scope: ModelCatalogScope?
     /// Look up the saved key only when a Sail picker opens.
     var sailKey: @MainActor () -> String? = { nil }
-    var providers: [ModelProvider] = []
-    var onProvider: ((String) -> Void)?
     @State private var query = ""
     @State private var highlighted: String?
     @State private var showsCustom = false
@@ -31,12 +29,6 @@ struct ModelPicker: View {
                 ProviderLabel(title: accountName, kind: data.kind, size: 12).font(.system(size: 11)).foregroundStyle(.secondary)
             }
             .padding(16)
-            if data.kind == .pi, let onProvider {
-                LabeledContent("Provider") {
-                    ModelProviderMenu(providers: providers, selected: data.providerID ?? "openrouter", select: { onProvider($0); dismiss() })
-                }
-                .padding(.horizontal, 16).padding(.bottom, 8)
-            }
             if showsCustom {
                 customForm
             } else {
@@ -60,7 +52,6 @@ struct ModelPicker: View {
         }
         .onChange(of: disabled) { _, running in if running { dismiss() } }
         .task {
-            if data.kind == .pi, data.providerID == "openrouter" { await catalog.load() }
             if data.kind == .sail { await catalog.loadSail(key: sailKey()) }
             if let scope { await catalog.refresh(scope) }
         }
@@ -142,15 +133,6 @@ struct ModelPicker: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if data.kind == .pi, data.providerID == "openrouter" {
-                HStack(spacing: 6) {
-                    if catalog.loading { ProgressView().controlSize(.mini) }
-                    Text(catalog.loading ? "Loading OpenRouter models…" : catalog.unavailable
-                         ? "Catalog unavailable · current and custom models still work"
-                         : "OpenRouter · models with tool support")
-                        .font(.system(size: 10.5)).foregroundStyle(.secondary)
-                }
-            }
             if let scope { nativeStatus(catalog.status(for: scope), scope: scope) }
             HStack {
                 Button {
@@ -194,7 +176,7 @@ struct ModelPicker: View {
 
     private var customForm: some View {
         VStack(alignment: .leading, spacing: 14) {
-            TextField(data.kind == .pi ? "provider/model-name" : "Model ID", text: $customID)
+            TextField("Model ID", text: $customID)
                 .textFieldStyle(.roundedBorder).focused($customFocused).onSubmit(saveCustom)
                 .accessibilityLabel("Custom model ID")
             HStack {

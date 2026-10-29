@@ -335,6 +335,10 @@ public struct JobRun: Identifiable, Codable, Hashable, Sendable {
     public var accountID: String?
     public var accountName: String?
     public var providerID: String?
+    public var provider: String? {
+        get { providerID }
+        set { providerID = newValue }
+    }
     public var model: String?
     public var reasoningEffort: ReasoningEffort?
     /// The model the CLI said it ran.
@@ -471,14 +475,18 @@ public struct JobRunsOn: Codable, Hashable, Sendable {
     public var accountProfile: Account?
     /// Empty means the account's default model.
     public var providerID: String?
+    public var provider: String? {
+        get { providerID }
+        set { providerID = newValue }
+    }
     public var model: String
     /// Nil leaves reasoning effort to the CLI.
     public var reasoningEffort: ReasoningEffort?
 
-    public init(accountID: String, accountProfile: Account? = nil, model: String = "", reasoningEffort: ReasoningEffort? = nil, providerID: String? = nil) {
+    public init(accountID: String, accountProfile: Account? = nil, provider: String? = nil, model: String = "", reasoningEffort: ReasoningEffort? = nil, providerID: String? = nil) {
         self.accountID = accountID
         self.accountProfile = accountProfile
-        self.providerID = providerID
+        self.providerID = providerID ?? provider
         self.model = model
         self.reasoningEffort = reasoningEffort
     }

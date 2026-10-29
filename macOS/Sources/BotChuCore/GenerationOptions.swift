@@ -17,6 +17,10 @@ public struct ModelOption: Identifiable, Equatable, Sendable {
     public let name: String
     public let efforts: [ReasoningEffort]
     public var providerID: String?
+    public var provider: String? {
+        get { providerID }
+        set { providerID = newValue }
+    }
     /// False when only a public model name/reasoning flag is known, without runtime capabilities.
     public var effortsKnown: Bool
     /// A CLI alias that moves to newer versions, such as Claude Code's `opus`, not a pinned version.
@@ -25,13 +29,13 @@ public struct ModelOption: Identifiable, Equatable, Sendable {
     public var fast = false
 
     public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false, fast: Bool = false,
-                providerID: String? = nil, effortsKnown: Bool = true) {
+                providerID: String? = nil, effortsKnown: Bool = true, provider: String? = nil) {
         self.id = id
         self.name = name
         self.efforts = efforts
         self.moving = moving
         self.fast = fast
-        self.providerID = providerID
+        self.providerID = providerID ?? provider
         self.effortsKnown = effortsKnown
     }
 }
@@ -97,7 +101,7 @@ public enum GenerationOptions {
                     ModelOption(id: "muse-spark-1.3", name: "Muse Spark 1.3", efforts: listed),
                     ModelOption(id: "muse-spark-1.2", name: "Muse Spark 1.2", efforts: [.minimal, .low, .medium, .high, .xhigh])]
         case .pi:
-            return [ModelOption(id: CommandBuilder.defaultOpenRouterModel, name: "Claude Sonnet 4.5", efforts: [.off, .minimal] + common, providerID: "openrouter")]
+            return []
         case .sail:
             // Sail's models depend on the key: Settings ▸ Sail lists them, and any ID can be typed.
             return []
@@ -282,18 +286,6 @@ extension RunSettings {
             fastMode = nil
         }
         if executionScope != oldScope { invalidateSession(previous: oldScope) }
-    }
-
-    public mutating func selectProvider(_ id: String) {
-        guard account.kind == .pi else { return }
-        let selected = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !selected.isEmpty, selected != effectiveProviderID else { return }
-        let previous = executionScope
-        providerID = selected
-        model = ""
-        reasoningEffort = nil
-        fastMode = nil
-        invalidateSession(previous: previous)
     }
 
     private mutating func invalidateSession(previous: RunSessionScope) {

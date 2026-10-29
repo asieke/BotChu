@@ -202,7 +202,7 @@ import Testing
             ]]]
         let listed = try PiModelList.parse(frame)
         #expect(listed.count == 2)
-        #expect(listed.first?.efforts.isEmpty == true)
+        #expect(listed.first?.efforts == [.off])
         let saved = try #require(NativeCatalogFile.encode(["test": NativeCatalog(models: listed, checkedAt: .now)]))
         #expect(!String(decoding: saved, as: UTF8.self).contains("secret-test-marker"))
         let choices = ModelPickerData(kind: .pi, model: "same-model", openRouterDefault: "", native: listed, providerID: "two")

@@ -8,7 +8,7 @@ import Testing
         let missing = try #require(JSONSerialization.jsonObject(with: Data(PiModelSamples.authMissing.utf8)) as? [String: Any])
         #expect(PiAuthentication.problem(ready, provider: "radius") == nil)
         #expect(PiAuthentication.problem(missing, provider: "kimi-coding") == "Sign in to Kimi Coding in this Pi profile before starting a turn.")
-        #expect(PiAuthentication.problem(missing, provider: "radius") == nil)
+        #expect(PiAuthentication.problem(missing, provider: "radius") != nil)
         #expect(PiAuthentication.problem(["provider": "radius", "status": "invalid", "reason": "secret-test-value"],
                                         provider: "radius") == "Pi could not use the Radius login. Sign in again in this profile.")
         #expect(PiAuthentication.problem(["provider": "unknown", "status": "not_ready", "reason": "provider_not_found"],
@@ -45,9 +45,9 @@ import Testing
         #expect(asked["args"] as? [String] == ["auth", "check", "--provider", "openrouter", "--json", "--no-refresh"])
     }
 
-    @Test func anOlderWrapperStillLetsTheTurnHandleItsLogin() async {
+    @Test func anUnavailableReadinessCommandBlocksTheTurn() async {
         let account = Accounts.account(id: "openrouter")
-        #expect(await PiAuthentication.problem(account: account, providerID: "radius", command: "/usr/bin/false", timeout: 1) == nil)
+        #expect(await PiAuthentication.problem(account: account, providerID: "radius", command: "/usr/bin/false", timeout: 1) != nil)
         #expect(await AgentKind.muse.adapter.authenticationProblem(account: Accounts.account(id: "muse"),
             providerID: nil, command: "/a/nonexistent/command") == nil)
     }

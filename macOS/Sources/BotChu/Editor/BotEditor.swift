@@ -135,7 +135,7 @@ struct BotEditor: View {
                     ModelMenu(settings: bot, disabled: false,
                               onModel: { bot.selectModel($0, catalog: model.nativeModels(for: bot)) },
                               onEffort: { bot.reasoningEffort = $0 },
-                              onProvider: { bot.selectProvider($0) }, inForm: true)
+                              onProvider: model.isRunning(.home(bot.id)) ? nil : { bot.selectProvider($0) }, inForm: true)
                     LabeledContent("Workspace") {
                         HStack {
                             TextField("Workspace", text: $bot.workspace, prompt: Text("~/BotChu/…"))

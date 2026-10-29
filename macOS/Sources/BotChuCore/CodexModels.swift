@@ -8,22 +8,36 @@ public struct ModelCatalogScope: Hashable, Sendable {
     public var command: String
     /// The profile's CLI family, which says how its list is read.
     public var kind: AgentKind
+    public var machine: Machine
+    public var folder: String
+    public var usesLegacyOpenRouterKey: Bool { legacyOpenRouterCredential && !machine.isRemote }
+    public var profileEnvironment: [String: String] {
+        guard !machine.isRemote, let configurationDirectory else { return [:] }
+        return ["PI_CODING_AGENT_DIR": (configurationDirectory as NSString).expandingTildeInPath]
+    }
+    public var unsetEnvironment: [String] {
+        guard kind == .pi, !machine.isRemote else { return [] }
+        return configurationDirectory != nil ? AgentRun.modelCredentialNames.sorted()
+            : legacyOpenRouterCredential ? [] : ["OPENROUTER_API_KEY"]
+    }
     public var configurationDirectory: String?
     public var legacyOpenRouterCredential: Bool
 
     public init(accountID: String, command: String, kind: AgentKind, configurationDirectory: String? = nil,
-                legacyOpenRouterCredential: Bool = false) {
+                legacyOpenRouterCredential: Bool = false, machine: Machine = .thisMac, folder: String = NSHomeDirectory(), usesLegacyOpenRouterKey: Bool = false) {
         self.accountID = accountID
         self.command = command
         self.kind = kind
-        self.configurationDirectory = configurationDirectory
-        self.legacyOpenRouterCredential = kind == .pi && legacyOpenRouterCredential
+        self.machine = machine
+        self.folder = folder
+        self.configurationDirectory = machine.isRemote ? nil : configurationDirectory
+        self.legacyOpenRouterCredential = kind == .pi && !machine.isRemote && (legacyOpenRouterCredential || usesLegacyOpenRouterKey)
     }
 
     /// How the scope is saved: opaque, so `model-catalogs.json` holds no command.
     public var key: String {
         // Preserve existing native cache keys; Pi is a new catalog with explicit runtime scope.
-        ConnectorScope.profile(accountID: accountID, command: kind == .pi ? "pi\0\(configurationDirectory ?? "")\0\(legacyOpenRouterCredential)\0\(command)" : command)
+        ConnectorScope.profile(accountID: accountID, command: kind == .pi ? "pi\0\(configurationDirectory ?? "")\0\(legacyOpenRouterCredential)\0\(command)\(machine.destination.map { "@" + $0 + ":" + folder } ?? "")" : command)
     }
 }
 
@@ -61,8 +75,9 @@ public enum NativeModelList {
         switch scope.kind {
         case .codex: try await CodexModelList.list(command: scope.command, folder: folder, timeout: timeout)
         case .muse: try await MuseModelList.list(command: scope.command, folder: folder, timeout: timeout)
-        case .pi: try await PiModelList.list(command: scope.command, configurationDirectory: scope.configurationDirectory, folder: folder,
-                                           openRouterKey: scope.legacyOpenRouterCredential ? openRouterKey : nil, timeout: timeout)
+        case .pi: try await PiModelList.list(command: scope.command, machine: scope.machine, folder: scope.folder,
+            environment: scope.profileEnvironment.merging(scope.usesLegacyOpenRouterKey ? openRouterKey.map { ["OPENROUTER_API_KEY": $0] } ?? [:] : [:]) { _, value in value },
+            unsetEnvironment: scope.unsetEnvironment, timeout: timeout)
         case .claude, .antigravity, .sail: throw ModelListFailure.unsupported(scope.kind.displayName)
         }
     }
