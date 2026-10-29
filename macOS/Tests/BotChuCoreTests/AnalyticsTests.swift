@@ -840,7 +840,7 @@ extension AnalyticsTests {
         #expect(rows.map { $0.tokens.uncachedInput } == [nil, 30, 50, nil, 15, nil, nil])
         #expect(rows[2].models.first?.model == "gpt-5-mini")
         #expect(rows[2].tokens.cacheRead == nil && rows[4].tokens.cacheRead == 15)
-        #expect(!rows[2].canReprice && rows[2].cost == nil && rows[2].costProvenance == .unpriced)
+        #expect(!rows[2].canReprice && rows[2].cost == nil && rows[2].costProvenance == .unavailable)
         #expect(rows[0].costProvenance == .unavailable && rows[3].costProvenance == .unavailable)
     }
 
@@ -952,5 +952,31 @@ extension AnalyticsTests {
         var b = builder(); b.bot(bot.id, name: bot.name); b.addLedger(entries: [entry])
         b.add(turns: [AnalyticsTurn(start: base, end: base, outcome: .finished, messageID: prompt.id)], bot: bot, task: nil)
         #expect(b.snapshot().records[0].cost == nil && b.snapshot().unpricedModelIDs == ["unknown-model"])
+    }
+}
+
+extension AnalyticsTests {
+    @Test func incompleteCumulativeTokensStillAllowValidReportedOrActualCosts() {
+        let bot = Bot(name: "Partial", accountID: "codex-work", workspace: "/tmp/partial")
+        let prompts = [message(.user, at: 0), message(.user, at: 100)]
+        let session = UUID().uuidString
+        let entries = prompts.enumerated().map { index, prompt in
+            ledgerEntry(bot, prompt: prompt, provider: .codex, model: "gpt-5",
+                        usage: TurnUsage(models: [ModelUsage(model: "", uncachedInput: 100 + index * 50,
+                                                            output: index == 0 ? nil : 20)],
+                                         reportedCostUSD: index == 0 ? 0.5 : 0.75, cumulative: true),
+                        session: session, resumed: true)
+        }
+        func snapshot(_ amendments: [UsageLedger.Amendment]) -> AnalyticsSnapshot {
+            var b = builder(); b.bot(bot.id, name: bot.name)
+            b.addLedger(entries: entries, amendments: amendments)
+            b.add(turns: prompts.map { AnalyticsTurn(start: $0.date, end: $0.date, outcome: .finished, messageID: $0.id) }, bot: bot, task: nil)
+            return b.snapshot()
+        }
+        let estimated = snapshot([]).records[1]
+        #expect(!estimated.canReprice && estimated.tokens.uncachedInput == 50 && estimated.tokens.output == nil)
+        #expect(estimated.cost == 0.25 && estimated.costProvenance == .estimated)
+        let actual = snapshot([.init(amends: entries[1].id, actualCostUSD: 0)]).records[1]
+        #expect(actual.cost == 0 && actual.costProvenance == .actual && !actual.canReprice)
     }
 }
