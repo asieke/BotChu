@@ -29,6 +29,16 @@ enum SailSamples {
 
     static let reasoning = #"{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"Thinking it over."}]}"#
     static let usage = #","usage":{"input_tokens":1200,"output_tokens":34,"total_tokens":1234}"#
+
+    /// Synthetic `GET /v2/usage/summary` fixture shaped as Sail's docs describe, with
+    /// the balance, spend and burn rate in fractional US cents, and a free plan's 7 days noted.
+    static func usageSummary(range: String = "30d", effective: String = "7d", limited: Bool = true) -> String {
+        #"{"object":"usage.summary","available":true,"empty":false,"has_metronome_customer":true,"# +
+            #""range":"\#(range)","balance":5498.0166062,"balance_unavailable":false,"period_spend":1.9833938,"# +
+            #""product_spend":{"inference":1.9833938,"sailboxes":0},"burn_rate":0.2833419714285714,"days_remaining":null,"# +
+            #""model_count":1,"total_requests":2,"tokens":{"total":3000,"input":2500,"output":500,"cached":0},"# +
+            #""avg_cost_per_day":0.2833419714285714,"sla_mix":{"flex":1},"effective_range":"\#(effective)","plan_limited":\#(limited)}"#
+    }
 }
 
 /// Answers each request with the next fixture, checking it is the request expected, and keeps every

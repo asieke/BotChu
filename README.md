@@ -306,10 +306,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     visible chat into its preamble instead. Provider changes wait until that conversation's turn ends.
     SSH tasks discover providers/models on the host through its own Pi command; local provider
     catalogs and config paths are not applied to the host.
-  - **Sail Research:** for long-running agent work, on Sail's Flex completion window, which queues
-    requests for a lower price. Flex is taken only by background Responses requests (`background:
-    true`, `metadata.completion_window: "flex"`), which can't stream, so pointing Pi's streaming
-    providers at Sail can't use it: the Sail account runs `botchu-sail`, BotChu's own headless agent, built
+  - **Sail Research:** choose **ASAP**, **Balanced**, or **Flex** from the conversation's
+    completion-window menu, its inspector, or the bot/job editor. Existing conversations default
+    to Flex. The choice is saved per conversation and applies to its next turn. Flex trades waiting
+    for a lower price. Flex and Balanced use background Responses requests; ASAP uses foreground
+    Responses. The Sail account runs `botchu-sail`, BotChu's own headless agent, built
     beside the app and run like the other CLIs (`SailCommand`). Each turn sends the whole
     conversation (Sail keeps no `previous_response_id` state), polls `GET /responses/{id}` (2 s at
     first, then up to every 30 s, honouring `Retry-After`), runs the function tools the model calls
@@ -317,13 +318,12 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     the key — and submits again until the model answers without one. A reply without a call that
     stops short (empty, or ending by announcing its next step, such as `…one at a time:`) is asked
     to go on, up to twice in a row, so a model that narrates instead of calling doesn't end the turn
-    mid-task (#251); its system prompt says the same. Every request is on Flex; a
-    model or request Sail won't take on Flex fails the turn saying so, with the choices (another
-    model in Settings ▸ Sail or the model menu, or another account): BotChu never moves work to a
-    faster, pricier window for queue delay. A submission is retried with the same idempotency key
+    mid-task (#251); its system prompt says the same. An unsupported model/window combination fails
+    with guidance to choose another model or window; BotChu never changes it automatically.
+    A submission is retried with the same idempotency key
     (`Retry-After`, else backoff from 1 s to 60 s), and a poll that times out or fails is made again,
     as it never cancels the inference. While Sail queues or runs a request, the conversation shows a
-    **Sail Flex** row (submitting, queued, running, retrying, then completed, incomplete, failed,
+    **Sail** row, naming the selected window (submitting, queued, running, retrying, then completed, incomplete, failed,
     cancelled or refused, each said as itself). Each conversation's items and the submission still
     out are saved (`~/Library/Application Support/BotChu/sail/sessions/`, readable only by you), the
     submission before it is sent and again once Sail names its response. **Stop** ends BotChu's side
@@ -332,10 +332,16 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     answered again, with its key) before it is answered; the picked-up reply is kept, and the tools it
     calls are reported not run, for the model to call again. Settings ▸ Sail holds the key (its own
     Keychain item) and the model a conversation runs when it chooses none (Load Models lists those
-    Sail offers the key), and links Sail's dashboard, which has its usage and billing: BotChu reads
-    or infers none. The conversation's model picker also lists and searches Sail's models, fetching
-    only when it opens with a saved key. A failed fetch keeps the last list and retries on the next
-    opening; the Settings default, current model and custom ID remain available. When the conversation
+    Sail offers the key). Its allowance is Sail's own: BotChu reads the account's credit balance and
+    what is spending it from Sail's Usage API (`GET /v2/usage/summary`, the numbers the dashboard's
+    Billing page shows), shown in Providers and a conversation's Usage as the balance and its burn
+    rate. Sail reports money in fractional US cents, so every amount is divided by 100 once, in its
+    parser; nothing is worked out from prices or a plan, and an organization without a billing
+    account reads as nothing rather than a $0 balance. A free organization's usage history covers 7 days of
+    spend, and the card says so when the plan shortened the range asked for. Settings ▸ Sail still
+    links Sail's dashboard for invoices. The conversation's model picker lists and searches Sail's
+    models when it opens with a saved key. A failed fetch keeps the last list and retries next time;
+    the Settings default, current model and custom ID remain available. When the conversation
     inherits its model, the picker names the default from Settings ▸ Sail.
     Sail runs on This Mac only, and not for run reviews or Quick tasks.
   - **Chat:** one continuous thread per bot (its **Home**), and one per task. Replies stream in, rendered as Markdown (each reply
@@ -1438,7 +1444,9 @@ on that pull request's branch to continue in instead). The same command run agai
     (`GenerationOptions.swift`, `ModelCatalog.swift`), offline token market pricing
     (`ModelUsage.swift`, `ModelPricing.swift`, `ModelPrices.generated.swift`): a dated USD snapshot
     from models.dev's first-party/OpenRouter lists, LiteLLM first-party fallbacks and 1h cache prices,
-    and Sail's published Flex prices. Prices apply each request's total-input context tier, count
+    and Sail's published ASAP, Balanced, and Flex prices. Sail usage retains the actual window of
+    each response, including an older pending response resumed after the selection changes. Prices
+    apply each request's total-input context tier, count
     reasoning within output and 1h writes within cache writes, and leave unknown models or rates
     unpriced. No prices are fetched at runtime. Refresh with
     `scripts/update-model-prices.py --date YYYY-MM-DD`; to reproduce saved source JSON, add
@@ -1466,7 +1474,8 @@ on that pull request's branch to continue in instead). The same command run agai
     team playbook, memory, skill catalog and recap that open a session (`BotContext.swift`),
     their reusable background preparation (`SessionPreparation.swift`), the editable Markdown
     files of a bot and of every bot (`BotDocument.swift`), account allowance parsing and native queries,
-    with each window's model group and length, and what Providers makes of a reading: its windows by
+    with each window's model group and length, what a provider's billing API adds besides them (Sail's
+    credit balance and burn rate, `UsageBalance`), and what Providers makes of a reading: its windows by
     group, each reset as the time left and when, the credits and resets, what a row's second line
     says, and how its columns and meters share the table's width (`ProviderUsage.swift`, `ProviderUsageClient.swift`) with a throttled cache,
     saved between launches (`UsageCache.swift`), per-conversation pending-message delivery, keeping a follow-up the CLI
@@ -1944,7 +1953,8 @@ file from other programs running as the same user.
   (unknown buckets stay absent; Codex and Antigravity mark their session totals cumulative). It spends the accounts' own
   allowance, so it is not part of `check`; OpenRouter needs `OPENROUTER_API_KEY` in its environment,
   and Sail `SAIL_API_KEY` and `BOTCHU_SMOKE_MODEL=<a Sail model id>` (its helper runs from the smoke
-  binary itself, and each turn can wait in Sail's Flex queue). To exercise explicit generation
+  binary itself, and each turn can wait in Sail's Flex queue). Set
+  `BOTCHU_SMOKE_SAIL_WINDOW=asap|balanced|flex` to test a window (default `flex`). To exercise explicit generation
   settings, prefix the command with `BOTCHU_SMOKE_EFFORT=low` and optionally
   `BOTCHU_SMOKE_MODEL=<model id>`; both settings apply to the new and resumed turns. For Pi,
   `BOTCHU_SMOKE_PROVIDER=<provider id>` selects another provider using Pi's existing login,
@@ -2132,7 +2142,8 @@ file from other programs running as the same user.
 - Account allowance end to end: `swift run --package-path macOS botchu-smoke --usage [account id …]`
   reads each account's usage through the same client as the inspector. It prints only the normalized
   usage fields, never raw CLI output or credentials. Muse makes its brief usage request; OpenRouter
-  needs `OPENROUTER_API_KEY` in the environment. This is separate from the two-turn conversation smoke.
+  needs `OPENROUTER_API_KEY` in the environment and Sail `SAIL_API_KEY`, the same key its inference
+  uses. This is separate from the two-turn conversation smoke.
 - Run reviews without tools: `swift run --package-path macOS botchu-smoke --review [account id …]`
   runs one turn on each account the way a run review does, asking the CLI to read a file outside its
   folder, and passes when the CLI answers without a tool call and without the file's word. Accounts

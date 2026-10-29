@@ -13,6 +13,8 @@ public protocol RunSettings {
     var reasoningEffort: ReasoningEffort? { get set }
     /// Codex's Fast tier (#249): faster turns that use more of the allowance. Nil is off.
     var fastMode: Bool? { get set }
+    /// Sail scheduling/price tier; nil preserves the historical Flex default.
+    var sailCompletionWindow: SailCompletionWindow? { get set }
     /// The CLI session the conversation continues, and the account it belongs to.
     var sessionID: String? { get set }
     var sessionAccountID: String? { get set }
@@ -22,6 +24,7 @@ public protocol RunSettings {
 }
 
 extension RunSettings {
+    public var effectiveSailCompletionWindow: SailCompletionWindow { sailCompletionWindow ?? .flex }
     public var account: Account { accountProfile.flatMap { $0.id == accountID ? $0 : nil } ?? Accounts.account(id: accountID) }
 
     /// Compatibility spelling; providerID remains the persisted field shipped with provider support.
@@ -103,6 +106,8 @@ public struct Bot: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var providerID: String?
     /// Nil leaves reasoning effort to the CLI. Optional for compatibility with saved bots.
     public var reasoningEffort: ReasoningEffort?
+    /// Sail scheduling/price tier; nil preserves the historical Flex default.
+    public var sailCompletionWindow: SailCompletionWindow?
     /// Codex's Fast tier; nil is off, as in bots saved before it (#249).
     public var fastMode: Bool?
     /// Absolute path of the bot's workspace folder.

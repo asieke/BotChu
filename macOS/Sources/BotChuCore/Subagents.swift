@@ -43,6 +43,7 @@ public struct SubagentRun: Identifiable, Codable, Equatable, Sendable, RunSettin
     public var model: String
     public var providerID: String?
     public var reasoningEffort: ReasoningEffort?
+    public var sailCompletionWindow: SailCompletionWindow?
     public var fastMode: Bool?
     public var sessionID: String?
     public var sessionAccountID: String?
@@ -83,6 +84,7 @@ public struct SubagentRun: Identifiable, Codable, Equatable, Sendable, RunSettin
         model = targetBot.model
         reasoningEffort = targetBot.reasoningEffort
         fastMode = targetBot.fastMode
+        sailCompletionWindow = targetBot.sailCompletionWindow
         self.phase = phase
         self.createdAt = createdAt
     }

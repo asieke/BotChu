@@ -34,11 +34,16 @@ extension RenderingTests {
         settings.customAccounts = [Account(id: "custom-long", name: "Claude Research and Long-Form Writing Profile", kind: .claude,
                                            defaultCommand: "botchu-missing-\(UUID().uuidString.prefix(8))", symbol: "terminal")]
         let claudeWork = FailAfterFirst()
-        let usage = UsageCache { request, key in
-            let usesExpectedKey = key == (request.account.kind == .pi ? "test-openrouter-key" : nil)
-            #expect(usesExpectedKey)
+        // A Sail profile shows its balance in Credits & resets, with no window to meter.
+        settings.customAccounts = [Account(id: "custom-sail", name: "Sail Lab", kind: .sail, defaultCommand: "botchu-sail", symbol: "sailboat")]
+        let usage = UsageCache { request, keys in
+            // Only the account's own key reaches its check: none for the CLI profiles.
+            let expected = request.account.kind == .pi ? UsageKeys(openRouter: "test-openrouter-key") : UsageKeys()
+            #expect(keys == expected)
             let now = Date()
             switch request.account.id {
+            case "custom-sail":
+                return ProviderUsage(windows: [], readAt: now, balance: UsageBalance(credit: 54.98, spent: 1.98, period: "7d", perDay: 0.28, daysLeft: 194))
             case "google":
                 return ProviderUsage(windows: ["Gemini · Weekly", "Gemini · 5-hour", "Claude & GPT · Weekly", "Claude & GPT · 5-hour", "Images · Daily"].enumerated().map {
                     UsageWindow(id: $1, title: $1, usedPercent: Double([22, 4, 97, 100, 61][$0]), resetsAt: now.addingTimeInterval(Double($0 + 1) * 9_000))
@@ -216,10 +221,10 @@ extension RenderingTests {
 
         let usage = UsageCache(fetch: { _, _ in ProviderUsage(windows: [UsageWindow(id: "week", title: "Weekly", usedPercent: 50)]) }, file: file)
         let board = ProviderUsageBoard()
-        await board.refresh(request, usage: usage, openRouterKey: { nil }, for: .background)
+        await board.refresh(request, usage: usage, keys: { _ in UsageKeys() }, for: .background)
         #expect(board.states[request]?.reading == reading) // ten minutes old: shown, not checked
         #expect(board.checking.isEmpty)
-        await board.refresh(request, usage: usage, openRouterKey: { nil })
+        await board.refresh(request, usage: usage, keys: { _ in UsageKeys() })
         #expect(board.states[request]?.reading?.windows.first?.usedPercent == 50) // shown, it is due
     }
 

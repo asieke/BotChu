@@ -469,6 +469,7 @@ public struct Job: Identifiable, Codable, Hashable, Sendable {
 
 /// The account, model and reasoning effort the owner chose for a job's runs, in place of its agent's.
 public struct JobRunsOn: Codable, Hashable, Sendable {
+    public var sailCompletionWindow: SailCompletionWindow?
     public var accountID: String
     /// A CLI profile's details, kept with the choice as a bot keeps its own, so the job still names it
     /// (and its CLI family) once the profile is gone; nil for the accounts BotChu comes with.
@@ -495,6 +496,7 @@ public struct JobRunsOn: Codable, Hashable, Sendable {
     public init(_ settings: any RunSettings) {
         self.init(accountID: settings.accountID, accountProfile: settings.accountProfile.flatMap { $0.id == settings.accountID ? $0 : nil },
                   model: settings.model, reasoningEffort: settings.reasoningEffort, providerID: settings.providerID)
+        sailCompletionWindow = settings.sailCompletionWindow
     }
 
     /// Why BotChu can't run the choice, so the job's runs use its agent's.
@@ -532,6 +534,7 @@ public struct JobRunsOn: Codable, Hashable, Sendable {
         bot.clearSession()
         bot.model = model
         bot.reasoningEffort = reasoningEffort
+        bot.sailCompletionWindow = sailCompletionWindow
         return bot
     }
 }

@@ -179,6 +179,7 @@ public enum CommandBuilder {
         fast: Bool = false,
         openRouterKey: String? = nil,
         sailKey: String? = nil,
+        sailCompletionWindow: SailCompletionWindow = .flex,
         liveInput: Bool = false,
         providerID: String? = nil,
         catalog: [ModelOption]? = nil,
@@ -249,6 +250,7 @@ public enum CommandBuilder {
             if let model { args += ["--model", model] }
             if let effort { args += ["--effort", effort] }
             args.append(prompt)
+            if sailCompletionWindow != .flex { args.insert(contentsOf: ["--completion-window", sailCompletionWindow.rawValue], at: 0) }
             if let sailKey, !sailKey.isEmpty { env[Sail.keyVariable] = sailKey }
         }
         return Invocation(arguments: args, environment: env, sessionID: session, input: input)

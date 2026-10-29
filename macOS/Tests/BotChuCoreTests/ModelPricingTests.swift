@@ -21,7 +21,7 @@ import Testing
         #expect(abs(try #require(ModelPricing.price(hour, provider: .claude)).usd - 0.1000005) < 1e-12)
     }
 
-    @Test func piKeepsDottedSlugsAndSailUsesOnlyFlex() throws {
+    @Test func piKeepsDottedSlugsAndLegacySailUsageDefaultsToFlex() throws {
         let pi = ModelUsage(model: "deepseek/deepseek-v4.1-flash-1017", uncachedInput: 1_000_000, cacheRead: 1_000_000, output: 1_000_000)
         #expect(abs(try #require(ModelPricing.price(pi, provider: .pi)).usd - 0.753) < 1e-12)
         #expect(ModelPricing.price(pi, provider: .sail) == nil)

@@ -25,18 +25,36 @@ public struct UsageState: Equatable, Sendable, Codable {
     }
 }
 
+/// The keys an allowance check may need, read only for the account being checked: Pi's OpenRouter
+/// key, Sail's, and nothing else. Kept out of the request, which is what a reading is filed under.
+public struct UsageKeys: Equatable, Sendable {
+    public var openRouter: String?
+    public var sail: String?
+
+    public init(openRouter: String? = nil, sail: String? = nil) {
+        self.openRouter = openRouter
+        self.sail = sail
+    }
+
+    /// What a check of one account's kind may have: Pi's OpenRouter key, Sail's, and none of
+    /// another account's. Every other kind needs no key at all.
+    public init(for request: UsageRequest, from all: UsageKeys) {
+        self.init(openRouter: request.usesLegacyOpenRouterKey ? all.openRouter : nil, sail: request.usesSailKey ? all.sail : nil)
+    }
+}
+
 /// Shared across bots on the same account command. Never stores credentials or raw responses.
 /// Coalesces concurrent checks and keeps the last successful reading labelled stale on failure.
 /// Given a file, it keeps what it last read there, so a relaunch shows those readings at once; a
 /// reading saved is only usage fields, and one unchecked for a week is dropped.
 public actor UsageCache {
-    public typealias Fetch = @Sendable (UsageRequest, String?) async throws -> ProviderUsage
+    public typealias Fetch = @Sendable (UsageRequest, UsageKeys) async throws -> ProviderUsage
     private let fetch: Fetch
     private let file: URL?
     private var states: [UsageRequest: UsageState] = [:]
     private var running: [UsageRequest: Task<UsageState, Never>] = [:]
 
-    public init(fetch: @escaping Fetch = { try await ProviderUsageClient.read($0, openRouterKey: $1) }, file: URL? = nil) {
+    public init(fetch: @escaping Fetch = { try await ProviderUsageClient.read($0, openRouterKey: $1.openRouter, sailKey: $1.sail) }, file: URL? = nil) {
         self.fetch = fetch
         self.file = file
         if let file, let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode([Saved].self, from: data) {
@@ -56,7 +74,7 @@ public actor UsageCache {
         return previous.checkedAt.map { now.timeIntervalSince($0) >= request.interval(for: check) } ?? true
     }
 
-    public func read(_ request: UsageRequest, openRouterKey: String? = nil, for check: UsageCheck = .providers,
+    public func read(_ request: UsageRequest, keys: UsageKeys = UsageKeys(), for check: UsageCheck = .providers,
                      now: Date = .now) async -> UsageState {
         if let task = running[request] { return await task.value }
         let previous = states[request] ?? UsageState()
@@ -64,7 +82,7 @@ public actor UsageCache {
         let fetch = fetch
         let task = Task<UsageState, Never> {
             do {
-                let reading = try await fetch(request, openRouterKey)
+                let reading = try await fetch(request, UsageKeys(for: request, from: keys))
                 return UsageState(reading: reading, checkedAt: now)
             } catch {
                 // Provider errors are deliberately sanitized. No raw auth, CLI or HTTP errors.

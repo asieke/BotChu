@@ -1,15 +1,23 @@
 import Foundation
 
-/// Sail Research, a Responses API for long-running agent work whose Flex completion window queues
-/// requests for a lower price. BotChu's Sail account sends every request on Flex. Flex is taken
-/// only by background Responses requests (`background: true` with
-/// `metadata.completion_window = "flex"`), not by Chat Completions, Messages or foreground
-/// Responses, and a background request can't stream: each one is submitted, then polled at
-/// `GET /responses/{id}` until it ends (`SailClient`). A request carries the whole conversation
-/// (no `previous_response_id`), and the client runs the function tools (`SailToolbox`). Sail
-/// can't cancel or delete a response, so stopping in BotChu stops only BotChu's side.
+/// Sail's request scheduling and price tier. Existing conversations keep Flex.
+public enum SailCompletionWindow: String, Codable, CaseIterable, Sendable {
+    case asap, balanced, flex
+    public var title: String { switch self { case .asap: "ASAP"; case .balanced: "Balanced"; case .flex: "Flex" } }
+    public var background: Bool { self != .asap }
+    public var priceSource: String { self == .flex ? "sail" : "sail-" + rawValue }
+    public static func from(_ body: SailJSON) -> Self {
+        body["metadata"]?["completion_window"]?.string.flatMap(Self.init(rawValue:)) ?? .flex
+    }
+}
+
+/// Sail Research's Responses API. Flex and Balanced use background submission and polling;
+/// ASAP uses a foreground response. Stopping BotChu cannot cancel a request already at Sail.
 public enum Sail {
     public static let apiBase = URL(string: "https://api.sailresearch.com/v1")!
+    /// Sail's Usage API, which reports what the key's organization has spent and what it has left
+    /// (`GET /v2/usage/summary`): the same numbers its dashboard's Billing page shows.
+    public static let usageURL = URL(string: "https://api.sailresearch.com/v2/usage/summary")!
     public static let dashboard = URL(string: "https://app.sailresearch.com/dashboard")!
     /// Where the helper reads the key: BotChu sets it from the Keychain for each run, and never
     /// passes it to a host or to the agent's own tools.
@@ -92,14 +100,14 @@ public enum SailStatus: Equatable, Sendable {
 
 /// The request bodies and conversation items BotChu sends.
 public enum SailRequest {
-    /// One background request on Flex with the whole conversation. Never `stream`,
-    /// `previous_response_id` or `service_tier`: Flex is chosen by the metadata alone.
-    public static func body(model: String, instructions: String, input: [SailJSON], tools: [SailJSON], effort: String?) -> SailJSON {
+    /// The whole conversation in the chosen window. ASAP is foreground; Balanced and Flex
+    /// are background. No streaming, previous_response_id, or service_tier.
+    public static func body(model: String, instructions: String, input: [SailJSON], tools: [SailJSON], effort: String?, completionWindow: SailCompletionWindow = .flex) -> SailJSON {
         var body: [String: SailJSON] = [
             "model": .string(model),
             "input": .array(input),
-            "background": true,
-            "metadata": ["completion_window": .string(Sail.completionWindow)],
+            "background": .bool(completionWindow.background),
+            "metadata": ["completion_window": .string(completionWindow.rawValue)],
         ]
         if !instructions.isEmpty { body["instructions"] = .string(instructions) }
         if !tools.isEmpty { body["tools"] = .array(tools) }
@@ -307,16 +315,15 @@ public enum SailHTTP {
         return text.isEmpty ? "(empty)" : text
     }
 
-    /// What a refused submission means for the owner. A model or request Sail won't take on Flex
-    /// says so with the choices there are, as BotChu never moves work to a faster, pricier window.
-    public static func submissionFailure(status: Int, data: Data, model: String) -> SailFailure {
+    /// A refused submission names the selected window and the choices available.
+    public static func submissionFailure(status: Int, data: Data, model: String, completionWindow: SailCompletionWindow = .flex) -> SailFailure {
         let said = message(data)
         switch status {
         case 401, 403:
             return SailFailure(.key, status: status, "Sail refused the API key (HTTP \(status): \(said)). Check it in BotChu ▸ Settings ▸ Sail.")
         default:
             if [400, 404, 422].contains(status), isAboutFlex(said) {
-                return SailFailure(.flex, status: status, flexRefusal(model: model, said: "HTTP \(status): \(said)"))
+                return SailFailure(.flex, status: status, flexRefusal(model: model, said: "HTTP \(status): \(said)", completionWindow: completionWindow))
             }
             return SailFailure(.rejected, status: status, "Sail rejected the request for \(model) (HTTP \(status): \(said)).")
         }
@@ -328,14 +335,9 @@ public enum SailHTTP {
         return lower.contains("completion_window") || lower.contains("completion window") || lower.contains("flex")
     }
 
-    /// A model or request Sail won't run on Flex, with the owner's choices: BotChu doesn't pick a
-    /// faster, pricier window for them.
-    public static func flexRefusal(model: String, said: String) -> String {
-        """
-        Sail won't run \(model) on Flex (\(said)). BotChu sends every Sail request on Flex and doesn't move work to \
-        a faster, pricier completion window on its own. Choose a model that takes Flex in BotChu ▸ Settings ▸ Sail or \
-        this conversation's model menu, or switch the conversation to another account.
-        """
+    /// BotChu never switches completion windows automatically.
+    public static func flexRefusal(model: String, said: String, completionWindow: SailCompletionWindow = .flex) -> String {
+        "Sail won't run \(model) on \(completionWindow.title) (\(said)). Choose another completion window or model in this conversation's model menu. BotChu does not change the window automatically."
     }
 
     public static func pollFailure(status: Int, data: Data, id: String) -> SailFailure {

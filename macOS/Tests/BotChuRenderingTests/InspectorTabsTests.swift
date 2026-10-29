@@ -88,8 +88,8 @@ extension RenderingTests {
         settings.usageCredentialRevision = 2
         let readings = InspectorUsageProbe()
         var keyReads = 0
-        let model = AppModel(store: store, settings: settings, usage: UsageCache { request, key in
-            let usesExpectedKey = key == (request.account.kind == .pi ? "test-openrouter-key" : nil)
+        let model = AppModel(store: store, settings: settings, usage: UsageCache { request, keys in
+            let usesExpectedKey = keys == UsageKeys(openRouter: request.account.kind == .pi ? "test-openrouter-key" : nil)
             #expect(usesExpectedKey)
             return await readings.read(request.account.id)
         }, openRouterKey: { keyReads += 1; return "test-openrouter-key" })
@@ -99,7 +99,7 @@ extension RenderingTests {
         }
         // The background has read Home's account already (#147).
         let background = try #require(model.usageRequests.first { $0.account.id == "codex-dev" })
-        await model.usageBoard.refresh(background, usage: model.usage, openRouterKey: model.openRouterKey, for: .background)
+        await model.usageBoard.refresh(background, usage: model.usage, keys: model.usageKeys, for: .background)
         #expect(await readings.accounts == ["codex-dev"])
         let taskTarget = ChatTarget.task(task.id, of: bot.id)
         model.runStates[taskTarget] = RunState(hasOutput: true, activity: .coding)

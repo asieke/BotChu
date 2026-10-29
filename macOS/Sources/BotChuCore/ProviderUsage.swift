@@ -12,15 +12,19 @@ public struct ProviderUsage: Equatable, Sendable, Codable {
     /// The plan the account's CLI says it is on, in the CLI's own words (Codex's `planType`), when
     /// it says. Never worked out from allowance, prices, command or profile names.
     public var plan: String?
+    /// What the account has left to spend, when its provider's billing API reports it (Sail's credit
+    /// balance). Not a limit, so it has no share of a window: a balance and what is spending it.
+    public var balance: UsageBalance?
 
     public init(windows: [UsageWindow], note: String? = nil, readAt: Date = .now, credits: UsageCredits? = nil, resets: UsageResets? = nil,
-                plan: String? = nil) {
+                plan: String? = nil, balance: UsageBalance? = nil) {
         self.windows = windows
         self.note = note
         self.readAt = readAt
         self.credits = credits
         self.resets = resets
         self.plan = plan
+        self.balance = balance
     }
 
     /// The reported plan as Providers names it: Codex's plans by their names, any other as reported.
@@ -57,6 +61,47 @@ public struct UsageResets: Equatable, Sendable, Codable {
     public init(available: Int, expiries: [Date] = []) {
         self.available = max(0, available)
         self.expiries = expiries.sorted()
+    }
+}
+
+/// What an account has left to spend, from its provider's own billing API, and what is spending it:
+/// Sail Research's credit balance, its spend over a range and the burn rate that spend implies. A
+/// balance isn't a limit with a window, so it has no share used; it says how many days it would last
+/// at the burn rate, when the provider says.
+public struct UsageBalance: Equatable, Sendable, Codable {
+    /// What is left, in US dollars.
+    public var credit: Double?
+    /// The spend over the range the provider was asked for, in US dollars.
+    public var spent: Double?
+    /// The range that spend covers, as the provider named it ("7d"), when a plan shortened it.
+    public var period: String?
+    /// What the range's spend comes to a day, in US dollars.
+    public var perDay: Double?
+    /// How many days the balance would last at `perDay`, when the provider reports it
+    /// and it is no further off than a year.
+    public var daysLeft: Int?
+    /// The provider has nothing billed to the account in the range.
+    public var unused: Bool
+
+    public init(credit: Double? = nil, spent: Double? = nil, period: String? = nil, perDay: Double? = nil, daysLeft: Int? = nil,
+                unused: Bool = false) {
+        self.credit = credit.flatMap { $0.isFinite ? $0 : nil }
+        self.spent = spent.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        self.period = period
+        self.perDay = perDay.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        self.daysLeft = daysLeft.flatMap { $0 > 0 && $0 <= 365 ? $0 : nil }
+        self.unused = unused
+    }
+
+    /// "$54.98", as the inspector says it; a balance under a cent reads "<$0.01" rather than "$0.00".
+    public var creditText: String? { credit.map(UsageParser.usdSmall) }
+
+    /// "$0.28/day, about 194 days left", as the inspector says what is spending the balance; nil
+    /// while nothing has been billed in the range. A rate under a cent a day reads "<$0.01/day".
+    public var burnText: String? {
+        guard !unused else { return nil }
+        guard let perDay else { return spent.map { "\(UsageParser.usdSmall($0)) spent, none lately" } ?? "Nothing spent lately" }
+        return "\(UsageParser.usdSmall(perDay))/day" + (daysLeft.map { ", about \($0) day\($0 == 1 ? "" : "s") left" } ?? "")
     }
 }
 
@@ -254,7 +299,8 @@ extension ProviderUsage {
     /// and its free resets, with the soonest expiry when that is within three days.
     public func badges(at now: Date) -> [UsageBadge] {
         let spending = windows.filter { $0.detail != nil && !$0.hasReset(at: now) }
-        var badges = spending.map { window in
+        var badges = balanceBadges
+        badges += spending.map { window in
             let detail = window.detail ?? ""
             let scope = window.title.replacingOccurrences(of: " allowance", with: "")
             return UsageBadge(id: "spend:\(window.id)", kind: .spend, text: spending.count > 1 ? "\(scope) \(detail)" : detail,
@@ -287,10 +333,40 @@ extension ProviderUsage {
         return badges
     }
 
+    /// The balance and what is spending it, as a line each in Providers' Credits & resets: what is
+    /// left, then the burn rate (or the spend, when there is no rate). Sail reports them; no other
+    /// account does, so they are never worked out from windows or plans.
+    public var balanceBadges: [UsageBadge] {
+        guard let balance else { return [] }
+        var lines: [UsageBadge] = []
+        if let text = balance.creditText {
+            lines.append(UsageBadge(id: "balance", kind: .balance, text: "\(text) left", amount: text,
+                                    available: (balance.credit ?? 0) > 0,
+                                    help: "The credit balance the account has to spend, as Sail's billing reports it"
+                                        + (balance.burnText.map { "; \($0)" } ?? "")))
+        }
+        if let burn = balance.burnText {
+            lines.append(UsageBadge(id: "burn", kind: .burn, text: burn, amount: balance.perDay.map { UsageParser.usd($0) },
+                                    available: true, help: "Sail's spend over \(balance.period ?? "the range"): \(burn)"))
+        }
+        return lines
+    }
+
+    /// The balance and its burn as the inspector lists them, under the windows.
+    public var balanceFacts: [UsageFact] {
+        guard let balance else { return [] }
+        var facts: [UsageFact] = []
+        if let text = balance.creditText { facts.append(UsageFact(label: "Credit balance", value: text)) }
+        if let burn = balance.burnText {
+            facts.append(UsageFact(label: balance.perDay == nil ? "Spent" : "Burn rate", value: burn))
+        }
+        return facts
+    }
+
     /// What the inspector lists under the windows: the usage credits, the free resets and when
     /// they expire.
     public var facts: [UsageFact] {
-        var facts: [UsageFact] = []
+        var facts: [UsageFact] = balanceFacts
         if let credits {
             let balance = credits.balance.map { $0.rounded(.down).formatted(.number.precision(.fractionLength(0))) }
             facts.append(UsageFact(label: "Usage credits", value: credits.unlimited ? "Unlimited" : !credits.available ? "None" : balance ?? "Available"))
@@ -309,7 +385,7 @@ extension ProviderUsage {
 /// Something an account has besides its windows' share, a line in Providers' Credits & resets:
 /// money left under a spending limit, usage credits, or free resets of its limits.
 public struct UsageBadge: Identifiable, Equatable, Sendable {
-    public enum Kind: Sendable { case spend, credits, resets }
+    public enum Kind: Sendable { case spend, credits, resets, balance, burn }
     public var id: String
     public var kind: Kind
     public var text: String
@@ -733,7 +809,42 @@ public enum UsageParser {
         return ProviderUsage(windows: windows, readAt: now)
     }
 
+    /// What a Sail account has left, from its Usage API (`GET /v2/usage/summary`): the balance its
+    /// dashboard's Billing page shows, and the spend and burn rate that are using it. Sail reports
+    /// money in fractional US cents (`73795.09` is $737.95), so every amount is divided by 100 here
+    /// and nowhere else. Sail's own allowance has no window or limit of its own: usage-based spend
+    /// against prepaid credits, which is a balance, so none is made up from prices or a plan.
+    public static func sail(_ data: Data, now: Date = .now) throws -> ProviderUsage {
+        guard let body = try? SailJSON.parse(data), body["available"]?.bool != false,
+              body["has_metronome_customer"]?.bool != false else { throw UsageFailure.unrecognized }
+        func dollars(_ field: String, allowNegative: Bool = false) -> Double? {
+            guard let cents = body[field]?.number, cents.isFinite, allowNegative || cents >= 0 else { return nil }
+            return cents / 100
+        }
+        let reportedDays = body["days_remaining"]?.number
+        let days = reportedDays.flatMap { $0.isFinite && $0 >= 1 && $0 <= 365 ? Int($0.rounded(.down)) : nil }
+        let period = body["effective_range"]?.string.flatMap {
+            ["1h", "6h", "24h", "7d", "30d", "period"].contains($0) ? $0 : nil
+        }
+        let balance = UsageBalance(
+            credit: body["balance_unavailable"]?.bool == true ? nil : dollars("balance", allowNegative: true),
+            spent: dollars("period_spend"), period: period,
+            perDay: dollars("burn_rate") ?? dollars("avg_cost_per_day"), daysLeft: days,
+            unused: body["empty"]?.bool == true)
+        guard balance.credit != nil || balance.spent != nil else { throw UsageFailure.unrecognized }
+        // The range a plan shortened says so, rather than passing its spend off as the one asked for.
+        let asked = body["range"]?.string
+        let note = body["plan_limited"]?.bool == true && balance.period != asked
+            ? "Your Sail plan limits usage history to \(balance.period ?? "a short range")."
+            : nil
+        return ProviderUsage(windows: [], note: note, readAt: now, balance: balance)
+    }
+
     static func usd(_ amount: Double) -> String { amount.formatted(.currency(code: "USD")) }
+
+    /// An amount that is there but under a cent says so, rather than "$0.00", as a fractional-cent
+    /// spend or burn rate off Sail is.
+    static func usdSmall(_ amount: Double) -> String { amount > 0 && amount < 0.01 ? "<\(usd(0.01))" : usd(amount) }
 
     static func openRouterReset(_ period: String?, now: Date) -> Date? {
         var calendar = Calendar(identifier: .gregorian)

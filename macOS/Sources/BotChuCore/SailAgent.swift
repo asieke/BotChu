@@ -18,6 +18,7 @@ public enum SailEvent: Equatable, Sendable {
     case model(String)
     case usage(TurnUsage)
     /// The row in the chat that follows one submission (`row` is its idempotency key).
+    // Historical wire name retained for all completion windows.
     case flex(row: String, detail: String, state: FlexState)
     case text(String)
     case toolStarted(id: String, name: String, arguments: SailJSON)
@@ -89,7 +90,7 @@ public enum SailInstructions {
 
             - Read a file before you edit it. Use edit for changes and write for new files or complete rewrites.
             - Use bash for the rest: listing and searching (ls, rg, find), git, builds and tests.
-            - Each of your requests waits in Sail's Flex queue, so work in fewer, larger steps: run independent \
+            - Requests on Balanced or Flex can wait in a queue, so work in fewer, larger steps: run independent \
             commands in one bash call where that is safe, and read what you need at once.
             - Keep going until the task is done. A reply without a tool call ends your turn and hands it back to \
             the owner, so never end one by saying what you'll do next: make the call instead.
@@ -154,7 +155,7 @@ public enum SailInstructions {
 }
 
 /// One Sail turn, end to end: picks up a submission an earlier run left at Sail, adds the owner's
-/// message, then submits the whole conversation on Flex, waits for the response, runs the tools
+/// message, then submits the conversation in the chosen window, waits for the response, runs the tools
 /// it calls and submits again, until it answers without one. The session is saved at each step.
 public struct SailAgent: Sendable {
     public struct Turn: Sendable {
@@ -163,14 +164,16 @@ public struct SailAgent: Sendable {
         public var resume: Bool
         public var model: String
         public var effort: String?
+        public var completionWindow: SailCompletionWindow
         public var prompt: String
         public var images: [Data]
 
-        public init(sessionID: String, resume: Bool, model: String, effort: String? = nil, prompt: String, images: [Data] = []) {
+        public init(sessionID: String, resume: Bool, model: String, effort: String? = nil, completionWindow: SailCompletionWindow = .flex, prompt: String, images: [Data] = []) {
             self.sessionID = sessionID
             self.resume = resume
             self.model = model
             self.effort = effort
+            self.completionWindow = completionWindow
             self.prompt = prompt
             self.images = images
         }
@@ -198,7 +201,7 @@ public struct SailAgent: Sendable {
     }
 
     /// The name of a submission's row in the chat.
-    public static let rowName = "Sail Flex"
+    public static let rowName = "Sail"
 
     /// What the chat's row says once BotChu has stopped waiting.
     public static func detachedDetail(response: String?) -> String {
@@ -250,8 +253,11 @@ public struct SailAgent: Sendable {
         var reportedModel: String?
         var nudges = 0
         for _ in 0..<maxRequests {
-            let response = try await submitAndWait(model: model, effort: turn.effort, session: &session, emit: emit)
-            if let reported = response.turnUsage { usage.add(reported) }
+            let response = try await submitAndWait(model: model, effort: turn.effort, completionWindow: turn.completionWindow, session: &session, emit: emit)
+            if var reported = response.turnUsage {
+                for index in reported.models.indices { reported.models[index].sailCompletionWindow = turn.completionWindow }
+                usage.add(reported)
+            }
             if let ran = response.model, ran != reportedModel {
                 reportedModel = ran
                 emit(.model(ran))
@@ -284,7 +290,7 @@ public struct SailAgent: Sendable {
                 try settle(&session)
                 let said = response.errorMessage ?? response.errorCode ?? "no reason given"
                 if SailHTTP.isAboutFlex(said + " " + (response.errorCode ?? "")) {
-                    throw SailFailure(.flex, SailHTTP.flexRefusal(model: model, said: "response \(response.id) failed: \(said)"))
+                    throw SailFailure(.flex, SailHTTP.flexRefusal(model: model, said: "response \(response.id) failed: \(said)", completionWindow: turn.completionWindow))
                 }
                 throw SailFailure(.rejected, "Sail couldn't complete response \(response.id): \(said).")
             case .cancelled:
@@ -300,15 +306,15 @@ public struct SailAgent: Sendable {
     // MARK: Submissions
 
     /// Submits the conversation as it stands and waits for Sail to finish the response.
-    func submitAndWait(model: String, effort: String?, session: inout SailSession, emit: @escaping @Sendable (SailEvent) -> Void) async throws -> SailResponse {
-        let body = SailRequest.body(model: model, instructions: instructions, input: session.items, tools: SailToolbox.definitions, effort: effort)
+    func submitAndWait(model: String, effort: String?, completionWindow: SailCompletionWindow = .flex, session: inout SailSession, emit: @escaping @Sendable (SailEvent) -> Void) async throws -> SailResponse {
+        let body = SailRequest.body(model: model, instructions: instructions, input: session.items, tools: SailToolbox.definitions, effort: effort, completionWindow: completionWindow)
         let key = newKey()
         let started = now()
         session.pending = SailPending(idempotencyKey: key, body: body, model: model, submittedAt: started)
         // Saved before it is sent: a run that ends now sends it again, with the same key.
         try save(&session)
         live?.submitted(row: key, response: nil)
-        emit(.flex(row: key, detail: "Submitting to Sail Flex · \(model)", state: .waiting))
+        emit(.flex(row: key, detail: "Submitting to Sail \(completionWindow.title) · \(model)", state: .waiting))
         return try await send(session.pending!, in: &session, emit: emit)
     }
 
@@ -316,6 +322,7 @@ public struct SailAgent: Sendable {
     private func send(_ pending: SailPending, in session: inout SailSession, emit: @escaping @Sendable (SailEvent) -> Void) async throws -> SailResponse {
         let row = pending.idempotencyKey
         let model = pending.model
+        let completionWindow = SailCompletionWindow.from(pending.body)
         var response: SailResponse
         if let id = pending.responseID {
             // As last seen; the first poll says how it stands now.
@@ -324,7 +331,7 @@ public struct SailAgent: Sendable {
             do {
                 response = try await client.submit(pending.body, idempotencyKey: row, model: model) { progress in
                     if case let .retrying(reason, wait) = progress {
-                        emit(.flex(row: row, detail: "Submitting to Sail Flex · \(model) · trying again in \(Self.duration(wait)) after \(reason)", state: .waiting))
+                        emit(.flex(row: row, detail: "Submitting to Sail \(completionWindow.title) · \(model) · trying again in \(Self.duration(wait)) after \(reason)", state: .waiting))
                     }
                 }
             } catch let failure as SailFailure where failure.kind != .unavailable && failure.kind != .malformed {
@@ -342,7 +349,7 @@ public struct SailAgent: Sendable {
         let id = response.id
         let since = pending.submittedAt
         if !response.status.isTerminal {
-            emit(.flex(row: row, detail: Self.waitingDetail(response.status, id: id, model: model), state: .waiting))
+            emit(.flex(row: row, detail: Self.waitingDetail(response.status, id: id, model: model, completionWindow: completionWindow), state: .waiting))
             let seen = SailSeen(response.status)
             do {
                 response = try await client.wait(for: response) { progress in
@@ -351,10 +358,10 @@ public struct SailAgent: Sendable {
                         seen.status = next.status
                         // The end is reported below, with what it took.
                         if !next.status.isTerminal {
-                            emit(.flex(row: row, detail: Self.waitingDetail(next.status, id: id, model: model), state: .waiting))
+                            emit(.flex(row: row, detail: Self.waitingDetail(next.status, id: id, model: model, completionWindow: completionWindow), state: .waiting))
                         }
                     case let .retrying(reason, wait):
-                        emit(.flex(row: row, detail: Self.waitingDetail(seen.status, id: id, model: model)
+                        emit(.flex(row: row, detail: Self.waitingDetail(seen.status, id: id, model: model, completionWindow: completionWindow)
                                    + " · checking again in \(Self.duration(wait)) after \(reason)", state: .waiting))
                     }
                 }
@@ -368,7 +375,7 @@ public struct SailAgent: Sendable {
         let took = Self.duration(now().timeIntervalSince(since))
         switch response.status {
         case .completed:
-            emit(.flex(row: row, detail: "Completed on Sail Flex · \(id) · \(took)" + Self.tokens(response), state: .done))
+            emit(.flex(row: row, detail: "Completed on Sail \(completionWindow.title) · \(id) · \(took)" + Self.tokens(response), state: .done))
         case .incomplete:
             emit(.flex(row: row, detail: "Incomplete · \(id) · \(response.incompleteReason ?? "no reason given")", state: .failed))
         case .failed:
@@ -386,8 +393,9 @@ public struct SailAgent: Sendable {
     /// so, and calls them again if they're still needed.
     func pickUp(_ pending: SailPending, in session: inout SailSession, usage: inout TurnUsageAccumulator, emit: @escaping @Sendable (SailEvent) -> Void) async throws {
         let row = pending.idempotencyKey
+        let completionWindow = SailCompletionWindow.from(pending.body)
         let what = pending.responseID.map { "response \($0)" } ?? "the earlier submission"
-        emit(.flex(row: row, detail: "Picking up \(what), submitted \(Self.clock(pending.submittedAt)), on Sail Flex", state: .waiting))
+        emit(.flex(row: row, detail: "Picking up \(what), submitted \(Self.clock(pending.submittedAt)), on Sail \(completionWindow.title)", state: .waiting))
         live?.submitted(row: row, response: pending.responseID)
         let response: SailResponse
         do {
@@ -400,7 +408,10 @@ public struct SailAgent: Sendable {
             }
             return
         }
-        if let reported = response.turnUsage { usage.add(reported) }
+        if var reported = response.turnUsage {
+            for index in reported.models.indices { reported.models[index].sailCompletionWindow = completionWindow }
+            usage.add(reported)
+        }
         switch response.status {
         case .completed:
             let calls = try record(response, in: &session, includeCalls: true, emit: emit)
@@ -451,11 +462,11 @@ public struct SailAgent: Sendable {
 
     // MARK: Wording
 
-    static func waitingDetail(_ status: SailStatus, id: String, model: String) -> String {
+    static func waitingDetail(_ status: SailStatus, id: String, model: String, completionWindow: SailCompletionWindow = .flex) -> String {
         switch status {
-        case .inProgress: "Running on Sail Flex · \(id) · \(model)"
-        case .queued: "Queued on Sail Flex · \(id) · \(model)"
-        default: "\(status.label.prefix(1).uppercased() + status.label.dropFirst()) on Sail Flex · \(id) · \(model)"
+        case .inProgress: "Running on Sail \(completionWindow.title) · \(id) · \(model)"
+        case .queued: "Queued on Sail \(completionWindow.title) · \(id) · \(model)"
+        default: "\(status.label.prefix(1).uppercased() + status.label.dropFirst()) on Sail \(completionWindow.title) · \(id) · \(model)"
         }
     }
 

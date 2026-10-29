@@ -232,6 +232,14 @@ final class AppModel {
     let openRouterKey: @MainActor () -> String?
     /// The Sail key as Settings ▸ Sail shows it; tests replace it, so they never read the Keychain.
     @ObservationIgnored var sailKey: @MainActor () -> String? = { Keychain.get(Keychain.sailAccount) }
+    /// Resolve only the key this local request is allowed to use.
+    @ObservationIgnored var usageKeys: @MainActor (UsageRequest) -> UsageKeys {
+        { [unowned self] request in
+            if request.usesLegacyOpenRouterKey { return UsageKeys(openRouter: self.openRouterKey()) }
+            if request.usesSailKey { return UsageKeys(sail: self.sailKey()) }
+            return UsageKeys()
+        }
+    }
     let modelCatalog = ModelCatalog()
 
     private let store: Store
@@ -336,7 +344,7 @@ final class AppModel {
         projectSync = ProjectSync(file: self.store.root.appendingPathComponent("projects.json"), client: ProjectSync.Client(
             gh: { await projectGitHub.gh($0) }, record: { try await projectGitHub.record(repo: $0) }, openWork: openWorkLookup))
         self.settings = settings ?? AppSettings()
-        self.usage = usage ?? UsageCache(fetch: DevHooks.usageFetch ?? { try await ProviderUsageClient.read($0, openRouterKey: $1) },
+        self.usage = usage ?? UsageCache(fetch: DevHooks.usageFetch ?? { try await ProviderUsageClient.read($0, openRouterKey: $1.openRouter, sailKey: $1.sail) },
                                          file: self.store.root.appendingPathComponent("usage.json"))
         self.openRouterKey = openRouterKey
         connectorBoard = ConnectorBoard(file: self.store.root.appendingPathComponent("connectors.json"))
@@ -408,7 +416,7 @@ final class AppModel {
     /// A profile's usage request, the one Providers, the background checks and a conversation's
     /// Model & Usage share, so they show one reading.
     func usageRequest(for account: Account) -> UsageRequest {
-        UsageRequest(account: account, command: settings.command(for: account), openRouterKeyRevision: settings.usageCredentialRevision)
+        UsageRequest(account: account, command: settings.command(for: account), openRouterKeyRevision: settings.usageCredentialRevision, sailKeyRevision: settings.sailUsageCredentialRevision)
     }
 
     /// A conversation's allowance follows its selected backend and host, never another login.
@@ -416,7 +424,7 @@ final class AppModel {
         let task = run as? BotTask
         let remote = task?.isRemote == true || (run as? SubagentRun)?.hostID != nil
         let command = remote ? "" : settings.command(for: run.account)
-        return UsageRequest(account: run.account, command: command, openRouterKeyRevision: settings.usageCredentialRevision,
+        return UsageRequest(account: run.account, command: command, openRouterKeyRevision: settings.usageCredentialRevision, sailKeyRevision: settings.sailUsageCredentialRevision,
                             providerID: run.resolvedProvider, remote: remote)
     }
 
@@ -427,7 +435,7 @@ final class AppModel {
     /// so a slow CLI holds up no other.
     private func refreshUsageInBackground() {
         for request in usageRequests {
-            Task { await usageBoard.refresh(request, usage: usage, openRouterKey: openRouterKey, for: .background) }
+            Task { await usageBoard.refresh(request, usage: usage, keys: usageKeys, for: .background) }
         }
     }
 
@@ -694,6 +702,11 @@ final class AppModel {
     }
 
     /// Turns Codex's Fast tier on or off for this conversation's next turns (#249).
+    func setSailCompletionWindow(_ window: SailCompletionWindow, for target: ChatTarget) {
+        guard !isRunning(target), runSettings(of: target)?.account.kind == .sail else { return }
+        change(target) { $0.sailCompletionWindow = window }
+    }
+
     func setFastMode(_ on: Bool, for target: ChatTarget) {
         guard !isRunning(target), let current = runSettings(of: target) else { return }
         if on, !GenerationOptions.offersFast(for: current.account.kind, model: current.model, catalog: nativeModels(for: current)) { return }

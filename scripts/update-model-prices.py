@@ -18,8 +18,8 @@ from urllib.request import Request, urlopen
 MODELS_URL = "https://models.dev/api.json"
 LITELLM_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 SAIL_URL = "https://docs.sailresearch.com/pricing"
-SAIL_VERIFIED = "2026-10-28"
-# Hand-maintained USD/MTok (input, cached input, output), Flex window only.
+SAIL_VERIFIED = "2026-10-29"
+# Hand-maintained USD/MTok (input, cached input, output), by completion window.
 # Sail guarantees a 30-minute write in its input price; no separate write surcharge.
 SAIL_FLEX = {
     "moonshotai/Kimi-K3": ("0.70", "0.10", "6"),
@@ -34,6 +34,28 @@ SAIL_FLEX = {
     "nvidia/Gemma-4-31B-IT-NVFP4": ("0.07", "0.04", "0.20"),
     "google/gemma-4-12B-it": ("0.05", "0.02", "1"),
     "Qwen/Qwen3.6-35B-A3B": ("0.05", "0.02", "0.40"),
+}
+SAIL_ASAP = {
+    "moonshotai/Kimi-K3": ("1.50", "0.20", "10.00"),
+    "zai-org/GLM-5.3": ("0.98", "0.18", "3.08"),
+    "zai-org/GLM-5.3-Flash": ("0.11", "0.02", "0.35"),
+    "deepseek-ai/DeepSeek-V4.1-Flash-1017": ("0.09", "0.006", "0.30"),
+    "deepseek-ai/DeepSeek-V4-Pro-0813": ("0.92", "0.04", "2.77"),
+    "deepseek-ai/DeepSeek-V4-Flash-0731": ("0.09", "0.02", "0.18"),
+    "google/gemma-4-31B-it": ("0.40", "0.20", "0.60"),
+    "nvidia/Gemma-4-31B-IT-NVFP4": ("0.14", "0.07", "0.40"),
+    "google/gemma-4-12B-it": ("0.30", "0.15", "2.00"),
+}
+SAIL_BALANCED = {
+    "moonshotai/Kimi-K3": ("1.20", "0.15", "8.00"),
+    "zai-org/GLM-5.3": ("0.50", "0.12", "2.50"),
+    "zai-org/GLM-5.3-Flash": ("0.08", "0.02", "0.28"),
+    "deepseek-ai/DeepSeek-V4.1-Flash-1017": ("0.07", "0.005", "0.22"),
+    "deepseek-ai/DeepSeek-V4-Pro-0813": ("0.74", "0.03", "2.22"),
+    "deepseek-ai/DeepSeek-V4-Flash-0731": ("0.07", "0.02", "0.14"),
+    "google/gemma-4-31B-it": ("0.12", "0.08", "0.60"),
+    "nvidia/Gemma-4-31B-IT-NVFP4": ("0.11", "0.06", "0.32"),
+    "google/gemma-4-12B-it": ("0.10", "0.07", "2.00"),
 }
 FIELDS = ("input", "output", "cache_read", "cache_write", "cache_write_1h")
 LITE_FIELDS = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost",
@@ -137,9 +159,10 @@ def build_entries(models, litellm):
             result[key] = (base, tiers)
     for key, value in fallback.items():
         result.setdefault(key, value)
-    for model, (input_price, cache_price, output_price) in SAIL_FLEX.items():
-        result["sail/" + model] = (rates({"input": input_price, "output": output_price,
-                                        "cache_read": cache_price, "cache_write": input_price}), {})
+    for source, table in [("sail", SAIL_FLEX), ("sail-asap", SAIL_ASAP), ("sail-balanced", SAIL_BALANCED)]:
+        for model, (input_price, cache_price, output_price) in table.items():
+            result[source + "/" + model] = (rates({"input": input_price, "output": output_price,
+                                                 "cache_read": cache_price, "cache_write": input_price}), {})
     return result
 
 
@@ -154,7 +177,7 @@ def generate(entries, snapshot_date, sources):
              f"// Snapshot: {snapshot_date}. Rates are USD per million tokens."]
     for name, url, etag, digest in sources:
         lines += [f"// {name}: {url}", f"// ETag: {json.dumps(etag or 'unavailable')} SHA-256: {digest}"]
-    lines += [f"// Sail Flex: {SAIL_URL} (manually verified {SAIL_VERIFIED}).", "", "enum ModelPrices {",
+    lines += [f"// Sail completion windows: {SAIL_URL} (manually verified {SAIL_VERIFIED}).", "", "enum ModelPrices {",
               f'    static let snapshotDate = "{snapshot_date}"', "    static let entries: [String: ModelPrice] = ["]
     for key, (base, tiers) in sorted(entries.items()):
         literal = ".init(" + swift_rates(base)

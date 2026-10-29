@@ -34,7 +34,7 @@ extension RuntimeAdapter {
         var invocation = CommandBuilder.invocation(kind: kind, prompt: prompt, model: model, sessionID: sessionID,
             reasoningEffort: settings.reasoningEffort, fast: settings.fastMode == true,
             openRouterKey: !remote && settings.usesLegacyOpenRouterKey ? openRouterKey : nil,
-            sailKey: remote ? nil : sailKey, liveInput: liveInput, providerID: settings.resolvedProvider,
+            sailKey: remote ? nil : sailKey, sailCompletionWindow: settings.effectiveSailCompletionWindow, liveInput: liveInput, providerID: settings.resolvedProvider,
             catalog: catalog, newID: newID)
         if !remote {
             invocation.environment.merge(profileEnvironment(account: settings.account, providerID: settings.providerID,

@@ -115,7 +115,7 @@ public struct SailClient: Sendable {
                 let (answer, http) = try await transport.send(request("POST", "responses", body: data, idempotencyKey: idempotencyKey))
                 if (200..<300).contains(http.statusCode) { return try SailResponse.parse(answer) }
                 guard SailHTTP.isTransient(http.statusCode) else {
-                    throw SailHTTP.submissionFailure(status: http.statusCode, data: answer, model: model)
+                    throw SailHTTP.submissionFailure(status: http.statusCode, data: answer, model: model, completionWindow: .from(body))
                 }
                 reason = "HTTP \(http.statusCode): \(SailHTTP.message(answer))"
                 wait = retry.delay(afterAttempt: attempt, retryAfter: SailHTTP.retryAfter(http, now: now()), random: random())

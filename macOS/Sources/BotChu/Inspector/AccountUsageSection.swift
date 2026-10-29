@@ -21,7 +21,7 @@ struct AccountUsageSection: View {
                 InspectorCard(padded: true) {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Text(request.usesLegacyOpenRouterKey ? "OpenRouter key allowance" : "Account allowance")
+                            Text(Self.title(for: request))
                                 .font(.system(size: 12))
                                 .foregroundStyle(Palette.secondaryText)
                             Spacer()
@@ -122,8 +122,15 @@ struct AccountUsageSection: View {
             : "Refresh the selected account’s allowance"
     }
 
+    /// What the card is about: Pi's key and Sail's balance are their own, any other account's its allowance.
+    private static func title(for request: UsageRequest) -> String {
+        if request.usesLegacyOpenRouterKey { return "OpenRouter key allowance" }
+        if request.usesSailKey { return "Sail credit balance" }
+        return "Account allowance"
+    }
+
     private func refresh(_ check: UsageCheck) async {
-        await model.usageBoard.refresh(request, usage: model.usage, openRouterKey: model.openRouterKey, for: check)
+        await model.usageBoard.refresh(request, usage: model.usage, keys: model.usageKeys, for: check)
     }
 }
 

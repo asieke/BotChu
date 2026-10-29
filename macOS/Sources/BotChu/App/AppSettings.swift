@@ -61,13 +61,18 @@ final class AppSettings {
     var quickTasks: QuickTasks? { QuickTasks(accountID: quickTaskAccountID, model: quickTaskModel, accounts: accounts) }
     /// The page of Settings shown last, which Settings opens on when nothing asks for another.
     var settingsPage: SettingsPage { didSet { defaults.set(settingsPage.rawValue, forKey: "settingsPage") } }
-    /// Invalidates allowance readings when the saved OpenRouter key changes, without retaining it.
+    /// Invalidates OpenRouter readings when its saved key changes, without retaining it.
     var usageCredentialRevision = 0
+    /// Persist Sail's revision so a relaunch cannot restore readings from an earlier key.
+    var sailUsageCredentialRevision: Int {
+        didSet { defaults.set(sailUsageCredentialRevision, forKey: "sailUsageCredentialRevision") }
+    }
 
     init(defaults: UserDefaults? = nil) {
         // Throwaway runs (DevHooks) keep their settings apart from the real ones.
         let defaults = defaults ?? (DevHooks.dataDir == nil ? .standard : UserDefaults(suiteName: "local.BotChu.dev")!)
         self.defaults = defaults
+        self.sailUsageCredentialRevision = defaults.integer(forKey: "sailUsageCredentialRevision")
         customAccounts = DevHooks.dataDir == nil ? Self.load([Account].self, from: defaults, forKey: "customAccounts") ?? [] : []
         if let dev = DevHooks.dataDir {
             botsRoot = dev.appendingPathComponent("bots").path

@@ -3,7 +3,7 @@ import BotChuCore
 
 /// Settings ▸ Sail: the Sail Research key, kept in the Keychain apart from OpenRouter's, and the
 /// model the Sail account runs when a conversation doesn't choose one. Sail lists the models the
-/// key can use; every request runs on its Flex completion window.
+/// key can use; conversations choose their own completion window.
 struct SailSettings: View {
     @Environment(AppModel.self) private var model
     @Binding var key: SettingsKeyDraft
@@ -45,7 +45,7 @@ struct SailSettings: View {
                     }
                 }
             }
-            .help("Used by the Sail account. Every request runs on Sail’s Flex completion window.")
+            .help("Used by the Sail account. Choose ASAP, Balanced, or Flex in each conversation.")
             if let problem {
                 Text(problem).font(.caption).foregroundStyle(.secondary)
             }
@@ -59,6 +59,8 @@ struct SailSettings: View {
         models = []
         problem = nil
         saved = true
+        // A new key is a new account's balance: nothing read with the old one is shown as it.
+        model.settings.sailUsageCredentialRevision += 1
     }
 
     /// Asks Sail which models the saved key can use.

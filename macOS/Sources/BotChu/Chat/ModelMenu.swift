@@ -11,6 +11,7 @@ struct ModelMenu: View {
     let onEffort: (ReasoningEffort?) -> Void
     var onFast: ((Bool) -> Void)? = nil
     var onProvider: ((String) -> Void)? = nil
+    var onSailCompletionWindow: ((SailCompletionWindow) -> Void)? = nil
     var inInspector = false
     /// As rows of a form, such as the job editor's.
     var inForm = false
@@ -40,6 +41,7 @@ struct ModelMenu: View {
         onFast != nil && GenerationOptions.offersFast(for: settings.account.kind, model: data.effectiveID,
                                                       catalog: app.nativeModels(for: settings))
     }
+    private var offersSailWindow: Bool { settings.account.kind == .sail && onSailCompletionWindow != nil }
     private var fast: Bool { settings.fastMode == true }
 
     var body: some View {
@@ -62,7 +64,7 @@ struct ModelMenu: View {
             } else if inInspector {
                 if settings.runtimeAdapter.offersProviders { InspectorRow("Provider") { providerButton } }
                 InspectorRow("Model") { modelButton }
-                InspectorRow("Reasoning", last: !offersFast) { effortButton }
+                InspectorRow("Reasoning", last: !offersFast && !offersSailWindow) { effortButton }
                 if offersFast {
                     InspectorRow("Fast", last: true) {
                         Toggle("Fast", isOn: Binding(get: { fast }, set: { onFast?($0) }))
@@ -70,16 +72,19 @@ struct ModelMenu: View {
                             .help(fastHelp)
                     }
                 }
+                if offersSailWindow { InspectorRow("Completion window", last: true) { sailWindowButton } }
             } else if inForm {
                 if settings.runtimeAdapter.offersProviders { LabeledContent("Provider") { providerButton } }
                 LabeledContent("Model") { modelButton }
                 LabeledContent("Reasoning") { effortButton }
+                if offersSailWindow { LabeledContent("Completion window") { sailWindowButton } }
             } else {
                 HStack(spacing: 6) {
                     if settings.runtimeAdapter.offersProviders { providerButton }
                     modelButton
                     effortButton
                     if offersFast { fastButton }
+                    if offersSailWindow { sailWindowButton }
                 }
             }
         }
@@ -102,6 +107,20 @@ struct ModelMenu: View {
             showsModels = false
             showsEffort = false
         }
+    }
+
+    private var sailWindowButton: some View {
+        Menu {
+            ForEach(SailCompletionWindow.allCases, id: \.self) { window in
+                Button { onSailCompletionWindow?(window) } label: {
+                    if settings.effectiveSailCompletionWindow == window { Label(window.title, systemImage: "checkmark") }
+                    else { Text(window.title) }
+                }
+            }
+        } label: { Text(settings.effectiveSailCompletionWindow.title).font(.system(size: 12, weight: .medium)) }
+        .menuStyle(.borderlessButton).fixedSize()
+        .accessibilityLabel("Completion window: \(settings.effectiveSailCompletionWindow.title)")
+        .help("ASAP prioritizes speed; Balanced and Flex trade waiting time for lower prices. Availability depends on the model.")
     }
 
     private var providerButton: some View {
