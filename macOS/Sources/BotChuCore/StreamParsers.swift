@@ -410,6 +410,8 @@ public struct MuseParser: StreamParser {
 /// `pi -p --mode json`.
 public struct PiParser: StreamParser {
     private var usage = TurnUsageAccumulator()
+    // Coverage includes assistant requests with no usage, so billing never sums only a subset.
+    private var generationIDs: [String] = []
     public init() {}
 
     public mutating func parse(line: String) -> [AgentEvent] {
@@ -438,14 +440,17 @@ public struct PiParser: StreamParser {
                                   output: contentText(result?["content"]), isError: isError)]
         case "message_end":
             guard let message = obj["message"] as? JSON, message["role"] as? String == "assistant" else { return [] }
+            generationIDs.append(UsageParsing.piResponseID(message))
             if let reported = UsageParsing.pi(message) { usage.add(reported) }
             if message["stopReason"] as? String == "error" || message["stopReason"] as? String == "aborted" {
                 let reason = message["errorMessage"] as? String
                 return [.failed(reason.flatMap { $0.isEmpty ? nil : $0 } ?? "The model stopped with an error.")]
             }
         case "agent_end":
-            let reported = usage.value
+            var reported = usage.value
+            reported?.generationIDs = generationIDs
             usage = TurnUsageAccumulator()
+            generationIDs = []
             return reported.map { [.usage($0), .finished] } ?? [.finished]
         default: break
         }
