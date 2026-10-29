@@ -507,10 +507,9 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     or **View ▸ Collapse Tasks** folds it into a 56-point rail of tiles (a house for Home, each
     task's number, or a checklist for a brief, then **+**), with a dot in the corner of each tile
     that isn't idle and the tab's lines on hover; **»** or **View ▸ Expand Tasks** brings it
-    back, and the choice survives a relaunch. The column also becomes the rail by itself while the
-    chat beside it would be less than 600 points wide to read, and comes back when the window
-    widens; as the chat's text never grows past 760 points, on windows of 1,680 points and wider
-    the column takes only space the chat wasn't using. A bot without an open task has no column,
+    back, and the choice survives a relaunch. Resizing the window or showing the status sidebar
+    keeps that choice and the column's saved width; the window's minimum size leaves room for
+    the column and chat. A bot without an open task has no column,
     and its chat is as before, with **New Task** in the toolbar (also ⌘T and the bot's menu); once
     it has one, New Task is the column's **+**. A task's chat opens with its repository and issue
     or pull request (`asieke/BotChu · Issue #113`) above the title as its headline, and its message
@@ -2039,8 +2038,8 @@ file from other programs running as the same user.
   with `BOTCHU_DEMO=activity`, `BOTCHU_SUBAGENT=<title>` opens the details of the demo's sub-agent
   whose title starts with it;
   `inspector-model` and `inspector-effort` also select Model & Usage before opening the picker.
-  `BOTCHU_WINDOW=compact` checks the minimum window width, where a bot's tasks show as the rail,
-  `wide` (1,700 points) the column, and `BOTCHU_WINDOW=1908x960` a window of that size, as a
+  `BOTCHU_WINDOW=compact` checks the minimum window width, `wide` (1,700 points) a wide window,
+  and `BOTCHU_WINDOW=1908x960` a window of that size, as a
   report gives it. `BOTCHU_DEMO=tasks` gives the first bot six more open
   tasks in memory, so its tabs show every state at once (working, starting, making the worktree,
   news with a pull request, idle, beside the seeded finished and failed ones), with no real turn;

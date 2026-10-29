@@ -347,29 +347,11 @@ public struct BotRowSummary: Equatable, Sendable {
 }
 
 /// Where the conversation column goes (#128): 240 points beside the chat, which the owner can
-/// narrow to 200 or widen to 320, or a 56-point rail of tiles, by the owner's choice or by itself
-/// while the chat beside the column would be too narrow to read.
+/// narrow to 200 or widen to 320, or a 56-point rail of tiles by the owner's choice.
 public enum ConversationColumnLayout {
     public static let width: Double = 240
     public static let widths: ClosedRange<Double> = 200...320
     public static let railWidth: Double = 56
-    /// Below this, the chat's text is too narrow to read beside the column, and it shows the rail.
-    public static let minimumReadable: Double = 600
-    /// The widest the chat's text grows, and its margin on each side (`Theme.chatWidth`, `ChatView`).
-    public static let chatWidth: Double = 760
-    public static let chatMargin: Double = 24
-
-    /// How wide the chat's text is, with `column` points of `available` taken by the column.
-    public static func readableWidth(available: Double, column: Double) -> Double {
-        min(chatWidth, available - column - 2 * chatMargin)
-    }
-
-    /// Whether the rail shows: the owner collapsed the column, or the chat beside it would be
-    /// narrower than `minimumReadable`. It depends only on the space for both, which the rail
-    /// doesn't change, so the column comes back as soon as the window widens enough.
-    public static func showsRail(available: Double, column: Double, collapsed: Bool) -> Bool {
-        collapsed || readableWidth(available: available, column: clamped(column)) < minimumReadable
-    }
 
     /// A width the owner dragged the column's edge to, within `widths`.
     public static func clamped(_ width: Double) -> Double {

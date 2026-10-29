@@ -25,7 +25,6 @@ private struct BotChuCommands: Commands {
     let model: AppModel
     @AppStorage("showsStatus") private var showsStatus = true
     @AppStorage(ChatDensity.storageKey) private var chatDensity: ChatDensity = .detailed
-    @AppStorage(ConversationColumnSettings.collapsedKey) private var tasksCollapsed = false
 
     var body: some Commands {
         // Settings is a page of the window (#191), not a window of its own.
@@ -46,8 +45,7 @@ private struct BotChuCommands: Commands {
                 ForEach(ChatDensity.allCases) { Text($0.title).tag($0) }
             }
             // The column of a bot's tabs beside its chat, or its rail (#128).
-            Button(tasksCollapsed ? "Expand Tasks" : "Collapse Tasks") { tasksCollapsed.toggle() }
-                .disabled(model.visibleBotID.map { model.openTasks(of: $0).isEmpty } ?? true)
+            ConversationColumnToggle(model: model)
         }
         // A page in the browser on this Mac, made from what BotChu has recorded (#233).
         CommandGroup(after: .toolbar) {

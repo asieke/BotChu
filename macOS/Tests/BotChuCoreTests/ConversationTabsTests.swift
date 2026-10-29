@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import BotChuCore
 
-/// #128: the conversation column's states, texts and dots, and when it folds into the rail.
+/// #128: the conversation column's states, texts and dots, and the owner's column width.
 @Suite struct ConversationTabsTests {
     let now = Date(timeIntervalSince1970: 1_000_000)
     let bot = Bot(name: "10x Engineer Bot", workspace: "/w/bot")
@@ -355,23 +355,14 @@ import Testing
         #expect(status(stopped).phase == .stopped && status(replied).phase == .idle)
     }
 
-    @Test func theColumnFoldsIntoTheRailWhenTheChatWouldBeTooNarrow() {
+    @Test func savedAndDraggedColumnWidthsStayWithinTheReadableRange() {
         typealias Layout = ConversationColumnLayout
-        // The issue's figures: a 250-point bot list and the 380-point status sidebar.
-        func available(window: Double) -> Double { window - 250 - 380 }
-        #expect(Layout.readableWidth(available: available(window: 1_680), column: Layout.width) == 760)
-        #expect(Layout.readableWidth(available: available(window: 1_600), column: Layout.width) == 682)
-        #expect(!Layout.showsRail(available: available(window: 1_600), column: Layout.width, collapsed: false))
-        #expect(Layout.showsRail(available: available(window: 1_500), column: Layout.width, collapsed: false))
-        #expect(Layout.readableWidth(available: available(window: 1_500), column: Layout.railWidth) == 760)
-        // Exactly 600 still reads; the owner's collapse always wins.
-        #expect(!Layout.showsRail(available: 600 + 240 + 48, column: 240, collapsed: false))
-        #expect(Layout.showsRail(available: 599 + 240 + 48, column: 240, collapsed: false))
-        #expect(Layout.showsRail(available: 3_000, column: 240, collapsed: true))
-        // A wider column folds sooner; widths stay within 200 to 320.
-        #expect(Layout.showsRail(available: 950, column: 320, collapsed: false))
-        #expect(!Layout.showsRail(available: 950, column: 200, collapsed: false))
-        #expect(Layout.clamped(120) == 200 && Layout.clamped(500) == 320 && Layout.clamped(260) == 260)
-        #expect(Layout.showsRail(available: 950, column: 900, collapsed: false) == Layout.showsRail(available: 950, column: 320, collapsed: false))
+        #expect(Layout.clamped(Layout.width) == Layout.width)
+        for (requested, expected) in [(-Double.infinity, 200.0), (0, 200), (56, 200), (199, 200),
+                                      (200, 200), (240, 240), (260, 260), (320, 320), (500, 320), (.infinity, 320)] {
+            #expect(Layout.clamped(requested) == expected)
+            // A saved width can be restored and used as the start of the next drag unchanged.
+            #expect(Layout.clamped(Layout.clamped(requested)) == expected)
+        }
     }
 }

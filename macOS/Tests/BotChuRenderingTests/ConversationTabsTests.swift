@@ -19,7 +19,7 @@ extension RenderingTests {
         // The second task's turn runs; the first is idle and the third failed.
         model.runStates[tasks[1]] = RunState(startedAt: Date().addingTimeInterval(-252), hasOutput: true, activity: .coding)
         model.show(tasks[0])
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 600), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.contentView = nil; window.close() }
         let host = NSHostingView(rootView: ConversationSplit(botID: bot.id) { Color.clear }
@@ -94,11 +94,11 @@ extension RenderingTests {
         #expect(!fixture.defaults.bool(forKey: ConversationColumnSettings.collapsedKey))
         try await click(home)
         #expect(model.tab(of: bot.id) == .home(bot.id))
+        try await checkColumnControlsAtReportedAndMinimumWidths(fixture)
     }
 
-    /// The column beside the chat while the bot has an open task, in light and dark; the rail by
-    /// itself at the narrowest window, and by the owner's choice, which a relaunch keeps; no column
-    /// without an open task, when New Task is back in the toolbar.
+    /// #312: window/inspector changes keep task labels and the saved width in light and dark.
+    /// Only the owner's choice shows the rail, including after recreating the window.
     @Test func conversationColumnFollowsTheWindowAndTheOwnersChoice() async throws {
         _ = NSApplication.shared
         let oldAppearance = NSApp.appearance
@@ -106,11 +106,12 @@ extension RenderingTests {
         let fixture = try TabsFixture()
         defer { fixture.cleanUp() }
         let model = fixture.model, bot = fixture.bot
-        let tasks = fixture.tasks.map { ChatTarget.task($0.id, of: bot.id) }
-        model.runStates[tasks[1]] = RunState(startedAt: Date().addingTimeInterval(-252), hasOutput: true, activity: .coding)
-        model.unread.insert(tasks[0])
-        model.show(tasks[1])
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1700, height: 900),
+        model.show(.home(bot.id))
+        // The report: Home with two open tasks and Model & Usage shown.
+        model.closeTask(.task(fixture.tasks[2].id, of: bot.id))
+        fixture.defaults.set(InspectorTab.model.rawValue, forKey: InspectorTab.storageKey)
+        fixture.defaults.set(320.0, forKey: ConversationColumnSettings.widthKey)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1571, height: 960),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.contentView = nil; window.close() }
@@ -133,36 +134,62 @@ extension RenderingTests {
             window.appearance = NSAppearance(named: appearance)
             NSApp.appearance = NSAppearance(named: appearance)
             let name = appearance == .aqua ? "light" : "dark"
-            // Wide: the column, and the chat beside it at its full readable width.
-            window.setFrame(NSRect(x: 0, y: 0, width: 1700, height: 900), display: true)
-            try await settle(window)
-            #expect(abs(try chatInset(in: host) - ConversationColumnLayout.width) <= 1)
-            snapshot("conversation-column-\(name)")
-            // As narrow as the window goes: the rail, by itself, and the window still fits its columns.
-            window.setFrame(NSRect(x: 0, y: 0, width: 600, height: 900), display: true)
-            try await settle(window)
-            #expect(window.frame.width >= window.contentMinSize.width)
-            #expect(abs(try chatInset(in: host) - ConversationColumnLayout.railWidth) <= 1)
-            snapshot("conversation-rail-\(name)")
-            // And back when the window widens again.
-            window.setFrame(NSRect(x: 0, y: 0, width: 1700, height: 900), display: true)
-            try await settle(window)
-            #expect(abs(try chatInset(in: host) - ConversationColumnLayout.width) <= 1)
+            for width in [1571.0, 1240, 600, 1700] {
+                window.setFrame(NSRect(x: 0, y: 0, width: width, height: 960), display: true)
+                try await settle(window)
+                #expect(window.frame.width >= window.contentMinSize.width)
+                #expect(abs(try chatInset(in: host) - 320) <= 1,
+                        "Tasks keep their labels at requested window width \(width)")
+                try checkChatFits(in: host)
+                if width == 1571 { snapshot("conversation-reported-\(name)") }
+                if width == 600 { snapshot("conversation-minimum-\(name)") }
+            }
         }
-        // Folding by itself isn't the owner's choice, so nothing is kept for it.
         #expect(fixture.defaults.object(forKey: ConversationColumnSettings.collapsedKey) == nil)
-        // While the bot has an open task, New Task is the column's +, not in the toolbar.
         #expect(toolbarLabels().contains("Chat Density"))
         #expect(!toolbarLabels().contains("New Task"))
 
-        // Collapsed by the owner (View ▸ Collapse Tasks, or «), it stays the rail, also after a relaunch.
+        // Restoring every supported width keeps it through inspector changes and resizing, without
+        // overwriting it or implicitly saving a collapse. A fresh view restores the same settings.
+        for width in [200.0, 280, 320] {
+            fixture.defaults.set(width, forKey: ConversationColumnSettings.widthKey)
+            for showsStatus in [false, true] {
+                fixture.defaults.set(showsStatus, forKey: "showsStatus")
+                for requested in [600.0, 1571] {
+                    window.setFrame(NSRect(x: 0, y: 0, width: requested, height: 960), display: true)
+                    try await settle(window)
+                    #expect(abs(try chatInset(in: host) - width) <= 1)
+                    #expect(window.frame.width >= window.contentMinSize.width)
+                    try checkChatFits(in: host)
+                }
+            }
+            #expect(fixture.defaults.double(forKey: ConversationColumnSettings.widthKey) == width)
+            host = try await show()
+            #expect(abs(try chatInset(in: host) - width) <= 1)
+        }
+        #expect(fixture.defaults.object(forKey: ConversationColumnSettings.collapsedKey) == nil)
+
         fixture.defaults.set(true, forKey: ConversationColumnSettings.collapsedKey)
         try await settle(window)
         #expect(abs(try chatInset(in: host) - ConversationColumnLayout.railWidth) <= 1)
         host = try await show()
         #expect(abs(try chatInset(in: host) - ConversationColumnLayout.railWidth) <= 1)
-        fixture.defaults.removeObject(forKey: ConversationColumnSettings.collapsedKey)
+        for showsStatus in [false, true] {
+            fixture.defaults.set(showsStatus, forKey: "showsStatus")
+            window.setFrame(NSRect(x: 0, y: 0, width: 600, height: 960), display: true)
+            try await settle(window)
+            #expect(abs(try chatInset(in: host) - ConversationColumnLayout.railWidth) <= 1)
+            #expect(fixture.defaults.bool(forKey: ConversationColumnSettings.collapsedKey))
+        }
+        // Expanding at the rail's minimum must make room for the column immediately, and persist.
+        fixture.defaults.set(false, forKey: ConversationColumnSettings.collapsedKey)
         try await settle(window)
+        #expect(abs(try chatInset(in: host) - 320) <= 1)
+        #expect(window.frame.width >= window.contentMinSize.width)
+        try checkChatFits(in: host)
+        host = try await show()
+        #expect(abs(try chatInset(in: host) - 320) <= 1)
+        #expect(!fixture.defaults.bool(forKey: ConversationColumnSettings.collapsedKey))
 
         // A bot with no open task has no column; New Task is back in the toolbar.
         model.show(.home(fixture.quiet.id))
@@ -769,6 +796,137 @@ extension RenderingTests {
         #expect(try await height() > 10)
     }
 
+    /// The actual controls at #312's size, then the smallest supported window. Kept in the
+    /// isolated native-click test so AppKit's event callbacks cannot stall another test process.
+    private func checkColumnControlsAtReportedAndMinimumWidths(_ fixture: TabsFixture) async throws {
+        let model = fixture.model, bot = fixture.bot
+        model.runStates.removeAll()
+        model.show(.home(bot.id))
+        fixture.defaults.set(InspectorTab.model.rawValue, forKey: InspectorTab.storageKey)
+        fixture.defaults.set(320.0, forKey: ConversationColumnSettings.widthKey)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1571, height: 960),
+                              styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        func show() async throws -> NSView {
+            let host = NSHostingView(rootView: ContentView().environment(model).defaultAppStorage(fixture.defaults))
+            window.contentView = host
+            window.makeKeyAndOrderFront(nil)
+            try await settle(window)
+            return host
+        }
+        var host = try await show()
+        func columnOrigin() throws -> NSPoint {
+            let scroll = try chatScroll(in: host)
+            let frame = scroll.convert(scroll.bounds, to: host)
+            return NSPoint(x: frame.minX - (try chatInset(in: host)),
+                           y: host.safeAreaInsets.top)
+        }
+        func click(_ point: NSPoint) async throws {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] { send(type, at: point, in: host) }
+            try await settle(window)
+        }
+        func collapse() async throws {
+            let origin = try columnOrigin(), width = try chatInset(in: host)
+            try await click(NSPoint(x: origin.x + width - 20, y: origin.y + 77))
+            #expect(fixture.defaults.bool(forKey: ConversationColumnSettings.collapsedKey))
+            #expect(abs(try chatInset(in: host) - ConversationColumnLayout.railWidth) <= 1)
+        }
+        func expand() async throws {
+            let origin = try columnOrigin()
+            try await click(NSPoint(x: origin.x + 28, y: host.bounds.height - 22))
+            #expect(!fixture.defaults.bool(forKey: ConversationColumnSettings.collapsedKey))
+        }
+        // Use the View menu's production button in a native menu, so its label, enabled state,
+        // and action all execute, with the same AppStorage suite as the window.
+        func menuCommand(_ title: String, enabled: Bool = true) async throws {
+            let menuHost = NSHostingView(rootView: Color.gray.frame(width: 100, height: 40).contentShape(Rectangle())
+                .contextMenu { ConversationColumnToggle(model: model) }.defaultAppStorage(fixture.defaults))
+            let menuWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 40),
+                                      styleMask: [.titled], backing: .buffered, defer: false)
+            menuWindow.isReleasedWhenClosed = false
+            menuWindow.contentView = menuHost
+            menuWindow.orderFront(nil)
+            defer { menuWindow.contentView = nil; menuWindow.close(); window.makeKeyAndOrderFront(nil) }
+            try await settle(menuWindow)
+            let menu = try tabMenu(at: NSPoint(x: 50, y: 20), in: menuHost)
+            let item = try #require(menu.item(withTitle: title))
+            #expect(item.isEnabled == enabled)
+            if enabled {
+                menu.performActionForItem(at: menu.index(of: item))
+                try await settle(window)
+            }
+        }
+
+        #expect(abs(window.frame.width - 1571) <= 1)
+        #expect(abs(try chatInset(in: host) - 320) <= 1)
+        // A changed width is restored by both controls and after recreating the view.
+        fixture.defaults.set(280.0, forKey: ConversationColumnSettings.widthKey)
+        try await settle(window)
+        #expect(fixture.defaults.double(forKey: ConversationColumnSettings.widthKey) == 280)
+        #expect(abs(try chatInset(in: host) - 280) <= 1)
+        try await collapse()
+        host = try await show()
+        #expect(abs(try chatInset(in: host) - 56) <= 1)
+        try await expand()
+        #expect(abs(try chatInset(in: host) - 280) <= 1)
+        host = try await show()
+        #expect(abs(try chatInset(in: host) - 280) <= 1)
+
+        // Both paths expand at the rail's minimum width; neither needs the window widened first.
+        try await menuCommand("Collapse Tasks")
+        window.setFrame(NSRect(x: 0, y: 0, width: 600, height: 960), display: true)
+        try await settle(window)
+        try await expand()
+        #expect(abs(try chatInset(in: host) - 280) <= 1)
+        try checkChatFits(in: host)
+        try await collapse()
+        window.setFrame(NSRect(x: 0, y: 0, width: 600, height: 960), display: true)
+        try await settle(window)
+        try await menuCommand("Expand Tasks")
+        #expect(abs(try chatInset(in: host) - 280) <= 1)
+        #expect(!fixture.defaults.bool(forKey: ConversationColumnSettings.collapsedKey))
+        #expect(fixture.defaults.double(forKey: ConversationColumnSettings.widthKey) == 280)
+        #expect(window.frame.width >= window.contentMinSize.width)
+        try checkChatFits(in: host)
+
+        // Labels remain selectable and the chat still accepts typing at this width.
+        let narrowOrigin = try columnOrigin()
+        try await click(NSPoint(x: narrowOrigin.x + 120, y: narrowOrigin.y + 134))
+        let selected = try #require(model.openTasks(of: bot.id).first)
+        let target = ChatTarget.task(selected.id, of: bot.id)
+        #expect(model.tab(of: bot.id) == target)
+        let editor = try #require(composerEditors(in: host).first)
+        window.makeFirstResponder(editor)
+        editor.insertText("A narrow draft", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(model.drafts[target] == "A narrow draft")
+
+        model.show(.home(fixture.quiet.id))
+        try await settle(window)
+        try await menuCommand("Collapse Tasks", enabled: false)
+    }
+
+    private func composerEditors(in view: NSView) -> [ComposerTextView] {
+        ((view as? ComposerTextView).map { [$0] } ?? []) + view.subviews.flatMap(composerEditors)
+    }
+
+    /// Find the transcript by its probe, including when a 320-point task column is wider than it.
+    private func chatScroll(in host: NSView) throws -> NSScrollView {
+        func probe(_ view: NSView) -> ChatScrollProbeView? {
+            (view as? ChatScrollProbeView) ?? view.subviews.lazy.compactMap(probe).first
+        }
+        return try #require(probe(host)?.enclosingScrollView)
+    }
+
+    private func checkChatFits(in host: NSView) throws {
+        let scroll = try chatScroll(in: host)
+        let frame = scroll.convert(scroll.bounds, to: host)
+        #expect(frame.width >= 300 && frame.minX >= 0 && frame.maxX <= host.bounds.maxX + 1)
+        let editor = try #require(composerEditors(in: host).first)
+        let composer = editor.convert(editor.bounds, to: host)
+        #expect(composer.width > 100 && composer.minX >= frame.minX && composer.maxX <= frame.maxX + 1)
+    }
+
     /// How far the chat starts from the sidebar's edge: the column's or the rail's width, or
     /// nothing. The detail column runs under the sidebar (which floats over it on macOS 26), and so
     /// does the chat's scroll view when nothing is beside it.
@@ -776,14 +934,7 @@ extension RenderingTests {
         let splits = tabSplitViews(in: host)
         try #require(splits.count == 2)
         let sidebar = try #require(splits[0].arrangedSubviews.first)
-        let content = try #require(splits[1].arrangedSubviews.first)
-        var widest: NSScrollView?
-        func visit(_ view: NSView) {
-            if let scroll = view as? NSScrollView, scroll.documentView != nil, scroll.frame.width > (widest?.frame.width ?? 0) { widest = scroll }
-            view.subviews.forEach(visit)
-        }
-        visit(content)
-        let chat = try #require(widest)
+        let chat = try chatScroll(in: host)
         return max(0, chat.convert(chat.bounds, to: nil).minX - sidebar.convert(sidebar.bounds, to: nil).maxX)
     }
 
