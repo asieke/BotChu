@@ -252,6 +252,28 @@ import Testing
 
     // MARK: Sessions
 
+    @Test func writingRequestsNameTheExactFileWithoutCreatingIt() throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bot = Bot(name: "Data Analyst", workspace: root.appendingPathComponent("data-analyst").path)
+        let shared = Skills.sharedFolder(besideSharedMemory: root.appendingPathComponent("BOTS/MEMORY.md").path)
+        for destination in [Skills.folder(of: bot), shared] {
+            let file = Skills.file(named: "Kalshi markets", in: destination)
+            #expect(file.path == destination.path + "/kalshi-markets/SKILL.md")
+            let request = Skills.writingRequest(name: "  Kalshi markets\n", description: " Inspect markets. ", in: destination)
+            #expect(request == """
+                Write a reusable skill named "Kalshi markets" at this exact path:
+                \(file.path)
+
+                What it does: Inspect markets.
+
+                Create the skill's folder and write SKILL.md with YAML frontmatter containing name: kalshi-markets and a description of when to use it, followed by clear, actionable steps. Write the complete skill, not an empty template.
+                """)
+            #expect(!FileManager.default.fileExists(atPath: destination.path))
+        }
+        #expect(Skills.writingRequest(name: "Kalshi markets", description: " \n", in: shared).contains("What it does: Kalshi markets"))
+    }
+
     private let bot = Bot(name: "Scout", workspace: "/b/scout")
     private var skills: [Skill] {
         [skill("browse", "---\nname: browse\ndescription: Browse the web with aside.\n---\n# Browse\n\nSECRET-STEP: quote dollars."),

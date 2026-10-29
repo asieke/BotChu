@@ -1140,8 +1140,11 @@ on that pull request's branch to continue in instead). The same command run agai
     tabs of tables, as Providers is laid out (#246). **Skills** lists one row a skill: its name over its description, which
     bots have it, **Uses** (its tools) and its number of files (which goes first in a narrow window), with a search;
     selecting a row opens its sidebar with the description, a shared skill's switch for each bot, its used tools and its
-    folder. **New Skill** makes one, shared or for one bot (its **File** row shows `skills/<name>/SKILL.md`), from a template
-    and opens it in the Markdown editor, as do a row's **Edit…** and double-click; a shared skill's **Bots** menu and
+    folder. The heading's **+** menu is the same on both tabs: **New Skill…**, **Approve Tools…** (with the candidates
+    count), **Add SSH Destination…**, and **Shared Folder** (#308). **New Skill…** asks for **Name**, **What it does**,
+    a local **Bot**, and **Share with every bot**; **File** shows the exact destination. **Create** opens that bot's Home
+    and sends a visible request to write the complete skill there, with name/description frontmatter and steps.
+    BotChu creates no template or skill file itself. A row's **Edit…** and double-click open the Markdown editor; a shared skill's **Bots** menu and
     switches turn it on or off for each bot (kept in `bot.json` as `disabledSkills`; every shared skill is on until turned
     off), and its menu shows it in Finder or puts its folder in the Trash. **Shared Folder** opens the bots folder's
     `skills/`. BotChu detects tools from the first word of each fenced command line and inline code span, plus executable
@@ -1157,8 +1160,8 @@ on that pull request's branch to continue in instead). The same command run agai
   - **Tools** (Skills & Tools' second tab, #246): the command-line tools you approve for agents on This Mac, one global
     list for every bot, in `tools.json` beside `index.json`. Its table groups **Command line** (approved tools: name,
     status, **Used by** (skills), read-only **Bots** (bots with an active skill using it), and an **On** switch), **SSH destinations**, and **BotChu**'s own helpers
-    (`botchu-subagent`, `-task`, `-inbox`, `-message`, always on); selecting a row opens its sidebar. **Add Tools…** (with
-    how many wait) lists candidates, none of them approved until you tick them and press **Approve**: tools of a curated
+    (`botchu-subagent`, `-task`, `-inbox`, `-message`, always on); selecting a row opens its sidebar. **Approve Tools…** in
+    the **+** menu lists candidates, none of them approved until you tick them and press **Approve**: tools of a curated
     catalog of service and infrastructure CLIs (`gh`, `glab`, `aws`, `gcloud`, `az`, `vercel`, `netlify`, `fly`,
     `heroku`, `wrangler`, `supabase`, `firebase`, `railway`, `doctl`, `stripe`, `op`, `docker`, `kubectl`, `helm`,
     `terraform`, `ngrok`, `aside`) found in the login shell's `PATH` and the usual install folders, and commands skills
