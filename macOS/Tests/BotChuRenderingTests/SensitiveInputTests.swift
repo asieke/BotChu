@@ -5,10 +5,10 @@ import BotChuCore
 @testable import BotChu
 
 extension RenderingTests {
-    @Test func sensitiveInputSavesOnlyAtApprovedDestinationAndCancelsWithTurn() async throws {
-        let fixture = try SensitiveInputFixture()
+    @Test(arguments: [false, true]) func sensitiveInputSavesOnlyAtApprovedDestinationAndCancelsWithTurn(inTask: Bool) async throws {
+        let fixture = try SensitiveInputFixture(inTask: inTask)
         defer { fixture.cleanUp() }
-        let app = fixture.app, home = ChatTarget.home(fixture.bot.id)
+        let app = fixture.app, home = fixture.target
         let runtime = app.delegation.sensitiveInput
         runtime.present = { _ in }
         app.send("ASK_SECRET", to: home)
@@ -42,6 +42,83 @@ extension RenderingTests {
         app.stop(home)
         try await fixture.wait { runtime.current == nil && !app.isRunning(home) }
         #expect(!FileManager.default.fileExists(atPath: fixture.destination.path))
+    }
+
+    @Test func storageMoveWaitsForTurnAndPreservesBotData() async throws {
+        let fixture = try SensitiveInputFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app, runtime = app.delegation.sensitiveInput
+        runtime.present = { _ in }
+        app.send("ASK_SECRET", to: fixture.target)
+        try await fixture.wait { runtime.current != nil }
+        let path = fixture.root.appendingPathComponent("moved-fox").path
+        let move = StorageMove(source: fixture.bot.workspace, destination: path, kind: .bot)
+        let relocating = Task { try await app.moveStorage([move]) }
+        try await fixture.wait { app.storageMovePending }
+        #expect(FileManager.default.fileExists(atPath: fixture.bot.workspace))
+        #expect(!FileManager.default.fileExists(atPath: path))
+        #expect(!app.send("Wait until the move finishes", to: fixture.target))
+        runtime.finish(try #require(runtime.current).id)
+        try await relocating.value
+        #expect(!app.storageMovePending)
+        #expect(app.bot(fixture.bot.id)?.workspace == path)
+        #expect(BotHome(workspace: path).loadBot()?.id == fixture.bot.id)
+        #expect(app.store.loadIndex().first?.workspace == path)
+        #expect(!FileManager.default.fileExists(atPath: fixture.bot.workspace))
+    }
+
+    @Test func changingStorageDefaultsPinsExistingTaskCheckoutAndSharedDocuments() throws {
+        let fixture = try SensitiveInputFixture(inTask: true)
+        defer { fixture.cleanUp() }
+        let app = fixture.app
+        let task = try #require(app.task(fixture.target))
+        let shared = app.settings.sharedMemoryPath
+        app.setWorkspaceRoot(fixture.root.path + "/future-repos")
+        app.setBotsRoot(fixture.root.path + "/future-bots")
+        #expect(app.settings.repoLocations[task.repo]?.path == task.checkout)
+        #expect(app.task(fixture.target)?.checkout == task.checkout)
+        #expect(app.bot(fixture.bot.id)?.workspace == fixture.bot.workspace)
+        #expect(app.settings.sharedMemoryPath == shared)
+        #expect(!FileManager.default.fileExists(atPath: app.settings.expandedReposRoot))
+    }
+
+    @Test func janitorSetupUsesExistingJobsAndPreservesPolicy() async throws {
+        let fixture = try SensitiveInputFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app
+        var bot = fixture.bot
+        bot.name = "Security Racoon"
+        app.update(bot)
+        try app.setupJanitor()
+        let id = try #require(app.settings.janitorJobID)
+        let job = try #require(app.jobs.job(id))
+        #expect(job.botID == bot.id && job.enabled && job.runs.isEmpty)
+        #expect(job.schedule.kind == .daily && job.schedule.hour == 3 && job.schedule.minute == 0)
+        #expect(job.schedule.timeZone == TimeZone.current.identifier)
+        #expect(app.janitorContext(for: job).contains("Not configured"))
+        let policy = URL(fileURLWithPath: bot.workspace).appendingPathComponent(Janitor.policyPath)
+        try "Owner edited policy".write(to: policy, atomically: true, encoding: .utf8)
+        try app.setupJanitor()
+        #expect(app.settings.janitorJobID == id && app.jobs.jobs.count == 1)
+        #expect(try String(contentsOf: policy, encoding: .utf8) == "Owner edited policy")
+        await app.storage.settle()
+    }
+
+    @Test func sensitiveInputQueueReportsOnlyFixedLimitReasons() {
+        let runtime = SensitiveInputRuntime()
+        runtime.present = { _ in }
+        let invocation = UUID(), bot = UUID()
+        var reason: SensitiveInputResult.Reason?
+        for _ in 0..<9 {
+            runtime.enqueue(SensitiveInputRequest(invocationID: invocation, callerBotID: bot, label: "Fixture",
+                destination: "/private/tmp/unused"), botName: "Fox", reject: { reason = $0 }) { _ in }
+        }
+        #expect(reason == .queueFull && runtime.prompts.count == 8)
+        runtime.cancel(invocationID: invocation)
+        for _ in 0..<1024 { runtime.cancel(UUID(), invocationID: invocation) }
+        runtime.enqueue(SensitiveInputRequest(invocationID: invocation, callerBotID: bot, label: "Fixture",
+            destination: "/private/tmp/unused"), botName: "Fox", reject: { reason = $0 }) { _ in }
+        #expect(reason == .withdrawnLimit && runtime.prompts.isEmpty)
     }
 
     @Test func sensitiveInputPopupUsesSecureFieldAndDropsValueWhenClosed() async throws {
@@ -128,16 +205,36 @@ extension RenderingTests {
     let domain = "local.BotChu.SensitiveInputTests.\(UUID().uuidString)"
     let bot: Bot
     let app: AppModel
-    var destination: URL { root.appendingPathComponent("value") }
+    let destination: URL
+    let target: ChatTarget
 
-    init() throws {
+    init(inTask: Bool = false) throws {
         let store = Store(root: root.appendingPathComponent("index"))
         let settings = AppSettings(defaults: UserDefaults(suiteName: domain)!)
         settings.botsRoot = root.appendingPathComponent("bots").path
         bot = Bot(name: "Fox", accountID: "codex-dev", workspace: root.appendingPathComponent("fox").path)
-        try BotHome(workspace: bot.workspace).save(bot)
+        let home = BotHome(workspace: bot.workspace)
+        try home.save(bot)
+        if inTask {
+            let checkout = root.appendingPathComponent("repo")
+            let worktree = checkout.appendingPathComponent(".claude/worktrees/task")
+            let local = worktree.appendingPathComponent(".local")
+            try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
+            var task = BotTask(repo: "fixture/repo", checkout: checkout.path, brief: "Test secure entry")
+            task.accountID = bot.accountID
+            task.folder = worktree.path
+            try home.save(task)
+            target = .task(task.id, of: bot.id)
+            destination = local.appendingPathComponent("value")
+        } else {
+            target = .home(bot.id)
+            destination = root.appendingPathComponent("value")
+        }
         let script = root.appendingPathComponent("cli.py")
-        try Self.script.write(to: script, atomically: true, encoding: .utf8)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .withoutEscapingSlashes
+        let literal = String(decoding: try encoder.encode(destination.path), as: UTF8.self)
+        try Self.script.replacingOccurrences(of: "DESTINATION", with: literal).write(to: script, atomically: true, encoding: .utf8)
         settings.commands[bot.accountID] = "/usr/bin/python3 \(Shell.quote(script.path))"
         try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
         app = AppModel(store: store, settings: settings, usage: UsageCache { _, _ in throw UsageFailure("No usage in tests") })
@@ -148,6 +245,8 @@ extension RenderingTests {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(25))
         }
+        let diagnostic = app.thread(target).map(\.text).joined(separator: " | ")
+        Issue.record("Synthetic fixture did not finish: \(diagnostic)")
         throw CocoaError(.executableLoad)
     }
 
@@ -163,7 +262,7 @@ extension RenderingTests {
     emit({"type":"thread.started", "thread_id":"fixture-session"})
     if sys.argv[-1].splitlines()[-1] == "ASK_SECRET":
         result = subprocess.run(["botchu-secret", "request", "--label", "Test service key",
-            "--destination", str(pathlib.Path(__file__).parent / "value")],
+            "--destination", DESTINATION],
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         answer = result.stdout + result.stderr
     else:

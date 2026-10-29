@@ -917,6 +917,32 @@ on that pull request's branch to continue in instead). The same command run agai
     its own workspace, and not the bots folder itself; moving a bot's workspace in its editor moves its `.botchu/`, `INSTRUCTIONS.md`, `MEMORY.md`, `SOUL.md` and `skills/` with it. Moving
     waits until its turns finish and refuses to overwrite files at the destination. Deleting a bot
     puts only its `.botchu/` in the Trash.
+  - **Storage locations (#316):** Settings ▸ General has **Workspace** (repository checkouts),
+    **Bots**, and **Archive**. Choosing a new default keeps existing checkout/task associations and
+    bot folders in place; shared memory and the team playbook keep their existing location too.
+    **Move existing…** is separate: it lists source and destination paths, waits for running turns,
+    pauses new turns, moves the full folders, repairs Git worktree registrations and saves the new
+    task/checkout associations. It refuses existing destinations and overlapping moves. A move
+    journal supports recovery after interruption; ambiguous copies remain untouched with new turns
+    paused for review. Cancel stops between completed moves. An unavailable archive volume stays
+    unavailable: BotChu neither creates a substitute mount directory nor picks another disk.
+    Projects' location column shows **No checkout**, **Checkout · clean**, **Checkout · local changes**,
+    **Ahead N / Behind N**, or **Elsewhere** with its path/host in the tooltip. The tooltip gives the
+    last fetch time; counts compare fetched refs and never claim that local changes were uploaded.
+  - **Storage Janitor (#316):** **Set up report-only Janitor** in General creates Security Racoon's
+    normal Job, daily at 3 a.m. in the Mac's current time zone, with a one-hour missed-run window.
+    Its editable `skills/storage-janitor/SKILL.md` and `janitor/policy.json` live in that agent's
+    workspace; setup preserves existing edits. Each run receives current locations, Archive
+    availability and active folders. The initial policy reports only: every destructive category
+    is disabled and ages/scopes/approvals are unset. It covers rebuildable artifacts, verified
+    merged clean inactive worktrees, and archival of older conversation/artifact data. Dirty,
+    active, unmerged or uncertain work is preserved with a reason. Datasets remain excluded.
+    Cleanup requires the owner's approval of a concrete preview and its exact scope/retention.
+    Archive transactions must copy, hash-verify and commit a manifest, summary/index and receipt
+    before removing any approved source; a missing drive defers them. In-app raw history remains
+    preserved until separately approved. Receipts record candidate/reclaimed bytes, destinations,
+    preserved/deferred items and errors. BotChu schedules the agent; it has no automatic cleanup
+    or archival engine. Jobs run only while the app is open and the Mac is awake.
   - **Saving:** conversations and their queues, bots' and tasks' settings, the turn log, memory
     notes, sub-agents' and jobs' transcripts and run reviews' records are written off the main
     thread, so typing, switching conversations and Stop never wait for the disk, however long a
@@ -1349,6 +1375,10 @@ on that pull request's branch to continue in instead). The same command run agai
     secrets), quoted as evidence rather than instructions; with no such messages it is asked as a
     new task's summary. Nothing from another task, Home, the bot's instructions or its memory goes
     in, and it is never asked after a turn by itself.
+    Automatic titles and Regenerate Title allow one formatting correction on that same profile
+    when a reply misses the three-or-four-word, 40-character limit, within the original 90-second
+    timeout. A failed correction keeps the existing title; no other account is substituted.
+
   - **Remote queue bots:** choose **Remote queue** in New Bot to message an agent such as Danny
     on its own computer. BotChu serves an authenticated HTTP queue, while the remote runtime
     polls for messages and posts complete replies or errors into Home. Documents go both ways: attach
@@ -2171,3 +2201,8 @@ file from other programs running as the same user.
 - **Recovery:** After a failed deploy, fix it (or revert the change) through a pull request and deploy again; `scripts/deploy.sh` retries, and reinstalls what is checked out when nothing new merged.
 - **Scheduled jobs:** none.
 - **Development:** On this Mac, in task worktrees of `~/Desktop/WORKSPACE/BotChu` (`.claude/worktrees/<type>-<slug>`, from `origin/main`). Changes reach the live app only by merging a pull request to `main` and deploying it.
+
+Secure-input regression checks also run in Release: Core validation plus the gated Home/Task
+integration tests. Rejections carry only fixed reason codes, never underlying errors or entered
+values. The helper still reports status only; exclusive creation, no-symlink traversal and 0600
+permissions apply in both configurations.

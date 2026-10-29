@@ -33,12 +33,17 @@ final class SensitiveInputRuntime {
     @ObservationIgnored private var timers: [UUID: Task<Void, Never>] = [:]
 
     func enqueue(_ request: SensitiveInputRequest, botName: String,
+                 reject: ((SensitiveInputResult.Reason) -> Void)? = nil,
                  reply: @escaping (SensitiveInputResult.Status) -> Void) {
         guard replies[request.id] == nil else { return }
         if withdrawn[request.invocationID]?.contains(request.id) == true { reply(.cancelled); return }
         // Bound metadata retained by a turn that repeatedly creates then withdraws requests.
-        guard (withdrawn[request.invocationID]?.count ?? 0) < 1024 else { reply(.rejected); return }
-        guard replies.count < 8 else { reply(.rejected); return }
+        guard (withdrawn[request.invocationID]?.count ?? 0) < 1024 else {
+            if let reject { reject(.withdrawnLimit) } else { reply(.rejected) }; return
+        }
+        guard replies.count < 8 else {
+            if let reject { reject(.queueFull) } else { reply(.rejected) }; return
+        }
         replies[request.id] = reply
         prompts.append(Prompt(request: request, botName: botName))
         let remaining = max(0, request.createdAt.addingTimeInterval(SensitiveInputRequest.lifetime).timeIntervalSinceNow)

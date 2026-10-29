@@ -275,23 +275,14 @@ private struct GeneralSettings: View {
     var body: some View {
         @Bindable var settings = model.settings
         Section {
-            LabeledContent("Bots folder") {
-                HStack {
-                    TextField("Bots folder", text: $settings.botsRoot)
-                        .labelsHidden()
-                        .settingsField()
-                        .font(.system(size: 12, design: .monospaced))
-                    Button("Choose…") { if let url = chooseFolder() { settings.botsRoot = url.path } }
-                }
-            }
-            .help("New bots get a folder here by default.")
             Toggle("Check on bots that stop mid-work", isOn: $settings.heartbeat)
                 .help("When a turn ends saying its work is still going and nothing is running, BotChu sends a heartbeat asking the bot to check on it: up to \(Heartbeat.maxPulses) in a row, 2, 10 and 30 minutes after.")
         }
+        StorageSettings()
         Section("Shared by every bot") {
             ForEach(SharedDocument.allCases) { document in
                 LabeledContent {
-                    Button("Edit…") { sharedDocument = DocumentEditorRequest(shared: document, botsRoot: settings.botsRoot) }
+                    Button("Edit…") { sharedDocument = DocumentEditorRequest(shared: document, botsRoot: settings.sharedDocumentsRoot) }
                         .accessibilityLabel("Edit \(document.rawValue)")
                 } label: {
                     VStack(alignment: .leading, spacing: 1) {
@@ -393,12 +384,12 @@ private struct ThisMacSettings: View {
         Section {
             LabeledContent("Repositories folder") {
                 HStack {
-                    TextField("Repositories folder", text: $settings.reposRoot, prompt: Text("~/Desktop/WORKSPACE"))
+                    TextField("Repositories folder", text: Binding(get: { settings.reposRoot }, set: { model.setWorkspaceRoot($0) }), prompt: Text("~/Desktop/WORKSPACE"))
                         .labelsHidden()
                         .settingsField()
                         .font(.system(size: 12, design: .monospaced))
                     Button("Choose…") {
-                        if let url = chooseFolder() { settings.reposRoot = (url.path as NSString).abbreviatingWithTildeInPath }
+                        if let url = chooseFolder() { model.setWorkspaceRoot((url.path as NSString).abbreviatingWithTildeInPath) }
                     }
                 }
             }

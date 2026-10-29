@@ -264,17 +264,24 @@ struct MergeCell: View {
 /// The computer tasks work on, and whether its checkout exists yet on this Mac.
 struct WorkplaceCell: View {
     var row: ProjectRow
+    @State private var status: CheckoutStatus?
     var body: some View {
-        let here = row.location.hostID == nil
-        let path = here ? (row.location.path as NSString).abbreviatingWithTildeInPath : row.location.path
-        let cloned = here && FileManager.default.fileExists(atPath: (row.location.path as NSString).appendingPathComponent(".git"))
-        HStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(row.workplace).lineLimit(1)
-            Image(systemName: !here ? "network" : cloned ? "checkmark" : "arrow.down.circle")
-                .font(.system(size: 10, weight: cloned ? .bold : .semibold))
-                .foregroundStyle(cloned ? AnyShapeStyle(GitHubColors.open) : AnyShapeStyle(.tertiary))
+            Text(status?.label ?? "Checking checkout…").font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
         }
-        .help(here && !cloned ? "Not cloned yet: \(path). The first task clones it." : "Tasks work in \(path)")
+        .help((status?.detail ?? row.location.path) + "\n" + (status?.fetchedAt.map {
+            "Last fetched \($0.formatted(date: .abbreviated, time: .shortened)); ahead/behind compares local fetched refs."
+        } ?? "No recorded fetch. Checkout state does not mean changes have been uploaded."))
+        .task(id: row.location) {
+            status = nil
+            while !Task.isCancelled {
+                let reading = await CheckoutStatus.read(row.location, host: row.workplace)
+                guard !Task.isCancelled else { return }
+                status = reading
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            }
+        }
     }
 }
 

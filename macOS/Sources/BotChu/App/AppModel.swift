@@ -116,6 +116,8 @@ final class AppModel {
     var notifier: InboxNotifier?
     /// Each bot's tasks, open and closed, oldest first.
     var tasks: [UUID: [BotTask]] = [:]
+    var storageMovePending = false
+    var storageMoveProblem: String?
     /// Every conversation (each bot's Home, and each task), observed one by one: see
     /// `ConversationState`. Made when first asked for (`conversation(_:)`).
     @ObservationIgnored private(set) var conversations: [ChatTarget: ConversationState] = [:]
@@ -242,7 +244,7 @@ final class AppModel {
     }
     let modelCatalog = ModelCatalog()
 
-    private let store: Store
+    let store: Store
     /// BotChu's data folder (`~/Library/Application Support/BotChu`, or a test's).
     var dataFolder: URL { store.root }
     /// Where conversations, settings, logs, memory, sub-agents' and jobs' files are written, off the
@@ -350,6 +352,17 @@ final class AppModel {
         connectorBoard = ConnectorBoard(file: self.store.root.appendingPathComponent("connectors.json"))
         tools = ToolsBoard(folder: self.store.root)
         self.store.migrateIfNeeded()
+        do {
+            if let move = try self.store.recoverStorageMove() {
+                for (repo, place) in self.settings.repoLocations where place.hostID == nil {
+                    self.settings.repoLocations[repo] = RepoLocation(path: move.replacing(place.path))
+                }
+                try FileManager.default.removeItem(at: self.store.root.appendingPathComponent("storage-move.json"))
+            }
+        } catch {
+            storageMovePending = true
+            storageMoveProblem = error.localizedDescription
+        }
         let loaded = self.store.loadBots()
         bots = loaded.bots
         missing = loaded.missing
@@ -1398,6 +1411,7 @@ final class AppModel {
     func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [], files: [FileAttachment] = [],
               id: UUID = UUID(), references: [MessageReference] = [], delivery: UUID? = nil, fromAgent: AgentLink? = nil,
               heartbeat: Int? = nil, accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
+        guard !storageMovePending else { accepted?(false); return false }
         let (text, references) = MessageReference.trimming(text, references: references)
         // Anything sent to the conversation answers the heartbeat it waited to send.
         pendingHeartbeats[target] = nil
@@ -1599,6 +1613,7 @@ final class AppModel {
     }
 
     private func beginTurn(_ text: String, for target: ChatTarget, message: ChatMessage?) -> Bool {
+        guard !storageMovePending else { return false }
         guard bot(target.botID)?.isRemoteQueue != true else { return false }
         guard !isRunning(target), conversation(target).isLoaded, let bot = bot(target.botID), let current = runSettings(of: target) else { return false }
         let history = thread(target)

@@ -40,6 +40,9 @@ if [ "$mode" = --windows ]; then
   if [ "$clicks" = 1 ]; then
     test_step 'native clicks' test_run clicks --skip-build --filter "$click_test"
   fi
+  if [ "${BOTCHU_RELEASE_SECRET:-0}" = 1 ]; then
+    test_step 'release secure input' test_run release-secret --skip-build --configuration release --scratch-path "$release_scratch" --filter 'BotChuRenderingTests.RenderingTests/sensitiveInput'
+  fi
   exit
 fi
 test_step 'renderer checksums' renderer_checksums
@@ -69,13 +72,13 @@ if [ "$mode" = --changed ]; then
 fi
 # Optimization is required to catch Swift 6.4's task-group regression.
 if [ "$release" = 1 ]; then
-  test_step 'release tests' test_run release --skip-build --configuration release --scratch-path "$release_scratch" --filter 'projectLoading|RunEvaluationTests'
+  test_step 'release tests' test_run release --skip-build --configuration release --scratch-path "$release_scratch" --filter 'projectLoading|RunEvaluationTests|BotChuCoreTests.SensitiveInputTests/'
 fi
-[ "$windows" != none ] || [ "$clicks" = 1 ] || exit 0
+[ "$windows" != none ] || [ "$clicks" = 1 ] || [ "$release" = 1 ] || exit 0
 "$test_root/scripts/coord/install.sh"
 run_windows() {
   local gate=/tmp/botchu-coord/gate.sh id run result
-  id=$("$gate" start env BOTCHU_TEST_RESULTS="$BOTCHU_TEST_RESULTS" BOTCHU_TEST_REPORT_OWNER="$BOTCHU_TEST_REPORT_OWNER" BOTCHU_WINDOW_TESTS="$windows" BOTCHU_CLICK_TEST="$clicks" "$dir/test.sh" --windows)
+  id=$("$gate" start env BOTCHU_TEST_RESULTS="$BOTCHU_TEST_RESULTS" BOTCHU_TEST_REPORT_OWNER="$BOTCHU_TEST_REPORT_OWNER" BOTCHU_WINDOW_TESTS="$windows" BOTCHU_CLICK_TEST="$clicks" BOTCHU_RELEASE_SECRET="$release" "$dir/test.sh" --windows)
   run="/tmp/botchu-coord/gate/runs/$id"
   echo "test: queued window tests as $id"
   while :; do

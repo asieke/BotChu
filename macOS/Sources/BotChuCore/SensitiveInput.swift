@@ -25,14 +25,19 @@ public struct SensitiveInputRequest: Codable, Equatable, Identifiable, Sendable 
     }
 
     public func validate(caller: SubagentCallerContext, now: Date = Date()) throws {
-        guard kind == "secret", invocationID == caller.invocationID, callerBotID == caller.botID,
-              callerTaskID == caller.taskID, parentSubagentID == caller.parentSubagentID,
-              caller.hostID == nil else { throw SensitiveInputError.invalidRequest }
+        guard kind == "secret" else { throw SensitiveInputError.invalidRequest }
+        guard invocationID == caller.invocationID, callerBotID == caller.botID,
+              callerTaskID == caller.taskID, parentSubagentID == caller.parentSubagentID else {
+            throw SensitiveInputError.callerMismatch
+        }
+        guard caller.hostID == nil else { throw SensitiveInputError.notLocal }
         guard now.timeIntervalSince(createdAt) >= -5, now.timeIntervalSince(createdAt) < Self.lifetime else {
             throw SensitiveInputError.expired
         }
+        // Keep an explicit predicate: the bound CharacterSet.contains reference rejects ordinary
+        // text in the optimized package build (#314); Release tests cover both labels and paths.
         guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, label.count <= 120,
-              !label.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+              !label.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
             throw SensitiveInputError.invalidRequest
         }
         try SensitiveInputDestination.validate(destination)
@@ -40,10 +45,20 @@ public struct SensitiveInputRequest: Codable, Equatable, Identifiable, Sendable 
 }
 
 public enum SensitiveInputError: Error, LocalizedError, Sendable {
-    case invalidRequest, expired, invalidDestination, unavailableDestination, invalidValue, writeFailed
+    case invalidRequest, callerMismatch, notLocal, expired, invalidDestination, unavailableDestination, invalidValue, writeFailed
+    public var rejectionReason: SensitiveInputResult.Reason {
+        switch self {
+        case .invalidRequest, .invalidValue, .writeFailed: .invalidRequest
+        case .callerMismatch: .callerMismatch
+        case .notLocal: .notLocal
+        case .expired: .expired
+        case .invalidDestination: .invalidDestination
+        case .unavailableDestination: .unavailableDestination
+        }
+    }
     public var errorDescription: String? {
         switch self {
-        case .invalidRequest: "This sensitive-input request is invalid or isn't from an active local turn."
+        case .invalidRequest, .callerMismatch, .notLocal: "This sensitive-input request is invalid or isn't from an active local turn."
         case .expired: "This sensitive-input request expired. Ask the agent to request it again."
         case .invalidDestination: "Use an absolute path to a new file, without links, dot components or control characters."
         case .unavailableDestination: "The destination must be a new file in an existing folder, with no symbolic links."
@@ -56,10 +71,22 @@ public enum SensitiveInputError: Error, LocalizedError, Sendable {
 /// A receipt never contains the value or an underlying filesystem error (which might include data).
 public struct SensitiveInputResult: Codable, Sendable {
     public enum Status: String, Codable, Sendable { case saved, cancelled, expired, rejected }
+    /// Fixed codes only: never decoder errors, paths or request contents.
+    public enum Reason: String, Codable, Error, Sendable {
+        case malformedRequest = "malformed_request", requestIDMismatch = "request_id_mismatch"
+        case invalidRequest = "invalid_request", callerMismatch = "caller_mismatch", notLocal = "not_local"
+        case expired, invalidDestination = "invalid_destination", excludedDestination = "excluded_destination"
+        case unavailableDestination = "unavailable_destination", unknownBot = "unknown_bot"
+        case ackFailed = "ack_failed", turnEnded = "turn_ended", queueFull = "queue_full"
+        case withdrawnLimit = "withdrawn_limit"
+    }
     public var kind = "secret"
     public var id: UUID
     public var status: Status
-    public init(id: UUID, status: Status) { self.id = id; self.status = status }
+    public var reason: Reason?
+    public init(id: UUID, status: Status, reason: Reason? = nil) {
+        self.id = id; self.status = status; self.reason = status == .rejected ? reason : nil
+    }
 }
 
 public enum SensitiveInputDestination {
@@ -67,7 +94,7 @@ public enum SensitiveInputDestination {
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
         guard path.hasPrefix("/"), path.utf8.count <= 4096, parts.count > 2,
               !parts.dropFirst().contains(where: { $0.isEmpty || $0 == "." || $0 == ".." || $0.lowercased() == ".git" || $0.lowercased() == ".botchu" }),
-              !path.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+              !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
             throw SensitiveInputError.invalidDestination
         }
     }
