@@ -1401,14 +1401,16 @@ on that pull request's branch to continue in instead). The same command run agai
     there are. Conversations, instructions, memory, prompts, tool calls, error text, paths and the
     names of bots, tasks, accounts, hosts and repositories never go into the app state.
   - **Analytics:** **View ▸ Open Analytics Dashboard** reads what BotChu has recorded (conversations'
-    transcripts, tasks, jobs' histories, sub-agent runs and the saved allowance readings) off the main
+    transcripts, tasks, jobs' histories, sub-agent runs, usage ledgers and saved allowance readings) off the main
     thread, changing nothing, and opens a read-only page of it in the default browser: turns and runs
     a day by outcome (finished, failed, stopped, in progress), median durations, failure rates and
     time at work, by bot, provider account and project, for 7, 30 or 90 days, all or a range of days,
     and for Home turns, task turns, job runs or sub-agent runs; then each profile's latest allowance
     reading, apart. Days are this Mac's calendar days; a finished turn isn't taken as work that
-    succeeded; durations BotChu can't know are left out rather than counted as zero; tokens and cost
-    are shown as unavailable, as nothing records them; run reviews and remote queue bots are left out.
+    succeeded; durations BotChu can't know are left out rather than counted as zero. The usage ledger
+    supplies each new turn's captured account/model, reported tokens and known spend: actual billing
+    amendments first, then bundled-price or CLI estimates. Missing and unpriced usage stays distinct
+    from measured zero; older turns remain unavailable. Run reviews and remote queue bots are left out.
     The page is one file, `analytics/dashboard.html` in BotChu's data folder, that only your macOS user
     can read, holds names and numbers only (no messages, titles, paths or credentials), and loads
     nothing; nothing serves it, so it has no port. Choosing the command again makes it again. See
@@ -1546,7 +1548,7 @@ on that pull request's branch to continue in instead). The same command run agai
     `Mentions.swift`: the link a message keeps, where a query starts and ends, matching and ranking,
     what a choice inserts, whether a link still resolves, and what a sent message tells its bot
     about them. The analytics dashboard (#233) is in `Analytics.swift` (the records read into a
-    snapshot of days, outcomes and durations by bot, account and project, a conversation's turns, and
+    snapshot of days, outcomes, durations, tokens and spend by bot, account, model and project, a conversation's turns, and
     `AnalyticsSummary`) and `AnalyticsDashboard.swift` (the page, its script and writing it for this
     user only), tested by `AnalyticsTests`; the app's `App/Analytics.swift` is its menu command.
   - `Sources/BotChu/` — the SwiftUI app, a standard `NavigationSplitView` window with an inspector,
