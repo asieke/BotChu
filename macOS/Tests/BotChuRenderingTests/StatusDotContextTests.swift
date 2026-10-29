@@ -186,7 +186,7 @@ private struct StatusContextColumns: View {
     var body: some View {
         HStack(spacing: 0) {
             ConversationColumn(botID: botID, width: 240, focus: $focus, resize: { _ in }, collapse: {})
-            ConversationRail(botID: botID, canExpand: true, focus: $focus, expand: {})
+            ConversationRail(botID: botID, focus: $focus, expand: {})
         }
     }
 }

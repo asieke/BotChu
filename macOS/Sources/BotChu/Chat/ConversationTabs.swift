@@ -24,6 +24,17 @@ enum ConversationColumnSettings {
     static let widthKey = "conversationColumn.width"
 }
 
+/// The View menu's command uses the same saved choice as the column and its buttons.
+struct ConversationColumnToggle: View {
+    let model: AppModel
+    @AppStorage(ConversationColumnSettings.collapsedKey) private var collapsed = false
+
+    var body: some View {
+        Button(collapsed ? "Expand Tasks" : "Collapse Tasks") { collapsed.toggle() }
+            .disabled(model.visibleBotID.map { model.openTasks(of: $0).isEmpty } ?? true)
+    }
+}
+
 extension EnvironmentValues {
     /// Whether a chat's message box takes keyboard focus as it shows: not while the tabs beside it
     /// have it, so ↑ and ↓ go on moving between them.
@@ -80,15 +91,13 @@ struct StatusDot: View {
 }
 
 /// The bot's conversations as tabs beside its chat (#128): Home, then its open tasks, in a column,
-/// or a rail of tiles when the owner collapsed it or the chat beside it would be too narrow to
-/// read. Nothing while the bot has no open task, so its chat is as it was. A view of its own
-/// beside the chat, kept as conversations change; only the chat is made anew for each.
+/// or a rail of tiles when the owner collapsed it. Nothing while the bot has no open task,
+/// so its chat is as it was. A view of its own beside the chat, kept as conversations change;
+/// only the chat is made anew for each.
 struct ConversationSplit<Chat: View>: View {
     @Environment(AppModel.self) private var model
     @AppStorage(ConversationColumnSettings.collapsedKey) private var collapsed = false
     @AppStorage(ConversationColumnSettings.widthKey) private var width = ConversationColumnLayout.width
-    /// The width of the column and the chat together, which the column doesn't change.
-    @State private var available: CGFloat?
     /// The tab with keyboard focus, if one has it.
     @FocusState private var focus: ChatTarget?
     let botID: UUID
@@ -99,8 +108,8 @@ struct ConversationSplit<Chat: View>: View {
             if !model.openTasks(of: botID).isEmpty {
                 let column = ConversationColumnLayout.clamped(width)
                 Group {
-                    if ConversationColumnLayout.showsRail(available: available ?? .infinity, column: column, collapsed: collapsed) {
-                        ConversationRail(botID: botID, canExpand: collapsed, focus: $focus) { collapsed = false }
+                    if collapsed {
+                        ConversationRail(botID: botID, focus: $focus) { collapsed = false }
                     } else {
                         ConversationColumn(botID: botID, width: column, focus: $focus, resize: { width = ConversationColumnLayout.clamped($0) }) {
                             collapsed = true
@@ -112,7 +121,6 @@ struct ConversationSplit<Chat: View>: View {
             chat
                 .environment(\.composerTakesFocus, focus == nil)
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { available = $0 }
         .modifier(TaskTitlePrompts(botID: botID))
     }
 
@@ -202,9 +210,9 @@ struct ConversationColumn: View {
             }
             .scrollIndicators(.never)
         }
-        // No wider a minimum than the rail's, so the window's narrowest stays the same whether the
-        // column or the rail shows (it becomes the rail well before it would be squeezed).
-        .frame(minWidth: ConversationColumnLayout.railWidth, idealWidth: width, maxWidth: width)
+        // Keep the owner's width and the labels readable. The window's minimum includes the
+        // expanded column, as it includes the chat and the other sidebars (#312).
+        .frame(width: width)
         .frame(maxHeight: .infinity, alignment: .top)
         .background {
             Palette.conversationColumn
@@ -445,8 +453,6 @@ private struct ColumnButton: View {
 struct ConversationRail: View {
     @Environment(AppModel.self) private var model
     let botID: UUID
-    /// The owner collapsed it; otherwise the window is too narrow for the column.
-    let canExpand: Bool
     let focus: FocusState<ChatTarget?>.Binding
     let expand: () -> Void
 
@@ -480,9 +486,7 @@ struct ConversationRail: View {
                 }
             }
             .scrollIndicators(.never)
-            ColumnButton(symbol: "chevron.right.2",
-                         help: canExpand ? "Expand Tasks" : "Widen the window to show the tasks’ column", action: expand)
-                .disabled(!canExpand)
+            ColumnButton(symbol: "chevron.right.2", help: "Expand Tasks", action: expand)
                 .accessibilityIdentifier("conversation-expand")
         }
         .padding(.top, 8)
