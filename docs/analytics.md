@@ -233,7 +233,9 @@ negative counters make the invocation unavailable and establish a new baseline. 
 buckets are differenced before applying the invocation's requested-model fallback, so changing
 models does not charge the full session again. A bucket without a prior reading remains unknown;
 known deltas can still be shown, but `canReprice` is false and list-price estimates are prohibited for
-that partial delta. Actual amendments or a valid differenced reported cost can still supply cost.
+that partial delta. Its cost is unavailable, not unpriced: the missing baseline prevents a price
+even when the model rates are known. Actual amendments or a valid differenced reported cost can
+still supply cost.
 
 `AnalyticsSummary` and the page's `summarize` accept the same task list and selected records.
 Finished-task averages use the current retained task outcome, include selected task turns and

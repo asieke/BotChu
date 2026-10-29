@@ -855,7 +855,7 @@ public struct AnalyticsBuilder {
                 records[index].cost = reported
                 records[index].costProvenance = .estimated
             }
-            if records[index].cost == nil, value.models.contains(where: \.hasReportedTokens) {
+            if records[index].cost == nil, !uncertainDeltas.contains(entry.id), value.models.contains(where: \.hasReportedTokens) {
                 records[index].costProvenance = .unpriced
             }
         }
