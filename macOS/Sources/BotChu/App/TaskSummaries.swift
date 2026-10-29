@@ -16,6 +16,7 @@ extension AppModel {
     /// Asks for the summary of a new task waiting for one once it has something to summarize, after
     /// the summaries asked for before it.
     func summarizeIfReady(_ target: ChatTarget) {
+        guard !storageMovePending else { return }
         guard let id = target.taskID, summariesWanted.contains(id), let task = task(target), TaskSummary.source(of: task) != nil else { return }
         summariesWanted.remove(id)
         guard !terminating, let quick = settings.quickTasks, let job = TaskSummary.job(for: task, botID: target.botID, quick: quick) else { return }
@@ -88,6 +89,7 @@ extension AppModel {
     /// latest messages, unless that is under way already. Without a Quick tasks profile and model,
     /// it says where to choose them, and asks no other account.
     func regenerateTitle(_ target: ChatTarget) {
+        guard !storageMovePending else { return }
         guard let id = target.taskID, let task = task(target), !task.isArchived, !terminating else { return }
         guard let quick = settings.quickTasks else {
             titleNotice = TaskTitleNotice(botID: target.botID, taskID: id, kind: .notConfigured)

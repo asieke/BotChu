@@ -889,7 +889,16 @@ actor Gate {
         #expect(third.phase == .pending)
         #expect(fixture.evaluator.waitReason(third) == .another)
         #expect(fixture.evaluator.status(of: other.id) == .waiting(.another, conversations: 1))
+        // Storage relocation drains the active review without starting the next one.
+        var paused = true
+        fixture.evaluator.isPaused = { paused }
         await gate.release()
+        await fixture.evaluator.settle()
+        #expect(!fixture.evaluator.hasActiveWork)
+        #expect(fixture.evaluator.records[second.id]?.phase == .done)
+        #expect(fixture.evaluator.records[third.id]?.phase == .pending)
+        paused = false
+        fixture.evaluator.pump()
         await fixture.evaluator.settle()
         #expect(fixture.evaluator.records[third.id]?.phase == .done)
 

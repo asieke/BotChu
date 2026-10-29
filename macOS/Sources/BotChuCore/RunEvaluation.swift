@@ -1229,6 +1229,9 @@ public final class RunEvaluator {
     public var runner: Runner?
     /// The owner's switch (Settings ▸ Run reviews), read whenever work is handed over or a review would start.
     public var isEnabled: () -> Bool = { true }
+    /// A storage move lets active reviews finish, then holds all new review work until paths change.
+    public var isPaused: () -> Bool = { false }
+    public var hasActiveWork: Bool { !running.isEmpty }
     public var limits = Limits()
     public var isAccountBusy: (String) -> Bool = { _ in false }
     /// The review time (Settings ▸ Run reviews) and the Mac's time zone, read whenever reviews are looked at.
@@ -1481,7 +1484,7 @@ public final class RunEvaluator {
     public func pump() {
         wakeTask?.cancel()
         wakeTask = nil
-        guard !stopping, runner != nil else { return }
+        guard !stopping, runner != nil, !isPaused() else { return }
         let date = now()
         expire(at: date)
         guard isEnabled() else { return }

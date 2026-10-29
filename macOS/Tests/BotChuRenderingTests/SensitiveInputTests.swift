@@ -67,6 +67,35 @@ extension RenderingTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.bot.workspace))
     }
 
+    @Test(arguments: [false, true]) func storageMoveWaitsForBackgroundTitles(regenerate: Bool) async throws {
+        let fixture = try SensitiveInputFixture(inTask: true)
+        defer { fixture.cleanUp() }
+        let app = fixture.app, gate = StorageTitleGate()
+        app.settings.quickTaskAccountID = "claude-dev"
+        app.settings.quickTaskModel = "haiku"
+        let oldPath = fixture.bot.workspace
+        app.summaryRunner = { _ in
+            await gate.wait()
+            // A CLI appends its final log after producing its title.
+            try "Finished background title".write(toFile: oldPath + "/title-log", atomically: true, encoding: .utf8)
+            return "Secure Entry Fixture"
+        }
+        if regenerate { app.regenerateTitle(fixture.target) } else { app.summarizeNewTask(fixture.target) }
+        let move = StorageMove(source: oldPath, destination: fixture.root.path + "/moved-fox", kind: .bot)
+        let relocating = Task { try await app.moveStorage([move]) }
+        try await fixture.wait { app.storageMovePending }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!FileManager.default.fileExists(atPath: move.destination))
+        #expect(app.evaluator.isPaused())
+        await gate.release()
+        try await relocating.value
+        await app.storage.settle()
+        #expect(app.task(fixture.target)?.summary == "Secure Entry Fixture")
+        #expect(try String(contentsOfFile: move.destination + "/title-log", encoding: .utf8) == "Finished background title")
+        #expect(!FileManager.default.fileExists(atPath: oldPath))
+        #expect(!app.evaluator.isPaused())
+    }
+
     @Test func changingStorageDefaultsPinsExistingTaskCheckoutAndSharedDocuments() throws {
         let fixture = try SensitiveInputFixture(inTask: true)
         defer { fixture.cleanUp() }
@@ -212,6 +241,19 @@ extension RenderingTests {
         runtime.enqueue(active, botName: "Fox") { receipt = $0 }
         #expect(receipt == .cancelled && runtime.current == nil)
         await #expect(throws: SensitiveInputError.self) { try await runtime.submit("fixture", id: active.id) }
+    }
+}
+
+private actor StorageTitleGate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        if !opened { await withCheckedContinuation { waiters.append($0) } }
+    }
+    func release() {
+        opened = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
     }
 }
 

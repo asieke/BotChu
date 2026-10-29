@@ -485,6 +485,12 @@ final class AppModel {
             || jobs?.isRunning(botID: botID) == true
     }
 
+    var storageWritersActive: Bool {
+        bots.contains { isBusy($0.id) } || !summaryRuns.isEmpty || !titleRuns.isEmpty
+            || evaluator.hasActiveWork || !petTasks.isEmpty || !makings.isEmpty || !checkoutWork.isEmpty
+            || issueFilings.contains { $0.state == .writing }
+    }
+
     /// What a conversation runs on: its task's settings, or its bot's.
     func runSettings(of target: ChatTarget) -> (any RunSettings)? {
         task(target) ?? (target.taskID == nil ? bot(target.botID) : nil)

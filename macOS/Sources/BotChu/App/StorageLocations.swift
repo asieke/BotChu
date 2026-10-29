@@ -47,7 +47,7 @@ extension AppModel {
         }
     }
 
-    /// Wait for existing turns; block new turns while moving. Each completed item is saved before
+    /// Wait for existing turns and background writers; block new work while moving. Each item is saved before
     /// the next begins. A durable journal identifies paths if the app or machine stops mid-move.
     func moveStorage(_ plan: [StorageMove]) async throws {
         guard !storageMovePending else { throw StorageMove.Problem("Another move is already pending.") }
@@ -74,8 +74,16 @@ extension AppModel {
             storageMoveProblem = storageMovePending
                 ? "A move needs recovery. New turns are paused. Keep storage-move.json and both paths; relaunch to recover completed moves." : nil
             jobs.tick()
+            evaluator.pump()
+            if !storageMovePending {
+                for (botID, items) in tasks {
+                    for task in items where summariesWanted.contains(task.id) {
+                        summarizeIfReady(.task(task.id, of: botID))
+                    }
+                }
+            }
         }
-        while bots.contains(where: { isBusy($0.id) }) {
+        while storageWritersActive {
             try await Task.sleep(for: .milliseconds(250))
         }
         await storage.settle()
@@ -87,6 +95,7 @@ extension AppModel {
             // The filesystem move succeeded. Update associations even if cancellation arrived.
             for i in bots.indices where !bots[i].isRemoteQueue {
                 let id = bots[i].id
+                let previous = bots[i].workspace
                 bots[i].workspace = move.replacing(bots[i].workspace)
                 for j in tasks[id, default: []].indices where tasks[id]![j].hostID == nil {
                     tasks[id]![j].checkout = move.replacing(tasks[id]![j].checkout)
@@ -94,6 +103,7 @@ extension AppModel {
                     try BotHome(workspace: bots[i].workspace).save(tasks[id]![j])
                 }
                 try BotHome(workspace: bots[i].workspace).save(bots[i])
+                if bots[i].workspace != previous { reloadPet(id) }
             }
             for (repo, place) in settings.repoLocations where place.hostID == nil {
                 settings.repoLocations[repo] = RepoLocation(path: move.replacing(place.path))

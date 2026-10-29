@@ -20,7 +20,7 @@ struct StorageSettings: View {
             if model.storageMovePending {
                 HStack {
                     ProgressView().controlSize(.small)
-                    Text("Waiting for turns or moving folders… New turns are paused.").font(.caption)
+                    Text("Waiting for background work or moving folders… New turns are paused.").font(.caption)
                     Button("Cancel") { move?.cancel() }
                 }
             }
@@ -92,19 +92,26 @@ struct StorageSettings: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") { showingPreview = false }.keyboardShortcut(.cancelAction)
-                Button("Move these folders") {
-                    let plan = preview
-                    showingPreview = false
-                    move = Task {
-                        do { try await model.moveStorage(plan); message = "Moved \(plan.count) folders." }
-                        catch is CancellationError { message = "Move cancelled. Completed moves were kept; remaining folders stayed in place." }
-                        catch { message = error.localizedDescription }
-                        move = nil
-                    }
-                }.disabled(preview.isEmpty || preview.contains { problem($0) != nil })
+                Button("Cancel") {
+                    if let move { move.cancel() } else { showingPreview = false }
+                }.keyboardShortcut(.cancelAction)
+                if move != nil {
+                    ProgressView().controlSize(.small)
+                    Text("Waiting for background work or moving folders…").font(.caption)
+                } else {
+                    Button("Move these folders") {
+                        let plan = preview
+                        move = Task {
+                            do { try await model.moveStorage(plan); message = "Moved \(plan.count) folders." }
+                            catch is CancellationError { message = "Move cancelled. Completed moves were kept; remaining folders stayed in place." }
+                            catch { message = error.localizedDescription }
+                            move = nil
+                            showingPreview = false
+                        }
+                    }.disabled(preview.isEmpty || preview.contains { problem($0) != nil })
+                }
             }
-        }.padding(24).frame(width: 640, height: 420)
+        }.padding(24).frame(width: 640, height: 420).interactiveDismissDisabled(move != nil)
     }
 
     private func problem(_ item: StorageMove) -> String? {

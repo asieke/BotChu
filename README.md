@@ -920,7 +920,7 @@ on that pull request's branch to continue in instead). The same command run agai
   - **Storage locations (#316):** Settings ▸ General has **Workspace** (repository checkouts),
     **Bots**, and **Archive**. Choosing a new default keeps existing checkout/task associations and
     bot folders in place; shared memory and the team playbook keep their existing location too.
-    **Move existing…** is separate: it lists source and destination paths, waits for running turns,
+    **Move existing…** is separate: it lists source and destination paths, waits for running turns and background writers,
     pauses new turns, moves the full folders, repairs Git worktree registrations and saves the new
     task/checkout associations. It refuses existing destinations and overlapping moves. A move
     journal supports recovery after interruption; ambiguous copies remain untouched with new turns
