@@ -12,9 +12,14 @@ final class AppSettings {
     var accounts: [Account] { Accounts.all + customAccounts }
 
     var botsRoot: String { didSet { defaults.set(botsRoot, forKey: "botsRoot") } }
+    /// Shared documents are existing data; a new-bot default must not make them disappear.
+    var sharedRootOverride: String? { didSet { defaults.set(sharedRootOverride, forKey: "sharedDocumentsRoot") } }
+    var sharedDocumentsRoot: String { sharedRootOverride ?? botsRoot }
     /// Where repositories are checked out on this Mac, one folder each, and where BotChu clones one
     /// a task needs.
     var reposRoot: String { didSet { defaults.set(reposRoot, forKey: "reposRoot") } }
+    var archiveRoot: String { didSet { defaults.set(archiveRoot, forKey: "archiveRoot") } }
+    var janitorJobID: UUID? { didSet { defaults.set(janitorJobID?.uuidString, forKey: "janitorJobID") } }
     /// The computers besides this Mac that tasks can run on, over SSH.
     var hosts: [SSHHost] { didSet { save(hosts, forKey: "hosts") } }
     /// Where the owner chose to work on each repository (`owner/name`), when not where it lives by default.
@@ -72,6 +77,8 @@ final class AppSettings {
         // Throwaway runs (DevHooks) keep their settings apart from the real ones.
         let defaults = defaults ?? (DevHooks.dataDir == nil ? .standard : UserDefaults(suiteName: "local.BotChu.dev")!)
         self.defaults = defaults
+        archiveRoot = defaults.string(forKey: "archiveRoot") ?? ""
+        janitorJobID = defaults.string(forKey: "janitorJobID").flatMap(UUID.init(uuidString:))
         self.sailUsageCredentialRevision = defaults.integer(forKey: "sailUsageCredentialRevision")
         customAccounts = DevHooks.dataDir == nil ? Self.load([Account].self, from: defaults, forKey: "customAccounts") ?? [] : []
         if let dev = DevHooks.dataDir {
@@ -85,6 +92,7 @@ final class AppSettings {
             hosts = Self.load([SSHHost].self, from: defaults, forKey: "hosts") ?? []
             repoLocations = Self.load([String: RepoLocation].self, from: defaults, forKey: "repoLocations") ?? [:]
         }
+        sharedRootOverride = defaults.string(forKey: "sharedDocumentsRoot")
         openRouterModel = (DevHooks.dataDir != nil ? DevHooks.env["BOTCHU_DEFAULT_MODEL"] : nil)
             ?? defaults.string(forKey: "openRouterModel") ?? CommandBuilder.defaultOpenRouterModel
         sailModel = defaults.string(forKey: "sailModel") ?? ""
@@ -132,6 +140,7 @@ final class AppSettings {
 
     var expandedBotsRoot: String { (botsRoot as NSString).expandingTildeInPath }
     var expandedReposRoot: String { (reposRoot as NSString).expandingTildeInPath }
-    var sharedMemoryPath: String { (expandedBotsRoot as NSString).appendingPathComponent(BotContext.memoryFile) }
+    var expandedArchiveRoot: String { (archiveRoot as NSString).expandingTildeInPath }
+    var sharedMemoryPath: String { ((sharedDocumentsRoot as NSString).expandingTildeInPath as NSString).appendingPathComponent(BotContext.memoryFile) }
     var teamPath: String { BotContext.teamPath(besideSharedMemory: sharedMemoryPath) }
 }

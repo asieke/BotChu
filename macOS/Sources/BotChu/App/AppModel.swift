@@ -116,6 +116,8 @@ final class AppModel {
     var notifier: InboxNotifier?
     /// Each bot's tasks, open and closed, oldest first.
     var tasks: [UUID: [BotTask]] = [:]
+    var storageMovePending = false
+    var storageMoveProblem: String?
     /// Every conversation (each bot's Home, and each task), observed one by one: see
     /// `ConversationState`. Made when first asked for (`conversation(_:)`).
     @ObservationIgnored private(set) var conversations: [ChatTarget: ConversationState] = [:]
@@ -242,7 +244,7 @@ final class AppModel {
     }
     let modelCatalog = ModelCatalog()
 
-    private let store: Store
+    let store: Store
     /// BotChu's data folder (`~/Library/Application Support/BotChu`, or a test's).
     var dataFolder: URL { store.root }
     /// Where conversations, settings, logs, memory, sub-agents' and jobs' files are written, off the
@@ -350,6 +352,17 @@ final class AppModel {
         connectorBoard = ConnectorBoard(file: self.store.root.appendingPathComponent("connectors.json"))
         tools = ToolsBoard(folder: self.store.root)
         self.store.migrateIfNeeded()
+        do {
+            if let move = try self.store.recoverStorageMove() {
+                for (repo, place) in self.settings.repoLocations where place.hostID == nil {
+                    self.settings.repoLocations[repo] = RepoLocation(path: move.replacing(place.path))
+                }
+                try FileManager.default.removeItem(at: self.store.root.appendingPathComponent("storage-move.json"))
+            }
+        } catch {
+            storageMovePending = true
+            storageMoveProblem = error.localizedDescription
+        }
         let loaded = self.store.loadBots()
         bots = loaded.bots
         missing = loaded.missing
@@ -472,6 +485,12 @@ final class AppModel {
             || jobs?.isRunning(botID: botID) == true
     }
 
+    var storageWritersActive: Bool {
+        bots.contains { isBusy($0.id) } || !summaryRuns.isEmpty || !titleRuns.isEmpty
+            || evaluator.hasActiveWork || !petTasks.isEmpty || !makings.isEmpty || !checkoutWork.isEmpty
+            || issueFilings.contains { $0.state == .writing }
+    }
+
     /// What a conversation runs on: its task's settings, or its bot's.
     func runSettings(of target: ChatTarget) -> (any RunSettings)? {
         task(target) ?? (target.taskID == nil ? bot(target.botID) : nil)
@@ -561,7 +580,7 @@ final class AppModel {
 
     /// Opens a file every bot shares, in the bots folder, as Settings does.
     func editSharedDocument(_ document: SharedDocument) {
-        documentEditor = DocumentEditorRequest(shared: document, botsRoot: settings.botsRoot)
+        documentEditor = DocumentEditorRequest(shared: document, botsRoot: settings.sharedDocumentsRoot)
     }
 
     /// Why a bot can't use `path` as its workspace, or nil when it can.
@@ -571,6 +590,7 @@ final class AppModel {
             return "Finish or stop this bot's turns before moving its workspace."
         }
         return Workspace.problem(with: path, for: id, among: bots, botsRoot: settings.expandedBotsRoot)
+            ?? Workspace.problem(with: path, for: id, among: bots, botsRoot: settings.sharedDocumentsRoot)
     }
 
     /// The default workspace for a new bot named `name`: its slug under the bots folder, numbered
@@ -1398,6 +1418,7 @@ final class AppModel {
     func send(_ text: String, to target: ChatTarget, visible: Bool = true, images: [ImageAttachment] = [], files: [FileAttachment] = [],
               id: UUID = UUID(), references: [MessageReference] = [], delivery: UUID? = nil, fromAgent: AgentLink? = nil,
               heartbeat: Int? = nil, accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
+        guard !storageMovePending else { accepted?(false); return false }
         let (text, references) = MessageReference.trimming(text, references: references)
         // Anything sent to the conversation answers the heartbeat it waited to send.
         pendingHeartbeats[target] = nil
@@ -1599,6 +1620,7 @@ final class AppModel {
     }
 
     private func beginTurn(_ text: String, for target: ChatTarget, message: ChatMessage?) -> Bool {
+        guard !storageMovePending else { return false }
         guard bot(target.botID)?.isRemoteQueue != true else { return false }
         guard !isRunning(target), conversation(target).isLoaded, let bot = bot(target.botID), let current = runSettings(of: target) else { return false }
         let history = thread(target)

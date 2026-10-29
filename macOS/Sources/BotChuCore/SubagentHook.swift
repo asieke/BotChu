@@ -623,7 +623,12 @@ def secret_main():
                 if status not in ("saved", "cancelled", "expired", "rejected"):
                     fail("Invalid sensitive-input status.")
                 completed = True
-                print("Sensitive input: " + status + ". No value is returned to the agent.", flush=True)
+                reason = result.get("reason")
+                reasons = {"malformed_request", "request_id_mismatch", "invalid_request", "caller_mismatch", "not_local", "expired", "invalid_destination",
+                    "excluded_destination", "unavailable_destination", "unknown_bot", "ack_failed", "turn_ended",
+                    "queue_full", "withdrawn_limit"}
+                detail = " (" + reason + ")" if status == "rejected" and isinstance(reason, str) and reason in reasons else ""
+                print("Sensitive input: " + status + detail + ". No value is returned to the agent.", flush=True)
                 return 0 if status == "saved" else 1
             live()
             time.sleep(0.2)

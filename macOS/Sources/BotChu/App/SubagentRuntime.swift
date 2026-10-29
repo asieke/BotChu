@@ -567,36 +567,45 @@ final class SubagentRuntime {
     // MARK: Sensitive input (#266)
 
     private func receiveSensitiveInput(_ data: Data, id: UUID, filename: String, from caller: Caller) async {
+        func respond(_ status: SensitiveInputResult.Status, reason: SensitiveInputResult.Reason? = nil) async {
+            try? await caller.transport.writeResult(id: id,
+                data: SubagentIPC.encode(SensitiveInputResult(id: id, status: status, reason: reason)))
+        }
         do {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            let request = try decoder.decode(SensitiveInputRequest.self, from: data)
-            guard request.id == id, contexts[caller.id] != nil, !caller.transport.machine.isRemote,
-                  let model else { throw SensitiveInputError.invalidRequest }
-            try request.validate(caller: SubagentCallerContext(invocationID: caller.id, botID: caller.target.botID,
-                taskID: caller.target.taskID, parentSubagentID: caller.parent, depth: caller.depth,
-                workingDirectory: caller.directory, hostID: caller.hostID))
+            let request: SensitiveInputRequest
+            do { request = try decoder.decode(SensitiveInputRequest.self, from: data) }
+            catch { throw SensitiveInputResult.Reason.malformedRequest }
+            guard request.id == id else { throw SensitiveInputResult.Reason.requestIDMismatch }
+            guard contexts[caller.id] != nil, let model else { throw SensitiveInputResult.Reason.turnEnded }
+            guard !caller.transport.machine.isRemote else { throw SensitiveInputResult.Reason.notLocal }
+            do {
+                try request.validate(caller: SubagentCallerContext(invocationID: caller.id, botID: caller.target.botID,
+                    taskID: caller.target.taskID, parentSubagentID: caller.parent, depth: caller.depth,
+                    workingDirectory: caller.directory, hostID: caller.hostID))
+            } catch let error as SensitiveInputError {
+                throw error.rejectionReason
+            }
             let excludedDirectory = root.path
-            try await Task.detached {
-                guard !SensitiveInputDestination.isWithin(request.destination, directory: excludedDirectory) else {
-                    throw SensitiveInputError.invalidDestination
-                }
-                try SensitiveInputDestination.check(request.destination)
-            }.value
+            guard !SensitiveInputDestination.isWithin(request.destination, directory: excludedDirectory) else {
+                throw SensitiveInputResult.Reason.excludedDestination
+            }
+            do { try await Task.detached { try SensitiveInputDestination.check(request.destination) }.value }
+            catch { throw SensitiveInputResult.Reason.unavailableDestination }
             let botID = caller.parent.flatMap { run($0) }?.targetBotID ?? caller.target.botID
-            guard let bot = model.bot(botID) else { throw SensitiveInputError.invalidRequest }
-            try await caller.transport.acknowledge(filename: filename)
-            guard contexts[caller.id] != nil else { throw SensitiveInputError.expired }
-            sensitiveInput.enqueue(request, botName: bot.name) { status in
-                Task {
-                    try? await caller.transport.writeResult(id: id,
-                        data: SubagentIPC.encode(SensitiveInputResult(id: id, status: status)))
-                }
+            guard let bot = model.bot(botID) else { throw SensitiveInputResult.Reason.unknownBot }
+            do { try await caller.transport.acknowledge(filename: filename) }
+            catch { throw SensitiveInputResult.Reason.ackFailed }
+            guard contexts[caller.id] != nil else { throw SensitiveInputResult.Reason.turnEnded }
+            sensitiveInput.enqueue(request, botName: bot.name, reject: { reason in
+                Task { await respond(.rejected, reason: reason) }
+            }) { status in
+                Task { await respond(status) }
             }
         } catch {
-            // Never serialize decoder or filesystem errors from sensitive-input handling.
-            try? await caller.transport.writeResult(id: id,
-                data: SubagentIPC.encode(SensitiveInputResult(id: id, status: .rejected)))
+            // Only allowlisted codes cross the IPC boundary; never underlying errors or values.
+            await respond(.rejected, reason: (error as? SensitiveInputResult.Reason) ?? .invalidRequest)
             try? await caller.transport.acknowledge(filename: filename)
         }
     }

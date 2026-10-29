@@ -13,6 +13,7 @@ extension AppModel {
                                      teamPath: { [weak self] in self?.settings.teamPath ?? "" })
         evaluator.runner = runner
         evaluator.isEnabled = { [weak self] in self?.settings.evaluateRuns ?? false }
+        evaluator.isPaused = { [weak self] in self?.storageMovePending ?? true }
         evaluator.isAccountBusy = { [weak self] id in self?.accountIsBusy(id) ?? true }
         evaluator.reviewTime = { [weak self] in self?.settings.reviewTime ?? .standard }
         evaluator.onChange = { [weak self] record in self?.evaluationChanged(record) }

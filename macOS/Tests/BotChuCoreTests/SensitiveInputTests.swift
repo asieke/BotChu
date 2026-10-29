@@ -57,6 +57,34 @@ import Testing
         #expect(SensitiveInputDestination.isWithin(root.path + "/key", directory: alias))
     }
 
+    @Test func receiptsUseOnlyAllowlistedReasonsAndReadOlderReceipts() throws {
+        let id = UUID()
+        let result = SensitiveInputResult(id: id, status: .rejected, reason: .callerMismatch)
+        let data = try SubagentIPC.encode(result)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: String])
+        #expect(object["reason"] == "caller_mismatch")
+        #expect(Set(object.keys) == ["id", "kind", "status", "reason"])
+        let old = try SubagentIPC.encode(SensitiveInputResult(id: id, status: .cancelled))
+        #expect(try JSONDecoder().decode(SensitiveInputResult.self, from: old).reason == nil)
+        #expect(SensitiveInputResult(id: id, status: .saved, reason: .callerMismatch).reason == nil)
+    }
+
+    @Test func decodesActualHelperEnvelopeAndMatchesFilename() throws {
+        let id = UUID(), invocation = UUID(), bot = UUID(), task = UUID()
+        let data = try JSONSerialization.data(withJSONObject: ["kind": "secret", "id": id.uuidString.lowercased(),
+            "invocationID": invocation.uuidString.lowercased(), "callerBotID": bot.uuidString.lowercased(),
+            "callerTaskID": task.uuidString.lowercased(), "parentSubagentID": NSNull(),
+            "label": "Test service key", "destination": "/private/tmp/fixture/.claude/worktrees/task/.local/value",
+            "createdAt": ISO8601DateFormatter().string(from: Date())])
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let request = try decoder.decode(SensitiveInputRequest.self, from: data)
+        let filename = id.uuidString.lowercased() + ".json"
+        #expect(request.id == UUID(uuidString: String(filename.dropLast(5))))
+        try request.validate(caller: SubagentCallerContext(invocationID: invocation, botID: bot, taskID: task,
+            parentSubagentID: nil, depth: 0, workingDirectory: "/private/tmp/fixture", hostID: nil))
+    }
+
     @Test func validationBindsCallerAndExpiry() throws {
         let invocation = UUID(), bot = UUID(), task = UUID(), parent = UUID()
         let now = Date()

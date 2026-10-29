@@ -212,6 +212,13 @@ struct Job {
         selection, _, _ = choose([("M", CORE + "Models.swift")], new, new, {CORE + "Models.swift": "@@ -2 +2 @@\n"})
         self.assertEqual(selection, {"fast"})
 
+    def test_sensitive_input_requires_release_without_a_task_group(self):
+        path = CORE + "SensitiveInput.swift"
+        source = "public enum SensitiveInputDestination {\n    public static func validate() {}\n}"
+        _, reasons, release = choose([("A", path)], {path: source})
+        self.assertTrue(release)
+        self.assertTrue(any("optimized validation" in reason for reason in reasons))
+
     def test_new_files_and_task_groups(self):
         new = SOURCES | {TESTS + "HubTests.swift": HUB_TESTS}
         new[APP + "Extra.swift"] = """extension AppModel {

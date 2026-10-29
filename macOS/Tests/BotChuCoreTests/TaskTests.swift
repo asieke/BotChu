@@ -573,6 +573,21 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
     let issue = BotTask.Work(number: 48, title: "Add a filter bar to the repository table", url: URL(string: "https://github.com/asieke/GitChu/issues/48")!,
                              isPullRequest: false)
 
+    @Test func correctsRealFiveWordReplyOnSameProfileOnce() async throws {
+        // Captured from Claude Personal / claude-sonnet-5-5, 2026-10-29, with the title prompt.
+        let quick = try #require(QuickTasks(accountID: "claude-personal", model: "claude-sonnet-5-5", accounts: Accounts.all))
+        let job = try #require(TaskSummary.job(for: BotTask(repo: "a/b", checkout: "/w/b", brief: "Create a study coach"),
+            botID: UUID(), quick: quick))
+        let replies = TitleReplies()
+        let title = await TaskSummary.title(job, with: { next in
+            #expect(next.account == job.account && next.model == job.model)
+            return await replies.next(next.prompt)
+        })
+        #expect(title == .named("Build study coach"))
+        #expect(await replies.prompts.count == 2)
+        #expect(await replies.prompts.last?.contains("exactly THREE words") == true)
+    }
+
     @Test func summarizesTheIssuesTitleElseTheBriefOnce() {
         #expect(TaskSummary.source(of: BotTask(repo: "a/b", checkout: "/w/b", work: issue, brief: "Long brief")) == issue.title)
         #expect(TaskSummary.source(of: BotTask(repo: "a/b", checkout: "/w/b", brief: "  Speed up the sync\n")) == "Speed up the sync")
@@ -793,5 +808,13 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
         #expect(TaskSummary.displayedLabel(of: loaded) == "Filter bar, then the sort order by stars")
         // Its identity stays: the issue, its title and the task's own title.
         #expect(loaded.id == task.id && loaded.work == issue && loaded.title == task.title)
+    }
+}
+
+private actor TitleReplies {
+    var prompts: [String] = []
+    func next(_ prompt: String) -> String {
+        prompts.append(prompt)
+        return prompts.count == 1 ? "Build mobile study coach app" : "Build study coach"
     }
 }

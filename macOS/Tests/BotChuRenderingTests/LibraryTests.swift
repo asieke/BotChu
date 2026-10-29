@@ -193,7 +193,9 @@ extension RenderingTests {
         #expect(app.tab(of: bot.id) == target)
         try await Task.sleep(for: .milliseconds(400))
         var text = try await settingsText(host)
-        #expect(shows(text, "Bots folder"), "\(text.sorted())")
+        for label in ["Workspace", "Bots", "Archive", "Move existing", "Storage Janitor"] {
+            #expect(shows(text, label), "\(label) in \(text.sorted())")
+        }
         // The rail, with its pages; no status sidebar beside Settings.
         for page in ["GitHub", "Hosts", "Run reviews", "Telegram", "Remote queue"] { #expect(shows(text, page), "\(page) in \(text.sorted())") }
         #expect(!shows(text, "Activity"))

@@ -271,6 +271,7 @@ final class JobRuntime {
     /// (#146), or a sub-agent working there.
     private func busy(_ botID: UUID) -> Bool {
         guard let model, let bot = model.bot(botID) else { return true }
+        if model.storageMovePending { return true }
         let folder = AppModel.standardized(bot.workspace)
         return model.isRunning(.home(botID))
             || model.openTasks(of: botID).contains { $0.jobRun != nil && model.isRunning(.task($0.id, of: botID)) }
@@ -366,7 +367,7 @@ final class JobRuntime {
                     memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, soul: snapshot.soul,
                     instructions: snapshot.instructions, team: snapshot.team, skills: snapshot.skills,
                     availableBots: model.delegation.roster, tools: model.tools.instructions(), locale: .current)
-                let prompt = BotContext.prompt(for: job.prompt, preamble: preamble)
+                let prompt = BotContext.prompt(for: job.prompt + model.janitorContext(for: job), preamble: preamble)
                 var invocation = JobLaunch.invocation(for: agent, prompt: prompt, openRouterDefault: model.settings.openRouterModel, openRouterKey: key,
                                                       sailDefault: model.settings.sailModel, sailKey: sailKey, catalog: model.nativeModels(for: agent))
                 invocation.environment.merge(caller.environment) { _, new in new }

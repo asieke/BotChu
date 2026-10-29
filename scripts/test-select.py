@@ -168,6 +168,9 @@ def select(changes, files, read_old, read_new, diff):
     Returns ("all" or a set of window test names, reasons, whether Release tests are needed)."""
     reasons, release, tests, origins = [], False, set(), []
     for status, path in changes:
+        if path.endswith(("/SensitiveInput.swift", "/SensitiveInputTests.swift")):
+            release = True
+            reasons.append(f"{path}: secure input must also pass optimized validation")
         if path.startswith(EVERYTHING):
             return "all", [f"{path}: test scripts, package or renderer assets"], True
         if not path.endswith(".swift") or not path.startswith(SOURCES + (WINDOW_TESTS,)):
