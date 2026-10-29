@@ -18,7 +18,16 @@ extension RenderingTests {
             return AnalyticsTurn(start: start, end: start.addingTimeInterval(seconds), outcome: outcome)
         }
         builder.add(turns: [turn(150, 10, .finished), turn(8, 120, .finished), turn(1, 60, .finished), turn(1, 30, .failed)], bot: bot, task: nil)
-        return builder.snapshot()
+        var snapshot = builder.snapshot()
+        let usage = ModelUsage(model: "claude-opus-5-5", uncachedInput: 100, cacheRead: 0, output: 30)
+        snapshot.records[2].model = usage.model
+        snapshot.records[2].provider = .claude
+        snapshot.records[2].models = [usage]
+        snapshot.records[2].tokens = AnalyticsTokens([usage])
+        snapshot.records[2].cost = 0.001
+        snapshot.records[2].costProvenance = .estimated
+        snapshot.records[2].canReprice = true
+        return snapshot
     }
 
     @Test func theAnalyticsPageShowsItsTotalsFiltersByDateAndLoadsNothing() async throws {
@@ -40,17 +49,23 @@ extension RenderingTests {
 
         // The last 30 days, at first.
         let first = try await read("""
-            return { runs: value('Turns & runs'), failed: value('Failed'), finished: value('Finished'), tokens: value('Tokens'),
+            return { runs: value('Turns & runs'), waste: value('Wasted spend'), tokens: value('Tokens'),
                      error: document.querySelector('.card.error') !== null, pressed: document.querySelector('button.preset[aria-pressed=true]').textContent,
-                     bots: [...document.querySelectorAll('td')].some(td => td.textContent === 'Product Fox') };
+                     bots: [...document.querySelectorAll('td')].some(td => td.textContent.includes('Product Fox')) };
             """)
         #expect(first["runs"] as? String == "3")
-        #expect(first["failed"] as? String == "1")
-        #expect(first["finished"] as? String == "2")
-        #expect(first["tokens"] as? String == "Unavailable")
+        #expect(first["waste"] as? String == "—")
+        #expect(first["tokens"] as? String == "130")
         #expect(first["error"] as? Bool == false)
         #expect(first["pressed"] as? String == "30 days")
         #expect(first["bots"] as? Bool == true)
+
+        let tinySpend = try await read("""
+            return { height: Math.max(...[...document.querySelectorAll('.chart rect[fill^="var("]')].map(r => Number(r.getAttribute('height')))),
+                     axis: [...document.querySelectorAll('.chart .axis')].map(n => n.textContent) };
+            """)
+        #expect((tinySpend["height"] as? Double ?? 0) > 200)
+        #expect((tinySpend["axis"] as? [String])?.contains("$0.00100") == true)
 
         // A preset, then a custom range of one day.
         let all = try await read("""
@@ -70,11 +85,10 @@ extension RenderingTests {
             const again = document.querySelector('input[aria-label=Through]');
             again.value = '2026-10-20';
             again.dispatchEvent(new Event('change'));
-            return { runs: value('Turns & runs'), failed: value('Failed'), median: value('Median time'),
+            return { runs: value('Turns & runs'), median: document.querySelector('#ex tfoot td:nth-child(9)').textContent,
                      from: document.querySelector('input[aria-label=From]').value, through: document.querySelector('input[aria-label=Through]').value };
             """)
         #expect(day["runs"] as? String == "1")
-        #expect(day["failed"] as? String == "0")
         #expect(day["median"] as? String == "2 min")
         #expect(day["from"] as? String == "2026-10-20" && day["through"] as? String == "2026-10-20")
         // A range with nothing in it, and no kind of work included.
@@ -89,6 +103,60 @@ extension RenderingTests {
             """)
         #expect(empty["runs"] as? String == "0")
         #expect((empty["empty"] as? [String])?.contains("No turns or runs in this range.") == true)
+
+        // Filters, sort headers and details are usable without inline HTML from names.
+        let explorer = try await read("""
+            [...document.querySelectorAll('button.preset')].find(b => b.textContent === '30 days').click();
+            const picker = document.querySelector('select[aria-label="Add filter"]');
+            picker.value = JSON.stringify({ k: 'outcome', v: 'failed' });
+            picker.dispatchEvent(new Event('change'));
+            const failedRuns = value('Turns & runs');
+            const totals = document.querySelector('#ex tfoot td:nth-child(2)').textContent;
+            const closed = !document.querySelector('details.about').open;
+            document.querySelector('.chip button').click();
+            document.querySelector('#ex th button').click();
+            const sorted = document.querySelector('#ex th').getAttribute('aria-sort');
+            document.querySelector('#ex .row-filter').click();
+            return { failedRuns, totals, closed, sorted, chips: document.querySelectorAll('.chip').length,
+                     cards: document.querySelectorAll('.ins .in').length };
+            """)
+        #expect(explorer["failedRuns"] as? String == "1")
+        #expect(explorer["totals"] as? String == "1")
+        #expect(explorer["closed"] as? Bool == true)
+        #expect(explorer["sorted"] as? String == "ascending")
+        #expect(explorer["chips"] as? Int == 1)
+        #expect(explorer["cards"] as? Int == 6)
+
+        let changedRange = try await read("""
+            [...document.querySelectorAll('.ins .in')].find(c => c.textContent.includes('Top models under')).querySelector('button').click();
+            const selectedRuns = value('Turns & runs');
+            const selectedChips = document.querySelectorAll('.chip').length;
+            const impact = document.querySelector('.impact').textContent;
+            [...document.querySelectorAll('button.preset')].find(b => b.textContent === 'All').click();
+            return { selectedRuns, selectedChips, impact, allRuns: value('Turns & runs'), chips: document.querySelectorAll('.chip').length };
+            """)
+        #expect(changedRange["selectedRuns"] as? String == "1")
+        #expect((changedRange["impact"] as? String)?.contains("potential savings") == true)
+        #expect(changedRange["allRuns"] as? String == "4")
+        #expect(changedRange["selectedChips"] as? Int == 1)
+        #expect(changedRange["chips"] as? Int == 0)
+
+        // Optional screenshots of the same sample HTML the Core test writes.
+        if let path = ProcessInfo.processInfo.environment["BOTCHU_ANALYTICS_PREVIEW"] {
+            let sample = URL(fileURLWithPath: path)
+            web.frame = CGRect(x: 0, y: 0, width: 1180, height: 1900)
+            web.loadFileURL(sample, allowingReadAccessTo: sample.deletingLastPathComponent())
+            try await waitForPage(web, "document.querySelectorAll('.ins .in').length === 6 && JSON.parse(document.getElementById('botchu-analytics-data').textContent).records.length > 4")
+            for theme in ["light", "dark"] {
+                _ = try await web.callAsyncJavaScript("document.documentElement.dataset.theme = theme; return true;", arguments: ["theme": theme], in: nil, contentWorld: .page)
+                try await Task.sleep(for: .milliseconds(200))
+                let image = try await web.takeSnapshot(configuration: nil)
+                let tiff = try #require(image.tiffRepresentation)
+                let bitmap = try #require(NSBitmapImageRep(data: tiff))
+                let png = try #require(bitmap.representation(using: .png, properties: [:]))
+                try png.write(to: sample.deletingPathExtension().appendingPathExtension("\(theme).png"))
+            }
+        }
 
         // Its policy refuses every request the page could make.
         let blocked = try await web.callAsyncJavaScript("""
