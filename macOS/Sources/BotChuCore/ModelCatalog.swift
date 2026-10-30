@@ -88,9 +88,9 @@ public struct ModelPickerData: Sendable {
     public let choices: [Choice]
 
     /// `resolved` is the model the CLI reported for this selection (`RunSettings.resolvedModel`).
-    /// `native` is a Codex profile's own list once read (#220): it replaces the starters, which stand
-    /// in only while it is nil; the selection and the default stay choices either way.
-    /// `catalog` is the list for this kind: OpenRouter's for Pi, Sail's for Sail.
+    /// `native` is the profile's own list once read (#220, #326), Sail's included: it replaces the
+    /// starters, which stand in only while it is nil; the selection and the default stay choices either way.
+    /// `catalog` is a Sail list read apart from the profile's (Settings ▸ Sail).
     public init(kind: AgentKind, model: String, openRouterDefault: String, sailDefault: String = "",
                 catalog: [CatalogModel] = [], native: [ModelOption]? = nil, resolved: String? = nil, providerID: String? = nil, provider: String? = nil) {
         self.kind = kind
@@ -108,6 +108,9 @@ public struct ModelPickerData: Sendable {
             }
             if let found = available.first(where: { $0.id == id }) { return ModelLabel(title: found.title, detail: found.detail) }
             if kind == .pi, let found = native?.first(where: { $0.id == id }) { return ModelLabel(title: found.name, detail: id) }
+            if kind == .sail, let found = native?.first(where: { $0.id == id }) {
+                return ModelLabel(title: found.name, detail: CatalogModel(id: id, name: found.name, contextLength: found.contextLength).detail)
+            }
             return GenerationOptions.label(for: id, kind: kind, resolved: id == selectedID ? resolved : nil, catalog: native)
         }
         let current = label(effectiveID)

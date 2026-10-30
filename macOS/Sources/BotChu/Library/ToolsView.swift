@@ -51,7 +51,7 @@ struct ToolRow: Identifiable, Hashable {
             ToolRow(id: sshID(destination), kind: .destination(destination), name: destination.alias, title: "SSH destination",
                     status: .target(destination.target), skills: [], enabled: destination.included, blocked: false)
         }
-        let helpers = [ToolRow(id: "botchu", kind: .botchu, name: "botchu-*", title: "subagent · task · inbox · message · secret",
+        let helpers = [ToolRow(id: "botchu", kind: .botchu, name: "botchu-*", title: "subagent · task · inbox · message · secret · models",
                                status: .builtIn, skills: [], enabled: true, blocked: false)]
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let matches: (ToolRow) -> Bool = { query.isEmpty || "\($0.name) \($0.title)".localizedCaseInsensitiveContains(query) }

@@ -6,8 +6,9 @@ public enum SubagentHookInstaller {
     /// The helper's commands, each a copy of `script`, which acts by the name it is run as:
     /// `botchu-subagent` starts sub-agent runs, `botchu-task` creates Tasks (#111), and
     /// `botchu-inbox` delivers to the owner's Inbox, `botchu-message` messages remote queue bots,
-    /// and `botchu-secret` asks for direct, private delivery of a sensitive value.
-    public static let commands = ["botchu-subagent", "botchu-task", "botchu-inbox", "botchu-message", "botchu-secret"]
+    /// `botchu-secret` asks for direct, private delivery of a sensitive value, and `botchu-models`
+    /// checks the profiles' model lists now (#326).
+    public static let commands = ["botchu-subagent", "botchu-task", "botchu-inbox", "botchu-message", "botchu-secret", "botchu-models"]
 
     @discardableResult public static func install(binDirectory: URL = SubagentIPC.defaultBinDirectory) throws -> URL {
         try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true,
@@ -640,7 +641,48 @@ def secret_main():
             atomic_json(ROOT / "requests" / (cancellation_id + ".json"),
                 {"kind": "secretCancel", "id": cancellation_id, "requestID": request_id, "invocationID": invocation})
 
+def models_main():
+    parser = argparse.ArgumentParser(prog="botchu-models", description="Check BotChu's model lists now, as a picker's "
+        "Refresh models does, and print each profile's models. BotChu checks them daily by itself.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    refresh = commands.add_parser("refresh", help="Check every profile's model list now")
+    refresh.add_argument("--account", action="append", default=[], help="Only this profile's list, by ID such as claude-personal (repeatable)")
+    args = parser.parse_args()
+    live()
+    request_id = str(uuid.uuid4())
+    atomic_json(ROOT / "requests" / (request_id + ".json"), {
+        "kind": "modelRefresh",
+        "id": request_id,
+        "invocationID": caller_uuid("BOTCHU_INVOCATION_ID", True),
+        "callerBotID": caller_uuid("BOTCHU_CALLER_BOT_ID", True),
+        "callerTaskID": caller_uuid("BOTCHU_CALLER_TASK_ID"),
+        "parentSubagentID": caller_uuid("BOTCHU_CALLER_SUBAGENT_ID"),
+        "accountIDs": [account.strip() for account in args.account if account.strip()],
+        "createdAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
+    started = time.monotonic()
+    timeout = seconds("BOTCHU_WAIT_TIMEOUT_SECONDS", 120, 86400)
+    path = ROOT / "results" / (request_id + ".result.json")
+    while not path.exists():
+        if time.monotonic() - started > timeout:
+            fail("BotChu is still checking; each picker shows its list when its check ends.")
+        live()
+        time.sleep(0.25)
+    result = read_json(path)
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    if result.get("kind") != "modelRefresh" or canonical(result.get("id")) != request_id:
+        fail("Mismatched model lists: " + request_id)
+    if result.get("errorMessage"):
+        fail("No model lists checked: " + str(result["errorMessage"]))
+    print(str(result.get("text", "")), flush=True)
+    return 0
+
 def main():
+    if os.path.basename(sys.argv[0]) == "botchu-models":
+        return models_main()
     if os.path.basename(sys.argv[0]) == "botchu-secret":
         return secret_main()
     if os.path.basename(sys.argv[0]) == "botchu-message":

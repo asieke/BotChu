@@ -341,7 +341,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
     account reads as nothing rather than a $0 balance. A free organization's usage history covers 7 days of
     spend, and the card says so when the plan shortened the range asked for. Settings ▸ Sail still
     links Sail's dashboard for invoices. The conversation's model picker lists and searches Sail's
-    models when it opens with a saved key. A failed fetch keeps the last list and retries next time;
+    models (`GET /models` with the saved key), kept like every profile's list (**Model controls**):
+    checked daily, saved, and checked again with a new key. A failed check keeps the last list;
     the Settings default, current model and custom ID remain available. When the conversation
     inherits its model, the picker names the default from Settings ▸ Sail.
     Sail runs on This Mac only, and not for run reviews or Quick tasks.
@@ -596,7 +597,10 @@ on that pull request's branch to continue in instead). The same command run agai
     `botchu-task list --mine` (#262), from a bot's Home, Task or sub-agent run, prints that bot's
     open Tasks as its Tasks column shows them, in its order and count: title, summary, state
     (`Idle`, `Running a tool…`), elapsed or idle time, issue or pull request, branch and ID, from
-    BotChu's live run state (`--json` for the same fields).
+    BotChu's live run state (`--json` for the same fields). `botchu-models refresh` (#326) checks
+    every profile's model list now, as each picker's refresh button does (`--account <id>` for one,
+    repeatable), and prints each profile's models once its check ends, for a model that came out
+    since the day's check.
   - **Agents and specialists (#250):** a local bot is an **agent**, which owns tasks and scheduled
     jobs, or a **specialist**, which is only called as a sub-agent (`botchu-subagent`) and keeps its own
     Home, instructions, personality, memory, skills, pet and account. Its role is kept in its
@@ -845,24 +849,29 @@ on that pull request's branch to continue in instead). The same command run agai
     text selectors in the status sidebar's **Runs on** card open the same pickers. Both stay in sync
     for the shown Home or task conversation; choices are saved for its next turn, including resumed sessions.
     Model search matches names and IDs, with a checkmark on the current selection and a custom-ID
-    option. OpenRouter shows the actual model inherited from Settings (for example **Flint (free)**),
-    and searches its public catalog of text models with tool support, with context sizes. Catalog
-    requests contain no key or conversation data, are cached in memory for an hour, and preserve
-    current/custom choices when unavailable. A Codex or Muse profile on this Mac offers the models
-    its own CLI lists (Codex app-server's `model/list`, every page, visible rows only; Muse's
-    `muse serve --no-session-log` `model/list` (#248), taken only from its account's catalog, not its
-    bundled fallback; each with the model's efforts), read through the profile's command in a
-    bounded, read-only query that starts no turn and reads no login. The list is shared by every picker set to that profile (Home and task chats, the
-    **Runs on** card, the job editor and Quick tasks) and saved in `model-catalogs.json` by an opaque
-    key of the profile and its command, so a changed command starts a new list. A list a day old is
-    checked again at launch, on wake, hourly while BotChu runs and when a picker opens; the picker's
-    footer says when it was checked, and its refresh button checks at once. Checks of a profile
-    don't overlap and time out after 20 seconds; a failed or incomplete one keeps the last list,
-    says so, and is retried after a minute, doubling up to an hour. Until a list is read, and for a
-    task on an SSH host, Codex and Muse offer BotChu's starter choices instead. A listed model isn't proof the
-    account can run it, and a new list never changes a saved model, effort or session. Other
-    providers offer starter choices; every provider labels an unspecified model as the account's
-    default.
+    option. OpenRouter shows the actual model inherited from Settings (for example **Flint (free)**).
+    Every profile offers the models its own CLI lists (#220, #248, #326), each with only the efforts
+    it reports: Claude Code's `initialize` control response (its aliases, such as `opus`, each
+    followed by the version it resolves to, and its pinned IDs; no user message is sent and every
+    tool, MCP server and customization is off), Codex app-server's `model/list` (every page, visible
+    rows only), Muse's `muse serve --no-session-log` `model/list` (taken only from its account's
+    catalog, not its bundled fallback), Antigravity's `agy models` (one choice per family, its
+    efforts the variants it lists), Pi's `get_available_models` for its providers, and Sail's API.
+    Each is read through the profile's command in a bounded, read-only query that starts no turn and
+    reads no login, off the main thread. The list is shared by every picker set to that profile (Home
+    and task chats, the **Runs on** card, Edit Bot, the Agents table, the job editor and Quick tasks)
+    and saved in `model-catalogs.json` by an opaque key of the profile and its command (and Pi's
+    configuration, Sail's key revision, a host's address), so a changed command, configuration or key
+    starts a new list. A task or sub-agent run on an SSH host offers the host's own list, read there
+    with the command its turns run, never this Mac's; the hosts of open tasks are kept fresh with the
+    profiles. A list a day old is checked again at launch, on wake, hourly while BotChu runs and when
+    a picker opens; the picker's footer says when it was checked, and its refresh button (or an
+    agent's `botchu-models refresh`) checks at once. Checks of a profile don't overlap and time out
+    after 20 seconds; a failed one keeps the last list, says so in the footer with the reason, and is
+    retried after a minute, doubling up to an hour. Until a list is read, a profile offers BotChu's
+    starter choices instead. A listed model isn't proof the account can run it, and a new list never
+    changes a saved model, effort, custom ID or session. Every provider labels an unspecified model
+    as the account's default.
     Models are shown by their full name and version (Claude Opus 5.5, GPT-6.1 Sol, Muse Spark 1.3) in
     the picker, the composer, the **Runs on** card, Edit Bot and sub-agent cards. A version shows only
     when the ID pins one or the CLI has reported the model it ran: Claude Code offers each moving

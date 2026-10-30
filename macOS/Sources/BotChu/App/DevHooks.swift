@@ -146,14 +146,19 @@ enum DevHooks {
     }
 
     /// `BOTCHU_CODEX_MODELS`: `sample`, a Codex profile's list as its `model/list` gave it on 2026-10-27
-    /// (#220), and a Muse profile's on 2026-10-28 (#248), after a second; `unavailable`, a check that
-    /// times out.
+    /// (#220), a Muse profile's on 2026-10-28 (#248), and Claude Code's, Antigravity's and a Sail
+    /// list (#326), after a second; `unavailable`, a check that times out.
     static var modelLists: (@Sendable (ModelCatalogScope) async throws -> [ModelOption])? {
         guard dataDir != nil, let fixture = env["BOTCHU_CODEX_MODELS"], ["sample", "unavailable"].contains(fixture) else { return nil }
         return { scope in
             try await Task.sleep(for: .seconds(1))
             if fixture == "unavailable" { throw ModelListFailure("\(scope.kind.displayName) didn’t list its models within 20 seconds.") }
             if scope.kind == .muse { return GenerationOptions.models(for: .muse) }
+            if scope.kind == .claude || scope.kind == .antigravity { return GenerationOptions.models(for: scope.kind) }
+            if scope.kind == .sail {
+                return [ModelOption(id: "moonshotai/kimi-k3", name: "Kimi K3", efforts: [], effortsKnown: false, contextLength: 262_144),
+                        ModelOption(id: "zai/glm-5.2", name: "GLM 5.2", efforts: [], effortsKnown: false, contextLength: 200_000)]
+            }
             if scope.kind == .pi {
                 return [ModelOption(id: "muse-spark-1.1", name: "Muse Spark 1.1", efforts: [.off, .minimal, .low, .medium, .high], providerID: "meta"),
                         ModelOption(id: "kimi-k3", name: "Kimi K3", efforts: [.off, .minimal, .low, .medium, .high], providerID: "radius")]

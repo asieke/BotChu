@@ -48,7 +48,8 @@ extension RuntimeAdapter {
                           environment: [String: String]) async -> String? { nil }
 
     public var hasProviderSelection: Bool { offersProviders }
-    public var listsModels: Bool { kind == .codex || kind == .muse || offersProviders }
+    /// Every family lists its own models (#326): the CLI's own query, or Sail's API.
+    public var listsModels: Bool { true }
     public var takesInputMidTurn: Bool { kind == .claude }
     public var runsToolFree: Bool { kind == .claude || kind == .codex || kind == .muse }
     public func parser() -> any StreamParser { StreamParsers.make(for: kind) }
@@ -99,7 +100,25 @@ public struct ClaudeRuntimeAdapter: RuntimeAdapter { public let kind = AgentKind
 public struct CodexRuntimeAdapter: RuntimeAdapter { public let kind = AgentKind.codex }
 public struct AntigravityRuntimeAdapter: RuntimeAdapter { public let kind = AgentKind.antigravity }
 public struct MuseRuntimeAdapter: RuntimeAdapter { public let kind = AgentKind.muse }
-public struct SailRuntimeAdapter: RuntimeAdapter { public let kind = AgentKind.sail }
+public struct SailRuntimeAdapter: RuntimeAdapter {
+    public let kind = AgentKind.sail
+    /// The models Settings ▸ Sail's key can use (`GET /models`), the key given as `SAIL_API_KEY` in
+    /// `environment`. Sail doesn't say which efforts a model takes, so the family's stand.
+    public func catalog(_ scope: ModelCatalogScope, environment: [String: String]) async throws -> [ModelOption] {
+        guard !scope.machine.isRemote else { throw ModelListFailure.unsupported("Sail on a host") }
+        guard let key = environment[Sail.keyVariable]?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else {
+            throw ModelListFailure("Save a Sail API key in Settings ▸ Sail to list its models.")
+        }
+        do { return Self.options(try await SailClient(key: key).models()) }
+        catch let failure as SailFailure { throw ModelListFailure(failure.message) }
+        catch { throw ModelListFailure.failed("Sail") }
+    }
+
+    /// Sail's rows as a profile's list: names without their publisher, and each context window.
+    static func options(_ models: [CatalogModel]) -> [ModelOption] {
+        models.map { ModelOption(id: $0.id, name: $0.title, efforts: [], effortsKnown: false, contextLength: $0.contextLength) }
+    }
+}
 
 public enum RuntimeAdapters {
     public static func adapter(for kind: AgentKind) -> any RuntimeAdapter {

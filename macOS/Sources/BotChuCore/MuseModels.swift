@@ -36,11 +36,12 @@ public enum MuseModelList {
         return models
     }
 
-    /// The profile's models, run from `folder` (the home folder) without a session log.
-    public static func list(command: String, folder: String = NSHomeDirectory(),
+    /// The profile's models, run from `folder` (the home folder), or on `machine` from its own,
+    /// without a session log.
+    public static func list(command: String, machine: Machine = .thisMac, folder: String = NSHomeDirectory(),
                             timeout: TimeInterval = NativeModelList.timeout) async throws -> [ModelOption] {
         try await NativeModelList.query("Muse", command: command, arguments: ["serve", "--no-session-log"], capabilities: [:],
-                                        folder: folder, timeout: timeout) { call in
+                                        machine: machine, folder: folder, timeout: timeout) { call in
             try parse(call("model/list", [:]))
         }
     }

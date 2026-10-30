@@ -25,12 +25,12 @@ struct ModelMenu: View {
     @State private var showsModels = false
     @State private var showsEffort = false
 
-    /// The profile on this Mac whose own list the picker shows (#220), if it lists one.
+    /// The profile whose own list the picker shows (#220, #326): this Mac's, or the host's it runs on.
     private var scope: ModelCatalogScope? { app.modelCatalogScope(for: settings) }
     private var data: ModelPickerData {
         ModelPickerData(kind: settings.account.kind, model: settings.model, openRouterDefault: app.settings.openRouterModel,
-                        sailDefault: app.settings.sailModel, catalog: app.modelCatalog.models(for: settings.account.kind),
-                        native: app.nativeModels(for: settings), resolved: settings.resolvedModel, provider: settings.resolvedProvider)
+                        sailDefault: app.settings.sailModel, native: app.nativeModels(for: settings),
+                        resolved: settings.resolvedModel, provider: settings.resolvedProvider)
     }
     private var efforts: [ReasoningEffort] {
         GenerationOptions.efforts(for: settings.account.kind, model: data.effectiveID, catalog: app.nativeModels(for: settings), providerID: settings.providerID)
@@ -174,7 +174,7 @@ struct ModelMenu: View {
         .help(disabled ? "Model can change when this turn ends" : modelHelp)
         .popover(isPresented: $showsModels, arrowEdge: .top) {
             ModelPicker(data: data, accountName: settings.account.name, catalog: app.modelCatalog,
-                        disabled: disabled, select: onModel, scope: scope, sailKey: app.sailKey)
+                        disabled: disabled, select: onModel, scope: scope)
         }
 
     }
@@ -245,7 +245,8 @@ struct ModelMenu: View {
     }
 
     private var modelHelp: String {
-        let argument = GenerationOptions.modelArgument(data.effectiveID, kind: settings.account.kind, effort: settings.reasoningEffort)
+        let argument = GenerationOptions.modelArgument(data.effectiveID, kind: settings.account.kind, effort: settings.reasoningEffort,
+                                                       catalog: app.nativeModels(for: settings))
         return argument == data.effectiveID ? data.detail : "\(data.detail) · runs as \(argument)"
     }
 }

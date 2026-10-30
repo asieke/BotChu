@@ -373,8 +373,6 @@ final class AppModel {
         arrange(botSections, save: false)
         connectorBoard.profiles = { [weak self] in self?.connectorProfiles }
         connectorBoard.prune()
-        // Lists Codex profiles' models (#220): only the real app, or a review copy with sample lists, checks by itself.
-        configureModelCatalogs(file: self.store.root.appendingPathComponent("model-catalogs.json"), live: store == nil && DevHooks.dataDir == nil)
         // Only the bots' and tasks' settings are read here; conversations are read when they are
         // needed (#109). A Home's or open task's queue with something in its files is recovered off
         // the main thread, with its transcript only when messages wait in it; the others have nothing
@@ -383,6 +381,9 @@ final class AppModel {
             tasks[bot.id] = BotHome(workspace: bot.persistencePath).loadTasks()
             reloadPet(bot.id)
         }
+        // Every profile's model list (#220, #326), and the hosts' its open tasks run on, so it needs
+        // the tasks: only the real app, or a review copy with sample lists, checks by itself.
+        configureModelCatalogs(file: self.store.root.appendingPathComponent("model-catalogs.json"), live: store == nil && DevHooks.dataDir == nil)
         let shown = bots.first.map { ChatTarget.home($0.id) }
         for bot in bots {
             let home = BotHome(workspace: bot.persistencePath)

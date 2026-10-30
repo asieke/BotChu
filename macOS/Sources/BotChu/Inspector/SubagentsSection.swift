@@ -1080,7 +1080,7 @@ private struct SubagentRunFacts: View {
 
     var body: some View {
         let label = ModelPickerData(kind: run.account.kind, model: run.model, openRouterDefault: model.settings.openRouterModel,
-                                    sailDefault: model.settings.sailModel, catalog: model.catalogModels(for: run), native: model.nativeModels(for: run),
+                                    sailDefault: model.settings.sailModel, native: model.nativeModels(for: run),
                                     resolved: run.resolvedModel, providerID: run.providerID)
         SubagentDisclosure("Run", expanded: $expanded) {
             InspectorCard {

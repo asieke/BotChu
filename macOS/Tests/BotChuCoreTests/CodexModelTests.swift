@@ -113,8 +113,8 @@ import Testing
         let unread = ModelPickerData(kind: .codex, model: "", openRouterDefault: "", native: nil)
         #expect(unread.choices.map(\.id) == [""] + GenerationOptions.models(for: .codex).map(\.id))
         #expect(unread.title == "Codex default")
-        // Another family never takes a Codex list.
-        let claude = ModelPickerData(kind: .claude, model: "", openRouterDefault: "", native: catalog)
+        // Another family's picker without its own list offers its own starters.
+        let claude = ModelPickerData(kind: .claude, model: "", openRouterDefault: "", native: nil)
         #expect(!claude.choices.contains { $0.id == "gpt-6.1-terra" })
     }
 
@@ -366,6 +366,9 @@ enum StandInModelServer {
         // The suggested model stays chosen and offered even when the list leaves it out.
         #expect(QuickTasks.models(for: .codex, catalog: catalog, chosen: "gpt-6-luna").map(\.id) == ["gpt-6.1-terra", "gpt-6-luna"])
         #expect(QuickTasks.models(for: .codex, catalog: nil, chosen: "").map(\.id) == GenerationOptions.models(for: .codex).map(\.id))
-        #expect(QuickTasks.models(for: .claude, catalog: catalog, chosen: "haiku").map(\.id) == GenerationOptions.models(for: .claude).map(\.id))
+        // Claude Code offers its starters until its own list is read (#326), then that list.
+        #expect(QuickTasks.models(for: .claude, catalog: nil, chosen: "haiku").map(\.id) == GenerationOptions.models(for: .claude).map(\.id))
+        let claude = [ModelOption(id: "claude-opus-9", name: "Claude Opus 9", efforts: [])]
+        #expect(QuickTasks.models(for: .claude, catalog: claude, chosen: "haiku").map(\.id) == ["claude-opus-9", "haiku"])
     }
 }
