@@ -2037,7 +2037,8 @@ file from other programs running as the same user.
   its baseline in `macOS/Journeys/baseline.json`, or the screen doesn't show what it should; the
   message names the journey, its budget, baseline and new time. While a baseline itself misses its
   budget, the budget is the baseline + 10 % (the ratchet), and the step says so; a perf issue fixes
-  it. A journey with a failed step is measured again once, saying why and the load then. Journey 2
+  it. A journey with a failed step is measured again once, after the others (a slow spell of the
+  Mac's can last a minute), saying how it failed first and the load then. Journey 2
   checks itself: the sidebar toggled with a 50 ms stall injected (the app stopped with `SIGSTOP`
   just after the press) must fail against that run's own times; `--stall <ms>` injects one into
   every toggle, to see the run fail. The harness needs Accessibility for the app it runs in (System

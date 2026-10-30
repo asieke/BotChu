@@ -56,24 +56,27 @@ struct Journeys {
 
     static func ms(_ from: UInt64, _ to: UInt64) -> Double { Double(Int64(to) - Int64(from)) / 1_000_000 }
 
-    /// Runs one journey; when a step fails, measures the journey again once, saying why and the load
-    /// (not while recording a baseline, which keeps what it measured).
-    func run(_ number: Int, _ journey: () -> [JourneyResult]) -> [JourneyResult] {
+    /// Runs one journey, saying how long it took.
+    func measure(_ number: Int, _ journey: () -> [JourneyResult]) -> [JourneyResult] {
         let began = Date()
         defer { print(String(format: "journeys: journey %d took %.1f s", number, Date().timeIntervalSince(began))) }
-        let first = journey()
-        let failed = first.filter { !$0.passed }
-        guard !failed.isEmpty, !recording else { first.forEach(report); return first }
-        let why = failed.map { "\($0.step): \($0.failure ?? "")" + ($0.load.map { String(format: " (load %.1f)", $0) } ?? "") }.joined(separator: "; ")
-        print("journeys: journey \(number) failed (\(why)); measuring it again")
-        let again = journey().map { result -> JourneyResult in
+        return journey()
+    }
+
+    /// Why a journey's first attempt failed, with the load then.
+    static func failures(_ results: [JourneyResult]) -> String {
+        results.filter { !$0.passed }.map { "\($0.step): \($0.failure ?? "")" + ($0.load.map { String(format: " (load %.1f)", $0) } ?? "") }
+            .joined(separator: "; ")
+    }
+
+    /// Measures a journey whose first attempt failed again, once, each step saying how it failed then.
+    func again(_ number: Int, _ journey: () -> [JourneyResult], after first: [JourneyResult]) -> [JourneyResult] {
+        measure(number, journey).map { result in
             var result = result
-            result.retried = failed.first(where: { $0.step == result.step }).map { "\($0.failure ?? "")" + ($0.load.map { String(format: " (load %.1f)", $0) } ?? "") }
-                ?? "another step failed"
+            result.retried = first.first(where: { $0.step == result.step && !$0.passed })
+                .map { "\($0.failure ?? "")" + ($0.load.map { String(format: " (load %.1f)", $0) } ?? "") } ?? "another step failed"
             return result
         }
-        again.forEach(report)
-        return again
     }
 
     // MARK: Helpers

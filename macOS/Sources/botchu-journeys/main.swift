@@ -135,8 +135,21 @@ var journeys = Journeys(app: app, fixture: fixture, baseline: baseline, repeats:
 journeys.stall = options["--stall"].flatMap(Double.init) ?? 0
 journeys.recording = options["--record"] != nil
 if journeys.stall > 0 { print("journeys: injecting a \(Int(journeys.stall)) ms stall into each of journey 2's toggles") }
+// A journey with a failed step is measured again once, after the others (not while recording a
+// baseline, which keeps what it measured), so a slow spell of the Mac's has time to pass.
+var failedFirst: [(number: Int, journey: () -> [JourneyResult], first: [JourneyResult])] = []
+func record(_ number: Int, _ journey: @escaping () -> [JourneyResult]) {
+    let measured = journeys.measure(number, journey)
+    if measured.allSatisfy(\.passed) || journeys.recording {
+        measured.forEach(journeys.report)
+        results += measured
+    } else {
+        print("journeys: journey \(number) failed (\(Journeys.failures(measured))); measuring it again after the others")
+        failedFirst.append((number, journey, measured))
+    }
+}
 if selection.numbers.contains(1) {
-    results += journeys.run(1) { journeys.launch() }
+    record(1) { journeys.launch() }
 } else {
     do {
         let start = try app.launch()
@@ -166,13 +179,19 @@ let later: [(Int, () -> [JourneyResult])] = [
     (6, journeys.sendAndStream), (7, journeys.scrollHistory), (8, journeys.expandGroup), (9, journeys.newTask), (10, journeys.resize),
     (11, journeys.inboxAndSettings), (12, journeys.typingWhileSubagentStreams), (13, journeys.relaunch),
 ]
+func notRun(_ number: Int) {
+    let result = journeys.notRun(number, because: "BotChu isn't running")
+    print("journey \(result.report)")
+    results.append(result)
+}
 for (number, journey) in later where selection.numbers.contains(number) {
-    if app.isRunning { results += journeys.run(number, journey) }
-    else {
-        let result = journeys.notRun(number, because: "BotChu isn't running")
-        print("journey \(result.report)")
-        results.append(result)
-    }
+    if app.isRunning { record(number, journey) } else { notRun(number) }
+}
+for (number, journey, first) in failedFirst {
+    if !app.isRunning, number != 1 { notRun(number); continue }
+    let again = journeys.again(number, journey, after: first)
+    again.forEach(journeys.report)
+    results += again
 }
 
 let loadAfter = load()
