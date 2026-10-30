@@ -85,8 +85,9 @@ extension RenderingTests {
 
         // Saved between launches, like every profile's.
         app.modelCatalog.flush()
-        let saved = try String(contentsOf: store.root.appendingPathComponent("model-catalogs.json"), encoding: .utf8)
-        #expect(saved.contains("sail/other") && saved.contains("128000") && !saved.contains("saved-test-key"))
+        let saved = try Data(contentsOf: store.root.appendingPathComponent("model-catalogs.json"))
+        #expect(NativeCatalogFile.decode(saved)[sail.key]?.models == listed)
+        #expect(!String(decoding: saved, as: UTF8.self).contains("saved-test-key"))
         // A new key is another account's list, unread until checked.
         settings.sailUsageCredentialRevision += 1
         let rekeyed = try #require(app.modelCatalogScope(for: settings.account("sail")))
