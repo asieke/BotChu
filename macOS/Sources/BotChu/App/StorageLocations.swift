@@ -51,22 +51,7 @@ extension AppModel {
     /// the next begins. A durable journal identifies paths if the app or machine stops mid-move.
     func moveStorage(_ plan: [StorageMove]) async throws {
         guard !storageMovePending else { throw StorageMove.Problem("Another move is already pending.") }
-        guard Set(plan.map(\.destination)).count == plan.count else {
-            throw StorageMove.Problem("Two folders have the same destination. Choose separate destinations first.")
-        }
-        for move in plan {
-            let source = URL(fileURLWithPath: move.source).resolvingSymlinksInPath().path
-            guard !StorageMove.contains(store.root.resolvingSymlinksInPath().path, under: source) else {
-                throw StorageMove.Problem("This folder contains BotChu’s application data. Choose its bot or repository folders separately.")
-            }
-            try move.validate()
-        }
-        for a in plan {
-            guard !plan.contains(where: { $0 != a && (StorageMove.contains(a.source, under: $0.source)
-                || StorageMove.contains(a.destination, under: $0.source)) }) else {
-                throw StorageMove.Problem("The selected folders overlap. Move them separately.")
-            }
-        }
+        try StorageMove.checkPlan(plan, applicationData: store.root)
         storageMovePending = true
         let journal = store.root.appendingPathComponent("storage-move.json")
         defer {

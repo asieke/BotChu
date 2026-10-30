@@ -278,4 +278,31 @@ struct RemoteQueueTests {
         #expect(reloaded.workspace.isEmpty)
         #expect(reloaded.remoteStorage == bot.remoteStorage)
     }
+
+    /// #287: a reconciliation applies each journal message once. The cursor keeps out what an
+    /// earlier one applied after paging evicted it from the live thread, which the IDs alone don't.
+    @Test func reconcilingAppliesEachJournalMessageOnceEvenAfterEviction() async throws {
+        let (root, _, queue) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for index in 0..<100 {
+            let message = try await queue.enqueue("Question \(index)")
+            try await queue.reply(to: message.id, text: "Answer \(index)", error: nil)
+        }
+        try await queue.enqueue("Still waiting")
+        let snapshot = await queue.snapshot()
+        let messages = snapshot.messages
+        #expect(messages.count == 201)
+        // The first reconciliation: all but the last message were saved before.
+        let saved = Set(messages.dropLast().map(\.id))
+        #expect(snapshot.unapplied(after: -1, known: saved)?.map(\.text) == ["Still waiting"])
+        // The same journal again, the live thread holding only its last 64 messages.
+        let tail = Set(messages.suffix(64).map(\.id))
+        #expect(snapshot.unapplied(after: messages.count, known: tail) == [])
+        #expect(messages.filter { !tail.contains($0.id) }.count == 137, "the IDs alone would replay what was evicted")
+        // A snapshot older than the cursor applies nothing.
+        #expect(snapshot.unapplied(after: messages.count + 1, known: tail) == nil)
+        // One more request: only it.
+        let next = try await queue.enqueue("A new request")
+        #expect(await queue.snapshot().unapplied(after: messages.count, known: tail)?.map(\.id) == [next.id])
+    }
 }

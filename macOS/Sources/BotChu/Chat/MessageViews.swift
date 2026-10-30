@@ -380,12 +380,10 @@ struct TypingDots: View {
     let date: Date
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    static let period: TimeInterval = 1.3
-
     var body: some View {
         HStack(spacing: 5) {
             ForEach(0..<3) { dot in
-                let lift = Self.lift(dot: dot, at: date)
+                let lift = TypingWave.lift(dot: dot, at: date)
                 Circle()
                     .fill(Color.secondary)
                     .frame(width: 7, height: 7)
@@ -394,14 +392,5 @@ struct TypingDots: View {
                     .offset(y: reduceMotion ? 0 : -3 * lift)
             }
         }
-    }
-
-    /// How far a dot is through its rise, 0 at rest and 1 at the top: a smooth bump over the
-    /// first half of its turn, each dot starting a little after the one before it.
-    static func lift(dot: Int, at date: Date) -> Double {
-        var phase = (date.timeIntervalSinceReferenceDate / period - Double(dot) * 0.15).truncatingRemainder(dividingBy: 1)
-        if phase < 0 { phase += 1 }
-        guard phase < 0.5 else { return 0 }
-        return (1 - cos(2 * .pi * phase / 0.5)) / 2
     }
 }

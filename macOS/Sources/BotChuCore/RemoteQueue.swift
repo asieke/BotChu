@@ -22,6 +22,15 @@ public actor RemoteQueue {
         public func online(at now: Date = Date()) -> Bool {
             lastPoll.map { now.timeIntervalSince($0) >= 0 && now.timeIntervalSince($0) < 120 } ?? false
         }
+        /// The journal's messages a conversation hasn't applied yet (#287): those after `cursor`, how
+        /// many an earlier reconciliation applied (below 0 before the first, which covers the saved
+        /// history too), that aren't among `known`. The journal only grows, so the cursor keeps
+        /// out what an earlier reconciliation applied even once paging has evicted it from `known`.
+        /// Nil for a snapshot older than the cursor. The new cursor is `messages.count`.
+        public func unapplied(after cursor: Int, known: Set<UUID>) -> [ChatMessage]? {
+            guard messages.count >= cursor else { return nil }
+            return messages.dropFirst(max(0, cursor)).filter { !known.contains($0.id) }
+        }
     }
     public enum Failure: Error, Equatable {
         case full, emptyText, unknownMessage, invalidReply, wrongBot, invalidJournal

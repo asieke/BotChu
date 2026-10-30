@@ -171,4 +171,29 @@ import Testing
         try Janitor.install(in: root.path)
         #expect(try String(contentsOf: policy, encoding: .utf8) == "Owner's edited policy")
     }
+
+    /// #317: a move plan is refused before anything moves when a folder holds BotChu's own data
+    /// (through a link too), two folders share a destination, or one folder is inside another.
+    @Test func planRefusesApplicationDataOverlapsAndSharedDestinations() throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = FileManager.default
+        for folder in ["data", "bots/a", "bots/b", "new"] {
+            try files.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        try files.createSymbolicLink(at: root.appendingPathComponent("link"), withDestinationURL: root)
+        let data = root.appendingPathComponent("data")
+        func path(_ name: String) -> String { root.appendingPathComponent(name).path }
+        func move(_ source: String, _ destination: String) -> StorageMove { StorageMove(source: path(source), destination: path(destination), kind: .bot) }
+        func refusal(_ plan: [StorageMove]) -> String? {
+            do { try StorageMove.checkPlan(plan, applicationData: data); return nil } catch { return (error as? StorageMove.Problem)?.message ?? "\(error)" }
+        }
+        #expect(refusal([move("bots/a", "new/a")]) == nil)
+        #expect(refusal([move("bots/a", "new/x"), move("bots/b", "new/x")])?.hasPrefix("Two folders have the same destination") == true)
+        #expect(refusal([move("link", "new/all")])?.hasPrefix("This folder contains BotChu’s application data") == true)
+        #expect(refusal([move("bots", "new/bots"), move("bots/a", "new/a")])?.hasPrefix("The selected folders overlap") == true)
+        #expect(refusal([move("bots/a", "bots/b/a"), move("bots/b", "new/b")])?.hasPrefix("The selected folders overlap") == true)
+        // Checking moves nothing.
+        #expect(files.fileExists(atPath: path("bots/a")) && !files.fileExists(atPath: path("new/a")))
+    }
 }

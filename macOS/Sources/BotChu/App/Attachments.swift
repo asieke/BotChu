@@ -119,15 +119,10 @@ enum ImagePaste {
         return pasteboard.pasteboardItems?.contains { imageType(in: $0.types) != nil } ?? false
     }
 
-    /// The image type an item offers ahead of any plain text, in the order its source wrote them.
-    /// Copied text often comes with a picture of itself after it (a spreadsheet's cells, say), and
-    /// pastes as text; a screenshot or a browser's Copy Image offers the picture alone, or first.
+    /// The image type an item offers ahead of any plain text (`PasteboardOrder`).
     static func imageType(in types: [NSPasteboard.PasteboardType]) -> NSPasteboard.PasteboardType? {
-        for type in types {
-            if type == .string { return nil }
-            if UTType(type.rawValue)?.conforms(to: .image) == true { return type }
-        }
-        return nil
+        PasteboardOrder.image(in: types.map(\.rawValue)) { UTType($0)?.conforms(to: .image) == true }
+            .map(NSPasteboard.PasteboardType.init(rawValue:))
     }
 
     /// Images dragged as data, which a text view takes only when it registers for them.

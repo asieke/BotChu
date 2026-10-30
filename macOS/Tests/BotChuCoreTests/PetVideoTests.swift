@@ -175,4 +175,25 @@ import Testing
         #expect(throws: PetError.self) { try PetVideoPackage.install(from: staging, model: "m", into: home) }
         #expect(PetVideoPackage.load(from: PetVideo.folder(for: home)) == nil)
     }
+
+    /// #29: the greeting finishes before idle takes over, and isn't played again when the view
+    /// refreshes; a new activity or a different pet takes over at once.
+    @Test func aReactionFinishesBeforeIdleAndIsNotReplayedOnRefresh() {
+        func choose(_ clip: String, same: Bool = true, requested: String?, playing: (String, Bool)?) -> PetClipChoice {
+            PetClipChoice.choose(clip, samePackage: same, requested: requested, current: playing.map { (clipID: $0.0, isReaction: $0.1) })
+        }
+        #expect(choose("greeting", same: false, requested: nil, playing: nil) == .play)
+        // A refresh asks for the greeting again while it plays.
+        #expect(choose("greeting", requested: "greeting", playing: ("greeting", true)) == .unchanged)
+        // Idle waits for the greeting, loaded or not, and asking again changes nothing.
+        #expect(choose("idle", requested: "greeting", playing: ("greeting", true)) == .keepPlaying)
+        #expect(choose("idle", requested: "idle", playing: ("greeting", true)) == .unchanged)
+        // Work takes over from a reaction at once, and so does another pet.
+        #expect(choose("thinking", requested: "idle", playing: ("greeting", true)) == .play)
+        #expect(choose("idle", same: false, requested: "greeting", playing: ("greeting", true)) == .play)
+        // Idle replaces a looping clip, and a clip already playing goes on.
+        #expect(choose("idle", requested: "thinking", playing: ("thinking", false)) == .play)
+        #expect(choose("thinking", requested: "idle", playing: ("thinking", false)) == .keepPlaying)
+        #expect(choose("idle", requested: nil, playing: nil) == .play)
+    }
 }

@@ -123,17 +123,15 @@ final class PetVideoLayerView: NSView {
     func show(package: PetVideoPackage, clipID: String) {
         let samePackage = self.package?.folder == package.folder
         self.package = package
-        guard !samePackage || requestedClipID != clipID else { return }
+        let choice = PetClipChoice.choose(clipID, samePackage: samePackage, requested: requestedClipID,
+                                          current: current.map { ($0.clipID, package.clip($0.clipID)?.loops == false) })
+        guard choice != .unchanged else { return }
         requestedClipID = clipID
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         still.contents = ImageThumbnails.shared.image(package.stillURL(package.clip(clipID)?.still ?? "idle"), pixels: ImageThumbnails.pet)
         CATransaction.commit()
-        guard !samePackage || current?.clipID != clipID else { return }
-        // Let a one-shot reaction finish before idle, including time spent loading the video.
-        // A new activity or a different pet can still take over immediately.
-        if samePackage, clipID == "idle", let current, package.clip(current.clipID)?.loops == false { return }
-        play(clipID)
+        if choice == .play { play(clipID) }
     }
 
     func stop() {
