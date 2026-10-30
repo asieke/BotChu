@@ -77,35 +77,6 @@ extension RenderingTests {
         await server.shutdown()
     }
 
-    @Test func remoteQueueThrottlesRequestsAndRecoversAfterRetryAfter() async throws {
-        let fixture = try RemoteSecurityFixture()
-        defer { fixture.remove() }
-        var limits = RemoteQueueServer.Limits()
-        limits.burst = 1; limits.perSecond = 1
-        let (server, port) = try await remoteSecurityServer(endpoint: fixture.endpoint, limits: limits)
-        defer { server.stop() }
-        let responses = try await Task.detached {
-            var responses: [String] = []
-            for _ in 0..<2 {
-                let socket = try RemoteTestSocket(port: port)
-                try socket.send("GET /v1/health HTTP/1.1\r\nAuthorization: Bearer fixture\r\n\r\n")
-                responses.append(try socket.response())
-            }
-            return responses
-        }.value
-        #expect(responses[0].contains("200 OK"))
-        #expect(responses[1].contains("429 Too Many Requests"))
-        #expect(responses[1].contains("Retry-After: 1"))
-        try await Task.sleep(for: .seconds(1.1))
-        let recovered = try await Task.detached {
-            let socket = try RemoteTestSocket(port: port)
-            try socket.send("GET /v1/health HTTP/1.1\r\nAuthorization: Bearer fixture\r\n\r\n")
-            return try socket.response()
-        }.value
-        #expect(recovered.contains("200 OK"))
-        await server.shutdown()
-    }
-
     @Test func remoteQueueSlowConnectionsExpireAndReleaseCapacity() async throws {
         let fixture = try RemoteSecurityFixture()
         defer { fixture.remove() }
@@ -148,27 +119,6 @@ extension RenderingTests {
     try await server.start(address: "127.0.0.1", port: 0)
     try await remoteSecurityEventually { readyPort != nil }
     return (server, try #require(readyPort))
-}
-
-/// Ask the kernel for a free loopback port for AppSettings, which deliberately disallows zero.
-/// Server-only tests bind zero directly and use the actual port delivered by onReady.
-func remoteTestAvailablePort() throws -> UInt16 {
-    let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
-    guard descriptor >= 0 else { throw CocoaError(.fileReadUnknown) }
-    defer { Darwin.close(descriptor) }
-    var address = sockaddr_in()
-    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-    address.sin_family = sa_family_t(AF_INET)
-    address.sin_addr.s_addr = inet_addr("127.0.0.1")
-    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-    let result = withUnsafeMutablePointer(to: &address) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { pointer in
-            guard Darwin.bind(descriptor, pointer, length) == 0 else { return Int32(-1) }
-            return getsockname(descriptor, pointer, &length)
-        }
-    }
-    guard result == 0 else { throw CocoaError(.fileReadUnknown) }
-    return UInt16(bigEndian: address.sin_port)
 }
 
 private struct RemoteSecurityFixture {

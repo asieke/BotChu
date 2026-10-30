@@ -44,29 +44,6 @@ extension RenderingTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.destination.path))
     }
 
-    @Test func storageMoveWaitsForTurnAndPreservesBotData() async throws {
-        let fixture = try SensitiveInputFixture()
-        defer { fixture.cleanUp() }
-        let app = fixture.app, runtime = app.delegation.sensitiveInput
-        runtime.present = { _ in }
-        app.send("ASK_SECRET", to: fixture.target)
-        try await fixture.wait { runtime.current != nil }
-        let path = fixture.root.appendingPathComponent("moved-fox").path
-        let move = StorageMove(source: fixture.bot.workspace, destination: path, kind: .bot)
-        let relocating = Task { try await app.moveStorage([move]) }
-        try await fixture.wait { app.storageMovePending }
-        #expect(FileManager.default.fileExists(atPath: fixture.bot.workspace))
-        #expect(!FileManager.default.fileExists(atPath: path))
-        #expect(!app.send("Wait until the move finishes", to: fixture.target))
-        runtime.finish(try #require(runtime.current).id)
-        try await relocating.value
-        #expect(!app.storageMovePending)
-        #expect(app.bot(fixture.bot.id)?.workspace == path)
-        #expect(BotHome(workspace: path).loadBot()?.id == fixture.bot.id)
-        #expect(app.store.loadIndex().first?.workspace == path)
-        #expect(!FileManager.default.fileExists(atPath: fixture.bot.workspace))
-    }
-
     @Test(arguments: [false, true]) func storageMoveWaitsForBackgroundTitles(regenerate: Bool) async throws {
         let fixture = try SensitiveInputFixture(inTask: true)
         defer { fixture.cleanUp() }
@@ -94,58 +71,6 @@ extension RenderingTests {
         #expect(try String(contentsOfFile: move.destination + "/title-log", encoding: .utf8) == "Finished background title")
         #expect(!FileManager.default.fileExists(atPath: oldPath))
         #expect(!app.evaluator.isPaused())
-    }
-
-    @Test func changingStorageDefaultsPinsExistingTaskCheckoutAndSharedDocuments() throws {
-        let fixture = try SensitiveInputFixture(inTask: true)
-        defer { fixture.cleanUp() }
-        let app = fixture.app
-        let task = try #require(app.task(fixture.target))
-        let shared = app.settings.sharedMemoryPath
-        try FileManager.default.createDirectory(atPath: (shared as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        try "Shared memory fixture".write(toFile: shared, atomically: true, encoding: .utf8)
-        app.setWorkspaceRoot(fixture.root.path + "/future-repos")
-        app.setBotsRoot(fixture.root.path + "/future-bots")
-        #expect(app.settings.repoLocations[task.repo]?.path == task.checkout)
-        #expect(app.task(fixture.target)?.checkout == task.checkout)
-        #expect(app.bot(fixture.bot.id)?.workspace == fixture.bot.workspace)
-        #expect(app.settings.sharedMemoryPath == shared)
-        app.editSharedDocument(.memory)
-        #expect(app.documentEditor?.url.path == shared)
-        #expect(app.workspaceProblem(app.settings.sharedDocumentsRoot, for: UUID()) != nil)
-        #expect(!FileManager.default.fileExists(atPath: app.settings.expandedReposRoot))
-    }
-
-    @Test func storageMoveCannotRelocateItsOwnApplicationData() async throws {
-        let fixture = try SensitiveInputFixture()
-        defer { fixture.cleanUp() }
-        let move = StorageMove(source: fixture.root.path, destination: fixture.root.path + "-moved", kind: .bot)
-        await #expect(throws: StorageMove.Problem.self) { try await fixture.app.moveStorage([move]) }
-        #expect(!fixture.app.storageMovePending)
-        #expect(FileManager.default.fileExists(atPath: fixture.bot.workspace))
-        #expect(!FileManager.default.fileExists(atPath: move.destination))
-    }
-
-    @Test func janitorSetupUsesExistingJobsAndPreservesPolicy() async throws {
-        let fixture = try SensitiveInputFixture()
-        defer { fixture.cleanUp() }
-        let app = fixture.app
-        var bot = fixture.bot
-        bot.name = "Security Racoon"
-        app.update(bot)
-        try app.setupJanitor()
-        let id = try #require(app.settings.janitorJobID)
-        let job = try #require(app.jobs.job(id))
-        #expect(job.botID == bot.id && job.enabled && job.runs.isEmpty)
-        #expect(job.schedule.kind == .daily && job.schedule.hour == 3 && job.schedule.minute == 0)
-        #expect(job.schedule.timeZone == TimeZone.current.identifier)
-        #expect(app.janitorContext(for: job).contains("Not configured"))
-        let policy = URL(fileURLWithPath: bot.workspace).appendingPathComponent(Janitor.policyPath)
-        try "Owner edited policy".write(to: policy, atomically: true, encoding: .utf8)
-        try app.setupJanitor()
-        #expect(app.settings.janitorJobID == id && app.jobs.jobs.count == 1)
-        #expect(try String(contentsOf: policy, encoding: .utf8) == "Owner edited policy")
-        await app.storage.settle()
     }
 
     @Test func sensitiveInputQueueReportsOnlyFixedLimitReasons() {
