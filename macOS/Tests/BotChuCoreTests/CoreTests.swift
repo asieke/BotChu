@@ -119,6 +119,34 @@ import Testing
         #expect(!preamble.contains("durable_memory"))
     }
 
+    @Test func theMacsShellFactsAreStatedOnceInEachSessionHere() throws {
+        // What agents kept rediscovering (#366): zsh's unmatched globs, bash 3.2, timeout, the upstream.
+        let facts = try #require(BotContext.shellFacts(remote: false))
+        #expect(facts.count < 400, "\(facts.count)")
+        for fact in ["zsh", "--include='*.swift'", "`/bin/bash` is 3.2", "`timeout` is on your PATH", "`git push -u origin HEAD`"] {
+            #expect(facts.contains(fact))
+        }
+        let task = BotTask(repo: "asieke/BotChu", checkout: "/tmp/BotChu", branch: "feat/366-timeout", folder: "/tmp/BotChu/.claude/worktrees/feat-366")
+        var run = SubagentRun(rootBotID: bot.id, depth: 1, targetBot: bot, title: "Review", brief: "Check it", workingDirectory: "/tmp/scout")
+        let job = JobLaunch.preamble(bot: bot, job: Job(botID: bot.id, title: "Triage", prompt: "Triage."),
+                                     run: JobRun(trigger: .manual, scheduledFor: nil, timeZone: "UTC", reservedAt: Date()),
+                                     startedAt: Date(), memory: "", sharedMemory: "")
+        let here = [BotContext.sessionPreamble(bot: bot, memory: "", sharedMemory: "", history: [], availableBots: [BotRosterEntry(bot: bot)]),
+                    BotContext.taskPreamble(bot: bot, task: task, memory: "", sharedMemory: "", history: []),
+                    BotContext.subagentPreamble(bot: bot, run: run, callerDescription: "Dev Bot", memory: "", sharedMemory: "", tools: "<tools/>"),
+                    job]
+        for context in here {
+            #expect(context.components(separatedBy: facts).count == 2)
+        }
+        // On a host, where none of it need be true.
+        run.hostID = UUID()
+        #expect(BotContext.shellFacts(remote: true) == nil)
+        for context in [BotContext.taskPreamble(bot: bot, task: task, memory: "", sharedMemory: "", history: [], machine: "Omarchy (asieke@omarchy)"),
+                        BotContext.subagentPreamble(bot: bot, run: run, callerDescription: "Dev Bot", memory: "", sharedMemory: "")] {
+            #expect(!context.contains("/bin/bash"))
+        }
+    }
+
     @Test func recapKeepsTheNewestWithinItsLimit() {
         let long = (0..<40).map { ChatMessage(role: .user, text: "message \($0) " + String(repeating: "x", count: 900)) }
         let recap = BotContext.recap(long)
