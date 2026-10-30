@@ -105,7 +105,9 @@ final class ConversationState {
     var unread = false
     /// What is typed in its message box and not sent yet, the agents and projects chosen in it from
     /// `@` and `#` completion (`Mentions.swift`), its images, a remote queue bot's documents
-    /// (`addFiles`), and why the last attachment wasn't added.
+    /// (`addFiles`), and why the last attachment wasn't added. The text and references are kept
+    /// between launches (`DraftStore`), written as they change through `AppModel.drafts` and
+    /// `draftReferences`; the attachments only in memory.
     var draft: String?
     var draftReferences: [MessageReference]?
     var draftImages: [ImageAttachment]?
@@ -312,10 +314,15 @@ final class ConversationState {
 @MainActor struct ConversationField<Value> {
     let model: AppModel
     let field: ReferenceWritableKeyPath<ConversationState, Value?>
+    /// Hears each conversation whose value is set, after it is (a draft, to save it).
+    var changed: (@MainActor (ChatTarget) -> Void)?
 
     subscript(target: ChatTarget) -> Value? {
         get { model.conversation(target)[keyPath: field] }
-        nonmutating set { model.conversation(target)[keyPath: field] = newValue }
+        nonmutating set {
+            model.conversation(target)[keyPath: field] = newValue
+            changed?(target)
+        }
     }
 
     /// The conversations that have one. For the model's own work, not for views: it can't see a

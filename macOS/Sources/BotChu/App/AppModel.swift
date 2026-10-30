@@ -145,9 +145,9 @@ final class AppModel {
     var openTask: [UUID: UUID] = [:]
     /// Conversations whose turn ended while they weren't shown.
     var unread: ConversationFlag { ConversationFlag(model: self, flag: \.unread) }
-    /// Each conversation's draft (see `ConversationState`).
-    var drafts: ConversationField<String> { ConversationField(model: self, field: \.draft) }
-    var draftReferences: ConversationField<[MessageReference]> { ConversationField(model: self, field: \.draftReferences) }
+    /// Each conversation's draft (see `ConversationState`), saved as it changes (`Drafts.swift`).
+    var drafts: ConversationField<String> { ConversationField(model: self, field: \.draft, changed: saveDraft) }
+    var draftReferences: ConversationField<[MessageReference]> { ConversationField(model: self, field: \.draftReferences, changed: saveDraft) }
     var draftImages: ConversationField<[ImageAttachment]> { ConversationField(model: self, field: \.draftImages) }
     var draftFiles: ConversationField<[FileAttachment]> { ConversationField(model: self, field: \.draftFiles) }
     var attachmentErrors: ConversationField<String> { ConversationField(model: self, field: \.attachmentError) }
@@ -402,6 +402,7 @@ final class AppModel {
                 }
             }
         }
+        restoreDrafts()
         // Reviews spend the accounts' allowance: only the real app runs them by itself.
         evaluator = makeEvaluator(runner: store == nil && DevHooks.dataDir == nil ? evaluationRunner ?? liveEvaluationRunner() : evaluationRunner)
         // Usage checks run the profiles' CLIs: only the real app, or a review copy with sample usage, checks by itself.
@@ -804,6 +805,7 @@ final class AppModel {
             BotHome(workspace: bot.persistencePath).trash()
             storage.reopen(bot.persistencePath)
         }
+        savedDrafts.removeBot(id, storage: storage, timeout: Self.saveTimeout)
         bots.removeAll { $0.id == id }
         remoteQueue?.reloadBot()
         sections[id] = nil
@@ -935,6 +937,7 @@ final class AppModel {
                 for waiting in waited { waiting.cancel?() }
             }
             TranscriptCache.forget(target)
+            savedDrafts.save(nil, for: DraftStore.Key(bot: botID, task: id), storage: storage)
             // After the writes asked for in its conversation's lane and then its settings' lane.
             let folder = home.taskURL(id), taskLane = home.taskLane(id), storage = storage
             storage.submit(home.conversationLane(task: id), label: "remove", work: {
