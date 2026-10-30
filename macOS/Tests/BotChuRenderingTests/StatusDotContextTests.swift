@@ -87,19 +87,20 @@ extension RenderingTests {
                         let label = "\(appearance.rawValue)-\(kind)-selected-\(selected)-focused-\(focused)"
                         try row.save(label + "-sidebar")
                         try tabs.save(label + "-tabs")
-                        // The bot's other five tasks are idle: three grey rings after this one's dot, then +2 (#324).
+                        // The bot's other five tasks are idle: five grey rings after this one's dot, in the grid's
+                        // two rows of four, and no +N (#324, #359).
                         let rowRegion = CGRect(x: cell.bounds.width - 80, y: 0, width: 80, height: cell.bounds.height)
                         let columnRegion = CGRect(x: 16, y: 90, width: 16, height: 70)
                         let railRegion = CGRect(x: 276, y: 60, width: 14, height: 24)
                         if kind == .idle {
                             let summary = model.botRowSummary(of: fixture.bot)
-                            #expect(summary.dots == [.idle, .idle, .idle, .idle] && summary.more == 2)
+                            #expect(summary.dots == Array(repeating: .idle, count: 6) && summary.more == 0)
                             #expect(row.dots(in: rowRegion).isEmpty, "\(label): idle rings are grey in the sidebar")
                             #expect(tabs.dots(in: railRegion).isEmpty, "\(label): idle omitted from rail")
                             continue
                         }
                         let summary = model.botRowSummary(of: fixture.bot)
-                        #expect(summary.dots == [kind, .idle, .idle, .idle] && summary.more == 2)
+                        #expect(summary.dots == [kind] + Array(repeating: .idle, count: 5) && summary.more == 0)
                         let expected = StatusContextDrawing.hue(for: kind)
                         let sidebarDot = try row.dot(in: rowRegion, hue: expected, label: label + " sidebar")
                         let columnDot = try tabs.dot(in: columnRegion, hue: expected, label: label + " column")
@@ -142,7 +143,7 @@ extension RenderingTests {
         #expect(comparisons == 112 && emphasizedSelections >= 14)
         print("Status dots: \(comparisons) native sidebar/column/rail colour comparisons, \(emphasizedSelections) emphasized selections, largest RGB-channel difference \(largestColourDifference), live focus \(liveFocus)")
 
-        // Mixed Home/task states, urgency, the four-dot cap, then resolution and read transitions.
+        // Mixed Home/task states, urgency, the eight-dot grid (#359), then resolution and read transitions.
         // All three surfaces above remain mounted throughout these changes.
         let home = ChatTarget.home(fixture.bot.id), tasks = fixture.targets
         model.show(tasks[4])
@@ -158,28 +159,31 @@ extension RenderingTests {
             #expect(summary.dots == expected && summary.more == more)
             let cell = try #require(table.view(atColumn: 0, row: table.numberOfRows - 2, makeIfNecessary: false))
             let row = try StatusContextDrawing(cell), tabs = try StatusContextDrawing(columns)
+            // The grid's dots in reading order: its first row of four, then the second (#359).
             let dots = row.dots(in: CGRect(x: cell.bounds.width - 80, y: 0, width: 80, height: cell.bounds.height))
-                .sorted { $0.bounds.minX < $1.bounds.minX }
+                .sorted { abs($0.bounds.midY - $1.bounds.midY) > 3 ? $0.bounds.midY < $1.bounds.midY : $0.bounds.minX < $1.bounds.minX }
+            // Idle rings are grey, so only the others are found by their colour.
+            let coloured = expected.filter { $0 != .idle }
             let columnDots = tabs.dots(in: CGRect(x: 16, y: 0, width: 16, height: 600)).sorted { $0.bounds.minY < $1.bounds.minY }
             let railDots = tabs.dots(in: CGRect(x: 276, y: 0, width: 14, height: 600)).sorted { $0.bounds.minY < $1.bounds.minY }
             let busy = model.tabs(of: fixture.bot.id).map { model.tabState(of: $0).kind }.filter { $0 != .idle }
-            try #require(dots.count == expected.count, "\(label): sidebar dots \(dots.map(\.bounds))")
+            try #require(dots.count == coloured.count, "\(label): sidebar dots \(dots.map(\.bounds))")
             try #require(columnDots.count == busy.count && railDots.count == busy.count, "\(label): column \(columnDots.count), rail \(railDots.count), states \(busy)")
-            for (dot, kind) in zip(dots, expected) {
+            for (dot, kind) in zip(dots, coloured) {
                 let index = try #require(busy.firstIndex(of: kind))
                 #expect(StatusContextDrawing.hue(for: kind).contains(dot.colour.hueComponent * 360), "\(label): \(kind)")
                 #expect(dot.colour.distance(to: columnDots[index].colour) < 0.025 && dot.colour.distance(to: railDots[index].colour) < 0.025)
             }
         }
-        try await checkMixed("seven busy", expected: [.needsInput, .failed, .stopped, .preparing], more: 3)
+        try await checkMixed("seven busy", expected: [.needsInput, .failed, .stopped, .preparing, .starting, .working, .news], more: 0)
         model.inbox.setDone(fixture.question.id, true)
-        try await checkMixed("request resolved", expected: [.failed, .stopped, .working, .preparing], more: 3)
+        try await checkMixed("request resolved", expected: [.failed, .stopped, .working, .preparing, .starting, .working, .news], more: 0)
         fixture.set(.idle, on: tasks[1])
         fixture.set(.news, on: tasks[2])
         model.show(home)
-        try await checkMixed("Home read", expected: [.working, .preparing, .starting, .working], more: 2)
+        try await checkMixed("Home read", expected: [.working, .preparing, .starting, .working, .news, .idle], more: 0)
         model.show(tasks[2])
-        try await checkMixed("completion read", expected: [.working, .preparing, .starting, .working], more: 2)
+        try await checkMixed("completion read", expected: [.working, .preparing, .starting, .working, .idle, .idle], more: 0)
     }
 }
 
