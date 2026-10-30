@@ -119,6 +119,28 @@ struct JourneyTests {
         #expect(String(decoding: try baseline.encoded(), as: UTF8.self).contains("\"recordedAt\" : \"2026-10-29T"))
     }
 
+    @Test func aRunsResultsKeepEachStepsVerdictAndReadBackAsABaselineToo() throws {
+        let results = [JourneyResult(journey: 2, step: "sidebar · close", budget: .instant, baseline: 44.1, samples: [44, 46, 43, 45, 47, 44],
+                                     load: 4.2),
+                       JourneyResult(journey: 3, step: "switch bot", budget: .within(50), baseline: 30, samples: [61.04, 58.2, 70], load: 4.4),
+                       JourneyResult(journey: 4, step: "not run", budget: .instant, samples: [], problem: "BotChu isn't running")]
+        let run = JourneyRun(recordedAt: Date(timeIntervalSince1970: 1_793_300_000), commit: "4ec0bca", branch: "feat/362-report",
+                             machine: "Mac16,6", hertz: 120, loadBefore: [12.5, 10, 8], loadAfter: [14, 11, 8.5], seconds: 312, results: results)
+        #expect(run.medians == ["2 sidebar · close": 44.5, "3 switch bot": 61])
+        #expect(run.steps.map(\.key) == ["2 sidebar · close", "3 switch bot", "4 not run"])
+        let ratcheted = try #require(run.steps.first)
+        #expect(ratcheted.ratcheted && ratcheted.passed && ratcheted.limit == 48.5 && ratcheted.budget == 16 && ratcheted.tier == "Instant")
+        #expect(ratcheted.p95 == 47 && ratcheted.samples.count == 6 && ratcheted.failure == nil)
+        #expect(run.steps[1].failure == "median 61.0 ms over its budget of 50.0 ms" && !run.steps[1].passed)
+        #expect(run.steps[2].median == nil && run.steps[2].failure == "BotChu isn't running")
+        let data = try run.encoded()
+        #expect(try JourneyRun.decode(data) == run)
+        #expect(try JourneyBaseline.decode(data).medians == run.medians)
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(text.contains("\"branch\" : \"feat/362-report\"") && text.contains("\"hertz\" : 120") && text.contains("\"p95\" : 47"))
+        #expect(!text.contains("null"))
+    }
+
     @Test func journeysAreChosenByNameOrNumber() throws {
         let catalog: [(number: Int, names: [String])] = [(1, ["launch"]), (2, ["sidebar", "inspector"]), (3, ["switch-bot"])]
         #expect(try JourneySelection.parse("", catalog: catalog).numbers == [1, 2, 3])

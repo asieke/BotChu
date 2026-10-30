@@ -81,6 +81,20 @@ import Testing
         #expect(html.contains("&lt;img") && html.contains("&lt;script&gt;"))
     }
 
+    /// A link to a file (#363) keeps the link as written, for the chat to resolve against its
+    /// folder: the page never names a file itself, and a place in the reply stays text.
+    @Test func fileLinksCarryTheLinkForTheChatToResolve() throws {
+        let html = try #require(RichMarkdown.html(#"""
+        $x$ [report](model-power-rankings-oct-2026.html), [up](../x.html), [there](file:///tmp/a.html) and [top](#top)
+        """#))
+        for link in ["model-power-rankings-oct-2026.html", "../x.html", "file:///tmp/a.html"] {
+            let page = try #require(FileLink.pageLink(URL(string: link)!))
+            #expect(html.contains("<a href=\"\(page)\">"), "\(link)")
+        }
+        #expect(html.components(separatedBy: "<a ").count == 4)
+        #expect(!html.contains("href=\"file:") && !html.contains("href=\"model") && !html.contains("href=\"#"))
+    }
+
     @Test func mermaidFencesBecomeDiagramsAndOtherCodeRemainsCode() throws {
         let html = try #require(RichMarkdown.html("```mermaid\nflowchart LR\n A[Chat] --> B[Bot]\n```\n\n```swift\nlet x = 1\n```"))
         #expect(html.contains("class=\"diagram-block\""))

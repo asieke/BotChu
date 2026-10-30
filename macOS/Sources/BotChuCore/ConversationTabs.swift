@@ -284,8 +284,8 @@ public struct ConversationTab: Equatable, Sendable {
 /// a ring, and for Home while it isn't idle, the most urgent first (#218); and a subtitle that says
 /// what it runs on, whatever it is doing.
 public struct BotRowSummary: Equatable, Sendable {
-    /// The most dots a row shows; the rest are counted (+N).
-    public static let dotLimit = 4
+    /// The most dots a row shows, two rows of four (#359); the rest are counted (+N).
+    public static let dotLimit = 8
 
     /// The dots, most urgent first (`TabState.Kind.urgency`), and in tab order (Home, then the open
     /// tasks) among equals, so the ones a full row leaves out are the least urgent.

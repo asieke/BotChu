@@ -369,7 +369,8 @@ public struct ThreadAssembler {
             }
         case let .toolFinished(id, name, output, isError, exitCode):
             apply(.textEnd, to: &messages)
-            let state: ChatMessage.ToolState = isError ? .failed : .done
+            // A non-zero exit is a failure whatever the CLI said; no output alone is not (#367).
+            let state: ChatMessage.ToolState = isError || (exitCode ?? 0) != 0 ? .failed : .done
             if let i = messages.lastIndex(where: { $0.toolID == id }) {
                 messages[i].toolOutput = output
                 messages[i].toolState = state
