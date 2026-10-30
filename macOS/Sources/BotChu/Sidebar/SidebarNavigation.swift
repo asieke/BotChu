@@ -76,8 +76,9 @@ extension AppModel {
 
     /// What the bot runs on, as its row and the `@` list say it (#324): "Claude Personal · Fable 5.1".
     func runsOn(_ bot: Bot) -> String {
+        // Sail's list is the profile's own now, as every profile's (#326).
         BotRowSummary.runsOn(bot, openRouterDefault: settings.openRouterModel, sailDefault: settings.sailModel,
-                             catalog: catalogModels(for: bot), native: nativeModels(for: bot))
+                             native: nativeModels(for: bot))
     }
 
     /// Shows the bot's conversation at `index` in its tabs (⌘1 for Home, ⌘2 to ⌘9 for its tasks).
