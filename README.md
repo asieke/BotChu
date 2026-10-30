@@ -1233,13 +1233,17 @@ on that pull request's branch to continue in instead). The same command run agai
     or error. The character and ring convey status
     without a dot or status pill. The card and pet animation reflect only the shown Home or task;
     the bot list still shows activity across its tasks. Five icon tabs sit below the character,
-    in a rounded bar with a raised selected segment: **Activity** (Home's closed tasks, run reviews of all the bot's work and conversation stats; a task's, the reviews that covered it), **Sub-agents** (delegated work),
+    in a rounded bar with a raised selected segment: **Activity** (the conversation's context, Home's closed tasks, run reviews of all the bot's work and conversation stats; a task's, the reviews that covered it), **Sub-agents** (delegated work),
     **Model & Usage** (account, agent, model, reasoning and allowance), **Session** (the CLI session
     and workspace controls), and **Memory** (instructions, personality, memory, the team
     playbook and skills). Hover for tab names, or
     focus the bar and use Left/Right arrows. The selected area is remembered across conversations
     and launches; its data always belongs to the shown Home or task. The character, tabs and bottom
-    actions stay visible while the selected area's content scrolls. Home's Activity lists only its
+    actions stay visible while the selected area's content scrolls. Activity opens, in Home and in a
+    task, with its **Context** (#320) once Quick tasks is set: two to four sentences on what the owner
+    last asked, what the bot is doing or just did and what it waits on, with how old they are beside
+    the heading (see Quick tasks); with no Quick tasks profile, or before one is made, there is none.
+    Home's Activity lists only its
     **Closed tasks** (collapsed at first, with their count), each to open again with a click: the
     open ones are the tabs beside the chat. Home keeps Edit and New Session;
     tasks keep Close Task and New Session. Task Activity shows the repository, computer and
@@ -1358,8 +1362,8 @@ on that pull request's branch to continue in instead). The same command run agai
     and default OpenRouter model, the Sail API key (a Keychain item of its own) and default Sail
     model, whether each bot's work gets a daily run review and at what time, and the Telegram gateway (below).
   - **Quick tasks:** Settings ▸ General ▸ **Quick tasks** picks the profile and model of small
-    background asks: for now, each new task's summary, the label of three or four words on its
-    tab's second line. It is **Off** until you pick a profile (Claude Code, Codex or Muse, which
+    background asks: each new task's summary, the label of three or four words on its
+    tab's second line, and each conversation's context on the Activity tab (below). It is **Off** until you pick a profile (Claude Code, Codex or Muse, which
     BotChu can run without tools); picking one starts on its family's smallest model (Haiku, GPT-6
     Luna, Muse Spark), which you can change, among a Codex profile's own models once listed. Each task started afterwards is summarized once, in the
     background (its turn doesn't wait), from its issue's or pull request's title once looked up, else
@@ -1378,6 +1382,19 @@ on that pull request's branch to continue in instead). The same command run agai
     Automatic titles and Regenerate Title allow one formatting correction on that same profile
     when a reply misses the three-or-four-word, 40-character limit, within the original 90-second
     timeout. A failed correction keeps the existing title; no other account is substituted.
+    A conversation's **Context** (#320), Home's or a task's, is asked for the same way, logged as a
+    "conversation context", as each of its turns ends (not after a bare heartbeat acknowledgement)
+    and, while a turn runs, at most every two minutes, counted from the turn's start and the last
+    ask; never two at once for a conversation, and a turn that ends meanwhile asks once more when
+    that one is done. It is made from the conversation's own latest messages as a title is (up to
+    20, 8,000 characters at most, the owner's latest kept first however much the bot wrote since,
+    without BotChu's heartbeats), with a task's issue title and brief, and whether the turn goes on.
+    Only a reply of two to four sentences, 400 characters at most, without a list, heading, tag,
+    code, link or a line that looks like a secret, replaces the card; anything else, a failure or
+    none within 90 seconds keeps the one before. It is saved beside the transcript in
+    `thread.context.json` with the transcript's stamp, so the next launch shows it at once while
+    the transcript is still the one it was made from, and never once it has changed. Closing a task,
+    deleting it or its bot, or quitting lets go of the one under way.
 
   - **Remote queue bots:** choose **Remote queue** in New Bot to message an agent such as Danny
     on its own computer. BotChu serves an authenticated HTTP queue, while the remote runtime
@@ -1517,7 +1534,9 @@ on that pull request's branch to continue in instead). The same command run agai
     (`ConversationTabs.swift`), a new task's summary on the Quick tasks profile: what it is made
     from, its prompt and which replies are kept, and a title renamed or made again from the task's
     own latest messages, which names the owner may type, one request at a time per task, and why a
-    late one is dropped (`TaskSummaries.swift`), replies' parsed Markdown, cached by their text within a
+    late one is dropped (`TaskSummaries.swift`), a conversation's context for the Activity tab: what
+    of the conversation it quotes, its prompt, which replies are kept, when it is asked for, and
+    when the one saved beside the transcript still describes it (`ConversationContext.swift`), replies' parsed Markdown, cached by their text within a
     budget of bytes (`MarkdownCache.swift`), and parsed off the main thread as they are written, one
     revision at a time for each reply (`MarkdownPreparation.swift`), a reply's text as it is selected
     and copied: its texts in reading order, what goes between them, words and paragraphs
@@ -2183,9 +2202,11 @@ file from other programs running as the same user.
   isn't part of `check`; run it after changing how reviews run a CLI.
 - Task summaries (Quick tasks) without tools: `swift run --package-path macOS botchu-smoke --summary
   [account id …]` names a sample task on each account the way a new task's summary is asked for,
-  then again from a short conversation as Regenerate Title asks (#236), on its family's smallest
-  model (or `BOTCHU_SMOKE_MODEL`), and passes when both replies are labels of three or four words. It spends a little of each account's allowance; run it after changing how
-  summaries are asked for.
+  then again from a short conversation as Regenerate Title asks (#236), and asks for that
+  conversation's context as the Activity tab does (#320), on its family's smallest model (or
+  `BOTCHU_SMOKE_MODEL`), and passes when both labels are of three or four words and the context is
+  two to four sentences. It spends a little of each account's allowance; run it after changing how
+  summaries or contexts are asked for.
 - New Issue without tools: `swift run --package-path macOS botchu-smoke --issue [account id …]` has
   each account write up a sample request as Product Fox would (#245), on its default model (or
   `BOTCHU_SMOKE_MODEL`), prints the issue and passes when the reply is one BotChu can file. Nothing

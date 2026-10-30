@@ -182,6 +182,9 @@ final class AppModel {
     /// and what is typed for it, and why a title couldn't be made again (#236, `TaskSummaries.swift`).
     var titleRequests = TaskTitleRequests()
     @ObservationIgnored var titleRuns: [UUID: Task<Void, Never>] = [:]
+    /// Conversations' contexts being asked for on the Activity tab (#320, `TaskSummaries.swift`).
+    @ObservationIgnored var contextRequests = ConversationContextRequests<ChatTarget>()
+    @ObservationIgnored var contextRuns: [ChatTarget: Task<Void, Never>] = [:]
     var renamingTask: ChatTarget?
     var renamingText = ""
     var titleNotice: TaskTitleNotice?
@@ -486,7 +489,7 @@ final class AppModel {
     }
 
     var storageWritersActive: Bool {
-        bots.contains { isBusy($0.id) } || !summaryRuns.isEmpty || !titleRuns.isEmpty
+        bots.contains { isBusy($0.id) } || !summaryRuns.isEmpty || !titleRuns.isEmpty || !contextRuns.isEmpty
             || evaluator.hasActiveWork || !petTasks.isEmpty || !makings.isEmpty || !checkoutWork.isEmpty
             || issueFilings.contains { $0.state == .writing }
     }
@@ -794,6 +797,7 @@ final class AppModel {
         // its history hears that it went, and a read under way finds it gone.
         for (target, conversation) in conversations where target.botID == id {
             historyBudget.remove(target)
+            stopContext(target)
             let waited = conversation.waiting
             conversation.waiting = []
             for waiting in waited { waiting.cancel?() }
@@ -916,6 +920,7 @@ final class AppModel {
             tasks[botID]?.removeAll { $0.id == id }
             if let conversation = conversations.removeValue(forKey: target) {
                 historyBudget.remove(target)
+                stopContext(target)
                 let waited = conversation.waiting
                 conversation.waiting = []
                 for waiting in waited { waiting.cancel?() }
@@ -947,6 +952,7 @@ final class AppModel {
         tasks[target.botID]?[i].archivedAt = Date()
         let task = tasks[target.botID]![i]
         saveTask(task, of: target.botID)
+        stopContext(target)
         unread.remove(target)
         TranscriptCache.forget(target)
         if openTask[target.botID] == target.taskID {
@@ -1092,12 +1098,17 @@ final class AppModel {
 
     /// Looks for every bot's requests every two seconds while any turn runs, whichever bot's or
     /// conversation's, so a request one conversation writes into another bot's folder doesn't wait
-    /// for that bot's Home (#111); and once more after the last turn ends.
+    /// for that bot's Home (#111); and once more after the last turn ends. Running turns' contexts
+    /// are asked for on the same tick, when they are due (#320).
     private func watchDispatches() {
         if !runs.isEmpty {
             guard dispatchTimer == nil else { return }
             dispatchTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.takeAllDispatches() }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.takeAllDispatches()
+                    for target in self.runs.keys { self.refreshContext(target, turnEnded: false) }
+                }
             }
         } else {
             dispatchTimer?.invalidate()
@@ -2064,6 +2075,9 @@ final class AppModel {
                                 self.runStates[target] = nil
                                 if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
                                 if !acknowledged, self.visibleBotID != id || self.tab(of: id) != target { self.unread.insert(target) }
+                                // What the conversation is about now, from the turn just saved; a bare
+                                // heartbeat acknowledgement changes nothing worth asking about (#320).
+                                if !acknowledged { self.refreshContext(target, turnEnded: true) }
                                 if target.taskID != nil { self.finishTaskTurn(target, messages: turn, stopped: stopped, failure: failure, reported: !acknowledged) }
                                 self.scheduleHeartbeat(after: Heartbeat.Turn(reply: turn.last(where: { $0.role == .assistant })?.text, pulse: pulse,
                                                                              stopped: stopped, failed: failure != nil,
@@ -2296,6 +2310,7 @@ final class AppModel {
         for task in petTasks.values { task.cancel() }
         for run in summaryRuns.values { run.cancel() }
         for run in titleRuns.values { run.cancel() }
+        for run in contextRuns.values { run.cancel() }
         // Sidebar changes that couldn't be saved get one more try.
         if indexFailure != nil { saveIndex() }
         unsavedAtQuit = storage.wait(timeout: quitTimeout)

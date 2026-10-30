@@ -100,6 +100,10 @@ final class ConversationState {
     var run: RunState?
     var reaction: BotActivity?
     var queue: MessageQueue?
+    /// What the conversation is about, on the Activity tab (#320), and whether the one saved
+    /// beside its transcript was read.
+    var context: ConversationContext?
+    @ObservationIgnored var contextRead = false
     /// Whether the thread is in memory (#109). Until it is, the chat shows a spinner, not an empty
     /// conversation, and `summary` comes from its digest.
     private(set) var isLoaded = false

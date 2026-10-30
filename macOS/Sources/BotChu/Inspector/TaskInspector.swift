@@ -19,6 +19,7 @@ struct TaskInspector: View {
             } content: { tab in
                 switch tab {
                 case .activity:
+                    ContextSection(target: target)
                     InspectorSection("Task") {
                         InspectorCard {
                             if let origin = task.jobRun {
@@ -107,6 +108,7 @@ struct TaskInspector: View {
             } actions: {
                 actions
             }
+            .readsContext(of: target, in: model)
         }
     }
 

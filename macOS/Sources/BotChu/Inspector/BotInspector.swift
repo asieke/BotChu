@@ -19,6 +19,7 @@ struct BotInspector: View {
             } content: { tab in
                 switch tab {
                 case .activity:
+                    ContextSection(target: .home(botID))
                     ClosedTasksSection(botID: botID)
                     RunReviewsSection(target: .home(botID))
                     JobsSection(botID: botID)
@@ -71,6 +72,7 @@ struct BotInspector: View {
             } actions: {
                 actions
             }
+            .readsContext(of: .home(botID), in: model)
         }
     }
 

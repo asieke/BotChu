@@ -163,36 +163,80 @@ extension TaskSummary {
         if !brief.isEmpty, !parts.contains(brief) { parts.append(brief) }
         if parts.isEmpty { parts.append(ConversationTab.subject(of: task).trimmingCharacters(in: .whitespacesAndNewlines)) }
         let opening = task.opening.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = excerpt(of: messages, repeating: [opening, brief], maxMessages: maxMessages,
+                            maxCharacters: maxConversation, maxMessage: maxMessage)
+        return TitleContext(about: parts.joined(separator: "\n\n"), conversation: lines)
+    }
+
+    /// The latest of a conversation's own words, oldest first: the owner's messages and the bot's
+    /// replies, each shortened to `maxMessage` and labelled ("Owner: ", "Bot: "), at most
+    /// `maxMessages` of them within `maxCharacters`. Tool calls, errors, BotChu's notes, images,
+    /// `<remember>` blocks, messages from other bots, and the first message when it is one of
+    /// `repeating` (a task's brief or issue, quoted already) are left out, and so is any line that
+    /// looks like a secret. With `ownerFirst` (a conversation's context, #320), the heartbeats BotChu
+    /// sends in the owner's place are left out too, and the owner's latest message is kept, first,
+    /// even when the bot has written more since than fits.
+    static func excerpt(of messages: [ChatMessage], repeating: Set<String>, maxMessages: Int, maxCharacters: Int,
+                        maxMessage: Int, ownerFirst: Bool = false) -> [String] {
         let first = messages.firstIndex { $0.role == .user }
-        var lines: [String] = []
-        var used = 0
-        var index = messages.endIndex
-        while index > messages.startIndex, lines.count < maxMessages {
-            index -= 1
+        func line(at index: Int) -> String? {
             let message = messages[index]
-            guard message.fromAgent == nil else { continue }
+            guard message.fromAgent == nil, !(ownerFirst && message.heartbeat != nil) else { return nil }
             var text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
             let speaker: String
             switch message.role {
             case .user:
-                // The task's first message is its brief, or its issue, quoted in `about` already.
-                if index == first, text == opening || text == brief { continue }
+                if index == first, repeating.contains(text) { return nil }
                 speaker = "Owner"
             case .assistant:
                 text = MemoryNotes.handoffText(text)
                 speaker = "Bot"
             case .tool, .error, .note, .receipt:
-                continue
+                return nil
             }
-            guard !text.isEmpty else { continue }
+            guard !text.isEmpty else { return nil }
             let quoted = neutralized(EvaluationSnapshot.window(text, maxMessage))
                 .replacingOccurrences(of: #"\R"#, with: "\n    ", options: .regularExpression)
-            let line = speaker + ": " + quoted
-            guard used + line.count + 1 <= maxConversation else { break }
+            return speaker + ": " + quoted
+        }
+        var owner: (index: Int, line: String)?
+        if ownerFirst {
+            var index = messages.endIndex
+            while index > messages.startIndex, owner == nil {
+                index -= 1
+                if messages[index].role == .user, let line = line(at: index) { owner = (index, line) }
+            }
+        }
+        // The owner's latest message is counted first, so the bot's later words fill what is left.
+        let reserved = owner.map { $0.line.count + 1 } ?? 0
+        var lines: [String] = []
+        var used = 0
+        var index = messages.endIndex
+        var reachedOwner = false
+        while index > messages.startIndex, lines.count < maxMessages - (owner == nil ? 0 : 1) {
+            index -= 1
+            if index == owner?.index { reachedOwner = true; break }
+            guard let line = line(at: index) else { continue }
+            guard used + reserved + line.count + 1 <= maxCharacters else { break }
             lines.insert(line, at: 0)
             used += line.count + 1
         }
-        return TitleContext(about: parts.joined(separator: "\n\n"), conversation: lines)
+        guard let owner else { return lines }
+        if reachedOwner {
+            // Reached in order: earlier words fill what is left before it.
+            lines.insert(owner.line, at: 0)
+            used += reserved
+            var earlier = owner.index
+            while earlier > messages.startIndex, lines.count < maxMessages {
+                earlier -= 1
+                guard let line = line(at: earlier) else { continue }
+                guard used + line.count + 1 <= maxCharacters else { break }
+                lines.insert(line, at: 0)
+                used += line.count + 1
+            }
+            return lines
+        }
+        return owner.line.count + 1 <= maxCharacters ? [owner.line, "[…]"] + lines : lines
     }
 
     /// The ask for a title made again. Without any conversation it is a new task's ask, from its
