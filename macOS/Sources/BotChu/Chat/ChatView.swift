@@ -305,6 +305,7 @@ struct ChatToolbar: ViewModifier {
                     Label(showsStatus ? "Hide Status" : "Show Status", systemImage: "sidebar.right")
                 }
                 .help("Show or hide the status sidebar (⌥⌘I)")
+                .accessibilityIdentifier("toolbar-status")
             }
         }
     }
@@ -341,7 +342,11 @@ struct TranscriptRow: View, Equatable {
             .onGeometryChange(for: Double.self) { Double($0.size.height) } action: { height in
                 transcript.measured(id, signature: signature, height: height)
             }
-            .onAppear { transcript.rowAppeared() }
+            .accessibilityIdentifier("chat-item-\(id.item.uuidString)")
+            .onAppear {
+                transcript.rowAppeared()
+                FrameTimings.mark(FrameMarks.chat(bot.id))
+            }
             .onDisappear { transcript.rowDisappeared() }
     }
 

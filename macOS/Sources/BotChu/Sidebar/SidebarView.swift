@@ -118,6 +118,7 @@ struct SidebarView: View {
         SidebarBotRow(bot: bot)
             .tag(SidebarDestination.bot(bot.id))
             .accessibilityIdentifier("sidebar-bot-\(bot.id)")
+            .onAppear { FrameTimings.mark(FrameMarks.sidebarRow) }
     }
 
     private func isExpanded(_ group: BotSections.Group) -> Binding<Bool> {
