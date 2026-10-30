@@ -133,15 +133,27 @@ private struct ConversationTabsColumn: View {
     let focus: FocusState<ChatTarget?>.Binding
 
     var body: some View {
+        // Compared by what they show, not by their actions, which are made anew each time and always
+        // set the same two settings: evaluated again at a write, this leaves their rows alone (#348).
         if collapsed {
             ConversationRail(botID: botID, focus: focus) { collapsed = false }
+                .equatable()
         } else {
             ConversationColumn(botID: botID, width: ConversationColumnLayout.clamped(width), focus: focus,
                                resize: { width = ConversationColumnLayout.clamped($0) }) {
                 collapsed = true
             }
+            .equatable()
         }
     }
+}
+
+extension ConversationColumn: Equatable {
+    static func == (a: Self, b: Self) -> Bool { a.botID == b.botID && a.width == b.width }
+}
+
+extension ConversationRail: Equatable {
+    static func == (a: Self, b: Self) -> Bool { a.botID == b.botID }
 }
 
 /// The column: Home pinned at the top, then a heading with the tasks' count, New Task and
