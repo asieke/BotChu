@@ -3,7 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
-- Latency report after each journeys run; every deploy sends it to the Inbox (#362)
+- Latency report after each journeys run; every deploy sends it to the Inbox (#362) (#370)
 - Journeys 4–13, the regression rule and the ratchet (#329) (#352)
 - Move the shared CLI turn loop into one Core TurnStream type (#345) (#351)
 - Fix main's build: pass input and timeout to Shell.execute (#350)
