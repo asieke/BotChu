@@ -45,6 +45,9 @@ import BotChuCore
 /// - `BOTCHU_DEMO=activity`: with `BOTCHU_DATA_DIR`, make the shown conversation a long agent run
 ///   in memory (`DemoActivity`), to review the chat's activity cards without a real turn;
 ///   `BOTCHU_SUBAGENT=<title>` opens the details of its sub-agent whose title starts with it.
+/// - `BOTCHU_SUBAGENT=<title>` without a demo: with `BOTCHU_DATA_DIR`, open the details of the saved
+///   sub-agent run whose title starts with it once it is read in; `BOTCHU_RESUME=<seconds>` then
+///   presses its Resume that long after (#368), to review an interrupted run and its relaunch.
 /// - `BOTCHU_DEMO=tasks`: with `BOTCHU_DATA_DIR`, give the selected bot six more open tasks in memory,
 ///   one in each state (`DemoTabs`), to review its tabs beside the chat without real turns.
 /// - `BOTCHU_DENSITY`: with `BOTCHU_DATA_DIR`, the chat density (`compact`, `detailed` or `raw`).
@@ -430,6 +433,23 @@ enum DevHooks {
         }
         if dataDir != nil, env["BOTCHU_DEMO"] == "activity", let id = model.selection {
             DemoActivity.install(in: model, target: model.tab(of: id))
+        }
+        if dataDir != nil, env["BOTCHU_DEMO"] == nil, let title = env["BOTCHU_SUBAGENT"] {
+            let delay = env["BOTCHU_RESUME"].flatMap(Double.init)
+            Task { @MainActor [weak model] in
+                for _ in 0..<80 {
+                    guard let model else { return }
+                    if let run = model.delegation.all.first(where: { $0.title.hasPrefix(title) && !$0.phase.isActive }) {
+                        SubagentFocus.shared.focus(run.id)
+                        if let delay {
+                            try? await Task.sleep(for: .seconds(delay))
+                            model.delegation.resumeByOwner(run.id)
+                        }
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+            }
         }
         if dataDir != nil, let draft = env["BOTCHU_DRAFT"], let id = model.selection {
             model.drafts[model.tab(of: id)] = draft.replacingOccurrences(of: "\\n", with: "\n")

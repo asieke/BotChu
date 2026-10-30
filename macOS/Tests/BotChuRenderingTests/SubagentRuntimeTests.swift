@@ -815,6 +815,112 @@ extension RenderingTests {
         #expect(restored.delegation.all.isEmpty)
     }
 
+    /// #368: a run cut by a restart is Interrupted, and Resume relaunches it in the same worktree,
+    /// continuing its session with a delta that says how it ended and what its workspace holds.
+    @Test func resumingARestartCutRunContinuesItsSessionInItsWorktree() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let cut = try interruptedRun(fixture)
+        let app = AppModel(store: fixture.store, settings: fixture.settings)
+        defer { app.stopAll() }
+        await app.storage.settle()
+        #expect(app.delegation.run(cut.id)?.isInterrupted == true)
+        app.delegation.resumeByOwner(cut.id)
+        try await fixture.wait { app.delegation.run(cut.id)?.phase == .completed }
+        let run = try #require(app.delegation.run(cut.id))
+        #expect(run.handoffOutput == "RESUMED|True|False|True")
+        #expect(run.interruption == nil && run.errorMessage == nil)
+        #expect(run.workingDirectory == fixture.folder.path)
+        let thread = fixture.home.loadSubagentThread(id: cut.id, taskID: fixture.target.taskID)
+        #expect(thread.contains { $0.role == .note && $0.text == "Resumed by the owner." })
+        let delta = try #require(thread.last { $0.role == .user }?.text)
+        #expect(delta.hasPrefix("<botchu_resume>") && delta.contains("BotChu quit or restarted while it ran"))
+        #expect(app.delegation.resumeProblems[cut.id] == nil)
+        // Done: there's nothing left to resume.
+        app.delegation.resumeByOwner(cut.id)
+        try await fixture.wait { app.delegation.resumeProblems[cut.id] != nil }
+        #expect(app.delegation.resumeProblems[cut.id]?.contains("completed") == true)
+    }
+
+    /// A CLI of the run (or anything it started) still running owns its worktree: Resume refuses
+    /// until it ends. A session that can't be continued starts anew with the brief, once.
+    @Test func resumeWaitsForAStillRunningCLIAndFallsBackToANewSession() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let cut = try interruptedRun(fixture)
+        let app = AppModel(store: fixture.store, settings: fixture.settings)
+        defer { app.stopAll() }
+        await app.storage.settle()
+        let survivor = Process()
+        survivor.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        survivor.arguments = ["-c", "import time; time.sleep(60)"]
+        survivor.environment = ["PATH": "/usr/bin:/bin", "BOTCHU_CALLER_SUBAGENT_ID": cut.id.uuidString]
+        try survivor.run()
+        defer { if survivor.isRunning { survivor.terminate() } }
+        app.delegation.resumeByOwner(cut.id)
+        try await fixture.wait { app.delegation.resumeProblems[cut.id] != nil }
+        #expect(app.delegation.resumeProblems[cut.id]?.contains("still runs on this Mac (pid \(survivor.processIdentifier))") == true)
+        #expect(app.delegation.run(cut.id)?.isInterrupted == true)
+        survivor.terminate()
+        survivor.waitUntilExit()
+        try Data().write(to: fixture.root.appendingPathComponent("break-session"))
+        app.delegation.resumeByOwner(cut.id)
+        try await fixture.wait { app.delegation.run(cut.id)?.phase == .completed }
+        // Its session failed before any tool call: a new one, with its brief (the worker's soul) and the delta.
+        #expect(app.delegation.run(cut.id)?.handoffOutput == "RESUMED|False|True|True")
+        #expect(app.delegation.resumeProblems[cut.id] == nil)
+        let thread = fixture.home.loadSubagentThread(id: cut.id, taskID: fixture.target.taskID)
+        #expect(thread.contains { $0.text == "Its session couldn't be continued, so it starts a new one with its brief." })
+    }
+
+    /// `botchu-subagent resume <id>` from the task's next turn and from its bot's Home relaunches
+    /// the run and hands its handoff to that turn; another bot's turn can't, and a later turn's
+    /// `wait` collects a run that ended in an earlier one.
+    @Test func turnsThatMayResumeOrCollectARunGetItsHandoffAndOthersCant() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let fromTask = try interruptedRun(fixture), fromHome = try interruptedRun(fixture), foreign = try interruptedRun(fixture)
+        var earlier = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID, depth: 1, targetBot: fixture.worker,
+                                  title: "Earlier", brief: "Earlier", workingDirectory: fixture.folder.path, phase: .completed)
+        earlier.callerInvocationID = UUID()
+        earlier.handoffOutput = "EARLIER-HANDOFF"
+        earlier.finishedAt = .now
+        try fixture.home.saveSubagent(earlier)
+        let app = AppModel(store: fixture.store, settings: fixture.settings)
+        defer { app.stopAll() }
+        await app.storage.settle()
+        func reply(_ text: String, in target: ChatTarget) async throws -> String {
+            let before = app.thread(target).count
+            app.send(text, to: target)
+            try await fixture.wait { !app.isRunning(target) && app.thread(target).count > before + 1 }
+            return app.thread(target).last { $0.role == .assistant }?.text ?? ""
+        }
+        #expect(try await reply("RESUME_CHILD:\(fromTask.id.uuidString)", in: fixture.target).contains("RESUMED|True|False|True"))
+        #expect(app.delegation.run(fromTask.id)?.phase == .completed)
+        let home = ChatTarget.home(fixture.parent.id)
+        #expect(try await reply("RESUME_CHILD:\(fromHome.id.uuidString)", in: home).contains("RESUMED|True|False|True"))
+        #expect(app.delegation.run(fromHome.id)?.phase == .completed)
+        let refused = try await reply("RESUME_CHILD:\(foreign.id.uuidString)", in: .home(fixture.worker.id))
+        #expect(refused.contains("Not resumed: No sub-agent run \(foreign.id.uuidString.lowercased()) that this turn can resume or collect."))
+        #expect(app.delegation.run(foreign.id)?.isInterrupted == true)
+        #expect(try await reply("WAIT_FOR:\(earlier.id.uuidString)", in: fixture.target).contains("EARLIER-HANDOFF"))
+    }
+
+    /// A run of the fixture's task saved as running, as a crash or quit leaves it, with its session.
+    private func interruptedRun(_ fixture: SubagentFixture) throws -> SubagentRun {
+        var run = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID, depth: 1, targetBot: fixture.worker,
+                              title: "Long audit", brief: "AUDIT", workingDirectory: fixture.folder.path, phase: .running)
+        run.startedAt = .now.addingTimeInterval(-60)
+        run.callerInvocationID = UUID()
+        run.sessionID = "fixture-session"
+        run.sessionAccountID = fixture.worker.accountID
+        try fixture.home.saveSubagent(run)
+        try fixture.home.saveSubagentThread(PagedTranscript.Snapshot([ChatMessage(role: .user, text: "AUDIT"),
+            ChatMessage(role: .tool, toolName: "Shell", toolInput: "swift test", toolState: .running)], start: 0, base: nil, pending: []),
+            id: run.id, taskID: fixture.target.taskID)
+        return run
+    }
+
     /// The tab leads with runs under way and failures, and folds trees that ended without one into
     /// Finished at once, also while the tab shows them. The chat's Open shows a finished run's
     /// details directly, leaving Finished folded, and Back returns to the list as it was (#194).
@@ -1257,6 +1363,16 @@ private final class MailboxStorageGate: @unchecked Sendable {
     with open(os.path.join(os.path.dirname(__file__), "session-prompts.txt"), "a") as output:
         output.write(prompt + "\n")
     emit({"type":"thread.started", "thread_id":"fixture-session"})
+    if "<botchu_resume>" in prompt:
+        # A resumed run (#368): whether it continued its session, had its brief again, and was told its workspace.
+        resumed = "fixture-session" in sys.argv
+        if resumed and os.path.exists(os.path.join(os.path.dirname(__file__), "break-session")):
+            print("tool_use ids were found without tool_result blocks", file=sys.stderr)
+            sys.exit(1)
+        emit({"type":"item.completed", "item":{"type":"agent_message",
+              "text":"RESUMED|%s|%s|%s" % (resumed, "WORKER-SOUL" in prompt, "Workspace: " in prompt)}})
+        emit({"type":"turn.completed"})
+        sys.exit(0)
     if depth:
         assert "WORKER-SOUL" in prompt
         brief = re.search(r"<handoff_brief>\s*(.*?)\s*</handoff_brief>", prompt, re.S).group(1)
@@ -1340,6 +1456,10 @@ private final class MailboxStorageGate: @unchecked Sendable {
         emit({"type":"item.completed", "item":{"id":"item_child", "type":"command_execution", "command":"swift test",
               "aggregated_output":"passed", "exit_code":0, "status":"completed"}})
         answer = "HANDOFF-REVIEWED"
+    elif brief.startswith("RESUME_CHILD:"):
+        answer = helper("resume", brief.split(":", 1)[1])
+    elif brief.startswith("WAIT_FOR:"):
+        answer = helper("wait", brief.split(":", 1)[1])
     elif brief == "DEPTH":
         answer = helper("call", "--agent", "Worker", "--brief", "DEPTH")
     elif brief == "UNKNOWN":
