@@ -133,6 +133,9 @@ if dumping {
 var results: [JourneyResult] = []
 var hertz: Int?
 var journeys = Journeys(app: app, fixture: fixture, baseline: baseline, repeats: repeats) { print("journey \($0.report)") }
+journeys.stall = options["--stall"].flatMap(Double.init) ?? 0
+journeys.recording = options["--record"] != nil
+if journeys.stall > 0 { print("journeys: injecting a \(Int(journeys.stall)) ms stall into each of journey 2's toggles") }
 
 /// The commit the app under test was built from.
 func builtCommit() -> String { (Bundle(url: app.bundle)?.object(forInfoDictionaryKey: "BotChuCommit") as? String) ?? "" }
@@ -155,9 +158,7 @@ func saveResults(loadAfter: [Double]) {
         print("journeys: couldn't write the results: \(error)")
     }
 }
-journeys.stall = options["--stall"].flatMap(Double.init) ?? 0
-journeys.recording = options["--record"] != nil
-if journeys.stall > 0 { print("journeys: injecting a \(Int(journeys.stall)) ms stall into each of journey 2's toggles") }
+
 // A journey with a failed step is measured again once, after the others (not while recording a
 // baseline, which keeps what it measured), so a slow spell of the Mac's has time to pass.
 var failedFirst: [(number: Int, journey: () -> [JourneyResult], first: [JourneyResult])] = []
