@@ -261,6 +261,8 @@ extension RenderingTests {
         let fixture = try PersistenceFixture(control: control)
         defer { fixture.cleanUp() }
         let app = fixture.app
+        // Launched, with the shown conversation read, before anything is typed.
+        await app.storage.settle()
         let reference = MessageReference(kind: .project, target: "fixture/repo0", label: "#fixture/repo0", location: 6)
         app.drafts[fixture.task] = "Check #fixture/repo0 next"
         app.draftReferences[fixture.task] = [reference]
@@ -283,10 +285,11 @@ extension RenderingTests {
         #expect(relaunched.drafts[fixture.homeTarget] == "Home's own")
         for target in [fixture.other, fixture.third, fixture.fourth] { #expect(relaunched.drafts[target] == nil) }
 
+        await relaunched.storage.settle()
         relaunched.delete(fixture.bot.id)
         await relaunched.storage.settle()
         #expect(!FileManager.default.fileExists(atPath: drafts.folder(bot: fixture.bot.id).path))
-        #expect(control.onMain.isEmpty)
+        #expect(control.onMain.isEmpty, "\(control.onMain)")
     }
 
     static func ms(since start: UInt64) -> Double { Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000 }
