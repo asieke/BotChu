@@ -299,12 +299,18 @@ public struct AntigravityParser: StreamParser {
                         let conversation = child["conversation_id"] as? String ?? ""
                         return "Launched \(role)" + (conversation.isEmpty ? "" : "\nConversation: \(conversation)")
                     }.joined(separator: "\n\n")
+                    // A failed step says why in tool_info.error (1.4.11). The stream leaves out what a
+                    // search found and a read's text ("N lines, M bytes"), though the model gets both.
+                    let reported = (info?["output"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                    let reason = ((info?["error"] as? JSON)?["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                     let output = state == "DONE"
-                        ? (info?["output"] as? String ?? launched ?? "")
-                        : (info?["output"] as? String ?? "Antigravity reported \(state).")
+                        ? (reported ?? launched ?? "")
+                        : (reported ?? reason ?? "Antigravity reported \(state).")
                     let failed = state != "DONE" || output.hasPrefix("Command failed")
+                    // Every command ends DONE; only its output says how it exited.
+                    let exit = ToolActivity.isShell(toolName: name) ? Self.exitCode(output) : nil
                     return [.toolStarted(id: id, name: name, input: input, arguments: arguments),
-                            .toolFinished(id: id, name: name, output: output, isError: failed)]
+                            .toolFinished(id: id, name: name, output: output, isError: failed, exitCode: exit)]
                 }
             default: break
             }
@@ -316,7 +322,10 @@ public struct AntigravityParser: StreamParser {
             // response is the assistant's reply, never an error diagnostic.
             if reportedError { return usage } // The error event already reported this failure.
             if status == "SUCCESS" || completedResponse { return usage + [.finished] }
-            return usage + [.failed("Antigravity stopped: \(status.isEmpty ? "unknown status" : status).")]
+            // A run that couldn't start (such as an unknown --model) says why in result.error.
+            let error = result?["error"] as? String ?? (result?["error"] as? JSON)?["message"] as? String
+            return usage + [.failed(error.flatMap { $0.isEmpty ? nil : $0 }
+                ?? "Antigravity stopped: \(status.isEmpty ? "unknown status" : status).")]
         case "error":
             reportedError = true
             let message = (obj["error"] as? JSON)?["message"] as? String ?? obj["error"] as? String ?? obj["message"] as? String
@@ -324,6 +333,20 @@ public struct AntigravityParser: StreamParser {
         default: break
         }
         return []
+    }
+
+    /// N in `Command exited with code N.`, the first line of a command's output, or the first after
+    /// the note agy puts before a long output it shortened.
+    static func exitCode(_ output: String) -> Int? {
+        var head = output.prefix(1_000)
+        if head.hasPrefix("The tool's output was truncated"),
+           let preview = head.range(of: "\nHere is a preview with the middle of the output truncated:\n") {
+            head = head[preview.upperBound...]
+        }
+        let line = head.prefix { !$0.isNewline }
+        let prefix = "Command exited with code "
+        guard line.hasPrefix(prefix), line.hasSuffix(".") else { return nil }
+        return Int(line.dropFirst(prefix.count).dropLast())
     }
 }
 
