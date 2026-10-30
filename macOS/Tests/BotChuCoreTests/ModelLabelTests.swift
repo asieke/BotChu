@@ -133,6 +133,46 @@ import Testing
         #expect(try JSONDecoder().decode(Bot.self, from: data).reportedModel == nil)
     }
 
+    /// #324: a bot's row and the `@` list name its model short, after its account: without the family
+    /// the account implies or the picker's "· default" and "· latest", and "default" for the
+    /// account's own until its CLI reports which model that is.
+    @Test func botRowsNameTheModelShortAfterTheAccount() {
+        func runsOn(_ accountID: String, _ model: String = "", reported: String? = nil, providerID: String? = nil,
+                    openRouterDefault: String = "", sailDefault: String = "", catalog: [CatalogModel] = [],
+                    native: [ModelOption]? = nil) -> String {
+            var bot = Bot(name: "Scout", accountID: accountID, model: model, workspace: "/tmp/scout")
+            bot.providerID = providerID
+            if let reported { bot.recordReportedModel(reported, requested: model) }
+            return BotRowSummary.runsOn(bot, openRouterDefault: openRouterDefault, sailDefault: sailDefault, catalog: catalog, native: native)
+        }
+        // Claude: a pinned model, an alias before and after its CLI reports it, and the default.
+        #expect(runsOn("claude-personal", "claude-fable-5-1") == "Claude Personal · Fable 5.1")
+        #expect(runsOn("claude-personal", "opus") == "Claude Personal · Opus")
+        #expect(runsOn("claude-personal", "opus", reported: "claude-opus-5-5") == "Claude Personal · Opus 5.5")
+        #expect(runsOn("claude-personal") == "Claude Personal · default")
+        #expect(runsOn("claude-personal", reported: "claude-opus-5-5") == "Claude Personal · Opus 5.5")
+        #expect(runsOn("claude-work", "opus[1m]", reported: "claude-opus-5-5[1m]") == "Claude Work · Opus 5.5 (1M context)")
+        // An ID its CLI ran as another model: the one it ran.
+        #expect(runsOn("claude-dev", "house-alias", reported: "claude-sonnet-5-5") == "Claude Dev · Sonnet 5.5")
+        // Codex's models keep their names, and Antigravity's Claude models theirs.
+        #expect(runsOn("codex-work", "gpt-6.1-sol") == "Codex Work · GPT-6.1 Sol")
+        #expect(runsOn("codex-work") == "Codex Work · default")
+        #expect(runsOn("google", "claude-opus-5-5-medium") == "Google (Antigravity) · Claude Opus 5.5")
+        #expect(runsOn("google", "gemini-4-argon-medium") == "Google (Antigravity) · Gemini 4 Argon")
+        // Muse drops its own name, from an ID or the profile's list.
+        #expect(runsOn("muse", reported: "muse-wonder-full-1.0") == "Muse · Wonder Full 1.0")
+        #expect(runsOn("muse", "muse-wonderful", native: [ModelOption(id: "muse-wonderful", name: "Wonderful", efforts: [])]) == "Muse · Wonderful")
+        // Pi: the profile's list names the model chosen or Settings' OpenRouter default; another
+        // provider with none chosen has none.
+        let deepSeek = [ModelOption(id: "deepseek/deepseek-v4", name: "DeepSeek V4", efforts: [], providerID: "openrouter")]
+        #expect(runsOn("openrouter", "deepseek/deepseek-v4", native: deepSeek) == "Pi · DeepSeek V4")
+        #expect(runsOn("openrouter", openRouterDefault: "deepseek/deepseek-v4", native: deepSeek) == "Pi · DeepSeek V4")
+        #expect(runsOn("openrouter", providerID: "anthropic") == "Pi · default")
+        // Sail: its list names Settings' model.
+        #expect(runsOn("sail", sailDefault: "kimi-k3", catalog: [CatalogModel(id: "kimi-k3", name: "MoonshotAI: Kimi K3")]) == "Sail Research · Kimi K3")
+        #expect(runsOn("sail") == "Sail Research · default")
+    }
+
     private func run(_ kind: AgentKind, _ lines: [String]) -> [AgentEvent] {
         var parser = StreamParsers.make(for: kind)
         return lines.flatMap { parser.parse(line: $0) }

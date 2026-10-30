@@ -280,8 +280,9 @@ public struct ConversationTab: Equatable, Sendable {
     }
 }
 
-/// A bot's row in the bot list (#128): a small dot for each of its conversations that isn't idle,
-/// the most urgent first (#218), and a subtitle that says what it is doing.
+/// A bot's row in the bot list (#128, #324): a small dot for each of its open tasks, an idle one's
+/// a ring, and for Home while it isn't idle, the most urgent first (#218); and a subtitle that says
+/// what it runs on, whatever it is doing.
 public struct BotRowSummary: Equatable, Sendable {
     /// The most dots a row shows; the rest are counted (+N).
     public static let dotLimit = 4
@@ -289,52 +290,30 @@ public struct BotRowSummary: Equatable, Sendable {
     /// The dots, most urgent first (`TabState.Kind.urgency`), and in tab order (Home, then the open
     /// tasks) among equals, so the ones a full row leaves out are the least urgent.
     public var dots: [TabState.Kind]
-    /// How many more conversations aren't idle.
+    /// How many more there are.
     public var more: Int
-    /// "Needs input on #113", "Working on #113", "2 tasks running", "Thinking…" while only Home
-    /// works, "4 tasks", or the account.
+    /// What the bot runs on (`runsOn`): "Claude Personal · Fable 5.1".
     public var subtitle: String
-    /// What the dots say, for VoiceOver and the tooltip: "1 needs input, 2 working, 1 finished".
+    /// What the dots say, for VoiceOver and the tooltip: "1 needs input, 2 working, 3 idle".
     public var spokenDots: String
 
-    public init(account: String, home: TabState, tasks: [(task: BotTask, state: TabState)]) {
-        let busy = ([home] + tasks.map(\.state)).map(\.kind).enumerated()
-            .filter { $0.element != .idle }
+    public init(runsOn: String, home: TabState, tasks: [TabState]) {
+        let shown = ([home.kind].filter { $0 != .idle } + tasks.map(\.kind)).enumerated()
             .sorted { ($0.element.urgency, -$0.offset) > ($1.element.urgency, -$1.offset) }
             .map(\.element)
-        dots = Array(busy.prefix(Self.dotLimit))
-        more = max(0, busy.count - Self.dotLimit)
-        func name(_ task: BotTask) -> String { task.work.map { "#\($0.number)" } ?? task.jobRun?.jobTitle ?? task.repoName }
-        let asking = tasks.filter { $0.state.kind == .needsInput }
-        let waiting = asking.count + (home.kind == .needsInput ? 1 : 0)
-        let running = tasks.filter { $0.state.kind.isActive }
-        if waiting > 1 {
-            subtitle = "\(waiting) need input"
-        } else if home.kind == .needsInput {
-            subtitle = "Needs input"
-        } else if let task = asking.first?.task {
-            subtitle = "Needs input on " + name(task)
-        } else if running.count == 1, let task = running.first?.task {
-            subtitle = "Working on " + name(task)
-        } else if running.count > 1 {
-            subtitle = "\(running.count) tasks running"
-        } else if home.kind.isActive, let text = home.text {
-            subtitle = text
-        } else if !tasks.isEmpty {
-            subtitle = "\(tasks.count) task\(tasks.count == 1 ? "" : "s")"
-        } else {
-            subtitle = account
-        }
-        let order: [TabState.Kind] = [.needsInput, .failed, .stopped, .preparing, .starting, .working, .news]
+        dots = Array(shown.prefix(Self.dotLimit))
+        more = max(0, shown.count - Self.dotLimit)
+        subtitle = runsOn
+        let order: [TabState.Kind] = [.needsInput, .failed, .stopped, .preparing, .starting, .working, .news, .idle]
         spokenDots = order.compactMap { kind in
-            let n = busy.filter { $0 == kind }.count
+            let n = shown.filter { $0 == kind }.count
             return n == 0 ? nil : "\(n) \(kind.name(count: n))"
         }.joined(separator: ", ")
     }
 
     /// Several bots' rows as one collapsed heading shows them, such as Specialists' in the sidebar
     /// (#250): their dots together, most urgent first and in the rows' order among equals, at most
-    /// `dotLimit`, then +N for the rest; spoken as each busy bot's own dots, by name.
+    /// `dotLimit`, then +N for the rest; spoken as each bot's own dots, by name.
     public init(merging rows: [(name: String, summary: BotRowSummary)]) {
         let busy = rows.flatMap(\.summary.dots).enumerated()
             .sorted { ($0.element.urgency, -$0.offset) > ($1.element.urgency, -$1.offset) }
@@ -343,6 +322,44 @@ public struct BotRowSummary: Equatable, Sendable {
         more = max(0, busy.count - Self.dotLimit) + rows.map(\.summary.more).reduce(0, +)
         subtitle = ""
         spokenDots = rows.filter { !$0.summary.dots.isEmpty }.map { "\($0.name): \($0.summary.spokenDots)" }.joined(separator: "; ")
+    }
+}
+
+extension BotRowSummary {
+    /// What a bot runs on, as its row and the `@` list say it (#324): its account, then its model
+    /// (`modelName`), "Claude Personal · Fable 5.1".
+    public static func runsOn(_ settings: any RunSettings, openRouterDefault: String = "", sailDefault: String = "",
+                              catalog: [CatalogModel] = [], native: [ModelOption]? = nil) -> String {
+        settings.account.name + " · " + modelName(of: settings, openRouterDefault: openRouterDefault, sailDefault: sailDefault,
+                                                  catalog: catalog, native: native)
+    }
+
+    /// The model the next turn runs, as the picker names it (`ModelPickerData`) but short: without
+    /// the family its account implies (Claude Fable 5.1 is Fable 5.1 on Claude Code) or what follows
+    /// the name (· default, · latest), and "default" for the account's own until its CLI reports
+    /// which model that is. `catalog` is Sail's list; `native` the profile's own (#220).
+    public static func modelName(of settings: any RunSettings, openRouterDefault: String = "", sailDefault: String = "",
+                                 catalog: [CatalogModel] = [], native: [ModelOption]? = nil) -> String {
+        let kind = settings.account.kind
+        let selected = settings.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effective = GenerationOptions.effectiveModel(selected, kind: kind, openRouterDefault: openRouterDefault,
+                                                         sailDefault: sailDefault, providerID: settings.providerID)
+        let resolved = effective == selected ? settings.resolvedModel.flatMap { $0.isEmpty ? nil : $0 } : nil
+        let listed = kind == .sail ? catalog : []
+        let title: String
+        if effective.isEmpty {
+            guard let resolved else { return "default" }
+            title = listed.first { $0.id == resolved }?.title ?? GenerationOptions.fullName(resolved, kind: kind, catalog: native)
+        } else if let model = listed.first(where: { $0.id == effective }) {
+            title = model.title
+        } else if kind == .pi, let model = native?.first(where: { $0.id == effective }) {
+            title = model.name
+        } else {
+            title = GenerationOptions.label(for: effective, kind: kind, resolved: resolved, catalog: native).title
+        }
+        let name = title.components(separatedBy: " · ")[0]
+        let family = (kind.displayName.split(separator: " ").first.map(String.init) ?? "") + " "
+        return name.hasPrefix(family) && name.count > family.count ? String(name.dropFirst(family.count)) : name
     }
 }
 

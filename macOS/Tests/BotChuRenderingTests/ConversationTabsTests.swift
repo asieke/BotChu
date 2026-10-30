@@ -245,7 +245,8 @@ extension RenderingTests {
         }
     }
 
-    /// #144: a bot row's dots sit at its end, centred on the row, not on its second line.
+    /// #144: a bot row's dots sit at its end, centred on the row, not on its second line; an idle
+    /// task's ring comes last (#324).
     @Test func botRowDotsAreCentredOnTheRow() async throws {
         _ = NSApplication.shared
         let fixture = try TabsFixture()
@@ -255,7 +256,7 @@ extension RenderingTests {
         model.runStates[tasks[1]] = RunState(startedAt: Date().addingTimeInterval(-252), hasOutput: true, activity: .coding)
         model.unread.insert(tasks[0])
         let summary = model.botRowSummary(of: bot)
-        try #require(summary.dots == [.working, .news])
+        try #require(summary.dots == [.working, .news, .idle])
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.contentView = nil; window.close() }
@@ -274,7 +275,12 @@ extension RenderingTests {
         // Both 6-point dots, 4 points apart.
         #expect(abs(dots.width - 16) <= 1 && abs(dots.height - 6) <= 1, "the dots are \(dots)")
         #expect(abs(dots.midY - host.bounds.height / 2) <= 1, "the dots' middle is \(dots.midY) in a row \(host.bounds.height) tall")
-        #expect(host.bounds.width - dots.maxX < 8, "the dots end \(host.bounds.width - dots.maxX) from the row's end, \(dots) in \(host.bounds)")
+        // Then the idle task's grey ring, 4 points on, at the row's end.
+        let ring = try #require(drawing.bounds(in: CGRect(x: dots.maxX + 1, y: 0, width: host.bounds.width - dots.maxX - 1, height: host.bounds.height)) {
+            $0.alphaComponent > 0.5
+        })
+        #expect(abs(ring.width - 6) <= 1 && abs(ring.minX - dots.maxX - 4) <= 1 && abs(ring.midY - dots.midY) <= 1, "the ring is \(ring), after \(dots)")
+        #expect(host.bounds.width - ring.maxX < 8, "the dots end \(host.bounds.width - ring.maxX) from the row's end, \(ring) in \(host.bounds)")
     }
 
     /// #218: each state's dot has its own colour and shape, in light and dark: rings while idle
@@ -371,7 +377,7 @@ extension RenderingTests {
             let ground = try #require(swatch.colours(around: swatchMiddle, at: 0...0.8).first, "\(appearance.rawValue): the column's ground")
             for kind in [TabState.Kind.preparing, .starting] + filled {
                 let label = "\(appearance.rawValue), \(kind)"
-                var summary = BotRowSummary(account: "Claude Dev", home: .idle(since: nil), tasks: [])
+                var summary = BotRowSummary(runsOn: "Claude Dev · default", home: .idle(since: nil), tasks: [])
                 summary.dots = [kind]
                 // The column's 8-point dot, and the row's 6-point one, unselected and selected.
                 let column = try await draw(StatusDot(kind: kind).padding(4), in: appearance)
@@ -423,8 +429,8 @@ extension RenderingTests {
         #expect(model.tabState(of: tasks[0]).kind == .needsInput)
         #expect(model.conversationTab(of: tasks[0])?.status == "Needs input")
         #expect(model.tabState(of: tasks[2]).kind == .idle)
-        #expect(model.botRowSummary(of: bot).dots == [.needsInput, .needsInput])
-        #expect(model.botRowSummary(of: bot).subtitle == "2 need input")
+        #expect(model.botRowSummary(of: bot).dots == [.needsInput, .needsInput, .idle, .idle])
+        #expect(model.botRowSummary(of: bot).subtitle == "Claude Personal · default")
         // Shown, its deliveries are read, and it still waits; Done, it doesn't.
         model.show(tasks[0])
         #expect(!model.inbox.isUnread(asking.id) && model.tabState(of: tasks[0]).kind == .needsInput)
@@ -447,7 +453,7 @@ extension RenderingTests {
         #expect(model.tabState(of: tasks[2]).kind == .news)
         model.show(tasks[2])
         #expect(model.tabState(of: tasks[2]).kind == .idle)
-        #expect(model.botRowSummary(of: bot).dots == [.needsInput, .stopped])
+        #expect(model.botRowSummary(of: bot).dots == [.needsInput, .stopped, .idle, .idle])
 
         // Relaunched: Home still waits on the owner, and the task is still stopped.
         model.saveThread(tasks[1])
@@ -471,10 +477,11 @@ extension RenderingTests {
         let home = ChatTarget.home(bot.id)
         let tasks = fixture.tasks.map { ChatTarget.task($0.id, of: bot.id) }
         #expect(model.tabs(of: bot.id) == [home] + tasks)
-        // Nothing running: the open tasks' count, and no dots.
-        #expect(model.botRowSummary(of: bot).subtitle == "3 tasks")
-        #expect(model.botRowSummary(of: bot).dots.isEmpty)
-        #expect(model.botRowSummary(of: fixture.quiet).subtitle == fixture.quiet.account.name)
+        // Nothing running: a ring for each open task, and what the bot runs on (#324).
+        #expect(model.botRowSummary(of: bot).subtitle == "Claude Personal · default")
+        #expect(model.botRowSummary(of: bot).dots == [.idle, .idle, .idle])
+        #expect(model.botRowSummary(of: fixture.quiet).subtitle == "Claude Personal · default")
+        #expect(model.botRowSummary(of: fixture.quiet).dots.isEmpty)
         // One running, one with news (and its pull request), one failed (from its thread).
         model.runStates[tasks[1]] = RunState(startedAt: Date().addingTimeInterval(-60), hasOutput: true, activity: .coding)
         model.tasks[bot.id]?[0].pullRequest = 122
@@ -490,7 +497,7 @@ extension RenderingTests {
         let summary = model.botRowSummary(of: bot)
         // The most urgent first (#218).
         #expect(summary.dots == [.failed, .working, .news])
-        #expect(summary.subtitle == "Working on #42")
+        #expect(summary.subtitle == "Claude Personal · default")
         // Shown, the news is read; the failure stays until the next turn starts.
         model.show(tasks[0])
         model.show(tasks[2])

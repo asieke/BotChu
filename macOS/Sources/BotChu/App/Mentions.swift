@@ -14,7 +14,10 @@ extension AppModel {
     /// but `botID`, and the projects with `repo`, the one chosen, first.
     func mentionSources(for botID: UUID?, favoring repo: String?) -> MentionSources {
         MentionSources(
-            agents: { [weak self] in self?.bots.filter { $0.id != botID }.map(BotRosterEntry.init) ?? [] },
+            agents: { [weak self] in
+                guard let self else { return [] }
+                return bots.filter { $0.id != botID }.map { BotRosterEntry(bot: $0, runsOn: $0.isRemoteQueue ? nil : self.runsOn($0)) }
+            },
             projects: { [weak self] in self?.projectCatalog ?? [] },
             catalog: { [weak self] in self?.mentionCatalog ?? MentionCatalogState() },
             favoredRepo: repo,
