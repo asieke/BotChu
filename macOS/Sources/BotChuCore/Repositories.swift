@@ -6,10 +6,25 @@ public enum Shell {
     /// Printed before the command runs, so what the login shell's own files print is left out.
     static let marker = "__BOTCHU_COMMAND_OUTPUT__"
 
+    /// How long a command may run before it is stopped: long enough for any gh or git command, so
+    /// only one that hangs (on a network that stopped answering) is.
+    public static let timeout: TimeInterval = 120
+    /// For a clone, a fetch and a checkout of a worktree, a move of one, and files sent with a command.
+    public static let longTimeout: TimeInterval = 30 * 60
+
     public struct Result: Equatable, Sendable {
         public var status: Int32
         public var output: String
         public var errors: String
+        /// Whether it was stopped at its time limit.
+        public var timedOut: Bool
+
+        public init(status: Int32, output: String, errors: String = "", timedOut: Bool = false) {
+            self.status = status
+            self.output = output
+            self.errors = errors
+            self.timedOut = timedOut
+        }
 
         public var ok: Bool { status == 0 }
 
@@ -25,71 +40,27 @@ public enum Shell {
         }
     }
 
-    public static func run(_ arguments: [String], in directory: String, input: Data? = nil) async -> Result {
+    public static func run(_ arguments: [String], in directory: String, input: Data? = nil, timeout: TimeInterval = Shell.timeout) async -> Result {
         await execute("/bin/zsh", ["-l", "-c", "print -r -- \(marker); exec \"$@\"", "botchu"] + arguments,
-                      in: (directory as NSString).expandingTildeInPath, input: input)
+                      in: (directory as NSString).expandingTildeInPath, input: input, timeout: timeout)
     }
 
-    /// Runs a program and collects what it printed after the marker.
-    static func execute(_ executable: String, _ arguments: [String], in directory: String, input: Data? = nil) async -> Result {
-        await withCheckedContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-            process.currentDirectoryURL = URL(fileURLWithPath: directory, isDirectory: true)
-            var env = AgentRun.childEnvironment(ProcessInfo.processInfo.environment)
-            // Never wait for a login or a password: without one, the command just fails.
-            env["GH_PROMPT_DISABLED"] = "1"
-            env["GIT_TERMINAL_PROMPT"] = "0"
-            env["NO_COLOR"] = "1"
-            process.environment = env
-            process.standardInput = FileHandle.nullDevice
-            let out = Pipe()
-            let err = Pipe()
-            process.standardOutput = out
-            process.standardError = err
-            let group = DispatchGroup()
-            group.enter()
-            process.terminationHandler = { _ in group.leave() }
-            do {
-                let inputFile = try ProcessInput.file(input)
-                defer { try? inputFile?.close() }
-                process.standardInput = inputFile ?? FileHandle.nullDevice
-                try process.run()
-            } catch {
-                continuation.resume(returning: Result(status: -1, output: "", errors: error.localizedDescription))
-                return
-            }
-            // Both pipes are read to the end at once, so a command that prints a lot never blocks.
-            let printed = Printed()
-            group.enter()
-            DispatchQueue.global().async {
-                printed.output = out.fileHandleForReading.readDataToEndOfFile()
-                group.leave()
-            }
-            group.enter()
-            DispatchQueue.global().async {
-                printed.errors = err.fileHandleForReading.readDataToEndOfFile()
-                group.leave()
-            }
-            group.notify(queue: .global()) {
-                continuation.resume(returning: Result(status: process.terminationStatus,
-                                                      output: commandOutput(String(decoding: printed.output, as: UTF8.self)),
-                                                      errors: String(decoding: printed.errors, as: UTF8.self)))
-            }
-        }
+    /// Runs a program and keeps what it printed after the marker.
+    static func execute(_ executable: String, _ arguments: [String], in directory: String, input: Data?, timeout: TimeInterval) async -> Result {
+        var env = AgentRun.childEnvironment(ProcessInfo.processInfo.environment)
+        // Never wait for a login or a password: without one, the command just fails.
+        env["GH_PROMPT_DISABLED"] = "1"
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["NO_COLOR"] = "1"
+        var result = await ChildProcess.run(executable, arguments, in: directory, environment: env, input: input, timeout: timeout)
+        result.output = commandOutput(result.output)
+        return result
     }
 
     /// What the command printed: everything after the marker.
     static func commandOutput(_ printed: String) -> String {
         guard let range = printed.range(of: marker + "\n") else { return printed }
         return String(printed[range.upperBound...])
-    }
-
-    /// What a command printed; each half is written by one reader, then read once both are done.
-    private final class Printed: @unchecked Sendable {
-        var output = Data()
-        var errors = Data()
     }
 
     /// `text` as one word for a POSIX shell, in single quotes.
@@ -123,16 +94,16 @@ public struct Machine: Hashable, Sendable {
                                     "-o", "ControlPath=~/.ssh/botchu-%C", "-o", "ControlPersist=120", "-T"]
 
     /// Runs `arguments` in `folder` (which may start with `~`), here or there.
-    public func run(_ arguments: [String], in folder: String, input: Data? = nil) async -> Shell.Result {
-        guard let destination else { return await Shell.run(arguments, in: folder, input: input) }
+    public func run(_ arguments: [String], in folder: String, input: Data? = nil, timeout: TimeInterval = Shell.timeout) async -> Shell.Result {
+        guard let destination else { return await Shell.run(arguments, in: folder, input: input, timeout: timeout) }
         let script = "printf '%s\\n' \(Shell.marker); exec \"$@\""
         return await Shell.execute(Self.ssh, Self.sshOptions + [destination, Self.remoteCommand(script: script, arguments: arguments, in: folder)],
-                                   in: NSHomeDirectory(), input: input)
+                                   in: NSHomeDirectory(), input: input, timeout: timeout)
     }
 
     /// Runs a POSIX `sh` script with arguments (`$1`…) in `folder`.
-    public func script(_ script: String, arguments: [String] = [], in folder: String) async -> Shell.Result {
-        await run(["/bin/sh", "-c", script, "botchu"] + arguments, in: folder)
+    public func script(_ script: String, arguments: [String] = [], in folder: String, timeout: TimeInterval = Shell.timeout) async -> Shell.Result {
+        await run(["/bin/sh", "-c", script, "botchu"] + arguments, in: folder, timeout: timeout)
     }
 
     /// The command string `ssh` gives the host's shell: go to the folder, then run `script` with
@@ -292,7 +263,7 @@ public enum TaskWorktree {
     /// (`gh issue develop`), when the checkout's origin is on GitHub and `gh` is there. The main
     /// checkout's `.env` files are linked into the worktree. Returns the worktree's folder.
     public static func prepare(branch: String, checkout: String, on machine: Machine = .thisMac) async -> Result<String, Failure> {
-        let run = await machine.script(prepareScript, arguments: [branch], in: checkout)
+        let run = await machine.script(prepareScript, arguments: [branch], in: checkout, timeout: Shell.longTimeout)
         guard run.ok, let folder = run.lastLine, !folder.isEmpty else {
             let step: String
             switch run.status {
@@ -308,7 +279,7 @@ public enum TaskWorktree {
     /// origin, so a pull request from a fork works too), in a new temporary folder. The main checkout
     /// stays as it is.
     public static func review(number: Int, checkout: String, on machine: Machine = .thisMac) async -> Result<Review, Failure> {
-        let run = await machine.script(reviewScript, arguments: [String(number)], in: checkout)
+        let run = await machine.script(reviewScript, arguments: [String(number)], in: checkout, timeout: Shell.longTimeout)
         let lines = run.output.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
         guard run.ok, lines.count >= 2 else {
             let step = run.status == 3 || run.status == 6 ? lastLine(run.errors) ?? "Couldn't fetch pull request #\(number)"
@@ -328,7 +299,7 @@ public enum TaskWorktree {
     /// GitHub, or a git URL) when it isn't there yet: with `gh` when it is signed in there, else
     /// with git. Returns the checkout's folder, with `~` expanded.
     public static func checkout(_ source: String, at folder: String, on machine: Machine = .thisMac) async -> Result<String, Failure> {
-        let run = await machine.script(cloneScript, arguments: [folder, source], in: "~")
+        let run = await machine.script(cloneScript, arguments: [folder, source], in: "~", timeout: Shell.longTimeout)
         guard run.ok, let checkout = run.lastLine, !checkout.isEmpty else {
             let step = run.status == 3 ? lastLine(run.errors) ?? "\(folder) isn't a git checkout"
                 : machine.isRemote && run.status == 255 ? "Couldn't reach \(machine.destination ?? "")"

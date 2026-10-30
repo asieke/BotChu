@@ -1076,7 +1076,7 @@ final class AppModel {
         if let checkout = found.checkout {
             location = RepoLocation(path: checkout.path)
         } else if let machine = wanted.machine {
-            let host = try await host(named: machine).get()
+            let host = try host(named: machine).get()
             location = RepoLocation(hostID: host?.id, path: folder(of: found.repo, on: host?.id))
         } else {
             location = self.location(of: found.repo)

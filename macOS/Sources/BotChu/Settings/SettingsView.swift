@@ -47,7 +47,7 @@ struct SettingsView: View {
 
     private func check(_ account: Account) async {
         let command = await MainActor.run { model.settings.command(for: account) }
-        let found = await CommandCheck.isAvailable(command)
+        let found = await ToolLocator.isAvailable(command)
         await MainActor.run { available[account.id] = found }
     }
 
@@ -398,9 +398,7 @@ private struct ThisMacSettings: View {
             HStack {
                 Text("This Mac")
                 Spacer()
-                if let name = model.settings.thisMacName {
-                    Text(name).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
-                }
+                Text(model.settings.thisMacName).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
             }
         }
     }

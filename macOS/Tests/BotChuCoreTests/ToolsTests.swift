@@ -543,12 +543,20 @@ import Testing
 
     @Test func theProbeRunsWithATimeLimit() async {
         let start = Date()
-        let output = await ToolProbe.execute("/bin/sleep", ["30"], environment: [:])
+        let output = await ToolProbe.execute("/bin/sleep", ["30"], environment: [:], timeout: 0.2)
         #expect(output.timedOut)
-        #expect(Date().timeIntervalSince(start) < 12)
-        let echo = await ToolProbe.execute("/bin/echo", ["hi"], environment: [:])
+        #expect(Date().timeIntervalSince(start) < 10)
+        let echo = await ToolProbe.execute("/bin/sh", ["-c", "echo hi; echo there >&2"], environment: [:])
         #expect(echo.status == 0)
-        #expect(echo.output == "hi\n")
+        #expect(echo.output == "hi\nthere\n")
+    }
+
+    @Test func accountCommandsAreFoundAsTheLoginShellFindsThem() async {
+        #expect(await ToolLocator.isAvailable("/bin/ls -la"))
+        #expect(await ToolLocator.isAvailable("sh -c true"))
+        #expect(!(await ToolLocator.isAvailable("/nonexistent/botchu-cli --flag")))
+        #expect(!(await ToolLocator.isAvailable("~/botchu-missing-\(UUID().uuidString)")))
+        #expect(!(await ToolLocator.isAvailable("botchu-missing-\(UUID().uuidString)")))
     }
 }
 

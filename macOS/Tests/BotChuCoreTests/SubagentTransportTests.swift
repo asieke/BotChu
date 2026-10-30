@@ -74,24 +74,6 @@ import Testing
         try await transport.close()
     }
 
-    @Test func transportCommandsTimeoutAndCancelPromptly() async throws {
-        let started = Date()
-        let timedOut = await TransportCommand().execute(executable: "/bin/sleep", arguments: ["30"], timeout: 0.15)
-        #expect(timedOut.status != 0)
-        #expect(Date().timeIntervalSince(started) < 3)
-        let command = TransportCommand()
-        let task = Task {
-            await withTaskCancellationHandler {
-                await command.execute(executable: "/bin/sleep", arguments: ["30"], timeout: 30)
-            } onCancel: { command.cancel() }
-        }
-        try await Task.sleep(for: .milliseconds(50))
-        task.cancel()
-        let result = await task.value
-        #expect(result.status != 0)
-        #expect(Date().timeIntervalSince(started) < 3)
-    }
-
     @Test func invocationExportsOnlyDelegationContextAndFindsHelperAfterLogin() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-env-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }

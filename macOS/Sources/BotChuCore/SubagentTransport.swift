@@ -214,16 +214,16 @@ public struct SubagentTransport: Sendable {
         return Data("{\"updatedAt\":\"\(date)\",\"closed\":\(closed ? "true" : "false")}".utf8)
     }
 
-    private func remote(_ operation: String, _ arguments: [String] = [], outputLimit: Int = TransportCommand.outputLimit) async throws -> Data {
+    /// Unlike a long-lived AgentRun, a mailbox command must release its coordinator after a network
+    /// failure or cancellation, so each has its own time limit and output limit.
+    private func remote(_ operation: String, _ arguments: [String] = [], outputLimit: Int = ChildProcess.outputLimit) async throws -> Data {
         try Task.checkCancellation()
         let script = "printf '%s\\n' \(Shell.marker); exec python3 -c \"$@\""
         let command = Machine.remoteCommand(script: script, arguments: [Self.remoteScript, operation, directory], in: "~")
-        let input = try JSONEncoder().encode(arguments)
-        let run = TransportCommand()
-        let result = await withTaskCancellationHandler {
-            await run.execute(executable: sshExecutable, arguments: Machine.sshOptions + [machine.destination ?? "", command], input: input,
-                              timeout: operation == "read" ? max(timeout, 120) : timeout, outputLimit: outputLimit)
-        } onCancel: { run.cancel() }
+        let result = await ChildProcess.run(sshExecutable, Machine.sshOptions + [machine.destination ?? "", command],
+                                            environment: AgentRun.childEnvironment(ProcessInfo.processInfo.environment),
+                                            input: try JSONEncoder().encode(arguments),
+                                            timeout: operation == "read" ? max(timeout, 120) : timeout, outputLimit: outputLimit)
         try Task.checkCancellation()
         guard result.status == 0 else {
             let detail = result.errors.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -313,98 +313,4 @@ elif operation in ['heartbeat', 'close']:
     atomic(root / 'heartbeat.json', json.dumps({'updatedAt': stamp, 'closed': closed}).encode())
 else: raise ValueError('Unknown mailbox operation')
 """#
-}
-
-/// Unlike long-lived AgentRun, mailbox commands must release their coordinator after a network
-/// failure or cancellation. Each operation owns its process, bounded output and timeout.
-final class TransportCommand: @unchecked Sendable {
-    private let lock = NSLock()
-    private let process = Process()
-    private var cancelled = false
-    private var completed = false
-
-    func cancel() {
-        lock.lock()
-        cancelled = true
-        if !completed, process.isRunning { process.terminate() }
-        lock.unlock()
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            if !self.completed, self.process.isRunning { kill(self.process.processIdentifier, SIGKILL) }
-            self.lock.unlock()
-        }
-    }
-
-    /// How much of a command's output is kept, unless it asks for more.
-    static let outputLimit = 12_000_000
-
-    func execute(executable: String, arguments: [String], input: Data? = nil, timeout: TimeInterval,
-                 outputLimit: Int = TransportCommand.outputLimit) async -> Shell.Result {
-        await withCheckedContinuation { continuation in
-            let out = Pipe(), err = Pipe(), group = DispatchGroup()
-            let stdin = input.map { _ in Pipe() }
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-            process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
-            process.environment = AgentRun.childEnvironment(ProcessInfo.processInfo.environment)
-            if let stdin { process.standardInput = stdin } else { process.standardInput = FileHandle.nullDevice }
-            process.standardOutput = out
-            process.standardError = err
-            group.enter()
-            process.terminationHandler = { _ in group.leave() }
-            lock.lock()
-            if cancelled {
-                lock.unlock()
-                continuation.resume(returning: Shell.Result(status: -1, output: "", errors: "Cancelled"))
-                return
-            }
-            do { try process.run() }
-            catch {
-                lock.unlock()
-                continuation.resume(returning: Shell.Result(status: -1, output: "", errors: error.localizedDescription))
-                return
-            }
-            lock.unlock()
-            if let stdin, let input {
-                // A command cancelled (or timed out) before reading its input must not take BotChu
-                // with it: the write then fails with EPIPE instead of raising SIGPIPE.
-                _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
-                group.enter()
-                DispatchQueue.global().async {
-                    try? stdin.fileHandleForWriting.write(contentsOf: input)
-                    try? stdin.fileHandleForWriting.close()
-                    group.leave()
-                }
-            }
-            let output = TransportOutput()
-            for (handle, isError) in [(out.fileHandleForReading, false), (err.fileHandleForReading, true)] {
-                group.enter()
-                DispatchQueue.global().async {
-                    let cap = isError ? 16_384 : outputLimit
-                    var data = Data()
-                    while let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty {
-                        if data.count < cap { data.append(chunk.prefix(cap - data.count)) }
-                    }
-                    if isError { output.errors = data } else { output.output = data }
-                    group.leave()
-                }
-            }
-            DispatchQueue.global().asyncAfter(deadline: .now() + max(0.1, timeout)) { [weak self] in self?.cancel() }
-            group.notify(queue: .global()) { [self] in
-                lock.lock()
-                completed = true
-                let wasCancelled = cancelled
-                lock.unlock()
-                continuation.resume(returning: Shell.Result(status: wasCancelled ? -1 : process.terminationStatus,
-                    output: String(decoding: output.output, as: UTF8.self),
-                    errors: wasCancelled ? "Command cancelled or timed out." : String(decoding: output.errors, as: UTF8.self)))
-            }
-        }
-    }
-}
-
-private final class TransportOutput: @unchecked Sendable {
-    var output = Data()
-    var errors = Data()
 }

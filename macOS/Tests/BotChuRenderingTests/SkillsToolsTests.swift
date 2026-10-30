@@ -39,7 +39,7 @@ extension RenderingTests {
         let runs = ProbeRuns()
         app.tools.probe = ToolProbe { path, arguments, _ in
             await runs.add(path)
-            return ToolProbe.Output(status: 0, output: arguments.contains("auth") ? #"{"hosts":{"github.com":[]}}"# : "gh version 2.1.0 (2026-10-01)")
+            return Shell.Result(status: 0, output: arguments.contains("auth") ? #"{"hosts":{"github.com":[]}}"# : "gh version 2.1.0 (2026-10-01)")
         }
         let host = NSHostingView<AnyView>(rootView: AnyView(SkillsView().environment(app).defaultAppStorage(defaults)))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1300, height: 900), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -194,7 +194,7 @@ extension RenderingTests {
         }
         app.tools.probe = ToolProbe { _, _, _ in
             Issue.record("Approving a custom tool must not run it")
-            return ToolProbe.Output(status: 1, output: "")
+            return Shell.Result(status: 1, output: "")
         }
         let entries = app.skillEntries()
         await app.tools.refresh(declaring: entries.flatMap { $0.skill.toolCommands })

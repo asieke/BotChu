@@ -23,7 +23,7 @@ import BotChuCore
     /// Looks for the catalog's commands and `names`; tests and reviews replace it.
     @ObservationIgnored var locate: @Sendable (_ names: [String]) async -> (catalog: [String: [ToolLocation]], declared: [String: ToolLocation]) =
         { names in
-            let locator = ToolLocator(loginPath: await ToolsBoard.loginPath.value)
+            let locator = ToolLocator(loginPath: await ToolLocator.loginPath.value)
             return (locator.catalogLocations(), locator.firstLocations(of: names))
         }
     @ObservationIgnored var probe: ToolProbe
@@ -31,11 +31,10 @@ import BotChuCore
 
     init(folder: URL?, probe: ToolProbe? = nil) {
         self.folder = folder
-        let loginPath = ToolsBoard.loginPath
         self.probe = probe ?? ToolProbe { path, arguments, environment in
             // Under the login shell's PATH, so a tool that runs on node finds it.
             var environment = environment
-            if let path = await loginPath.value { environment["PATH"] = path }
+            if let path = await ToolLocator.loginPath.value { environment["PATH"] = path }
             return await ToolProbe.execute(path, arguments, environment: environment)
         }
         checks = folder.map(ToolCheck.load(from:)) ?? [:]
@@ -46,9 +45,6 @@ import BotChuCore
             unreadable = "BotChu couldn’t read its tool settings (\(ToolPolicy.fileName)): \(error.localizedDescription)"
         }
     }
-
-    /// PATH as the login shell sets it, found once per launch.
-    private static let loginPath = Task.detached { await ToolLocator.loginPath() }
 
     func inventory(declarations: [(skill: String, tools: [String])] = []) -> ToolInventory {
         ToolInventory(policy: policy, catalogLocations: catalogLocations, declaredLocations: declaredLocations, declarations: declarations)

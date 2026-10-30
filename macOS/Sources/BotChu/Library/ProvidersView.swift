@@ -623,7 +623,7 @@ private struct AvatarGap: View {
 
     /// Whether the login shell finds the command.
     func check(_ command: String) async {
-        found[command] = await CommandCheck.isAvailable(command)
+        found[command] = await ToolLocator.isAvailable(command)
     }
 }
 
@@ -777,7 +777,7 @@ struct AddProviderSheet: View {
                         testing = true
                         let tested = command
                         Task {
-                            let result = await CommandCheck.isAvailable(tested)
+                            let result = await ToolLocator.isAvailable(tested)
                             if command == tested { found = result }
                             testing = false
                         }

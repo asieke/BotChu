@@ -218,8 +218,8 @@ public struct IssueFiler: Sendable {
         } catch {
             return .failed("BotChu couldn't get the images ready for gh: \(error.localizedDescription)")
         }
-        return IssueReport.outcome(of: await Shell.run(arguments, in: folder.path, input: Data(body.utf8)), images: images.count,
-                                   repository: repository)
+        return IssueReport.outcome(of: await Shell.run(arguments, in: folder.path, input: Data(body.utf8), timeout: Shell.longTimeout),
+                                   images: images.count, repository: repository)
     }
 
     public init(_ file: @escaping File) {

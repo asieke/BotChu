@@ -565,12 +565,21 @@ public struct ToolLocator: Sendable {
         return found
     }
 
-    /// PATH as the login shell sets it, which turns run with; nil when the shell couldn't say.
-    public static func loginPath() async -> String? {
+    /// PATH as the login shell sets it, which turns run with, found once per launch; nil when the
+    /// shell couldn't say.
+    public static let loginPath = Task.detached { () async -> String? in
         let output = await ToolProbe.execute("/bin/zsh", ["-l", "-c", "print -r -- \"$PATH\""], environment: [:])
         guard output.status == 0, !output.timedOut else { return nil }
         let path = output.output.split(whereSeparator: \.isNewline).last.map(String.init) ?? ""
         return path.contains("/") ? path : nil
+    }
+
+    /// Whether the login shell finds a command's program (its first word): at its path, or on the
+    /// login shell's PATH (BotChu's own when the shell couldn't say).
+    public static func isAvailable(_ command: String) async -> Bool {
+        let word = command.split(separator: " ").first.map(String.init) ?? command
+        let path = await loginPath.value ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
+        return !ToolLocator(directories: path.split(separator: ":").map(String.init)).firstLocations(of: [word]).isEmpty
     }
 
     /// The file `path` leads to, with every link resolved (`/tmp` too, unlike Foundation's).
