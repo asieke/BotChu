@@ -76,9 +76,13 @@ let app: AppUnderTest
 let fixture: Fixture
 do {
     try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-    let harness = Bundle.main.executableURL?.path ?? CommandLine.arguments[0]
+    // The fake CLI runs from a copy in the work folder: the app's copy may not read the build's
+    // folder (under Desktop, say) without asking the owner.
+    let harness = work.appendingPathComponent("botchu-journeys")
+    try? FileManager.default.removeItem(at: harness)
+    try FileManager.default.copyItem(at: Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]), to: harness)
     let fake = work.appendingPathComponent("fake-claude")
-    try FakeClaude.writeWrapper(at: fake, harness: harness)
+    try FakeClaude.writeWrapper(at: fake, harness: harness.path, log: work.appendingPathComponent("fake-claude.log"))
     let began = Date()
     fixture = try Fixture.make(in: work.appendingPathComponent("data"), fakeCLI: fake.path)
     print(String(format: "journeys: fixture made in %.1f s", Date().timeIntervalSince(began)))
@@ -110,6 +114,11 @@ if dumping {
         _ = try app.launch()
         _ = try app.mark(FrameMarks.chat(fixture.longBot.id), after: 0, timeout: 60)
         app.settle(quiet: 1)
+        // `--journeys <n>` with dump: the bot that journey shows first, by its place in the fixture.
+        if let index = options["--journeys"].flatMap(Int.init), fixture.bots.indices.contains(index) {
+            _ = try Journeys(app: app, fixture: fixture, baseline: nil, repeats: 1) { _ in }.select(fixture.bots[index])
+            app.settle(quiet: 1)
+        }
         var lines: [String] = []
         try app.window().dump(into: &lines)
         print(lines.joined(separator: "\n"))
@@ -124,6 +133,7 @@ if dumping {
 var results: [JourneyResult] = []
 var journeys = Journeys(app: app, fixture: fixture, baseline: baseline, repeats: repeats) { print("journey \($0.report)") }
 journeys.stall = options["--stall"].flatMap(Double.init) ?? 0
+journeys.recording = options["--record"] != nil
 if journeys.stall > 0 { print("journeys: injecting a \(Int(journeys.stall)) ms stall into each of journey 2's toggles") }
 if selection.numbers.contains(1) {
     results += journeys.run(1) { journeys.launch() }

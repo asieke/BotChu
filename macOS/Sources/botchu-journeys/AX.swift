@@ -110,11 +110,26 @@ struct AXElement: CustomStringConvertible {
 
     func first(identifier: String) -> AXElement? { first { $0.identifier == identifier } }
 
+    /// Every element with this identifier, among at most `limit`.
+    func all(identifier: String, limit: Int = 20_000) -> [AXElement] {
+        var queue = [self], index = 0, found: [AXElement] = []
+        while index < queue.count, index < limit {
+            let element = queue[index]
+            index += 1
+            if element.identifier == identifier { found.append(element) }
+            queue += element.children
+        }
+        return found
+    }
+
     /// The nearest ancestor (or itself) with this role.
-    func ancestor(role: String) -> AXElement? {
+    func ancestor(role: String) -> AXElement? { ancestor { $0.role == role } }
+
+    /// The nearest ancestor (or itself) that `matches`.
+    func ancestor(where matches: (AXElement) -> Bool) -> AXElement? {
         var element: AXElement? = self
         while let current = element {
-            if current.role == role { return current }
+            if matches(current) { return current }
             element = current.parent
         }
         return nil

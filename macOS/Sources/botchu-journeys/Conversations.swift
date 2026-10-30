@@ -7,6 +7,8 @@ extension Journeys {
 
     /// Selects the first bot's tasks in the tabs beside its chat, each followed by its Home (the
     /// 5,000-message conversation), `repeats` times each, timed until the chat shows the tab's rows.
+    /// A first round isn't counted: going back to Home the first time after a launch shows it, but
+    /// SwiftUI doesn't tell its rows they appeared, so no mark comes.
     func switchTasks() -> [JourneyResult] {
         var tasks: [Double] = [], home: [Double] = []
         var problem: String?
@@ -14,6 +16,13 @@ extension Journeys {
             let bot = fixture.longBot
             try show(bot)
             let ids = fixture.tasks(of: bot)
+            if let first = try app.window().first(identifier: "conversation-tab-\(ids[ids.count - 1].uuidString)"),
+               let homeTab = try app.window().first(identifier: "conversation-tab-home") {
+                _ = try press(first)
+                app.settle()
+                _ = try press(homeTab)
+                app.settle()
+            }
             for index in 0..<repeats {
                 tasks.append(try selectTab(ids[index % ids.count], of: bot))
                 home.append(try selectTab(nil, of: bot))
@@ -31,9 +40,7 @@ extension Journeys {
     private func selectTab(_ task: UUID?, of bot: Bot) throws -> Double {
         let identifier = task.map { "conversation-tab-\($0.uuidString)" } ?? "conversation-tab-home"
         guard let tab = try app.window().first(identifier: identifier) else { throw HarnessFailure("The column beside the chat has no \(identifier)") }
-        let start = AppUnderTest.now
-        try tab.press()
-        let shown = try app.mark(FrameMarks.chat(task ?? bot.id), after: start)
+        let (start, shown) = try press(tab, until: FrameMarks.chat(task ?? bot.id))
         app.settle()
         guard let last = fixture.lastItem[task ?? bot.id], try app.window().first(identifier: "chat-item-\(last.uuidString)") != nil else {
             throw HarnessFailure("After its tab was pressed, the chat doesn't show \(task.map { "task \($0.uuidString)" } ?? "Home")'s latest message")
@@ -55,6 +62,9 @@ extension Journeys {
             let began = AppUnderTest.now
             let streamers = Array(fixture.bots[2...5])
             for bot in streamers { try send("Write a long reply. journey-stream=\(Self.typingStream)", to: bot) }
+            let started = FakeLog.streaming(try FakeLog.waitFor(app, "\(streamers.count) streams", after: began, timeout: 20) {
+                FakeLog.streaming($0).count >= streamers.count
+            })
             let bot = fixture.longBot
             try show(bot)
             let composer = try composer()
@@ -65,17 +75,17 @@ extension Journeys {
             let expected = String(repeating: Self.typed, count: repeats)
             guard composer.text == expected else { throw HarnessFailure("The message box says \"\(composer.text.prefix(80))\", not what was typed") }
             left.draft = (bot, expected)
-            // Each streamer was still writing its reply after the typing ended.
-            let log = FakeLog.read(app)
-            let runs = log.filter { $0.time >= began && $0.text.hasPrefix("run ") && $0.text.contains(" -p") }.count
-            let ended = log.filter { $0.time >= began && $0.time <= typed && $0.text == "end" }.count
-            guard runs >= streamers.count, ended == 0 else {
-                throw HarnessFailure("Of the \(streamers.count) streams, \(runs) started and \(ended) ended before the typing did "
+            // Each stream was still going when the typing ended.
+            let ended = FakeLog.ended(FakeLog.read(app).filter { $0.time >= began && $0.time <= typed }).intersection(started)
+            guard ended.isEmpty else {
+                throw HarnessFailure("\(ended.count) of the \(streamers.count) streams ended before the typing did "
                                      + String(format: "(%.1f s after it started)", Self.ms(typing, typed) / 1_000))
             }
             try app.requireBackground()
             // The streams end before the next journey.
-            _ = try? FakeLog.waitFor(app, count: streamers.count, of: "end", after: began, timeout: Double(Self.typingStream) + 10)
+            _ = try? FakeLog.waitFor(app, "the streams' ends", after: began, timeout: Double(Self.typingStream) + 15) {
+                FakeLog.ended($0).isSuperset(of: started)
+            }
             app.settle(quiet: 0.5)
         } catch {
             problem = "\(error)"
@@ -105,13 +115,12 @@ extension Journeys {
             let start = AppUnderTest.now
             try send(text, to: bot)
             left.sent = (bot, text)
-            guard let end = try FakeLog.waitFor(app, count: 1, of: "end", after: start, timeout: Double(Self.streamSeconds) + 30).last else {
-                throw HarnessFailure("The reply didn't end")
+            let lines = try FakeLog.waitFor(app, "the reply's end", after: start, timeout: Double(Self.streamSeconds) + 30) { lines in
+                lines.contains { $0.words.first == "end" && FakeLog.streaming(lines).contains($0.pid ?? 0) }
             }
             try awaitIdle()
             app.settle()
-            let deltas = FakeLog.read(app).filter { $0.time >= start && $0.time <= end.time && $0.text.hasPrefix("delta ") }
-                .compactMap { line in Int(line.text.dropFirst(6)).map { (time: line.time, length: $0) } }
+            let deltas = lines.compactMap { line in line.length.map { (time: line.time, length: $0) } }
             guard let first = deltas.first, let last = deltas.last else { throw HarnessFailure("The fake CLI wrote no chunks") }
             let shownLengths = app.marks(from: start).compactMap { mark in
                 FrameMarks.streamedLength(mark.name, of: bot.id).map { (time: mark.nanoseconds, length: $0) }
@@ -162,18 +171,21 @@ extension Journeys {
             try send("Ask a sub-agent for a long reply. journey-subagent=\(Self.subagentStream)", to: bot)
             guard let tab = try app.window().first(identifier: "inspector-tab-subagents") else { throw HarnessFailure("The status sidebar has no Sub-agents tab") }
             try tab.press()
-            let run = try waitFor("The sub-agent's run in the status sidebar", timeout: 20) {
-                try app.window().first(where: { $0.identifier.hasPrefix("subagent-") && $0.identifier != "subagents-inspector" })
+            try FakeLog.waitFor(app, "the sub-agent's stream", after: began, timeout: 20) { !FakeLog.streaming($0).isEmpty }
+            app.settle(quiet: 0.2, limit: 2)
+            func running() throws -> AXElement? {
+                guard try app.window().first(identifier: "inspector-tab-subagents")?.label.hasSuffix("1 running") == true else { return nil }
+                return try app.window().first { $0.role == kAXButtonRole as String && $0.label.hasPrefix("Journey sub-agent, \(bot.name)") }
             }
-            _ = try FakeLog.waitFor(app, count: 1, of: "delta", after: began, timeout: 20)
+            guard try running() != nil else { throw HarnessFailure("The status sidebar's Sub-agents doesn't show the sub-agent running") }
             let composer = try composer()
             try composer.set(kAXValueAttribute, to: "" as CFString)
             let typing = AppUnderTest.now
             for _ in 0..<repeats { samples.append(Self.p95(try type(Self.typed, into: composer))) }
             let typed = AppUnderTest.now
-            let streamed = FakeLog.read(app).filter { $0.time >= typing && $0.time <= typed && $0.text.hasPrefix("delta ") }.count
+            let streamed = FakeLog.read(app).filter { $0.time >= typing && $0.time <= typed && $0.length != nil }.count
             guard streamed > 0 else { throw HarnessFailure("The sub-agent wrote nothing while the owner typed") }
-            guard try app.window().first(identifier: run.identifier) != nil else { throw HarnessFailure("The sub-agent's run left the status sidebar") }
+            guard try running() != nil else { throw HarnessFailure("The sub-agent stopped running in the status sidebar while the owner typed") }
             try composer.set(kAXValueAttribute, to: "" as CFString)
             if let activity = try app.window().first(identifier: "inspector-tab-activity") { try activity.press() }
             try app.requireBackground()
@@ -191,6 +203,20 @@ enum FakeLog {
     struct Line {
         var time: UInt64
         var text: String
+
+        var words: [Substring] { text.split(separator: " ") }
+        /// The process a `run`, `delta` or `end` line is about.
+        var pid: Int32? {
+            switch words.first {
+            case "run", "end": words.count > 1 ? Int32(words[1]) : nil
+            case "delta": words.count > 2 ? Int32(words[2]) : nil
+            default: nil
+            }
+        }
+        /// A `delta` line's reply length.
+        var length: Int? { words.first == "delta" && words.count > 1 ? Int(words[1]) : nil }
+        /// A turn's run (`-p`), not a probe of the CLI.
+        var isTurn: Bool { words.first == "run" && text.contains(" -p ") }
     }
 
     static func read(_ app: AppUnderTest) -> [Line] {
@@ -201,15 +227,21 @@ enum FakeLog {
         }
     }
 
-    /// Waits until `count` lines starting with `prefix` were logged after `start`.
+    /// Waits until `find` finds what it wants in what was logged after `start`.
     @discardableResult
-    static func waitFor(_ app: AppUnderTest, count: Int, of prefix: String, after start: UInt64, timeout: TimeInterval) throws -> [Line] {
+    static func waitFor(_ app: AppUnderTest, _ what: String, after start: UInt64, timeout: TimeInterval, _ find: ([Line]) -> Bool) throws -> [Line] {
         let deadline = Date().addingTimeInterval(timeout)
         while true {
-            let found = read(app).filter { $0.time >= start && $0.text.hasPrefix(prefix) }
-            if found.count >= count { return found }
-            guard Date() < deadline else { throw HarnessFailure("The fake CLI logged \(found.count) of \(count) \"\(prefix)\" within \(Int(timeout)) s") }
+            let lines = read(app).filter { $0.time >= start }
+            if find(lines) { return lines }
+            guard Date() < deadline else { throw HarnessFailure("The fake CLI didn't log \(what) within \(Int(timeout)) s") }
             usleep(50_000)
         }
     }
+
+    /// The processes that wrote reply chunks after `start`.
+    static func streaming(_ lines: [Line]) -> Set<Int32> { Set(lines.filter { $0.length != nil }.compactMap(\.pid)) }
+
+    /// The processes that ended their turn.
+    static func ended(_ lines: [Line]) -> Set<Int32> { Set(lines.filter { $0.words.first == "end" }.compactMap(\.pid)) }
 }

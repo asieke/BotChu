@@ -5,48 +5,48 @@ import BotChuCore
 extension Journeys {
     // MARK: 8. Expanding the group of 5,000 calls
 
-    /// Opens the second bot's group of 5,000 calls from its header and closes it again, `repeats`
-    /// times: opening timed until the chat shows its rows, and the main thread's longest busy
-    /// stretch in the second after.
+    /// Opens the second bot's group of calls from its header and closes it again, `repeats` times:
+    /// opening timed until the chat shows its rows, and the main thread's longest busy stretch in
+    /// the second after. The fixture's run of 5,000 calls is read from disk a page at a time, so the
+    /// group the chat shows on opening holds its newest calls (earlier pages come as groups of
+    /// their own when the reader asks for them).
     func expandGroup() -> [JourneyResult] {
         let bot = fixture.groupBot
         var opened: [Double] = [], frames: [Double] = []
         var problem: String?
         do {
             try show(bot)
+            print("journeys: 8 expands \"\(try groupHead().label)\"")
             for _ in 0..<repeats {
-                let head = try groupHead()
-                let closedLabel = head.label
-                let start = AppUnderTest.now
-                try head.press()
-                let shown = try app.mark(FrameMarks.chat(bot.id), after: start)
+                let (head, group) = try groupHeadAndID()
+                let (start, shown) = try press(head, until: FrameMarks.chat(bot.id))
                 opened.append(Self.ms(start, shown.nanoseconds))
+                let after = shown.nanoseconds + 1_000_000_000
                 app.settle(quiet: 0.3, limit: 3)
-                let after = max(AppUnderTest.now, shown.nanoseconds + 1_000_000_000)
                 while AppUnderTest.now < after { usleep(20_000) }
                 frames.append(app.longestBusy(from: shown.nanoseconds + 1, to: after))
-                guard try groupHead().label != closedLabel || app.window().first(where: { $0.label.hasPrefix("Read Sources/Module") }) != nil else {
-                    throw HarnessFailure("Pressed, the group's header still says \"\(closedLabel)\" and no call shows")
-                }
-                let close = AppUnderTest.now
-                try groupHead().press()
-                _ = try app.mark(FrameMarks.chat(bot.id), after: close)
+                let rows = try app.window().all(identifier: group).count
+                guard rows > 1 else { throw HarnessFailure("Pressed, the group of calls still shows as one row") }
+                _ = try press(try groupHeadAndID().head, until: FrameMarks.chat(bot.id))
                 app.settle(quiet: 0.3, limit: 3)
             }
             try app.requireBackground()
         } catch {
             problem = "\(error)"
         }
-        return [result(8, "expand 5,000 calls", .quick, opened, problem: problem),
+        return [result(8, "expand group of calls", .quick, opened, problem: problem),
                 result(8, "longest frame after expanding", .smooth, frames, problem: problem)]
     }
 
     /// The header of the group of calls, whose label says what it explored.
-    private func groupHead() throws -> AXElement {
-        guard let head = try app.window().first(where: { $0.role == kAXButtonRole as String && $0.label.hasPrefix("Explored") }) else {
+    private func groupHead() throws -> AXElement { try groupHeadAndID().head }
+
+    private func groupHeadAndID() throws -> (head: AXElement, group: String) {
+        guard let head = try app.window().first(where: { $0.role == kAXButtonRole as String && $0.label.hasPrefix("Explored") }),
+              let row = head.ancestor(where: { $0.identifier.hasPrefix("chat-item-") }) else {
             throw HarnessFailure("The chat shows no group of calls")
         }
-        return head
+        return (head, row.identifier)
     }
 
     // MARK: 9. New Task
@@ -68,11 +68,16 @@ extension Journeys {
                 sheets.append(Self.ms(start, sheet.nanoseconds))
                 let brief = try waitFor("New Task's brief") { try app.window().first(identifier: "task-brief") }
                 try brief.set(kAXValueAttribute, to: "Journey task \(index + 1): tidy the README. journey-stream=0" as CFString)
-                let startButton = try waitFor("An enabled Start Task") {
-                    try app.window().first(where: { $0.role == kAXButtonRole as String && $0.title == "Start Task" && ($0.value(kAXEnabledAttribute) as? Bool) == true })
+                // The project New Task chose last time, or the fixture's.
+                func startTask() throws -> AXElement? { try button("Start Task") }
+                if (try startTask()?.value(kAXEnabledAttribute) as? Bool) != true,
+                   let project = try app.window().first(where: { $0.role == kAXButtonRole as String && $0.label.hasPrefix(Fixture.taskRepo + ",") }) {
+                    try project.press()
                 }
-                start = AppUnderTest.now
-                try startButton.press()
+                let startButton = try waitFor("An enabled Start Task") {
+                    try startTask().flatMap { ($0.value(kAXEnabledAttribute) as? Bool) == true ? $0 : nil }
+                }
+                start = try press(startButton)
                 let deadline = Date().addingTimeInterval(5)
                 var tab: FrameMarks.Mark?
                 while tab == nil {
@@ -94,6 +99,11 @@ extension Journeys {
             try app.requireBackground()
         } catch {
             problem = "\(error)"
+            // A sheet left open would hold up the journeys after.
+            if let cancel = try? button("Cancel") {
+                try? cancel.press()
+                app.settle()
+            }
         }
         return [result(9, "New Task opens", .instant, sheets, problem: problem),
                 result(9, "task shows after Start Task", .quick, tabs, problem: problem)]
@@ -108,9 +118,9 @@ extension Journeys {
 
     // MARK: 10. Resizing the window
 
-    /// Narrows the window showing the 5,000-message conversation by 20 points a step and widens it
-    /// back, `repeats` sweeps of 12 steps: each step timed until the frame laid out at the new
-    /// size; a sweep's sample is its steps' p95.
+    /// Widens the window showing the 5,000-message conversation by up to 20 points a step and
+    /// narrows it back (it opens as narrow as its columns allow), `repeats` sweeps of 12 steps: each
+    /// step timed until the frame laid out at the new size; a sweep's sample is its steps' p95.
     func resize() -> [JourneyResult] {
         var samples: [Double] = []
         var problem: String?
@@ -119,17 +129,27 @@ extension Journeys {
             let window = try app.window()
             guard let frame = window.frame else { throw HarnessFailure("The window has no frame") }
             defer { try? window.setSize(frame.size) }
+            // As far as its screen leaves room for, at most 12 steps of 20 points (accessibility's
+            // frames are from the top left of the main screen, AppKit's from its bottom left).
+            let height = NSScreen.screens.first?.frame.height ?? 0
+            let room = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: frame.midX, y: height - frame.midY)) })
+                .map { $0.visibleFrame.maxX - frame.maxX } ?? 0
+            let stepWidth = min(Double(Self.resizeStep), (room / Double(Self.resizeSteps)).rounded(.down))
+            guard stepWidth >= 5 else { throw HarnessFailure("The window's screen leaves no room to widen it (\(Int(room)) points)") }
             for sweep in 0..<repeats {
                 var times: [Double] = []
                 for step in 1...Self.resizeSteps {
-                    let narrower = sweep.isMultiple(of: 2)
-                    let width = frame.width - Double(Self.resizeStep) * Double(narrower ? step : Self.resizeSteps - step)
+                    let wider = sweep.isMultiple(of: 2)
+                    let width = frame.width + stepWidth * Double(wider ? step : Self.resizeSteps - step)
                     let start = AppUnderTest.now
                     try window.setSize(CGSize(width: width, height: frame.height))
-                    times.append(Self.ms(start, try app.mark(FrameMarks.windowResized, after: start).nanoseconds))
+                    guard let mark = try? app.mark(FrameMarks.windowResized, after: start) else {
+                        throw HarnessFailure("Asked to be \(Int(width)) points wide, the window is \(Int(window.frame?.width ?? 0)) and BotChu wrote no \"\(FrameMarks.windowResized)\" mark")
+                    }
+                    times.append(Self.ms(start, mark.nanoseconds))
                 }
                 samples.append(Self.p95(times))
-                let expected = frame.width - (sweep.isMultiple(of: 2) ? Double(Self.resizeStep * Self.resizeSteps) : 0)
+                let expected = frame.width + (sweep.isMultiple(of: 2) ? stepWidth * Double(Self.resizeSteps) : 0)
                 guard let now = window.frame, abs(now.width - expected) < 1 else {
                     throw HarnessFailure("The window is \(Int(window.frame?.width ?? 0)) points wide, not \(Int(expected))")
                 }
@@ -168,11 +188,14 @@ extension Journeys {
                 _ = try select(bot)
             }
             _ = try openInbox()
-            for index in 0..<repeats {
-                let id = fixture.delivery(index * 4)
-                let row = try waitFor("The Inbox's row for delivery \(index * 4 + 1)") { try app.window().first(identifier: "inbox-row-\(id.uuidString)") }
+            for _ in 0..<repeats {
+                // Each a delivery not done yet: the newest left, needing the owner's input.
+                let n = left.deliveriesDone * 4
+                left.deliveriesDone += 1
+                let id = fixture.delivery(n)
+                let row = try waitFor("The Inbox's row for delivery \(n + 1)") { try app.window().first(identifier: "inbox-row-\(id.uuidString)") }
                 try (row.ancestor(role: kAXRowRole as String) ?? row).set(kAXSelectedAttribute, to: kCFBooleanTrue)
-                let button = try waitFor("Done for delivery \(index * 4 + 1)") {
+                let button = try waitFor("Done for delivery \(n + 1)") {
                     try app.window().first(where: { $0.identifier == "inbox-done" && $0.label == "Done" })
                 }
                 let start = AppUnderTest.now

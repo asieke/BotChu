@@ -4,12 +4,13 @@ import Foundation
 /// script): every `-p` turn replays the captured stream (`ClaudeStream`) under the session it was
 /// asked to resume, or a new one, a line every `BOTCHU_JOURNEY_FAKE_INTERVAL` milliseconds (30 by
 /// default, about the captured pace); anything else exits at once with no output. With
-/// `BOTCHU_JOURNEY_FAKE_LOG`, it appends each invocation and when it wrote each line
-/// (`<uptime ns> <line index>`), so a journey can time a chunk from when the CLI wrote it.
+/// `BOTCHU_JOURNEY_FAKE_LOG`, it appends each invocation (`run <pid> <arguments>`), when it wrote
+/// each line (`<uptime ns> <line index>`) and when the turn ended (`end <pid>`), so a journey can
+/// time a chunk from when the CLI wrote it.
 ///
 /// A journey steers a turn with words in its message (`Directive`): `journey-stream=<seconds>`
 /// replays the reply's text over and over for that long (`0`: the captured reply at once), logging
-/// each text chunk as `<uptime ns> delta <reply length in UTF-16 units>`; `journey-subagent=<seconds>`
+/// each text chunk as `<uptime ns> delta <reply length in UTF-16 units> <pid>`; `journey-subagent=<seconds>`
 /// first starts a sub-agent run of the same bot through BotChu's `botchu-subagent`, told to stream
 /// for that long, and waits for it, as a bot that delegates does.
 enum FakeClaude {
@@ -34,7 +35,7 @@ enum FakeClaude {
             return descriptor < 0 ? nil : FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         }
         func record(_ line: String) { try? log?.write(contentsOf: Data((line + "\n").utf8)) }
-        record("\(DispatchTime.now().uptimeNanoseconds) run \(arguments.joined(separator: " ").prefix(300))")
+        record("\(DispatchTime.now().uptimeNanoseconds) run \(getpid()) \(arguments.joined(separator: " ").prefix(300))")
         guard arguments.contains("-p") || arguments.contains("--print") else { return 0 }
         func value(after flag: String) -> String? {
             arguments.firstIndex(of: flag).flatMap { $0 + 1 < arguments.count ? arguments[$0 + 1] : nil }
@@ -60,6 +61,7 @@ enum FakeClaude {
             record("\(DispatchTime.now().uptimeNanoseconds) \(index)")
             if index < ClaudeStream.turn.count - 1, interval > 0 { usleep(useconds_t(interval * 1_000)) }
         }
+        record("\(DispatchTime.now().uptimeNanoseconds) end \(getpid())")
         return 0
     }
 
@@ -82,7 +84,9 @@ enum FakeClaude {
                 }
                 write(line)
                 text += chunk
-                record("\(DispatchTime.now().uptimeNanoseconds) delta \(text.utf16.count)")
+                // As the chat shows it: without the whitespace it ends with so far.
+                let shown = text.utf16.count - text.reversed().prefix(while: \.isWhitespace).reduce(0) { $0 + $1.utf16.count }
+                record("\(DispatchTime.now().uptimeNanoseconds) delta \(shown) \(getpid())")
                 usleep(useconds_t(max(interval, 1) * 1_000))
                 if DispatchTime.now().uptimeNanoseconds >= end { break }
             }
@@ -91,7 +95,7 @@ enum FakeClaude {
         for line in lines[(last + 1)...] {
             write(ClaudeStream.replacingText(of: line, with: text) ?? line)
         }
-        record("\(DispatchTime.now().uptimeNanoseconds) end")
+        record("\(DispatchTime.now().uptimeNanoseconds) end \(getpid())")
     }
 
     /// Starts a sub-agent run of this bot that streams for `seconds`, and waits for its handoff.
@@ -134,10 +138,12 @@ enum FakeClaude {
         return String(decoding: data, as: UTF8.self)
     }
 
-    /// The wrapper the profile runs (BotChu runs a profile's command through a login shell).
-    static func writeWrapper(at url: URL, harness: String) throws {
-        let quoted = "'" + harness.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        try "#!/bin/sh\nexec \(quoted) fake-claude \"$@\"\n".write(to: url, atomically: true, encoding: .utf8)
+    /// The wrapper the profile runs (BotChu runs a profile's command through a login shell). BotChu
+    /// leaves its own `BOTCHU_` variables out of a CLI's environment, so the log's path is set here.
+    static func writeWrapper(at url: URL, harness: String, log: URL) throws {
+        func quoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        try "#!/bin/sh\nBOTCHU_JOURNEY_FAKE_LOG=\(quoted(log.path)) exec \(quoted(harness)) fake-claude \"$@\"\n"
+            .write(to: url, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 }

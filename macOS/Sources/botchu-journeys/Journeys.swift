@@ -26,6 +26,8 @@ struct Journeys {
         var draft: (bot: Bot, text: String)?
         var sent: (bot: Bot, text: String)?
         var task: (bot: Bot, id: UUID)?
+        /// How many of the Inbox's deliveries journey 11 marked Done.
+        var deliveriesDone = 0
     }
 
     let app: AppUnderTest
@@ -34,6 +36,8 @@ struct Journeys {
     let repeats: Int
     /// A stall injected into journey 2's sidebar toggles (`--stall`), to see the run fail.
     var stall: Double = 0
+    /// Recording a baseline: a failed step isn't measured again.
+    var recording = false
     let left = Left()
     let report: (JourneyResult) -> Void
 
@@ -50,11 +54,12 @@ struct Journeys {
 
     static func ms(_ from: UInt64, _ to: UInt64) -> Double { Double(Int64(to) - Int64(from)) / 1_000_000 }
 
-    /// Runs one journey; when a step fails, measures the journey again once, saying why and the load.
+    /// Runs one journey; when a step fails, measures the journey again once, saying why and the load
+    /// (not while recording a baseline, which keeps what it measured).
     func run(_ number: Int, _ journey: () -> [JourneyResult]) -> [JourneyResult] {
         let first = journey()
         let failed = first.filter { !$0.passed }
-        guard !failed.isEmpty else { first.forEach(report); return first }
+        guard !failed.isEmpty, !recording else { first.forEach(report); return first }
         let why = failed.map { "\($0.step): \($0.failure ?? "")" + ($0.load.map { String(format: " (load %.1f)", $0) } ?? "") }.joined(separator: "; ")
         print("journeys: journey \(number) failed (\(why)); measuring it again")
         let again = journey().map { result -> JourneyResult in
@@ -99,6 +104,7 @@ struct Journeys {
     @discardableResult
     func send(_ text: String, to bot: Bot) throws -> Double {
         try show(bot)
+        try awaitIdle(timeout: 60)
         let composer = try composer()
         var start = AppUnderTest.now
         try composer.set(kAXValueAttribute, to: text as CFString)
@@ -106,10 +112,34 @@ struct Journeys {
         guard let button = try app.window().first(where: { $0.role == kAXButtonRole as String && $0.label == "Send" }) else {
             throw HarnessFailure("The message box has no Send button")
         }
-        start = AppUnderTest.now
-        try button.press()
+        start = try press(button)
         let shown = try app.mark(FrameMarks.chat(bot.id), after: start)
         return Self.ms(start, shown.nanoseconds)
+    }
+
+    /// Presses `element` and waits for `mark`; when no mark comes within a second and a half, presses
+    /// it once more, timed from then, and says so (the first press of a tab after a launch can go
+    /// unanswered).
+    func press(_ element: AXElement, until mark: String) throws -> (start: UInt64, mark: FrameMarks.Mark) {
+        let start = try press(element)
+        if let shown = try? app.mark(mark, after: start, timeout: 1.5) { return (start, shown) }
+        print("journeys: \(element) showed no \"\(mark)\" within 1.5 s; pressing it again")
+        let again = try press(element)
+        return (again, try app.mark(mark, after: again))
+    }
+
+    /// Presses `element` and returns when. Accessibility reports a failure when the press took the
+    /// element away (Start Task closing its sheet), so only an element still on screen is pressed
+    /// again, once, a moment later, timed from then.
+    func press(_ element: AXElement) throws -> UInt64 {
+        var start = AppUnderTest.now
+        do { try element.press() } catch {
+            usleep(100_000)
+            guard let frame = element.frame, frame.width > 0, frame.height > 0 else { return start }
+            start = AppUnderTest.now
+            try element.press()
+        }
+        return start
     }
 
     /// Waits until the shown conversation's turn has ended: its message box says Send again.
@@ -133,6 +163,13 @@ struct Journeys {
     }
 
     static func p95(_ values: [Double]) -> Double { JourneyStats.percentile(95, of: values) ?? 0 }
+
+    /// The button with this label that is on screen (SwiftUI keeps hidden copies of some, 0×0).
+    func button(_ label: String) throws -> AXElement? {
+        try app.window().first { element in
+            element.role == kAXButtonRole as String && element.label == label && (element.frame.map { $0.width > 0 && $0.height > 0 } ?? false)
+        }
+    }
 
     // MARK: 1. Cold launch
 
@@ -220,9 +257,7 @@ struct Journeys {
     /// Presses the button `find` finds and times it until `mark`, then lets the animation finish.
     /// With `stall`, the app is stopped that long just after the press.
     private func toggle(_ find: () throws -> AXElement, mark: String, stall: Double = 0) throws -> Double {
-        let button = try find()
-        let start = AppUnderTest.now
-        try button.press()
+        let start = try press(try find())
         app.stall(milliseconds: stall)
         let shown = try app.mark(mark, after: start)
         app.settle(quiet: 0.5)
