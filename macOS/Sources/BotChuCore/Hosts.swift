@@ -111,24 +111,4 @@ public enum Locations {
         if let chosen, chosen.hostID == nil || hosts.contains(where: { $0.id == chosen.hostID }) { return chosen }
         return RepoLocation(path: (reposRoot as NSString).appendingPathComponent(TaskNaming.repoName(repo)))
     }
-
-    /// This Mac's short name, as PROJECT.md's `deploy` calls it: its LocalHostName, else its host
-    /// name up to the first dot.
-    public static func thisMacName() -> String {
-        localHostName() ?? ProcessInfo.processInfo.hostName.split(separator: ".").first.map(String.init) ?? ""
-    }
-
-    private static func localHostName() -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/scutil")
-        process.arguments = ["--get", "LocalHostName"]
-        let out = Pipe()
-        process.standardOutput = out
-        process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return nil }
-        process.waitUntilExit()
-        let name = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return process.terminationStatus == 0 && !name.isEmpty ? name : nil
-    }
 }

@@ -80,25 +80,13 @@ public struct ToolCheck: Codable, Equatable, Sendable {
 }
 
 public struct ToolProbe: Sendable {
-    public struct Output: Sendable {
-        public var status: Int32
-        public var output: String
-        public var timedOut: Bool
-
-        public init(status: Int32, output: String, timedOut: Bool = false) {
-            self.status = status
-            self.output = output
-            self.timedOut = timedOut
-        }
-    }
-
     public struct Failure: Error, Equatable, Sendable {
         public let message: String
         public init(_ message: String) { self.message = message }
     }
 
     /// Runs an executable with arguments and extra environment, within a time limit.
-    public typealias Run = @Sendable (_ path: String, _ arguments: [String], _ environment: [String: String]) async -> Output
+    public typealias Run = @Sendable (_ path: String, _ arguments: [String], _ environment: [String: String]) async -> Shell.Result
     private let run: Run
 
     public init(run: @escaping Run = { await ToolProbe.execute($0, $1, environment: $2) }) {
@@ -151,65 +139,12 @@ public struct ToolProbe: Sendable {
 
     /// Runs `path` directly (no shell), with stdin closed, a small environment and the time limit,
     /// returning its output and error output together, cut to `outputLimit`.
-    public static func execute(_ path: String, _ arguments: [String], environment: [String: String]) async -> Output {
-        await withCheckedContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = arguments
-            let inherited = ProcessInfo.processInfo.environment
-            var env = ["HOME": NSHomeDirectory(), "NO_COLOR": "1", "TERM": "dumb", "LANG": "en_US.UTF-8",
-                       "PATH": inherited["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"]
-            env.merge(environment) { _, new in new }
-            process.environment = env
-            process.standardInput = FileHandle.nullDevice
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
-            let state = ProbeState()
-            pipe.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if chunk.isEmpty { handle.readabilityHandler = nil } else { state.append(chunk, limit: outputLimit) }
-            }
-            process.terminationHandler = { process in
-                pipe.fileHandleForReading.readabilityHandler = nil
-                let rest = (try? pipe.fileHandleForReading.readToEnd()) ?? nil
-                if let rest { state.append(rest, limit: outputLimit) }
-                continuation.resume(returning: Output(status: process.terminationStatus, output: state.text, timedOut: state.timedOut))
-            }
-            do {
-                try process.run()
-            } catch {
-                pipe.fileHandleForReading.readabilityHandler = nil
-                continuation.resume(returning: Output(status: -1, output: ""))
-                return
-            }
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                guard process.isRunning else { return }
-                state.markTimedOut()
-                process.terminate()
-                DispatchQueue.global().asyncAfter(deadline: .now() + 2) { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
-            }
-        }
-    }
-
-    private final class ProbeState: @unchecked Sendable {
-        private let lock = NSLock()
-        private var data = Data()
-        private var expired = false
-
-        func append(_ chunk: Data, limit: Int) {
-            lock.lock()
-            if data.count < limit { data.append(chunk.prefix(limit - data.count)) }
-            lock.unlock()
-        }
-
-        func markTimedOut() {
-            lock.lock()
-            expired = true
-            lock.unlock()
-        }
-
-        var timedOut: Bool { lock.lock(); defer { lock.unlock() }; return expired }
-        var text: String { lock.lock(); defer { lock.unlock() }; return String(decoding: data, as: UTF8.self) }
+    public static func execute(_ path: String, _ arguments: [String], environment: [String: String],
+                               timeout: TimeInterval = ToolProbe.timeout) async -> Shell.Result {
+        let inherited = ProcessInfo.processInfo.environment
+        var env = ["HOME": NSHomeDirectory(), "NO_COLOR": "1", "TERM": "dumb", "LANG": "en_US.UTF-8",
+                   "PATH": inherited["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"]
+        env.merge(environment) { _, new in new }
+        return await ChildProcess.run(path, arguments, environment: env, timeout: timeout, outputLimit: outputLimit, mergeErrors: true)
     }
 }

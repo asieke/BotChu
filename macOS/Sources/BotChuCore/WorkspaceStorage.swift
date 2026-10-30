@@ -162,7 +162,7 @@ public struct StorageMove: Identifiable, Codable, Equatable, Sendable {
             }
             let type = try files.attributesOfItem(atPath: source + "/.git")[.type] as? FileAttributeType
             if type == .typeRegular {
-                let moved = await Shell.run(["git", "worktree", "move", "--", source, destination], in: source)
+                let moved = await Shell.run(["git", "worktree", "move", "--", source, destination], in: source, timeout: Shell.longTimeout)
                 guard moved.ok else { throw Problem("Git refused to move this worktree. Nothing was overwritten.") }
                 return
             }

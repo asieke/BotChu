@@ -101,7 +101,7 @@ extension Machine {
             guard bytes.count <= ImageAttachment.maximumBytes else { throw ImageDelivery.Failure("An attached image is too large.") }
             let filename = UUID().uuidString.lowercased() + ".png"
             let script = "umask 077; dir=\"$HOME/.cache/botchu/attachments\"; mkdir -p \"$dir\" && cat > \"$dir/$1.tmp\" && mv \"$dir/$1.tmp\" \"$dir/$1\" && printf '%s\\n' \"$dir/$1\""
-            let result = await run(["/bin/sh", "-c", script, "botchu", filename], in: "~", input: bytes)
+            let result = await run(["/bin/sh", "-c", script, "botchu", filename], in: "~", input: bytes, timeout: Shell.longTimeout)
             guard result.ok, let path = result.lastLine, path.hasPrefix("/"), path.hasSuffix("/" + filename) else {
                 throw ImageDelivery.Failure("Couldn't copy the attached image to the task's host. Check its connection and try again.")
             }

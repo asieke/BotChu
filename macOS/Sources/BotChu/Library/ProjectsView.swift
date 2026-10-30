@@ -430,7 +430,7 @@ struct ProjectsTable: View {
 
     /// A local deploy target's machine as BotChu knows it: This Mac, a host's nickname, or its name.
     private func machineLabel(_ machine: String) -> String {
-        if let thisMac = model.settings.thisMacName, machine.caseInsensitiveCompare(thisMac) == .orderedSame { return "This Mac" }
+        if machine.caseInsensitiveCompare(model.settings.thisMacName) == .orderedSame { return "This Mac" }
         return model.settings.hosts.first { $0.machine.caseInsensitiveCompare(machine) == .orderedSame }?.nickname ?? machine
     }
 
@@ -667,11 +667,8 @@ struct ProjectMetadataEditor: View {
                 }
             }.padding(20)
         }.frame(width: 580, height: 590).background(Color(nsColor: .windowBackgroundColor)).interactiveDismissDisabled(saving)
-        // Read again once this Mac's name is known, as long as nothing in it was changed.
-        .task(id: model.settings.thisMacName) {
-            if deploy.map({ $0.value == metadata.deploy }) ?? true {
-                deploy = DeployForm(deploy: metadata.deploy, thisMac: model.settings.thisMacName, hosts: model.settings.hosts.map(\.machine))
-            }
+        .onAppear {
+            deploy = DeployForm(deploy: metadata.deploy, thisMac: model.settings.thisMacName, hosts: model.settings.hosts.map(\.machine))
         }
     }
 

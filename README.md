@@ -1010,8 +1010,8 @@ on that pull request's branch to continue in instead). The same command run agai
     and finished sub-agents' transcripts beyond 16 MB, leave memory, the least recently shown first,
     never the one shown, one with a turn or a sub-agent under way, or one not saved; drafts, queues,
     sessions and summaries stay, and the history is read again when it is shown. The replies parsed
-    ahead are the shown conversation's latest 60, up to 256 KB of them. This Mac's name (`scutil`) is
-    looked up off the main thread, and a task request naming this Mac waits for it. With eight bots,
+    ahead are the shown conversation's latest 60, up to 256 KB of them. This Mac's name comes from
+    System Configuration, without running `scutil`. With eight bots,
     forty open tasks and a hundred finished sub-agents (101 MB) on an M4 Max, the window is up in
     about 220 ms (it was 800) and the shown conversation in about 330, having read one transcript
     (it read all 148).
@@ -1584,7 +1584,10 @@ on that pull request's branch to continue in instead). The same command run agai
     read, decoded, encoded, written and copied, including index and journal bytes (`HistoryCounters.swift`),
     and the `Process` runner that launches
     a CLI through the login shell, `zsh -l`, or on a host over `ssh`, parsing its output off the
-    main thread and delivering it in batches (`AgentRun.swift`). Delegation models, validation, persistence and the Python helper are in
+    main thread and delivering it in batches (`AgentRun.swift`). The programs BotChu waits for (git,
+    gh, ssh, mailbox commands and tools' checks) run through one runner with a time limit (two
+    minutes for git and gh, half an hour for a clone, a fetch or files sent), an output limit and
+    cancellation, which stops a program's whole process group (`ChildProcess.swift`). Delegation models, validation, persistence and the Python helper are in
     `Subagents.swift`, `Store.swift`, `SubagentArchive.swift` (each run's transcript and record saved in
     a lane of its own, off the main thread, while they stream and at their start and end), `SubagentHook.swift` and `BotContext.swift`; `SubagentTransport.swift`
     handles isolated local and SSH mailboxes with bounded reads, timeout and cancellation.

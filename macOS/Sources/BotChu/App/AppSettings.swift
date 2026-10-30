@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SystemConfiguration
 import BotChuCore
 
 /// Settings kept in `defaults` (domain `local.BotChu`); the OpenRouter and Sail keys and the
@@ -24,13 +25,10 @@ final class AppSettings {
     var hosts: [SSHHost] { didSet { save(hosts, forKey: "hosts") } }
     /// Where the owner chose to work on each repository (`owner/name`), when not where it lives by default.
     var repoLocations: [String: RepoLocation] { didSet { save(repoLocations, forKey: "repoLocations") } }
-    /// This Mac's short name, as PROJECT.md's `deploy` calls it: looked up off the main thread (it
-    /// runs `scutil`), nil until it is. What places a task waits for it (`resolvedMacName`), never
-    /// taking another name meanwhile.
-    private(set) var thisMacName: String?
-    private let macName = Task.detached(priority: .utility) { Locations.thisMacName() }
-
-    func resolvedMacName() async -> String { await macName.value }
+    /// This Mac's short name, as PROJECT.md's `deploy` calls it: its LocalHostName, else its host
+    /// name up to the first dot.
+    let thisMacName = SCDynamicStoreCopyLocalHostName(nil) as String?
+        ?? ProcessInfo.processInfo.hostName.split(separator: ".").first.map(String.init) ?? ""
     var openRouterModel: String { didSet { defaults.set(openRouterModel, forKey: "openRouterModel") } }
     /// The Sail model a conversation on the Sail account runs when it doesn't choose one; empty
     /// until the owner chooses, as Sail has no default of its own.
@@ -111,10 +109,6 @@ final class AppSettings {
         quickTaskAccountID = defaults.string(forKey: "quickTaskAccountID")
         quickTaskModel = defaults.string(forKey: "quickTaskModel") ?? ""
         settingsPage = defaults.string(forKey: "settingsPage").flatMap(SettingsPage.init(rawValue:)) ?? .general
-        Task { [weak self, macName] in
-            let name = await macName.value
-            self?.thisMacName = name
-        }
     }
 
     func account(_ id: String) -> Account { accounts.first { $0.id == id } ?? Accounts.account(id: id) }

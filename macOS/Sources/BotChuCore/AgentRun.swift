@@ -479,19 +479,3 @@ public final class AgentRun: @unchecked Sendable {
         return lines
     }
 }
-
-/// Whether an account's command can be found by the login shell.
-public enum CommandCheck {
-    public static func isAvailable(_ command: String) async -> Bool {
-        let word = command.split(separator: " ").first.map(String.init) ?? command
-        return await withCheckedContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-l", "-c", "command -v \(word) >/dev/null 2>&1"]
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            process.terminationHandler = { continuation.resume(returning: $0.terminationStatus == 0) }
-            do { try process.run() } catch { continuation.resume(returning: false) }
-        }
-    }
-}
