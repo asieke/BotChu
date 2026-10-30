@@ -55,6 +55,12 @@ public struct SubagentRun: Identifiable, Codable, Equatable, Sendable, RunSettin
     public var finishedAt: Date?
     public var handoffOutput: String?
     public var errorMessage: String?
+    /// How far it got when it ended without a handoff (#368); nil for a run that handed off, and in
+    /// records saved before.
+    public var interruption: SubagentInterruption?
+
+    /// A stopped run BotChu recorded an interruption for: its row says Interrupted.
+    public var isInterrupted: Bool { phase == .stopped && interruption != nil }
 
     public init(id: UUID = UUID(), rootBotID: UUID, rootTaskID: UUID? = nil, parentSubagentID: UUID? = nil,
                 depth: Int, targetBot: Bot, title: String, brief: String,
@@ -92,7 +98,7 @@ public struct SubagentRun: Identifiable, Codable, Equatable, Sendable, RunSettin
     public var result: SubagentResult {
         SubagentResult(id: id, targetBotID: targetBotID, targetBotName: targetBotName, phase: phase,
                        handoffOutput: handoffOutput ?? "", errorMessage: errorMessage,
-                       startedAt: startedAt, finishedAt: finishedAt ?? Date())
+                       startedAt: startedAt, finishedAt: finishedAt ?? Date(), interrupted: isInterrupted ? true : nil)
     }
 }
 
@@ -246,7 +252,7 @@ public struct SubagentOverview: Equatable, Sendable {
 /// no progress, no blocked or accepted phase, and Done only for a run that ended with a handoff.
 public struct SubagentRowState: Equatable, Sendable {
     public enum Kind: String, Equatable, Sendable {
-        case queued, preparing, running, stopping, done, noHandoff, failed, stopped
+        case queued, preparing, running, stopping, done, noHandoff, failed, stopped, interrupted
     }
 
     public var kind: Kind
@@ -270,7 +276,7 @@ public struct SubagentRowState: Equatable, Sendable {
             let empty = (run.handoffOutput ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             (kind, word) = empty ? (.noHandoff, "No handoff") : (.done, "Done")
         case .failed: (kind, word) = (.failed, "Failed")
-        case .stopped: (kind, word) = (.stopped, "Stopped")
+        case .stopped: (kind, word) = run.isInterrupted ? (.interrupted, "Interrupted") : (.stopped, "Stopped")
         }
         if stopping, run.phase.isActive { (kind, word) = (.stopping, "Stopping…") }
     }
@@ -397,10 +403,13 @@ public struct SubagentResult: Codable, Equatable, Sendable {
     public var errorMessage: String?
     public var startedAt: Date?
     public var finishedAt: Date
+    /// A stopped run that BotChu interrupted (#368): its `errorMessage` says how far it got. Nil
+    /// otherwise; helpers that don't know it read a stopped result.
+    public var interrupted: Bool?
 
     public init(id: UUID, targetBotID: UUID? = nil, targetBotName: String, phase: SubagentPhase,
                 handoffOutput: String = "", errorMessage: String? = nil, startedAt: Date? = nil,
-                finishedAt: Date = Date()) {
+                finishedAt: Date = Date(), interrupted: Bool? = nil) {
         self.id = id
         self.targetBotID = targetBotID
         self.targetBotName = targetBotName
@@ -409,6 +418,7 @@ public struct SubagentResult: Codable, Equatable, Sendable {
         self.errorMessage = errorMessage
         self.startedAt = startedAt
         self.finishedAt = finishedAt
+        self.interrupted = interrupted
     }
 }
 

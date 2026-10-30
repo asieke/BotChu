@@ -612,6 +612,16 @@ extension RenderingTests {
         #expect(app.delegation.all.allSatisfy { $0.phase == .stopped })
         #expect(app.delegation.states.isEmpty)
         #expect(fixture.home.loadSubagents(taskID: fixture.target.taskID).allSatisfy { $0.phase == .stopped })
+        // #368: each was interrupted, by the owner or by its stopped caller, and says so and how far
+        // it got in its record and transcript, never a bare "Stopped".
+        #expect(Set(app.delegation.all.compactMap { $0.interruption?.cause }) == [.owner, .parentStopped])
+        for run in fixture.home.loadSubagents(taskID: fixture.target.taskID) {
+            #expect(run.isInterrupted)
+            let thread = fixture.home.loadSubagentThread(id: run.id, taskID: fixture.target.taskID)
+            #expect(!thread.contains { $0.role == .note && $0.text == "Stopped" })
+            #expect(thread.last?.role == .note && thread.last?.text == run.errorMessage)
+            #expect(run.errorMessage?.contains("Workspace: \(fixture.folder.path)") == true)
+        }
     }
 
     /// #145: Antigravity printed a sub-agent's handoff and the end of its turn, then never exited
@@ -763,6 +773,12 @@ extension RenderingTests {
         await restored.storage.settle()
         #expect(restored.delegation.run(parent.id)?.phase == .stopped)
         #expect(restored.delegation.run(child.id)?.phase == .completed)
+        // #368: cut by the restart, it is Interrupted, saying so, with its worktree.
+        #expect(restored.delegation.run(parent.id)?.interruption?.cause == .restart)
+        #expect(restored.delegation.run(parent.id)?.errorMessage == "BotChu quit or restarted while it ran, before any tool call. "
+            + "Workspace: \(fixture.folder.path).")
+        #expect(fixture.home.loadSubagentThread(id: parent.id, taskID: fixture.target.taskID).last?.text
+            == restored.delegation.run(parent.id)?.errorMessage)
         #expect(fixture.home.loadSubagents(taskID: fixture.target.taskID).allSatisfy { !$0.phase.isActive })
         let defaults = UserDefaults(suiteName: fixture.domain)!
         defaults.set("subagents", forKey: InspectorTab.storageKey)

@@ -259,9 +259,25 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     /// BotChu's note at the end of a stopped turn: marked `stopped` when the owner stopped it, not
     /// when BotChu stopped it to quit.
     public static func stopNote(byOwner: Bool, date: Date = Date()) -> ChatMessage {
-        var note = ChatMessage(role: .note, text: "Stopped", date: date)
+        stopNote(byOwner: byOwner, toolCalls: 0, lastAction: nil, date: date)
+    }
+
+    /// The note of a stopped turn that ran tools says how far it got (#368): "Stopped after 84 tool
+    /// calls. Last action: Ran `bun run test`." A turn that ran none says "Stopped".
+    public static func stopNote(byOwner: Bool, toolCalls: Int, lastAction: String?, date: Date = Date()) -> ChatMessage {
+        var text = "Stopped"
+        if toolCalls > 0 {
+            text += " after \(toolCalls) tool \(toolCalls == 1 ? "call" : "calls")."
+            if let lastAction { text += " Last action: \(lastAction)." }
+        }
+        var note = ChatMessage(role: .note, text: text, date: date)
         if byOwner { note.stopped = true }
         return note
+    }
+
+    /// BotChu's note at the end of a stopped turn (`stopNote`), however much it says.
+    public var isStopNote: Bool {
+        role == .note && (stopped == true || text == "Stopped" || text.hasPrefix("Stopped after "))
     }
 
     /// Older versions missed AGY's subagent terminal events and saved them as failures.
