@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- Antigravity tool and run errors carry agy's message, and non-zero shell exits are recorded as failed (#367) (#374)
 - Journeys 4–13, the regression rule and the ratchet (#329) (#352)
 - Move the shared CLI turn loop into one Core TurnStream type (#345) (#351)
 - Fix main's build: pass input and timeout to Shell.execute (#350)
