@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- Keep composer drafts between launches, owner-only and outside the bot's folder (#357) (#373)
 - Journeys 4–13, the regression rule and the ratchet (#329) (#352)
 - Move the shared CLI turn loop into one Core TurnStream type (#345) (#351)
 - Fix main's build: pass input and timeout to Shell.execute (#350)
