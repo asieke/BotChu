@@ -32,22 +32,80 @@ struct JourneyTests {
     }
 
     @Test func aStepPassesOnItsMedianAndSaysWhyItFailed() {
-        let quick = JourneyResult(journey: 2, step: "sidebar · close", budget: .instant, baseline: 9, samples: [8, 70, 9, 10, 7])
+        let quick = JourneyResult(journey: 2, step: "sidebar · close", budget: .instant, baseline: 9, samples: [8, 70, 9, 10, 7], load: 4.24)
         #expect(quick.median == 9)
         #expect(quick.p95 == 70)
         #expect(quick.passed)
-        #expect(quick.report == "2 sidebar · close: budget Instant 16.0 ms, baseline 9.0 ms, median 9.0 ms, p95 70.0 ms, 5 samples — ok")
+        #expect(quick.report == "2 sidebar · close: budget Instant 16.0 ms, baseline 9.0 ms, median 9.0 ms, p95 70.0 ms, 5 samples, load 4.2 — ok")
 
-        // An injected 50 ms stall: the report names the journey, its budget, baseline and time.
+        // Over budget: the report names the journey, its budget, baseline and time.
         let stalled = JourneyResult(journey: 2, step: "sidebar · close", budget: .instant, baseline: 9, samples: [58, 61, 59, 60, 62])
         #expect(!stalled.passed)
-        #expect(stalled.report == "2 sidebar · close: budget Instant 16.0 ms, baseline 9.0 ms, median 60.0 ms, p95 62.0 ms, 5 samples — FAILED: median over budget")
+        #expect(stalled.report == "2 sidebar · close: budget Instant 16.0 ms, baseline 9.0 ms, median 60.0 ms, p95 62.0 ms, 5 samples"
+            + " — FAILED: median 60.0 ms over its budget of 16.0 ms")
 
         let broken = JourneyResult(journey: 3, step: "switch bot", budget: .within(50), samples: [4], problem: "The chat doesn't show Iris's latest message")
         #expect(!broken.passed)
         #expect(broken.report.hasSuffix("— FAILED: The chat doesn't show Iris's latest message"))
         #expect(broken.report.contains("budget ≤ 50 ms 50.0 ms, baseline —"))
         #expect(!JourneyResult(journey: 1, step: "launch", budget: .launch, samples: []).passed)
+    }
+
+    @Test func aStepWithinBudgetFailsWhenItIsAQuarterAndThreeMillisecondsSlowerThanItsBaseline() {
+        func step(baseline: Double, median: Double) -> JourneyResult {
+            JourneyResult(journey: 4, step: "switch task", budget: .within(50), baseline: baseline, samples: [median])
+        }
+        // 30 % and 6 ms slower, within the 50 ms budget.
+        let slower = step(baseline: 20, median: 26)
+        #expect(slower.failure == "median 26.0 ms is 30 % (6.0 ms) slower than the baseline 20.0 ms")
+        #expect(slower.report.contains("budget ≤ 50 ms 50.0 ms, baseline 20.0 ms, median 26.0 ms"))
+        // 25 % or less, or 3 ms or less, is noise.
+        #expect(step(baseline: 20, median: 25).passed)
+        #expect(step(baseline: 8, median: 11).passed)
+        #expect(!step(baseline: 8, median: 11.5).passed)
+        // Faster always passes, and so does a step with no baseline yet.
+        #expect(step(baseline: 40, median: 10).passed)
+        #expect(JourneyResult(journey: 4, step: "switch task", budget: .within(50), samples: [49]).passed)
+    }
+
+    @Test func aBaselineOverBudgetRatchetsTheBudgetToItPlusATenthAndSaysSo() {
+        // Journey 2's recorded sidebar toggle, 44.1 ms against Instant's 16 ms.
+        let atBaseline = JourneyResult(journey: 2, step: "sidebar · close", budget: .instant, baseline: 44.1, samples: [44, 46, 43, 45, 47, 44])
+        #expect(atBaseline.ratcheted)
+        #expect(atBaseline.limit == 48.5)
+        #expect(atBaseline.passed)
+        #expect(atBaseline.report == "2 sidebar · close: budget Instant 16.0 ms (ratcheted to 48.5 ms: the baseline is over budget), "
+            + "baseline 44.1 ms, median 44.5 ms, p95 47.0 ms, 6 samples — ok")
+
+        // An injected 50 ms stall on top fails it, naming the budget, the baseline and the time.
+        let stalled = JourneyResult(journey: 2, step: "sidebar · close", budget: .instant, baseline: 44.1, samples: [94, 96, 93, 95, 97, 94])
+        #expect(stalled.failure == "median 94.5 ms over its budget of 48.5 ms")
+        #expect(stalled.report.contains("budget Instant 16.0 ms (ratcheted to 48.5 ms: the baseline is over budget), baseline 44.1 ms, median 94.5 ms"))
+
+        // A baseline within budget leaves the budget alone.
+        let within = JourneyResult(journey: 3, step: "switch bot", budget: .within(50), baseline: 47.8, samples: [51])
+        #expect(!within.ratcheted)
+        #expect(within.limit == 50)
+        #expect(within.failure == "median 51.0 ms over its budget of 50.0 ms")
+    }
+
+    @Test func aStepMeasuredAgainSaysWhyAndTheLoad() {
+        let again = JourneyResult(journey: 5, step: "echo while 4 stream (p95)", budget: .instant, baseline: 9, samples: [10, 11, 9],
+                                  load: 31.04, retried: "median 40.0 ms over its budget of 16.0 ms (load 52.3)")
+        #expect(again.passed)
+        #expect(again.report == "5 echo while 4 stream (p95): budget Instant 16.0 ms, baseline 9.0 ms, median 10.0 ms, p95 11.0 ms, 3 samples, "
+            + "load 31.0; measured again after: median 40.0 ms over its budget of 16.0 ms (load 52.3) — ok")
+    }
+
+    @Test func busyStretchesAndStreamedLengthsReadBack() {
+        let bot = UUID(uuidString: "00000000-0000-4000-8323-000000000001")!
+        #expect(FrameMarks.busyMilliseconds(FrameMarks.busy(milliseconds: 37.256)) == 37.26)
+        #expect(FrameMarks.busyMilliseconds("busyness") == nil)
+        #expect(FrameMarks.streamedLength(FrameMarks.streamed(bot, length: 812), of: bot) == 812)
+        #expect(FrameMarks.streamedLength(FrameMarks.streamed(UUID(), length: 812), of: bot) == nil)
+        #expect(FrameMarks.isContinuous(FrameMarks.busy(milliseconds: 5)))
+        #expect(FrameMarks.isContinuous(FrameMarks.avatarFrame))
+        #expect(!FrameMarks.isContinuous(FrameMarks.composer))
     }
 
     @Test func aBaselineKeepsEachStepsRoundedMedianAndReadsBack() throws {
