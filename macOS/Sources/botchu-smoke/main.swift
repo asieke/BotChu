@@ -109,7 +109,7 @@ func showConnectors(_ connectors: [Connector], kind: AgentKind? = nil) {
 }
 
 /// `followUp` is written to a CLI that takes input mid-turn at its first tool call.
-func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: String? = nil) async -> Turn {
+@MainActor func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: String? = nil) async -> Turn {
     let resume = bot.resumableSessionID
     let context: SessionPreparation.Snapshot
     do {
@@ -142,45 +142,33 @@ func runTurn(_ bot: Bot, prompt: String, history: [ChatMessage], followUp: Strin
     }
     return await withCheckedContinuation { continuation in
         var turn = Turn()
-        var assembler = ThreadAssembler()
-        var ledger = InputLedger()
+        var stream = TurnStream(account: bot.account, invocation: invocation)
+        var state: RunState?
+        var ledger = invocation.input == nil ? nil : InputLedger()
         var pending = followUp
         let run = AgentRun(command: command(for: bot.account), invocation: invocation, directory: URL(fileURLWithPath: bot.workspace))
         // As the app does: parsed off the main thread, delivered in batches.
-        run.deliverEvents(parsedBy: StreamParsers.make(for: kind)) { events in
+        run.deliverEvents(parsedBy: stream.parser()) { events in
+            var toolStarted = false
             for event in events {
-                switch event {
-                case .session(let reported):
-                    turn.session = CommandBuilder.resumeID(kind: kind, invocation: invocation, reported: reported)
-                case .usage(let usage):
-                    turn.usage.append(usage)
-                case .model(let id):
-                    turn.model = id
-                case .connectors(let list):
-                    turn.connectors = list
-                case .inputTaken:
-                    if ledger.taken(), let followUp {
-                        turn.followUpsTaken += 1
-                        assembler.apply(event, to: &turn.messages)
-                        turn.messages.append(ChatMessage(role: .user, text: followUp))
-                    }
-                case .toolStarted:
-                    // As the app does: written once the CLI has echoed the prompt.
-                    if let text = pending, ledger.acceptsFollowUps, let line = CommandBuilder.inputLine(kind: kind, text: text), run.send(line) {
-                        ledger.wrote()
-                        pending = nil
-                    }
-                case .finished, .failed:
-                    if invocation.input != nil, ledger.turnEnded() { run.closeInput() }
-                default: break
-                }
-                if case .inputTaken = event { continue }
-                assembler.apply(event, to: &turn.messages)
+                if case .usage(let usage) = event { turn.usage.append(usage) }
+                if case .toolStarted = event { toolStarted = true }
+            }
+            guard let batch = stream.apply(events, state: &state, ledger: &ledger, followUp: { followUp.map { ChatMessage(role: .user, text: $0) } },
+                                           in: { $0(&turn.messages) }) else { return }
+            turn.session = batch.sessions.last ?? turn.session
+            turn.model = batch.reportedModel ?? turn.model
+            turn.connectors = batch.connectors ?? turn.connectors
+            turn.followUpsTaken += batch.followUps.count
+            if batch.closesInput { run.closeInput() }
+            // As the app does: written once the CLI has echoed the prompt, here during a tool call.
+            if toolStarted, let text = pending, ledger?.acceptsFollowUps == true, let line = CommandBuilder.inputLine(kind: kind, text: text), run.send(line) {
+                ledger?.wrote()
+                pending = nil
             }
         }
         run.onExit = { status, stderr in
-            assembler.apply(.textEnd, to: &turn.messages)
-            ThreadAssembler.closeRunningTools(&turn.messages)
+            stream.close(&turn.messages)
             turn.status = status
             turn.stderr = stderr
             continuation.resume(returning: turn)

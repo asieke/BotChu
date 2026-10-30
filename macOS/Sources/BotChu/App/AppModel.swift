@@ -1866,16 +1866,20 @@ final class AppModel {
                     sailKey: sailKey,
                     liveInput: liveInput, catalog: nativeModels(for: current))
                 invocation.toolProfile = toolProfile
-
-                do {
-                    invocation = try ImageDelivery.attaching(imageURLs, to: invocation, kind: account.kind, prompt: prompt)
-                } catch {
+                // The turn can't start: it says why, and its queue waits for the owner.
+                @MainActor func fail(_ problem: String) {
                     usageCapture.finish(.failed, in: usageHome, queue: storage)
                     delegation.endCaller(context.id)
                     runStates[target] = nil
                     pauseQueue(target)
-                    append(ChatMessage(role: .error, text: "Couldn't send images: \(error.localizedDescription)"), to: target)
+                    append(ChatMessage(role: .error, text: problem), to: target)
                     saveThread(target)
+                }
+
+                do {
+                    invocation = try ImageDelivery.attaching(imageURLs, to: invocation, kind: account.kind, prompt: prompt)
+                } catch {
+                    fail("Couldn't send images: \(error.localizedDescription)")
                     return
                 }
                 invocation.environment.merge(context.environment) { _, new in new }
@@ -1884,26 +1888,10 @@ final class AppModel {
                 let readinessProblem = await current.runtimeAdapter.readiness(command: command, provider: current.provider, model: model,
                     machine: machine, folder: directory, environment: invocation.environment)
                 guard waiting[target] == ticket, !Task.isCancelled else { delegation.endCaller(context.id); return }
-                if let problem = readinessProblem {
-                    usageCapture.finish(.failed, in: usageHome, queue: storage)
-                    delegation.endCaller(context.id)
-                    runStates[target] = nil
-                    pauseQueue(target)
-                    append(ChatMessage(role: .error, text: problem), to: target)
-                    saveThread(target)
-                    return
-                }
+                if let problem = readinessProblem { return fail(problem) }
 
                 // Sail's helper is built beside BotChu and its key never leaves this Mac.
-                if account.kind == .sail, let problem = SailLaunch.problem(remote: machine.isRemote, key: sailKey) {
-                    usageCapture.finish(.failed, in: usageHome, queue: storage)
-                    delegation.endCaller(context.id)
-                    runStates[target] = nil
-                    pauseQueue(target)
-                    append(ChatMessage(role: .error, text: problem), to: target)
-                    saveThread(target)
-                    return
-                }
+                if account.kind == .sail, let problem = SailLaunch.problem(remote: machine.isRemote, key: sailKey) { return fail(problem) }
 
                 // On a host, its own command for the account when it has one.
                 let connectorScope = ConnectorScope(accountID: account.id, command: command, folder: directory, hostID: task?.hostID)
@@ -1918,89 +1906,37 @@ final class AppModel {
                 let turnStart = conversation(target).historyStart + thread(target).count
                 let turnPrompt = thread(target).last(where: { $0.role == .user })
                 var lastCheckpoint = Date()
-                var assembler = ThreadAssembler()
-                var outcome = TurnOutcome()
+                var stream = TurnStream(account: account, invocation: invocation, usage: usageCapture)
                 let accountID = account.id
 
                 // The CLI's lines are parsed off the main thread; their events arrive here in
                 // batches, a few times a second at most, and go into this conversation alone.
-                run.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak run] events in
+                run.deliverEvents(parsedBy: stream.parser()) { [weak self, weak run] events in
                     guard let self, let run, self.runs[target] === run, self.runSettings(of: target) != nil else { return }
                     let conversation = self.conversation(target)
                     var state = conversation.run
-                    if state?.hasOutput == false { state?.hasOutput = true }
-                    // The CLI's first lines held no events: it has started, and that's all.
-                    guard !events.isEmpty else {
-                        if state != conversation.run { conversation.run = state }
-                        return
-                    }
-                    var sessions: [String] = []
-                    var reported: String?
-                    var connectors: [Connector]?
-                    var settles: [TimeInterval] = []
-                    var delivered = false
-                    conversation.stream { messages in
-                        for event in events {
-                            // After Stop, a CLI's last word is about the interruption (Antigravity
-                            // repeats its whole reply as a failure); the "Stopped" note says it.
-                            if run.stopped, case .failed = event { continue }
-                            outcome.record(event)
-                            usageCapture.record(event)
-                            switch event {
-                            case .session(let reported):
-                                sessions.append(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: reported))
-                            case .model(let id):
-                                reported = id
-                            case .connectors(let list):
-                                connectors = list
-                            case .inputTaken:
-                                guard self.inputs[target] != nil else { break }
-                                if self.inputs[target]?.ledger.taken() == true {
-                                    // A follow-up reached the CLI: it joins the transcript here.
-                                    if let message = self.messageQueues[target]?.acknowledge() {
-                                        usageCapture.include(messageID: message.id)
-                                        assembler.apply(event, to: &messages)
-                                        messages.append(message)
-                                        delivered = true
-                                    }
-                                } else {
-                                    // The prompt's echo: this CLI takes follow-ups from now on.
-                                    state?.takesInput = true
-                                }
-                            case .finished, .failed:
-                                // Its input closes once the CLI has taken everything written to it.
-                                if self.inputs[target]?.ledger.turnEnded() == true {
-                                    run.closeInput()
-                                    state?.takesInput = false
-                                }
-                            default: break
-                            }
-                            if let activity = BotActivity.next(after: event), activity != state?.activity || state?.pending != nil,
-                               let wait = state?.move(to: activity) {
-                                settles.append(wait)
-                            }
-                            if case .inputTaken = event { continue }
-                            assembler.apply(event, to: &messages)
-                        }
-                    }
+                    var ledger = self.inputs[target]?.ledger
+                    let batch = stream.apply(events, state: &state, stopped: run.stopped, ledger: &ledger,
+                                             followUp: { self.messageQueues[target]?.acknowledge() }, in: conversation.stream)
                     if state != conversation.run { conversation.run = state }
-                    for wait in settles {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self, weak run] in
-                            guard let run, self?.runs[target] === run else { return }
-                            self?.runStates[target]?.settle()
-                        }
+                    guard let batch else { return }
+                    if let ledger { self.inputs[target]?.ledger = ledger }
+                    if batch.closesInput { run.closeInput() }
+                    batch.settle { [weak self, weak run] in
+                        guard let run, self?.runs[target] === run else { return }
+                        self?.runStates[target]?.settle()
                     }
-                    for session in sessions {
+                    for session in batch.sessions {
                         self.recordSession(session, accountID: accountID, scope: current.executionScope, for: target)
                         self.delegationSessions[target, default: []].insert(session)
                         self.toolSessions[target, default: [:]][session] = toolText
                         self.contextSessions[target, default: [:]][session] = snapshot.revision
                     }
-                    if let reported { self.recordReportedModel(reported, requested: current.model, accountID: accountID, scope: current.executionScope, for: target) }
-                    if let connectors {
-                        self.connectorBoard.record(connectors, scope: connectorScope, sessionID: sessions.last ?? self.runSettings(of: target)?.resumableSessionID, for: target)
+                    if let reported = batch.reportedModel { self.recordReportedModel(reported, requested: current.model, accountID: accountID, scope: current.executionScope, for: target) }
+                    if let connectors = batch.connectors {
+                        self.connectorBoard.record(connectors, scope: connectorScope, sessionID: batch.sessions.last ?? self.runSettings(of: target)?.resumableSessionID, for: target)
                     }
-                    if delivered || (conversation.messages.count > PagedTranscript.residentLimit && Date().timeIntervalSince(lastCheckpoint) >= 1) {
+                    if !batch.followUps.isEmpty || (conversation.messages.count > PagedTranscript.residentLimit && Date().timeIntervalSince(lastCheckpoint) >= 1) {
                         lastCheckpoint = Date()
                         // The taken message leaves the saved queue only once the saved transcript holds it.
                         self.saveThread(target)
@@ -2010,7 +1946,7 @@ final class AppModel {
                 }
                 run.onExit = { [weak self, weak run] status, stderr in
                     guard let self, let run, self.runs[target] === run else { return }
-                    usageCapture.finish(run.stopped ? .stopped : (!outcome.ended || outcome.failure != nil ? .failed : .finished),
+                    usageCapture.finish(run.stopped ? .stopped : (!stream.outcome.ended || stream.outcome.failure != nil ? .failed : .finished),
                                         in: usageHome, queue: self.storage)
                     self.usageCaptures[target] = nil
                     self.runs[target] = nil
@@ -2032,23 +1968,11 @@ final class AppModel {
                     let localTurnStart = max(0, turnStart - self.conversation(target).historyStart)
                     var acknowledged = false
                     self.conversation(target).stream { messages in
-                        assembler.apply(.textEnd, to: &messages)
-                        ThreadAssembler.closeRunningTools(&messages)
+                        stream.close(&messages)
                         messages += cards
-                        if stopped {
-                            messages.append(.stopNote(byOwner: !self.terminating && !interrupted))
-                        } else if run.lingered {
-                            messages.append(ChatMessage(role: .note, text: "\(account.name) didn't exit after its reply, so BotChu ended it."))
-                        } else if !outcome.ended, machine.isRemote, status == 255 {
-                            // ssh's own failure: the host didn't answer, or refused the connection.
-                            let detail = Self.lastLines(stderr)
-                            messages.append(ChatMessage(role: .error, text: "Couldn't reach \(place) over SSH" + (detail.isEmpty ? "." : ":\n\(detail)")))
-                        } else if !outcome.ended {
-                            // The stream never said the turn finished or failed: report what the CLI printed.
-                            let detail = Self.lastLines(stderr)
-                            messages.append(ChatMessage(role: .error, text: detail.isEmpty
-                                ? "\(account.name) exited with status \(status) without replying."
-                                : "\(account.name) exited with status \(status):\n\(detail)"))
+                        if let note = stream.endNote(status: status, stderr: stderr, stopped: stopped, byOwner: !self.terminating && !interrupted,
+                                                     lingered: run.lingered, host: machine.isRemote ? place : nil) {
+                            messages.append(note)
                         }
                         if pulse != nil, !stopped, let i = messages.indices.last(where: { messages[$0].role == .assistant }), i >= localTurnStart,
                            Heartbeat.isAck(messages[i].text) {
@@ -2058,7 +1982,7 @@ final class AppModel {
                         }
                     }
                     let messages = self.thread(target)
-                    let failure = outcome.failure(stopped: stopped, exitError: messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil })
+                    let failure = stream.outcome.failure(stopped: stopped, exitError: messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil })
                     let fallback = Array(messages.suffix(from: min(localTurnStart, messages.count)))
                     self.inbox.turnEnded(target)
                     // The turn's end is saved off the main thread, then what it asked to remember;
@@ -2126,12 +2050,7 @@ final class AppModel {
                             : "\(account.name) hasn't started yet. If macOS is asking whether BotChu may access a folder, allow it: the CLI reads its settings from there."), to: target)
                     }
                 } catch {
-                    usageCapture.finish(.failed, in: usageHome, queue: storage)
-                    delegation.endCaller(context.id)
-                    runStates[target] = nil
-                    pauseQueue(target)
-                    append(ChatMessage(role: .error, text: "Couldn't start \(account.name): \(error.localizedDescription)"), to: target)
-                    saveThread(target)
+                    fail("Couldn't start \(account.name): \(error.localizedDescription)")
                     reportTaskStart(target, failure: "Couldn't start \(account.name): \(error.localizedDescription)")
                 }
             } catch {
@@ -2900,11 +2819,5 @@ final class AppModel {
         for failure in failures where thread(target).last(where: { $0.role == .error })?.text != failure.message {
             append(ChatMessage(role: .error, text: failure.message), to: target)
         }
-    }
-
-    /// The last few meaningful lines of a CLI's stderr, for an error message.
-    static func lastLines(_ text: String, count: Int = 8) -> String {
-        text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            .suffix(count).joined(separator: "\n")
     }
 }
