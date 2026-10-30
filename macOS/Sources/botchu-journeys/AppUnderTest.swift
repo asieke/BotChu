@@ -68,12 +68,14 @@ final class AppUnderTest {
     var ax: AXElement { AXElement.application(pid) }
 
     /// Launches it without making it active, and returns when the launch began. LaunchServices can
-    /// refuse a launch just after the last copy quit (`procNotFound`), so a failed launch is tried again once.
+    /// refuse a launch just after the last copy quit (`procNotFound`) and still have started the copy,
+    /// so that copy is stopped and the launch tried again once.
     func launch() throws -> UInt64 {
         do {
             return try launchOnce()
         } catch {
             print("journeys: \(error); launching again")
+            Self.stopCopies(where: { $0 == executable })
             sleep(2)
             return try launchOnce()
         }
@@ -83,6 +85,7 @@ final class AppUnderTest {
         for leftover in NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleIdentifier) {
             leftover.forceTerminate()
         }
+        Self.stopCopies(where: Self.isLeftBehind)
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         configuration.addsToRecentItems = false
@@ -104,8 +107,10 @@ final class AppUnderTest {
         return start
     }
 
-    /// Quits it as the owner would, and waits until it has gone.
+    /// Quits it as the owner would, and waits until it has gone, with any copy of this run that
+    /// LaunchServices lost track of.
     func quit(timeout: TimeInterval = 20) {
+        defer { Self.stopCopies(where: { $0 == executable }) }
         guard let running else { return }
         let pid = running.processIdentifier
         running.terminate()
@@ -125,6 +130,37 @@ final class AppUnderTest {
     }
 
     var isRunning: Bool { pid > 0 && kill(pid, 0) == 0 }
+
+    /// The copy's executable, as the system reports a process's path (`/private/var/…`).
+    private var executable: String {
+        let path = bundle.appendingPathComponent("Contents/MacOS/BotChu").path
+        guard let resolved = realpath(path, nil) else { return path }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    /// Whether `path` is a copy in the work folder of a run whose harness has gone (`run-<pid>`).
+    static func isLeftBehind(_ path: String) -> Bool {
+        guard path.hasSuffix("/BotChu.app/Contents/MacOS/BotChu"), let run = path.range(of: "/botchu-journeys.noindex/run-"),
+              let harness = pid_t(path[run.upperBound...].prefix(while: \.isNumber)) else { return false }
+        return kill(harness, 0) != 0 && errno == ESRCH
+    }
+
+    /// Stops the processes whose executable `matches` accepts: politely, then after 10 s for good.
+    static func stopCopies(where matches: (String) -> Bool) {
+        var pids = [pid_t](repeating: 0, count: Int(max(proc_listallpids(nil, 0), 0)) + 256)
+        let count = Int(proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size)))
+        let copies = pids.prefix(max(count, 0)).filter { pid in
+            var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+            return pid > 0 && proc_pidpath(pid, &path, UInt32(path.count)) > 0 && matches(String(cString: path))
+        }
+        guard !copies.isEmpty else { return }
+        print("journeys: stopping copies of BotChu left running: \(copies.map(String.init).joined(separator: ", "))")
+        copies.forEach { kill($0, SIGTERM) }
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline, copies.contains(where: { kill($0, 0) == 0 }) { usleep(50_000) }
+        copies.filter { kill($0, 0) == 0 }.forEach { kill($0, SIGKILL) }
+    }
 
     /// The marks written since the last read.
     @discardableResult
