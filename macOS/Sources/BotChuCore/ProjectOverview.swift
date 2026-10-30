@@ -235,8 +235,6 @@ public struct ProjectRow: Identifiable, Equatable, Sendable {
     public var workplace: String
     public var location: RepoLocation
     public var openTasks: Int
-    /// Its checkout as last read (#321); nil until then.
-    public var checkout: CheckoutStatus?
 
     public var id: String { repo.id }
     public var metadata: ProjectMetadata? { if case .present(let metadata) = record { metadata } else { nil } }
@@ -250,19 +248,16 @@ public struct ProjectRow: Identifiable, Equatable, Sendable {
     public var mergeKey: Int { metadata.map { $0.merge == "agent" ? 2 : 1 } ?? 0 }
     public var deployKey: String { deploy.map(\.name).joined(separator: ",").lowercased() }
     public var workplaceKey: String { workplace.lowercased() }
-    public var checkoutKey: Int { checkout?.sortKey ?? -1 }
 
-    public init(repo: GitHubLookup.Repo, record: Record, deploy: [DeployTarget], workplace: String, location: RepoLocation, openTasks: Int,
-                checkout: CheckoutStatus? = nil) {
+    public init(repo: GitHubLookup.Repo, record: Record, deploy: [DeployTarget], workplace: String, location: RepoLocation, openTasks: Int) {
         self.repo = repo; self.record = record; self.deploy = deploy; self.workplace = workplace; self.location = location; self.openTasks = openTasks
-        self.checkout = checkout
     }
 
     /// The rows for these repositories, from their PROJECT.md records (or why one couldn't be read), the
-    /// owner's chosen locations and hosts, the open tasks' repositories, and the checkouts read.
+    /// owner's chosen locations and hosts, and the open tasks' repositories.
     public static func rows(repos: [GitHubLookup.Repo], records: [String: ProjectRecord], errors: [String: String] = [:],
                             chosen: [String: RepoLocation], hosts: [SSHHost], reposRoot: String,
-                            taskRepos: [String], checkouts: [RepoLocation: CheckoutStatus] = [:]) -> [ProjectRow] {
+                            taskRepos: [String]) -> [ProjectRow] {
         var tasks: [String: Int] = [:]
         for repo in taskRepos { tasks[repo.lowercased(), default: 0] += 1 }
         return repos.map { repo in
@@ -278,7 +273,7 @@ public struct ProjectRow: Identifiable, Equatable, Sendable {
             var deploy: [DeployTarget] = []
             if case .present(let metadata) = record { deploy = DeployTarget.parse(metadata.deploy) }
             return ProjectRow(repo: repo, record: record, deploy: deploy, workplace: workplace, location: location,
-                              openTasks: tasks[repo.id.lowercased()] ?? 0, checkout: checkouts[location])
+                              openTasks: tasks[repo.id.lowercased()] ?? 0)
         }
     }
 

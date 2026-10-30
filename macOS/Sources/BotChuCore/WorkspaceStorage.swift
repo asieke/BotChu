@@ -157,13 +157,6 @@ public struct CheckoutStatus: Equatable, Sendable {
         }
     }
 
-    /// Orders the Checkout column: none, on a host, unreadable, then this Mac's by local changes,
-    /// commits ahead and commits behind.
-    public var sortKey: Int {
-        let rank = switch kind { case .missing: 0; case .remote: 1; case .unavailable: 2; case .local: 3 }
-        return rank << 42 | (dirty ? 1 << 41 : 0) | min(ahead, 0xFFFFF) << 20 | min(behind, 0xFFFFF)
-    }
-
     /// Each location's checkout (with the name of the computer it is on), at most `atOnce` at a time
     /// and off the caller's actor, so a whole table takes them in one update (#321).
     public static func read(_ places: [RepoLocation: String], atOnce: Int = 4) async -> [RepoLocation: Self] {

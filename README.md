@@ -928,8 +928,7 @@ on that pull request's branch to continue in instead). The same command run agai
     unavailable: BotChu neither creates a substitute mount directory nor picks another disk.
     Projects' **Checkout** column (#321) shows the checkout as glyphs without words: a pencil for local
     changes, an up arrow and N for commits ahead, a down arrow and N for commits behind, a dash for no
-    checkout, the network for one on a host, and nothing for a clean, current one; it sorts from no
-    checkout to the most local work. Its tooltip says
+    checkout, the network for one on a host, and nothing for a clean, current one. Its tooltip says
     it in words (**Checkout · clean · Behind 9**, **No checkout**, **Elsewhere**) with the path or host and the
     last fetch time; counts compare fetched refs and never claim that local changes were uploaded.
     Every row's checkout is read together, by git itself (not the login shell), four at a time and

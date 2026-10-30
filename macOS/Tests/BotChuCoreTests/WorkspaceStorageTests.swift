@@ -58,11 +58,6 @@ import Testing
         try FileManager.default.createDirectory(atPath: root.path + "/broken/.git", withIntermediateDirectories: true)
         let broken = await CheckoutStatus.read(RepoLocation(path: root.path + "/broken"), host: "This Mac")
         #expect(broken.kind == .unavailable && broken.label == "Checkout · unavailable" && broken.marks == [.unavailable])
-
-        // The column sorts none, hosts, unreadable, then by changes, ahead and behind.
-        let order = [missing, remote, broken, current, behind, CheckoutStatus(kind: .local, ahead: 1, detail: "/repo"),
-                     CheckoutStatus(kind: .local, ahead: 1, behind: 3, detail: "/repo"), CheckoutStatus(kind: .local, dirty: true, detail: "/repo"), ahead]
-        #expect(order.map(\.sortKey) == order.map(\.sortKey).sorted() && Set(order.map(\.sortKey)).count == order.count)
     }
 
     /// A table's checkouts are read together, off the main actor, into one answer (#321): each

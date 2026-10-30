@@ -27,7 +27,7 @@ struct ProjectsView: View {
     private var allRows: [ProjectRow] {
         ProjectRow.rows(repos: model.repositories ?? [], records: model.projectRecords, errors: model.projectErrors, chosen: model.settings.repoLocations,
                         hosts: model.settings.hosts, reposRoot: model.settings.expandedReposRoot,
-                        taskRepos: model.openTasks.map(\.task.repo), checkouts: model.checkoutStatuses)
+                        taskRepos: model.openTasks.map(\.task.repo))
     }
 
     private var rows: [ProjectRow] {
@@ -373,6 +373,7 @@ struct ProjectsTable: View {
     var body: some View {
         let sorted = rows.sorted(using: sortOrder)
         let tasks = Dictionary(grouping: model.openTasks) { $0.task.repo.lowercased() }
+        let checkouts = model.checkoutStatuses
         let selection = Binding<ProjectRow.ID?>(get: { model.projectSelection?.repo }, set: { model.selectProject($0) })
         Table(sorted, selection: selection, sortOrder: $sortOrder, columnCustomization: Binding(get: { columns.customization }, set: { columns.customization = $0 })) {
             TableColumn("Repository", value: \ProjectRow.nameKey) { (row: ProjectRow) in RepoNameCell(row: row) }
@@ -413,8 +414,7 @@ struct ProjectsTable: View {
                 }
                     .width(min: 70, ideal: 90, max: 220)
                     .customizationID("workplace")
-                // Sortable like the others: a column without a sort costs every row more to show (#321).
-                TableColumn("Checkout", value: \ProjectRow.checkoutKey) { (row: ProjectRow) in CheckoutCell(status: row.checkout, path: row.location.path) }
+                TableColumn("Checkout") { (row: ProjectRow) in CheckoutCell(status: checkouts[row.location], path: row.location.path) }
                     .width(min: 74, ideal: 80, max: 130)
                     .customizationID("checkout")
                 TableColumn("Tasks", value: \ProjectRow.openTasks) { (row: ProjectRow) in TasksCell(tasks: tasks[row.id.lowercased()] ?? []) }
