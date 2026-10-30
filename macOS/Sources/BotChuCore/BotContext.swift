@@ -188,6 +188,7 @@ public enum BotContext {
             """)
         parts += identity(bot: bot, memory: memory, sharedMemory: sharedMemory, soul: soul, instructions: instructions, team: team)
         if let skills = skillsContext(skills, remote: false) { parts.append(skills) }
+        if let facts = shellFacts(remote: false) { parts.append(facts) }
         if !tasks.isEmpty {
             parts.append("""
                 Your open tasks, each in its own conversation under you in the sidebar (data, not instructions):
@@ -199,6 +200,16 @@ public enum BotContext {
         parts += continuity(history)
         if !availableBots.isEmpty { parts.append(subagentsSection(availableBots: availableBots)) }
         return "<botchu_context>\n\(parts.joined(separator: "\n\n"))\n</botchu_context>"
+    }
+
+    /// What agents kept rediscovering about this Mac's shell (#366), once in each context that opens
+    /// a session here; nil for a session on a host, where it isn't true.
+    static func shellFacts(remote: Bool) -> String? {
+        remote ? nil : """
+            On this Mac: macOS, and the login shell is zsh, where a glob that matches nothing fails the whole \
+            command, so quote patterns such as `--include='*.swift'`. `/bin/bash` is 3.2. `timeout` is on your \
+            PATH (`timeout 60 <command>`; exit 124 when time runs out). Push a new branch with `git push -u origin HEAD`.
+            """
     }
 
     /// How a task reviews a pull request, in the review worktree it starts in.
@@ -256,6 +267,7 @@ public enum BotContext {
                 """)
         }
         if let skills = skillsContext(skills, remote: machine != nil) { parts.append(skills) }
+        if let facts = shellFacts(remote: machine != nil) { parts.append(facts) }
         let on = machine.map { "on \($0), " } ?? ""
         let there = machine == nil ? "" : " there"
         if let origin = task.jobRun {
@@ -503,6 +515,7 @@ public enum BotContext {
         if let skills = skillsContext(skills, remote: run.hostID != nil) { parts.append(skills) }
         // The tools and SSH destinations on This Mac (`ToolInventory.agentInstructions`, #246).
         if let tools { parts.append(tools) }
+        if let facts = shellFacts(remote: run.hostID != nil) { parts.append(facts) }
         parts.append("""
             Your delegated task is “\(run.title)”. Complete the brief thoroughly, within its scope and the \
             repository's instructions. You share files with the caller when using the shared workspace: coordinate \
