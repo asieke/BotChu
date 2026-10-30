@@ -188,12 +188,12 @@ public struct CheckoutStatus: Equatable, Sendable {
             return Self(kind: .missing, detail: path)
         }
         // git itself, not through the login shell: one process per checkout, every 30 seconds.
-        let status = await Shell.execute("/usr/bin/git", ["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=normal"], in: path)
+        let status = await Shell.execute("/usr/bin/git", ["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=normal"], in: path, input: nil, timeout: Shell.timeout)
         guard status.ok else { return Self(kind: .unavailable, detail: path) }
         var fetchHead = path + "/.git/FETCH_HEAD"
         if !directory.boolValue {
             // A worktree's .git is a file, and git keeps its FETCH_HEAD apart.
-            let fetch = await Shell.execute("/usr/bin/git", ["rev-parse", "--path-format=absolute", "--git-path", "FETCH_HEAD"], in: path)
+            let fetch = await Shell.execute("/usr/bin/git", ["rev-parse", "--path-format=absolute", "--git-path", "FETCH_HEAD"], in: path, input: nil, timeout: Shell.timeout)
             fetchHead = fetch.ok ? fetch.lastLine ?? "" : ""
         }
         let fetched = (try? FileManager.default.attributesOfItem(atPath: fetchHead)[.modificationDate]) as? Date
