@@ -1,5 +1,7 @@
 // Runs two real turns on each account named (all accounts when none is), the way the app does:
 // a new session that opens with the bot's context, then a resumed one that must remember a code word.
+// Turns get the helpers' PATH as the app's do, and the first also runs `timeout 5 sleep 10.<n>`,
+// which must exit 124 and leave no sleep behind (#366).
 // A CLI that takes input mid-turn (Claude Code) gets a third turn, with a follow-up written to it
 // during its tool call, which it must take and answer in that same turn.
 // Prints each thread and exits non-zero when an account fails. Needs the CLIs signed in.
@@ -58,6 +60,23 @@ let requested = Array(CommandLine.arguments.dropFirst(usageOnly || reviewOnly ||
 let accounts = requested.isEmpty ? Accounts.all : requested.map { Accounts.account(id: $0) }
 let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-smoke-\(UUID().uuidString)")
 let preparation = SessionPreparation()
+/// The helpers and `timeout`, installed as the app installs them; each turn's PATH gets them.
+let helpers = root.appendingPathComponent("bin", isDirectory: true)
+do { try SubagentHookInstaller.install(binDirectory: helpers) } catch {
+    print("Couldn't install the helpers: \(error.localizedDescription)")
+    exit(2)
+}
+
+/// Whether a process running `sleep <seconds>` is left.
+func sleeping(_ seconds: String) -> Bool {
+    let pgrep = Process()
+    pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    pgrep.arguments = ["-f", "^sleep \(seconds)$"]
+    pgrep.standardOutput = FileHandle.nullDevice
+    guard (try? pgrep.run()) != nil else { return false }
+    pgrep.waitUntilExit()
+    return pgrep.terminationStatus == 0
+}
 /// The catalog tools BOTCHU_SMOKE_BLOCK names, and the profile that blocks them where they are installed.
 let blockedTools = (ProcessInfo.processInfo.environment["BOTCHU_SMOKE_BLOCK"] ?? "").split(separator: ",").map(String.init)
 let toolProfile: String? = blockedTools.isEmpty ? nil : {
@@ -136,6 +155,7 @@ func showConnectors(_ connectors: [Connector], kind: AgentKind? = nil) {
     // A stand-in for Sail's API, when one is named; the app never sets it.
     if kind == .sail, let base = ProcessInfo.processInfo.environment[Sail.baseVariable] { invocation.environment[Sail.baseVariable] = base }
     invocation.toolProfile = toolProfile
+    invocation.environment["BOTCHU_BIN_DIR"] = helpers.path
     if let smokeImage {
         do { invocation = try ImageDelivery.attaching([smokeImage], to: invocation, kind: bot.account.kind, prompt: fullPrompt) }
         catch { return Turn(messages: [ChatMessage(role: .error, text: error.localizedDescription)], status: -1) }
@@ -410,7 +430,10 @@ Task {
         let imageRequest = smokeImage == nil ? "" : " Also read the large word in the attached image and include it in your reply."
         let blockRequest = blockedTools.isEmpty ? "" : " Then run each of " + (blockedTools.map { "`\($0) --version`" } + ["`ssh -V`"]).joined(separator: ", ")
             + " as its own command, and after “stored” say which of them failed."
-        let first = await runTurn(bot, prompt: "The code word is \(word). Use your shell tool to run `ls`, then reply with: stored." + blockRequest + imageRequest,
+        let nap = "10.\(Int.random(in: 100...999))"
+        let first = await runTurn(bot, prompt: "The code word is \(word). Use your shell tool to run `ls`, then, as its own command, "
+                                  + "`timeout 5 sleep \(nap); echo timeout-exit=$?`, then reply with: stored, and the timeout-exit line it printed."
+                                  + blockRequest + imageRequest,
                                   history: [])
         show(first.messages)
         showModel(first, of: bot)
@@ -419,6 +442,18 @@ Task {
               first.messages.contains(where: { $0.role == .assistant }),
               imageExpected.map({ expected in first.messages.filter { $0.role == .assistant }.map(\.text).joined().localizedCaseInsensitiveContains(expected) }) ?? true else {
             print("    FAIL: first turn (exit \(first.status)) \(first.stderr.suffix(400))")
+            failures.append(account.id)
+            continue
+        }
+        // From the tool's own output where the CLI reports it, else from the reply.
+        let printed = first.messages.compactMap(\.toolOutput).joined(separator: "\n")
+        let timeoutLine = (printed.contains("timeout-exit=") ? printed : first.messages.filter { $0.role == .assistant }.map(\.text).joined())
+            .contains("timeout-exit=124")
+        let left = sleeping(nap)
+        print("    timeout: \(timeoutLine ? "exit 124" : "no timeout-exit=124")\(printed.contains("timeout-exit=") ? " (tool output)" : " (reply)"), "
+              + (left ? "its sleep is still running" : "no sleep left"))
+        guard timeoutLine, !left else {
+            print("    FAIL: `timeout 5 sleep \(nap)` didn't exit 124 and end its sleep")
             failures.append(account.id)
             continue
         }

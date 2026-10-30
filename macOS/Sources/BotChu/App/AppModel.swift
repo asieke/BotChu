@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import UniformTypeIdentifiers
 import BotChuCore
 
 struct EditorRequest: Identifiable {
@@ -206,6 +207,10 @@ final class AppModel {
     /// What opens a provider's settings and a Terminal handoff; tests record them instead.
     @ObservationIgnored var openURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
     @ObservationIgnored var openTerminal: (ConnectorHandoffRequest) -> Bool = AppModel.openInTerminal
+    /// What opens a file a reply links to (#363), and what shows one in Finder; tests record them
+    /// instead.
+    @ObservationIgnored var openFile: (URL) -> Bool = AppModel.openInDefaultApp
+    @ObservationIgnored var revealFile: (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
     var documentEditor: DocumentEditorRequest?
     /// Report a Bug or Feature, what files its issues: gh, or a stand-in (`DevHooks`, tests), what
     /// takes its window's screenshot, and whether one is being taken, before the sheet opens.
@@ -978,6 +983,27 @@ final class AppModel {
         }
         show(target)
         sendNextQueued(to: target)
+    }
+
+    /// A click on a reply's link to a file, in a conversation whose folder is `root` (#363).
+    func openFileLink(_ link: URL, root: String?) {
+        switch FileLink.action(for: link, root: root) {
+        // One with no app to open it is shown instead.
+        case .open(let file): if !openFile(file) { revealFile(file) }
+        case .reveal(let file): revealFile(file)
+        case .ignore: break
+        }
+    }
+
+    /// Opens a folder in a Finder window, and a document in the default app for its type, not
+    /// one the file names for itself (`com.apple.LaunchServices.OpenWith`). Handed to that app,
+    /// a file swapped for something else since it was checked is a document to it, not run.
+    static func openInDefaultApp(_ file: URL) -> Bool {
+        let workspace = NSWorkspace.shared
+        if file.hasDirectoryPath { return workspace.selectFile(nil, inFileViewerRootedAtPath: file.path) }
+        guard let type = UTType(filenameExtension: file.pathExtension), let app = workspace.urlForApplication(toOpen: type) else { return false }
+        workspace.open([file], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        return true
     }
 
     func revealWorktree(_ target: ChatTarget) {

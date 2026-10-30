@@ -951,6 +951,107 @@ extension RenderingTests {
         }
     }
 
+    /// #361: four runs stream, each 160 items long. A batch to one redraws only its row in the list;
+    /// in its details, only the Transcript's rows that changed, and the Transcript lists its last
+    /// `window` items as they come, not all of them. Another run's batch redraws nothing there.
+    @Test func aStreamingRunRedrawsOnlyItsOwnRowsAndItsTranscriptListsItsTail() async throws {
+        _ = NSApplication.shared
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let turn = UUID()
+        let runs = (0..<4).map { index in
+            var run = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID, depth: 1, targetBot: fixture.worker,
+                                  title: "Streaming \(index)", brief: "Keep going.", workingDirectory: fixture.folder.path,
+                                  callerInvocationID: turn, phase: .running)
+            run.startedAt = .now
+            return run
+        }
+        var calls = 0
+        func call(_ text: String = "Next.") -> [ChatMessage] {
+            calls += 1
+            return [ChatMessage(role: .assistant, text: text),
+                    ChatMessage(role: .tool, toolID: "call-\(calls)", toolName: "Bash", toolInput: "ls notes/\(calls)", toolState: .done)]
+        }
+        fixture.app.delegation.records[fixture.target] = runs
+        for run in runs {
+            fixture.app.delegation.threads[run.id] = [ChatMessage(role: .user, text: "Keep going.")] + (0..<80).flatMap { _ in call() }
+            fixture.app.delegation.states[run.id] = RunState(hasOutput: true)
+        }
+        let tab = SubagentTabState(target: fixture.target)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 700),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: InspectorPanel {
+            EmptyView()
+        } content: { _ in
+            SubagentsInspectorContent(target: fixture.target, state: tab)
+        } actions: {
+            EmptyView()
+        }.environment(fixture.app))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(300))
+        var rows: [UUID: Int] = [:], details: [UUID: Int] = [:], items: [UUID: Int] = [:]
+        SubagentDiagnostics.didEvaluateRow = { rows[$0, default: 0] += 1 }
+        SubagentDiagnostics.didEvaluateDetails = { details[$0, default: 0] += 1 }
+        SubagentDiagnostics.didEvaluateTranscriptItem = { items[$0, default: 0] += 1 }
+        defer {
+            SubagentDiagnostics.didEvaluateRow = nil
+            SubagentDiagnostics.didEvaluateDetails = nil
+            SubagentDiagnostics.didEvaluateTranscriptItem = nil
+        }
+        /// A batch as the runtime applies one: new messages, and the turn's activity when it changes.
+        func batch(_ run: SubagentRun, _ change: (inout [ChatMessage]) -> Void, activity: BotActivity? = nil) async throws {
+            rows.removeAll(); details.removeAll(); items.removeAll()
+            fixture.app.delegation.live(run.id).update(change)
+            if let activity { fixture.app.delegation.states[run.id] = RunState(hasOutput: true, activity: activity) }
+            try await Task.sleep(for: .milliseconds(120))
+            window.layoutIfNeeded()
+        }
+        var shown: Int {
+            tab.frames.keys.filter { if case .block(let name) = $0 { name.hasPrefix("message-") } else { false } }.count
+        }
+
+        // The list: each batch redraws the streaming run's row alone.
+        let streaming = runs[1]
+        for (index, activity) in [BotActivity.coding, .thinking, .coding].enumerated() {
+            try await batch(streaming, { $0 += call("Batch \(index).") }, activity: activity)
+            #expect(rows[streaming.id, default: 0] > 0)
+            #expect(rows.keys.allSatisfy { $0 == streaming.id }, "Only the streaming run's row: \(rows)")
+        }
+
+        // Its details: the Transcript lists the last `window` items as they come.
+        tab.push(.run(streaming.id), opened: streaming.id)
+        try await Task.sleep(for: .milliseconds(300))
+        window.layoutIfNeeded()
+        #expect(tab.transcriptOpen[streaming.id] == true)
+        #expect(shown == SubagentTranscriptList.window)
+        var counted: [String] = []
+        for index in 0..<6 {
+            // A text chunk to its last reply, then a new reply and tool call.
+            try await batch(streaming) { $0[$0.count - 2].text += " More \(index)." }
+            let grown = try #require(fixture.app.delegation.threads[streaming.id]?.dropLast().last)
+            #expect(details.isEmpty, "The details' head, Brief and Run don't redraw: \(details)")
+            #expect(items.keys.allSatisfy { $0 == grown.id }, "Only the reply that grew: \(items.count) items")
+            counted.append("chunk \(items.values.reduce(0, +))")
+            try await batch(streaming) { $0 += call("Reply \(index).") }
+            let added = Set(fixture.app.delegation.threads[streaming.id]?.suffix(2).map(\.id) ?? [])
+            #expect(details.isEmpty)
+            #expect(items.keys.allSatisfy { added.contains($0) }, "Only the new rows: \(items.count) items")
+            #expect(shown == SubagentTranscriptList.window, "It follows the last items")
+            counted.append("call \(items.values.reduce(0, +))")
+        }
+        let last = try #require(fixture.app.delegation.threads[streaming.id]?.last?.id)
+        #expect(tab.frames[.block("message-" + last.uuidString)] != nil, "The newest item shows")
+        // Only what shows is bounded: the transcript itself is whole.
+        #expect(fixture.app.delegation.threads[streaming.id]?.count == 1 + 2 * (80 + 3 + 6))
+
+        // Another run streaming redraws nothing of these details.
+        try await batch(runs[2], { $0 += call() }, activity: .coding)
+        #expect(details.isEmpty && items.isEmpty)
+        print("subagents: item bodies per batch while following \(counted.joined(separator: ", "))")
+    }
+
     /// Rows stay readable at the tab's narrow widths: deep nesting, long activity words and timers
     /// past an hour fit without the tab growing wider, in light and dark (#194).
     @Test func subagentRowsFitNarrowWidths() async throws {

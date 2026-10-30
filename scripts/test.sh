@@ -3,7 +3,8 @@
 # folder (so it never touches an installed or running copy). Needs full Xcode. Run directly:
 # only the prebuilt window phase takes the shared test gate. --fast leaves out the window tests,
 # Release and the app build; --changed adds the window and Release tests the change can reach.
-# --journeys [names] builds the release app and runs the journeys harness on it, in the gate.
+# --journeys [names] builds the release app and runs the journeys harness on it, in the gate, then
+# prints the latency report (scripts/journeys-report.py) of the results it keeps for each run.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 test_root=$PWD
@@ -45,10 +46,13 @@ if [ "$tier" = journeys ]; then
   journeys_build() { swift build -c release --package-path macOS --scratch-path macOS/.build/app --product botchu-journeys 2>&1 | { grep -vE '^\[[0-9]+ ?/ ?[0-9]+\]' || true; }; }
   test_step 'journeys build' journeys_build
   harness="$(swift build -c release --package-path macOS --scratch-path macOS/.build/app --show-bin-path)/botchu-journeys"
+  commit=$(/usr/libexec/PlistBuddy -c 'Print :BotChuCommit' "$out/BotChu.app/Contents/Info.plist" 2>/dev/null || true)
+  results="${BOTCHU_JOURNEYS_RUNS:-$HOME/Library/Caches/botchu-journeys/runs}/$(date -u +%Y%m%dT%H%M%SZ)-${commit:-unknown}.json"
   run_journeys() {
     local gate=/tmp/botchu-coord/gate.sh id run result record=()
     [ "${BOTCHU_JOURNEYS_RECORD:-0}" != 1 ] || record=(--record "$test_root/macOS/Journeys/baseline.json")
-    id=$("$gate" start "$harness" --app "$out/BotChu.app" --journeys "${journeys:-all}" --baseline "$test_root/macOS/Journeys/baseline.json" ${record[@]+"${record[@]}"})
+    id=$("$gate" start "$harness" --app "$out/BotChu.app" --journeys "${journeys:-all}" --baseline "$test_root/macOS/Journeys/baseline.json" \
+      --results "$results" --branch "$(git branch --show-current)" ${record[@]+"${record[@]}"})
     run="/tmp/botchu-coord/gate/runs/$id"
     echo "test: queued the journeys as $id"
     while :; do
@@ -62,9 +66,15 @@ if [ "$tier" = journeys ]; then
     fi
     return "$result"
   }
-  test_step 'gated journeys' run_journeys
-  echo "test: ok (journeys)"
-  exit
+  if test_step 'gated journeys' run_journeys; then result=0; else result=$?; fi
+  [ "$result" != 0 ] || echo "test: ok (journeys)"
+  if [ -f "$results" ]; then
+    scripts/journeys-report.py --results "$results" --write "${results%.json}.md"
+    echo "test: latency report ${results%.json}.md"
+  else
+    echo "test: the journeys left no results in $results"
+  fi
+  exit "$result"
 fi
 
 # Shell syntax for every script in the repository.
