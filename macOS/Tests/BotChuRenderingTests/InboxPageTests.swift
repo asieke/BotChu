@@ -225,6 +225,53 @@ extension RenderingTests {
         #expect(app.inbox.selected == second.id)
     }
 
+    /// Done from the Inbox reads the next delivery in the same change (#356), before the Inbox is
+    /// drawn again: no step is left for an `onChange` to make, each of which drew the whole Inbox
+    /// once more before the frame that shows Done.
+    @Test func doneReadsTheNextDeliveryInTheSameChange() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-inbox-done-change-\(UUID().uuidString)")
+        let domain = "BotChu.InboxPageTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: domain) }
+        let store = Store(root: root.appendingPathComponent("index"))
+        let bot = Bot(name: "Fox", emoji: "🦊", workspace: root.appendingPathComponent("fox").path)
+        try BotHome(workspace: bot.workspace).save(bot)
+        try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
+        let folder = InboxFolder(home: BotHome(workspace: bot.workspace))
+        let first = Delivery(botID: bot.id, title: "First", purpose: .needsInput, sentAt: Delivery.stamp(Date(timeIntervalSinceNow: -60)))
+        let second = Delivery(botID: bot.id, title: "Second", purpose: .needsInput, sentAt: Delivery.stamp(Date(timeIntervalSinceNow: -120)))
+        let third = Delivery(botID: bot.id, title: "Third", sentAt: Delivery.stamp(Date(timeIntervalSinceNow: -180)))
+        for delivery in [first, second, third] { try folder.save(delivery, contents: [:]) }
+        let app = AppModel(store: store, settings: AppSettings(defaults: defaults), openRouterKey: { nil }, projectGitHub: ProjectGitHub { _, _ in
+            await ProjectGitHub.command(["/usr/bin/false"], body: nil)
+        }, openWorkLookup: { _ in .success(GitHubLookup.OpenWork(items: [])) })
+        defer { app.stopAll() }
+        for _ in 0..<100 where app.inbox.all.count < 3 { try await Task.sleep(for: .milliseconds(20)) }
+
+        app.destination = .inbox
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 760), styleMask: [.titled, .closable, .resizable],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: InboxView().environment(app).defaultAppStorage(defaults))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(app.inbox.selected == first.id && !app.inbox.isUnread(first.id) && app.inbox.isUnread(second.id))
+
+        let derivations = app.inbox.statusDerivations
+        let e = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                              context: nil, characters: "e", charactersIgnoringModifiers: "e", isARepeat: false, keyCode: 14))
+        window.sendEvent(e)
+        // Filed, the next chosen and read, all before SwiftUI updates the Inbox: one change each.
+        #expect(app.inbox.isDone(first.id) && app.inbox.selected == second.id && !app.inbox.isUnread(second.id))
+        #expect(app.inbox.statusDerivations == derivations + 2)
+        try await Task.sleep(for: .milliseconds(200))
+        // Drawn, nothing more changes: what `onChange` reads again is read already.
+        #expect(app.inbox.statusDerivations == derivations + 2)
+        #expect(app.inbox.selected == second.id && app.inbox.isReading(second.id) && app.inbox.unfinishedCount == 2)
+    }
+
     /// A question's choice answers it from the keyboard, once; the delivery is Done and its
     /// conversation opens. Its card in the chat offers the choices until then.
     @Test func aChoiceAnswersTheQuestionAndOpensItsConversation() async throws {
