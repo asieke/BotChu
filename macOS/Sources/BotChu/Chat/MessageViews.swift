@@ -41,10 +41,9 @@ struct MessageRow: View, Equatable {
                     if !message.images.isEmpty {
                         ForEach(message.images) { image in
                             let url = BotHome(workspace: bot.persistencePath).imageURL(image)
-                            if let preview = NSImage(contentsOf: url) {
-                                Image(nsImage: preview).resizable().scaledToFit().frame(maxWidth: 320, maxHeight: 240)
+                            if ImageThumbnails.shared.pixelSize(of: url) != nil {
+                                ThumbnailImage(url: url, pixels: ImageThumbnails.preview, label: image.name).frame(maxWidth: 320, maxHeight: 240)
                                     .clipShape(RoundedRectangle(cornerRadius: 8)).help(image.name)
-                                    .accessibilityLabel(image.name)
                                     .onTapGesture { NSWorkspace.shared.open(url) }
                             } else { Label(image.name + " (image unavailable)", systemImage: "photo") }
                         }
@@ -146,12 +145,12 @@ struct MessageFiles: View {
         VStack(alignment: alignment, spacing: 6) {
             ForEach(files) { file in
                 let url = home.fileURL(file)
-                if file.type?.hasPrefix("image/") == true, let preview = NSImage(contentsOf: url) {
-                    Image(nsImage: preview).resizable().scaledToFit().frame(maxWidth: 320, maxHeight: 240)
+                if file.type?.hasPrefix("image/") == true, ImageThumbnails.shared.pixelSize(of: url) != nil {
+                    ThumbnailImage(url: url, pixels: ImageThumbnails.preview, label: file.name).frame(maxWidth: 320, maxHeight: 240)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .onTapGesture { NSWorkspace.shared.open(url) }
                         .fileActions(url)
-                        .help(file.name).accessibilityLabel(file.name)
+                        .help(file.name)
                 } else {
                     MessageFileCard(file: file, url: url)
                 }

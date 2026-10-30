@@ -1401,7 +1401,15 @@ final class AppModel {
     /// Reads the bot's pet again (its manifest; clips load when they play).
     func reloadPet(_ id: UUID) {
         guard let bot = bot(id) else { return }
-        pets[id] = PetVideoPackage.load(from: PetVideo.folder(for: BotHome(workspace: bot.persistencePath)))
+        let package = PetVideoPackage.load(from: PetVideo.folder(for: BotHome(workspace: bot.persistencePath)))
+        // A remade pet's stills replace the old ones under the same names: decode them again, idle (its
+        // manifest's first) first.
+        if let package {
+            var stills: [String] = []
+            for clip in package.manifest.clips where !stills.contains(clip.still) { stills.append(clip.still) }
+            ImageThumbnails.shared.reload(stills.map(package.stillURL), pixels: ImageThumbnails.pet)
+        }
+        pets[id] = package
     }
 
     /// Shows a short reaction, unless a turn is running, then goes back to what the bot shows otherwise.

@@ -226,41 +226,58 @@ extension View {
     }
 }
 
+/// Built on every keystroke, so it reads no file: an image file decodes once, off the main thread.
 struct AttachmentThumbnail: View {
+    private enum Content {
+        case preview(NSImage?)
+        case imageFile(URL?)
+        /// A document shows its type's icon over its name.
+        case document(NSImage)
+    }
+
     let name: String
-    let preview: NSImage?
+    private let content: Content
     var remove: (() -> Void)?
-    /// A document shows its icon over its name.
-    var isFile = false
 
     init(name: String, preview: NSImage?, remove: (() -> Void)? = nil) {
         self.name = name
-        self.preview = preview
+        content = .preview(preview)
         self.remove = remove
     }
 
     init(image: ImageAttachment, url: URL?, remove: (() -> Void)? = nil) {
-        self.init(name: image.name, preview: url.flatMap { NSImage(contentsOf: $0) }, remove: remove)
+        name = image.name
+        content = .imageFile(url)
+        self.remove = remove
     }
 
     init(file: FileAttachment, url: URL?, remove: (() -> Void)? = nil) {
-        let isImage = file.type?.hasPrefix("image/") == true
-        self.init(name: file.name, preview: url.flatMap { isImage ? NSImage(contentsOf: $0) : NSWorkspace.shared.icon(forFile: $0.path) },
-                  remove: remove)
-        isFile = !isImage
+        name = file.name
+        if file.type?.hasPrefix("image/") == true {
+            content = .imageFile(url)
+        } else {
+            let type = file.type.flatMap { UTType(mimeType: $0) } ?? UTType(filenameExtension: (file.name as NSString).pathExtension)
+            content = .document(NSWorkspace.shared.icon(for: type ?? .data))
+        }
+        self.remove = remove
     }
 
     var body: some View {
         Group {
-            if isFile {
+            switch content {
+            case .document(let icon):
                 VStack(spacing: 2) {
-                    if let preview { Image(nsImage: preview).resizable().frame(width: 32, height: 32) }
+                    Image(nsImage: icon).resizable().frame(width: 32, height: 32)
                     Text(name).font(.caption2).lineLimit(2).truncationMode(.middle).multilineTextAlignment(.center)
                 }
                 .padding(.horizontal, 4)
-            } else if let preview {
+            case .preview(let preview?):
                 Image(nsImage: preview).resizable().scaledToFit()
-            } else { Image(systemName: "photo").foregroundStyle(.secondary) }
+            case .imageFile(let url?) where ImageThumbnails.shared.pixelSize(of: url) != nil:
+                ThumbnailImage(url: url, pixels: ImageThumbnails.thumbnail)
+            default:
+                Image(systemName: "photo").foregroundStyle(.secondary)
+            }
         }
         .frame(width: 70, height: 64)
         .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))

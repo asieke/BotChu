@@ -1644,7 +1644,9 @@ on that pull request's branch to continue in instead). The same command run agai
     `Sidebar/` (workspace destinations and a row per bot, and the sections' menus and naming alert, which Agents shares), `Library/` (Projects with its repository sidebar, Agents grouped by section, Providers, Skills & Tools with Add Tools, and Jobs with its history), `Chat/` (a bot's conversations as tabs beside its chat, the column, its rail and their status dots, `ConversationTabs.swift`, messages, the activity cards and their density, the shown part of the transcript and the rows of it laid out, with the scroll view's watcher that keeps the reader's row in place, tells their own scrolling from the chat's and keeps a pinned chat at its end, `ChatScrollProbe.swift`, rich replies' web views and the pool that keeps them, selecting a reply's text across its blocks, `ReplySelection.swift`, and the composer, whose image-taking writing area the report, New Task and New Issue sheets share, with `@` and `#` completion in the chat's and the New Task and New Issue sheets', `MentionCompletion.swift`), `Inspector/` (the
     status sidebar, a bot's and a task's, with a bot's jobs and its run reviews), `Editor/` (the bot, Markdown, New Task, job and report sheets), `Settings/` (the
     in-window Settings page with its rail and pages, with the hosts, Telegram and run reviews), and
-    `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, and the
+    `Shared/` (layout constants, the avatar, the status badge, the pet's looping video, images
+    decoded once at the size they show, off the main thread, in one cache bounded in bytes
+    (`ImageThumbnails.swift`: pet stills at their clip's size, attachment and Inbox previews), and the
     providers' logos, drawn in code after GitChu's: the marks are their owners' trademarks, shown
     only to identify the CLI an account runs).
     `Resources/ChatRenderer/` bundles pinned Mermaid and KaTeX distributions, their fonts and licenses. Its README records provenance and update steps; no JavaScript package
