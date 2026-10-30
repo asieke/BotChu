@@ -2032,7 +2032,7 @@ file from other programs running as the same user.
   launching again (Launch), after which the message sent and the task started are still there (it
   says whether the draft is: BotChu keeps drafts in memory only). A run also prints the load
   average, the refresh rate of the display the window opened on, an accessibility request's round
-  trip and each journey's time; all 13 take about 145 s.
+  trip and each journey's time; all 13 take about 145–150 s.
   A step fails when its median is over budget, or more than 25 % and more than 3 ms slower than
   its baseline in `macOS/Journeys/baseline.json`, or the screen doesn't show what it should; the
   message names the journey, its budget, baseline and new time. While a baseline itself misses its
