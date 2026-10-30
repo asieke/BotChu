@@ -1,0 +1,24 @@
+{
+  "commit" : "e8e3654",
+  "loadAfter" : [
+    15.68,
+    16.29,
+    22.81
+  ],
+  "loadBefore" : [
+    21.71,
+    17.32,
+    23.4
+  ],
+  "machine" : "Mac16,5, 14 cores, macOS Version 27.0 (Build 26A428)",
+  "medians" : {
+    "1 launch" : 721.1,
+    "2 inspector · close" : 31.2,
+    "2 inspector · open" : 30.5,
+    "2 sidebar · close" : 44.1,
+    "2 sidebar · open" : 49.3,
+    "3 switch bot" : 47.8,
+    "3 switch to 5,000 messages" : 37.3
+  },
+  "recordedAt" : "2026-10-30T04:52:49Z"
+}

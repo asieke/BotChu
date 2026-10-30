@@ -58,10 +58,10 @@ struct Journeys {
 
     /// The bot's conversation shows: its name as the window's title, its row in the sidebar and its
     /// latest message in the chat.
-    func checkShown(_ bot: Bot, sidebar: Bool = true) throws {
+    func checkShown(_ bot: Bot) throws {
         let window = try app.window()
         guard window.title == bot.name else { throw HarnessFailure("The window's title is \"\(window.title)\", not \(bot.name)") }
-        if sidebar, window.first(identifier: "sidebar-bot-\(bot.id.uuidString)") == nil {
+        if window.first(identifier: "sidebar-bot-\(bot.id.uuidString)") == nil {
             throw HarnessFailure("The sidebar shows no row for \(bot.name)")
         }
         guard let last = fixture.lastItem[bot.id], window.first(identifier: "chat-item-\(last.uuidString)") != nil else {

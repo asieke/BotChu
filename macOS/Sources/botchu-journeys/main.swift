@@ -70,7 +70,7 @@ let work = FileManager.default.temporaryDirectory.appendingPathComponent("botchu
 let started = Date()
 let loadBefore = load()
 print("journeys: start; load \(loadBefore.map { String($0) }.joined(separator: " ")); \(machine()); "
-      + "Accessibility granted to \(Permission.responsibleApp()?.lastPathComponent ?? "this process"); work \(work.path)")
+      + (Permission.responsibleApp().map { "Accessibility through \($0.lastPathComponent); " } ?? "") + "work \(work.path)")
 
 let app: AppUnderTest
 let fixture: Fixture
@@ -133,11 +133,11 @@ if selection.numbers.contains(1) {
         finish(1)
     }
 }
-if app.isRunning, let window = try? app.window() {
-    // What an action costs before the app acts on it: an accessibility request answered on its main thread.
+if app.isRunning, let window = try? app.window(), let button = window.first(identifier: "toolbar-status") {
+    // What an action costs before the app acts on it: a request SwiftUI answers on the app's main thread.
     let trips = (0..<10).map { _ in
         let start = AppUnderTest.now
-        _ = window.title
+        _ = button.label
         return Double(AppUnderTest.now - start) / 1_000_000
     }
     print(String(format: "journeys: accessibility round trip %.2f ms (median of 10)", JourneyStats.median(trips) ?? 0))
