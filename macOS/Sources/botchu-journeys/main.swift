@@ -4,12 +4,12 @@ import BotChuCore
 // The journeys harness (#323; README.md, Test): drives a release build of BotChu from its own process,
 // in the background, through the Accessibility API, on a synthetic fixture with a fake Claude Code CLI.
 //   botchu-journeys --app <BotChu.app> [--journeys <names or numbers>] [--baseline <file>]
-//                   [--record <file>] [--repeats <n>] [--stall <ms>] [--keep]
+//                   [--record <file>] [--results <file> [--branch <name>]] [--repeats <n>] [--stall <ms>] [--keep]
 //   botchu-journeys dump --app <BotChu.app> [--bot <n>]   the app's accessibility tree on the fixture
 //   botchu-journeys fake-claude <arguments…>    the fixture's Claude Code CLI (FakeClaude)
 
 let usage = """
-    usage: botchu-journeys --app <BotChu.app> [--journeys <names or numbers>] [--baseline <file>] [--record <file>] [--repeats <n>] [--stall <ms>] [--keep]
+    usage: botchu-journeys --app <BotChu.app> [--journeys <names or numbers>] [--baseline <file>] [--record <file>] [--results <file> [--branch <name>]] [--repeats <n>] [--stall <ms>] [--keep]
            botchu-journeys dump --app <BotChu.app> [--bot <n>]
     """
 
@@ -24,7 +24,7 @@ var keep = false
 while let flag = arguments.first {
     arguments.removeFirst()
     if flag == "--keep" { keep = true; continue }
-    guard ["--app", "--journeys", "--baseline", "--record", "--repeats", "--stall", "--bot"].contains(flag), let value = arguments.first else {
+    guard ["--app", "--journeys", "--baseline", "--record", "--results", "--branch", "--repeats", "--stall", "--bot"].contains(flag), let value = arguments.first else {
         FileHandle.standardError.write(Data((usage + "\n").utf8))
         exit(2)
     }
@@ -131,7 +131,30 @@ if dumping {
 }
 
 var results: [JourneyResult] = []
+var hertz: Int?
 var journeys = Journeys(app: app, fixture: fixture, baseline: baseline, repeats: repeats) { print("journey \($0.report)") }
+
+/// The commit the app under test was built from.
+func builtCommit() -> String { (Bundle(url: app.bundle)?.object(forInfoDictionaryKey: "BotChuCommit") as? String) ?? "" }
+
+func save(_ data: Data, to path: String) throws {
+    let file = URL(fileURLWithPath: path)
+    try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try data.write(to: file, options: .atomic)
+}
+
+/// `--results <file>` (#362): what the run measured, for `scripts/journeys-report.py`; written when it fails too.
+func saveResults(loadAfter: [Double]) {
+    guard let path = options["--results"] else { return }
+    let run = JourneyRun(recordedAt: started, commit: builtCommit(), branch: options["--branch"] ?? "", machine: machine(), hertz: hertz,
+                         loadBefore: loadBefore, loadAfter: loadAfter, seconds: Int(Date().timeIntervalSince(started)), results: results)
+    do {
+        try save(run.encoded(), to: path)
+        print("journeys: wrote the results to \(path)")
+    } catch {
+        print("journeys: couldn't write the results: \(error)")
+    }
+}
 journeys.stall = options["--stall"].flatMap(Double.init) ?? 0
 journeys.recording = options["--record"] != nil
 if journeys.stall > 0 { print("journeys: injecting a \(Int(journeys.stall)) ms stall into each of journey 2's toggles") }
@@ -157,6 +180,8 @@ if selection.numbers.contains(1) {
         app.settle(quiet: 0.5, limit: 10)
     } catch {
         print("journeys: \(error)")
+        results = selection.numbers.map { journeys.notRun($0, because: "BotChu didn't launch: \(error)") }
+        saveResults(loadAfter: load())
         finish(1)
     }
 }
@@ -171,6 +196,7 @@ if app.isRunning, let window = try? app.window(), let button = window.first(iden
     // Accessibility's frames are from the top left of the main screen, AppKit's from its bottom left.
     if let frame = window.frame, let height = NSScreen.screens.first?.frame.height,
        let screen = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: frame.midX, y: height - frame.midY)) }) {
+        hertz = screen.maximumFramesPerSecond
         print("journeys: window \(Int(frame.width))×\(Int(frame.height)) on a \(screen.maximumFramesPerSecond) Hz display")
     }
 }
@@ -200,15 +226,13 @@ print("journeys: \(results.count - failed.count) of \(results.count) steps withi
       + "load \(loadBefore.map { String($0) }.joined(separator: " ")) → \(loadAfter.map { String($0) }.joined(separator: " "))")
 for result in failed { print("journeys: FAILED \(result.report)") }
 if let path = options["--record"] {
-    let commit = (Bundle(url: app.bundle)?.object(forInfoDictionaryKey: "BotChuCommit") as? String) ?? ""
-    let recorded = JourneyBaseline(recordedAt: started, commit: commit, machine: machine(), loadBefore: loadBefore, loadAfter: loadAfter, results: results)
+    let recorded = JourneyBaseline(recordedAt: started, commit: builtCommit(), machine: machine(), loadBefore: loadBefore, loadAfter: loadAfter, results: results)
     do {
-        let file = URL(fileURLWithPath: path)
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try recorded.encoded().write(to: file)
+        try save(recorded.encoded(), to: path)
         print("journeys: recorded the baseline in \(path)")
     } catch {
         print("journeys: couldn't record the baseline: \(error)")
     }
 }
+saveResults(loadAfter: loadAfter)
 finish(failed.isEmpty ? 0 : 1)
