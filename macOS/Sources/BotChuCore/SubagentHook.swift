@@ -18,6 +18,7 @@ public enum SubagentHookInstaller {
             try script.write(to: file, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
         }
+        try TimeoutShim.install(binDirectory: binDirectory)
         return binDirectory.appendingPathComponent(commands[0])
     }
 

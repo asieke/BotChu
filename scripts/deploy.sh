@@ -37,4 +37,6 @@ else
   echo "deploy: running full tests ($test_mode)"
   scripts/test.sh
 fi
+# The latency report reaches the Inbox before the install restarts BotChu; it never stops a deploy.
+scripts/deploy-report.sh || echo "deploy: no latency report (exit $?)"
 macOS/install.sh

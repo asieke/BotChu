@@ -164,6 +164,8 @@ private struct ChatContent: View {
                 ChatComposer(target: target)
             }
             .environment(transcript)
+            // Its replies' links to files open from its folder (#363).
+            .environment(\.openFileLink, FileLinkAction(root: FileLink.root(workspace: bot.workspace, task: task), model: model))
             // Keep room for the model, effort and send controls when the columns are narrowed.
             .frame(minWidth: 300)
             // The tab beside the chat says which conversation it is (#128).

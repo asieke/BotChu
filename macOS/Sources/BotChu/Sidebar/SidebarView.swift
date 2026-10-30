@@ -261,8 +261,8 @@ struct SidebarShade: ViewModifier {
 }
 
 /// A bot's row: its face, its name over what it runs on (#324), and a small dot for each of its
-/// open tasks and for Home while it isn't idle (#128), at most four, the most urgent first, then
-/// +N, at its end, centred on the row (#144).
+/// open tasks and for Home while it isn't idle (#128), at most eight in two rows of four, the most
+/// urgent first, then +N, at its end, centred on the row (#144, #359).
 struct BotRow: View {
     let bot: Bot
     let status: BotStatus
@@ -292,18 +292,26 @@ struct BotRow: View {
     }
 }
 
-/// The small dots at the end of a bot's row, in its tabs' colours, the most urgent first (#218).
+/// The small dots at the end of a bot's row, in its tabs' colours, the most urgent first (#218),
+/// in rows of four, the first filled first, so eight fit in the height of its two lines (#359).
 /// On the selection's accent colour each sits on a disc of the task column's background, as a rail
 /// tile's dot does, so it is drawn on the same ground as its tab's and looks the same (#237); on a
 /// white disc, dark mode's colours, made for a dark ground, read pale.
 struct BotRowDots: View {
     @Environment(\.backgroundProminence) private var prominence
     let summary: BotRowSummary
+    private static let columns = 4
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(Array(summary.dots.enumerated()), id: \.offset) { _, kind in
-                StatusDot(kind: kind, size: 6, cutout: prominence == .increased ? Palette.conversationColumn : nil)
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(stride(from: 0, to: summary.dots.count, by: Self.columns)), id: \.self) { start in
+                    HStack(spacing: 4) {
+                        ForEach(start..<min(start + Self.columns, summary.dots.count), id: \.self) { index in
+                            StatusDot(kind: summary.dots[index], size: 6, cutout: prominence == .increased ? Palette.conversationColumn : nil)
+                        }
+                    }
+                }
             }
             if summary.more > 0 {
                 Text("+\(summary.more)")

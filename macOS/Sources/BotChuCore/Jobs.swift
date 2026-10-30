@@ -896,6 +896,7 @@ public enum JobLaunch {
         if let skills = BotContext.skillsContext(skills, remote: false) { parts.append(skills) }
         // The tools and SSH destinations on This Mac (`ToolInventory.agentInstructions`, #246).
         if let tools { parts.append(tools) }
+        if let facts = BotContext.shellFacts(remote: false) { parts.append(facts) }
         parts.append(timing(job: job, run: run, startedAt: startedAt, locale: locale))
         parts.append("""
             Don't change a repository's files from here. When the job needs work in a repository, ask for a task as your \
