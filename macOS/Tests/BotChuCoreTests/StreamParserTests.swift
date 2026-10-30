@@ -197,7 +197,7 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
             .textEnd,
             .toolStarted(id: "step-2", name: "run_command", input: "ls", arguments: #"{"CommandLine":"ls"}"#),
             .toolStarted(id: "step-2", name: "run_command", input: "ls", arguments: #"{"CommandLine":"ls"}"#),
-            .toolFinished(id: "step-2", name: "run_command", output: "Command exited with code 0.\n\nNo output from the command.", isError: false),
+            .toolFinished(id: "step-2", name: "run_command", output: "Command exited with code 0.\n\nNo output from the command.", isError: false, exitCode: 0),
             .textDelta("Done"),
             .textDelta("\n"), .textEnd,
             .finished,
@@ -253,6 +253,78 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
     @Test func failedResult() {
         let events = run(.antigravity, [#"{"event":"result","result":{"status":"ERROR","response":""}}"#])
         #expect(events == [.failed("Antigravity stopped: ERROR.")])
+    }
+
+    // #367: the stream leaves out what a search found and what a read returned, so a search with
+    // no output and a read's "N lines, M bytes" are successes, not empty results.
+    @Test func capturedSearchAndRangeReadStayDone() {
+        let messages = BotChuCoreTests.thread(run(.antigravity, AntigravitySamples.searchAndRangeRead))
+        #expect(messages.map(\.toolName) == ["search_web", "read_file", "read_file"])
+        #expect(messages.map(\.toolState) == [.done, .done, .done])
+        #expect(messages.map(\.toolOutput) == ["", "400 lines, 6292 bytes", "2 lines, 11 bytes"])
+    }
+
+    @Test func capturedFailedCallCarriesAntigravitysReason() {
+        let messages = BotChuCoreTests.thread(run(.antigravity, AntigravitySamples.failedReads))
+        #expect(messages.map(\.toolState) == [.failed, .failed])
+        #expect(messages.map(\.toolOutput) == ["file does not exist", "path is a directory, not a file"])
+        #expect(ToolActivity.failureReason(output: messages[0].toolOutput ?? "") == "not found")
+        // Without a reason, BotChu still says the step failed.
+        let bare = run(.antigravity, [#"{"event":"step_update","step_update":{"step_index":1,"state":"CANCELED","step_type":"tool","tool_name":"search_web","tool_info":{"name":"search_web"}}}"#])
+        #expect(bare.last == .toolFinished(id: "step-1", name: "search_web", output: "Antigravity reported CANCELED.", isError: true))
+    }
+
+    @Test func capturedShellExitCodes() {
+        let events = run(.antigravity, AntigravitySamples.shell)
+        let finished = events.compactMap { event -> (Bool, Int?)? in
+            if case let .toolFinished(_, _, _, isError, exitCode) = event { (isError, exitCode) } else { nil }
+        }
+        // The parser reports how each command exited; the thread decides what failed.
+        #expect(finished.map(\.0) == [false, false, false, false])
+        #expect(finished.map(\.1) == [0, 1, 1, 0])
+        let messages = BotChuCoreTests.thread(events)
+        #expect(messages.map(\.toolState) == [.done, .failed, .failed, .done])
+        #expect(messages.map(\.toolExitCode) == [0, 1, 1, 0])
+        // grep finding nothing still reads as no matches, as it does for the other CLIs.
+        #expect(ToolActivity.describe(messages[1]).noMatches)
+        #expect(ToolActivity.describe(messages[2]).failure == "not found")
+        // Run reviews see the failures and agy's reasons.
+        let review = EvaluationSnapshot.items(messages + BotChuCoreTests.thread(run(.antigravity, AntigravitySamples.failedReads)),
+                                              brief: "", opening: nil, passages: EvaluationSnapshot.Passages.tiers[0])
+        #expect(review.map(\.text) == [
+            "run_command: mkdir made → exit 0",
+            "run_command: grep zzz small.txt → failed (exit 1)\n    Command exited with code 1.\n    \n    No output from the command.",
+            "run_command: ls /nonexistent-367 → failed (exit 1)\n    Command exited with code 1.\n    \n    Command output:\n    ls: /nonexistent-367: No such file or directory",
+            "run_command: true → exit 0",
+            #"read_file: {"Path":"/tmp/probe/does-not-exist.txt"} → failed"# + "\n    file does not exist",
+            #"read_file: {"Path":"/tmp/probe/adir"} → failed"# + "\n    path is a directory, not a file",
+        ])
+    }
+
+    @Test func exitCodeComesOnlyFromACommandsOwnHeader() {
+        let shortened = BotChuCoreTests.thread(run(.antigravity, [AntigravitySamples.truncated]))
+        #expect(shortened.map(\.toolExitCode) == [3] && shortened.map(\.toolState) == [.failed])
+        func finished(_ name: String, _ output: String) -> [AgentEvent] {
+            let line = summarizeToolInput(["event": "step_update", "step_update": ["step_index": 1, "state": "DONE", "step_type": "tool",
+                                                                                   "tool_name": name, "tool_info": ["name": name, "output": output]]])
+            return run(.antigravity, [line]).filter { if case .toolFinished = $0 { true } else { false } }
+        }
+        // Text that only looks like the header: in a file, later in the output, or without its period.
+        #expect(finished("read_file", "Command exited with code 1.") == [.toolFinished(id: "step-1", name: "read_file", output: "Command exited with code 1.", isError: false)])
+        #expect(finished("run_command", "Command failed to run: x\nCommand exited with code 0.").first
+            == .toolFinished(id: "step-1", name: "run_command", output: "Command failed to run: x\nCommand exited with code 0.", isError: true))
+        #expect(finished("run_command", "Command exited with code 2 and more") == [.toolFinished(id: "step-1", name: "run_command", output: "Command exited with code 2 and more", isError: false)])
+        // An empty output doesn't hide a failed step's reason.
+        let empty = summarizeToolInput(["event": "step_update", "step_update": ["step_index": 1, "state": "ERROR", "step_type": "tool", "tool_name": "read_file",
+                                                                                "tool_info": ["name": "read_file", "output": "", "error": ["message": "file does not exist"]]]])
+        #expect(run(.antigravity, [empty]).last == .toolFinished(id: "step-1", name: "read_file", output: "file does not exist", isError: true))
+    }
+
+    @Test func capturedRunErrorIsAntigravitysMessage() throws {
+        let events = run(.antigravity, [AntigravitySamples.badModel])
+        let message = try #require(events.compactMap { if case .failed(let text) = $0 { text } else { nil } }.first)
+        #expect(message.hasPrefix("invalid model selection (--model \"bogus-model-xyz\""))
+        #expect(events.last == .failed(message))
     }
 }
 
@@ -379,6 +451,18 @@ private func thread(_ events: [AgentEvent]) -> [ChatMessage] {
         var messages = thread([.toolStarted(id: "x", name: "Bash", input: "sleep 9")])
         ThreadAssembler.closeRunningTools(&messages)
         #expect(messages[0].toolState == .interrupted)
+    }
+
+    /// #367: a non-zero exit is never recorded as a success, whatever the CLI said; a quiet
+    /// success (exit 0, or no exit code, with no output) stays one.
+    @Test func nonZeroExitIsAFailure() {
+        let messages = thread([
+            .toolFinished(id: "a", name: "bash", output: "", isError: false, exitCode: 2),
+            .toolFinished(id: "b", name: "bash", output: "", isError: false, exitCode: 0),
+            .toolFinished(id: "c", name: "Edit", output: "", isError: false),
+            .toolFinished(id: "d", name: "Bash", output: "", isError: true),
+        ])
+        #expect(messages.map(\.toolState) == [.failed, .done, .done, .failed])
     }
 
     /// The call's arguments, exit code and duration reach the thread, for the chat to describe

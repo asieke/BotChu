@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- Antigravity tool and run errors carry agy's message, and non-zero shell exits are recorded as failed (#367) (#374)
 - `timeout` on every CLI session's PATH, the Mac's shell facts in the preamble, and ChildProcess ends what a stopped program left (#366) (#371)
 - Open reply links to files from the conversation's folder; other schemes besides web and mail open nothing (#363) (#372)
 - Journeys 4–13, the regression rule and the ratchet (#329) (#352)
