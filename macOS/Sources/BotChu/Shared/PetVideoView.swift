@@ -24,26 +24,17 @@ struct PetVideoView: View {
     }
 }
 
-/// A still, cached, filling its frame.
+/// A still, at its clip's size, filling its frame.
 struct PetStillImage: View {
     let url: URL
-    private static let cache = NSCache<NSURL, NSImage>()
 
     var body: some View {
-        if let image = Self.image(url) {
-            Image(nsImage: image)
+        if let image = ImageThumbnails.shared.image(url, pixels: ImageThumbnails.pet) {
+            Image(decorative: image, scale: 1)
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fill)
-                .accessibilityHidden(true)
         }
-    }
-
-    static func image(_ url: URL) -> NSImage? {
-        if let cached = cache.object(forKey: url as NSURL) { return cached }
-        guard let image = NSImage(contentsOf: url) else { return nil }
-        cache.setObject(image, forKey: url as NSURL)
-        return image
     }
 }
 
@@ -136,7 +127,7 @@ final class PetVideoLayerView: NSView {
         requestedClipID = clipID
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        still.contents = PetStillImage.image(package.stillURL(package.clip(clipID)?.still ?? "idle"))
+        still.contents = ImageThumbnails.shared.image(package.stillURL(package.clip(clipID)?.still ?? "idle"), pixels: ImageThumbnails.pet)
         CATransaction.commit()
         guard !samePackage || current?.clipID != clipID else { return }
         // Let a one-shot reaction finish before idle, including time spent loading the video.

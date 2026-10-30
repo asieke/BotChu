@@ -16,7 +16,7 @@ struct DeliveryCards: View {
                 switch file.kind {
                 case .document: DocumentCard(file: file, url: url)
                 case .page: PageCard(file: file, url: url)
-                case .image: ImageCard(file: file, url: url)
+                case .image: ImageCard(file: file, url: url, version: delivery.updatedAt)
                 case .other: FileCard(file: file, url: url)
                 }
             }
@@ -269,6 +269,8 @@ struct OfflinePage: NSViewRepresentable {
 private struct ImageCard: View {
     let file: Delivery.File
     let url: URL
+    /// When its delivery last changed: an update can replace the file under the same name.
+    let version: Date
 
     var body: some View {
         CardFrame {
@@ -277,16 +279,13 @@ private struct ImageCard: View {
                 Button("Open") { NSWorkspace.shared.open(url) }
                 fileMenu(file, url: url)
             }
-            if let image = NSImage(contentsOf: url) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
+            if ImageThumbnails.shared.pixelSize(of: url, version: version) != nil {
+                ThumbnailImage(url: url, pixels: ImageThumbnails.card, version: version, label: file.name)
                     .frame(maxHeight: 460)
                     .frame(maxWidth: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .padding(EdgeInsets(top: 0, leading: 12, bottom: 12, trailing: 12))
                     .onTapGesture { NSWorkspace.shared.open(url) }
-                    .accessibilityLabel(file.name)
             }
         }
     }
