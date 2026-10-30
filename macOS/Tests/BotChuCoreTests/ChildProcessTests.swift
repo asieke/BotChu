@@ -11,6 +11,13 @@ import Testing
                                outputLimit: outputLimit, mergeErrors: mergeErrors)
     }
 
+    /// Whether every process in `pids` has ended within `seconds`.
+    private func gone(_ pids: [pid_t], within seconds: TimeInterval) async -> Bool {
+        let limit = Date().addingTimeInterval(seconds)
+        while pids.contains(where: { kill($0, 0) == 0 }), Date() < limit { try? await Task.sleep(for: .milliseconds(20)) }
+        return !pids.contains { kill($0, 0) == 0 }
+    }
+
     @Test func itKeepsWhatAProgramPrintsAndHowItExited() async {
         let separate = await run("echo out; echo err >&2; exit 3")
         #expect(separate == Shell.Result(status: 3, output: "out\n", errors: "err\n"))
@@ -30,7 +37,7 @@ import Testing
         let result = await run("trap '' TERM; sleep 30 & echo $!; wait", timeout: 0.2)
         #expect(result.timedOut)
         #expect(result.status == -1)
-        #expect(result.errors.hasSuffix("BotChu stopped it: it was still running after 0.2 s."))
+        #expect(result.errors.hasSuffix("BotChu stopped it: it was still running after 0.2 s (2 processes ended)."))
         #expect(Date().timeIntervalSince(started) < 10)
         let sleeper = pid_t(result.output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
         #expect(sleeper > 0)
@@ -39,12 +46,37 @@ import Testing
         #expect(kill(sleeper, 0) != 0)
     }
 
+    @Test func aTimedOutProgramAndWhatItStartedAreGoneWithinASecond() async {
+        let started = Date()
+        // A shell waiting on a sleep it started (#366): both are in its process group.
+        let result = await run("sleep 30 & echo $$ $!; wait", timeout: 0.5)
+        #expect(result.timedOut)
+        #expect(result.errors.hasSuffix("BotChu stopped it: it was still running after 0.5 s (2 processes ended)."))
+        #expect(Date().timeIntervalSince(started) < 10)
+        let pids = result.output.split(whereSeparator: \.isWhitespace).compactMap { pid_t($0) }
+        #expect(pids.count == 2)
+        #expect(await gone(pids, within: 1))
+    }
+
     @Test func somethingLeftHoldingItsOutputIsStoppedAtTheTimeLimit() async {
         let started = Date()
-        let result = await run("sleep 30 & echo done", timeout: 0.3)
-        #expect(result.output == "done\n")
+        // The shell has exited, so the sleep is stopped through what it left in the group (#366).
+        let result = await run("sleep 30 & echo $!", timeout: 0.3)
         #expect(result.timedOut)
+        #expect(result.errors.hasSuffix("BotChu stopped it: it was still running after 0.3 s (1 process ended)."))
         #expect(Date().timeIntervalSince(started) < 10)
+        let sleeper = pid_t(result.output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        #expect(sleeper > 0)
+        #expect(await gone([sleeper], within: 1))
+    }
+
+    @Test func whatItLeftIsOnlyStoppedWhileItIsStillThere() {
+        // A process's ID alone doesn't name it: a later process with the same ID started at another time.
+        let me = ChildProcess.members(of: getpgrp()).first { $0.pid == getpid() }
+        #expect(me != nil)
+        #expect(me?.isStill(in: getpgrp()) == true)
+        #expect(me.map { ChildProcess.Member(pid: $0.pid, started: $0.started + 1).isStill(in: getpgrp()) } == false)
+        #expect(me?.isStill(in: getpgrp() + 1) == false)
     }
 
     @Test func outputPastTheLimitIsReadAndDropped() async {
@@ -70,7 +102,7 @@ import Testing
         let result = await task.value
         #expect(result.status == -1)
         #expect(!result.timedOut)
-        #expect(result.errors == "BotChu stopped it: cancelled.")
+        #expect(result.errors == "BotChu stopped it: cancelled (1 process ended).")
         #expect(Date().timeIntervalSince(started) < 10)
         // Cancelled before it starts, it isn't started.
         let early = Task {

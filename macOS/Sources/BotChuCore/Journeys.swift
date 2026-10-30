@@ -241,6 +241,90 @@ public struct JourneyBaseline: Codable, Equatable, Sendable {
     }
 }
 
+/// What a run measured (`botchu-journeys --results`, #362), kept outside the repository for
+/// `scripts/journeys-report.py`: the baseline's shape, so it reads back as one, plus how each step
+/// went and what the report's header names. Written when steps fail too.
+public struct JourneyRun: Codable, Equatable, Sendable {
+    public var recordedAt: Date
+    public var commit: String
+    public var branch: String
+    public var machine: String
+    /// The refresh rate of the display the window was on, when the harness could tell.
+    public var hertz: Int?
+    public var loadBefore: [Double]
+    public var loadAfter: [Double]
+    /// How long the run took.
+    public var seconds: Int
+    public var medians: [String: Double]
+    public var steps: [Step]
+
+    public struct Step: Codable, Equatable, Sendable {
+        public var journey: Int
+        public var step: String
+        public var key: String
+        public var budget: Double
+        public var tier: String
+        public var baseline: Double?
+        /// What the median was held to: the budget, or the ratchet's.
+        public var limit: Double
+        public var ratcheted: Bool
+        public var median: Double?
+        public var p95: Double?
+        public var samples: [Double]
+        public var passed: Bool
+        public var failure: String?
+        public var load: Double?
+        public var retried: String?
+
+        public init(_ result: JourneyResult) {
+            journey = result.journey
+            step = result.step
+            key = result.key
+            budget = result.budget.milliseconds
+            tier = result.budget.tier
+            baseline = result.baseline
+            limit = result.limit
+            ratcheted = result.ratcheted
+            median = result.median
+            p95 = result.p95
+            samples = result.samples
+            passed = result.passed
+            failure = result.failure
+            load = result.load
+            retried = result.retried
+        }
+    }
+
+    public init(recordedAt: Date, commit: String, branch: String, machine: String, hertz: Int?, loadBefore: [Double], loadAfter: [Double],
+                seconds: Int, results: [JourneyResult]) {
+        let baseline = JourneyBaseline(recordedAt: recordedAt, commit: commit, machine: machine, loadBefore: loadBefore, loadAfter: loadAfter,
+                                       results: results)
+        self.recordedAt = recordedAt
+        self.commit = commit
+        self.branch = branch
+        self.machine = machine
+        self.hertz = hertz
+        self.loadBefore = loadBefore
+        self.loadAfter = loadAfter
+        self.seconds = seconds
+        self.medians = baseline.medians
+        self.steps = results.map(Step.init)
+    }
+
+    public static func decode(_ data: Data) throws -> JourneyRun {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(JourneyRun.self, from: data)
+    }
+
+    public func encoded() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(self) + Data("\n".utf8)
+    }
+}
+
 /// The journeys a run asks for: names or numbers, separated by commas (`--journeys sidebar,3`).
 public struct JourneySelection: Equatable, Sendable {
     public var numbers: [Int]

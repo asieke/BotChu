@@ -186,7 +186,8 @@ public final class AgentRun: @unchecked Sendable {
     }
 
     /// Login shell files can replace PATH. Install the helper path afterwards, and export only
-    /// these coordinator-owned values on remote hosts, never the invocation's API credentials.
+    /// these coordinator-owned values on remote hosts, never the invocation's API credentials. The
+    /// helpers go first on PATH and `timeout`'s stand-in (`TimeoutShim`) last, so a real one wins.
     static func delegationShellPrefix(_ environment: [String: String]) -> String {
         let names = ["BOTCHU_INVOCATION_ID", "BOTCHU_CALLER_BOT_ID", "BOTCHU_CALLER_TASK_ID",
                      "BOTCHU_CALLER_SUBAGENT_ID", "BOTCHU_CALLER_DEPTH", "BOTCHU_IPC_DIR", "BOTCHU_BIN_DIR"]
@@ -194,7 +195,8 @@ public final class AgentRun: @unchecked Sendable {
             environment[name].map { "export \(name)=\(Shell.quote($0)); " }
         }.joined()
         if let directory = environment["BOTCHU_BIN_DIR"], !directory.isEmpty {
-            script += "export PATH=\(Shell.quote(directory)):\"$PATH\"; "
+            let fallback = (directory as NSString).appendingPathComponent(TimeoutShim.folder)
+            script += "export PATH=\(Shell.quote(directory)):\"$PATH\":\(Shell.quote(fallback)); "
         }
         return script
     }
