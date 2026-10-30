@@ -373,6 +373,7 @@ private struct SubagentRow: View {
     @State private var textWidth: CGFloat = 300
 
     var body: some View {
+        let _ = SubagentDiagnostics.didEvaluateRow?(run.id)
         let state = SubagentRowState(run, activity: model.delegation.states[run.id]?.activity, stopping: tab.isStopping(run))
         HStack(alignment: .top, spacing: 0) {
             Button { open.toggle() } label: {
@@ -751,15 +752,16 @@ private struct SubagentDetailContent: View {
     var focus: FocusState<SubagentAnchor?>.Binding
 
     var body: some View {
+        let _ = SubagentDiagnostics.didEvaluateDetails?(run.id)
         let state = SubagentRowState(run, activity: model.delegation.states[run.id]?.activity, stopping: tab.isStopping(run))
         let children = model.delegation.children(of: run.id)
-        let messages = model.delegation.threads[run.id] ?? []
+        // The transcript is read by what shows it, so a run streaming redraws those alone.
         VStack(alignment: .leading, spacing: 18) {
             head(state)
                 .id(SubagentAnchor.block("top"))
                 .modifier(Placed(anchor: .block("top"), tab: tab))
             if !run.phase.isActive {
-                SubagentResult(run: run, messages: messages)
+                SubagentResult(run: run)
                     .modifier(Placed(anchor: .block("result"), tab: tab))
             }
             if !children.isEmpty {
@@ -773,7 +775,7 @@ private struct SubagentDetailContent: View {
                 .id(SubagentAnchor.block("sub-agents"))
                 .modifier(Placed(anchor: .block("sub-agents"), tab: tab))
             }
-            SubagentTranscript(run: run, messages: model.delegation.live(run.id).displayMessages, tab: tab)
+            SubagentTranscript(run: run, tab: tab)
                 .id(SubagentAnchor.block("transcript"))
                 .modifier(Placed(anchor: .block("transcript"), tab: tab))
             SubagentBrief(run: run, tab: tab)
@@ -845,8 +847,8 @@ private struct SubagentDetailBranch: View {
 
 /// What a run came to, first once it has ended: its handoff, its error or why it stopped.
 private struct SubagentResult: View {
+    @Environment(AppModel.self) private var model
     let run: SubagentRun
-    let messages: [ChatMessage]
     @State private var expanded = true
 
     var body: some View {
@@ -881,7 +883,7 @@ private struct SubagentResult: View {
     }
 
     @ViewBuilder private var lastReply: some View {
-        if let reply = messages.last(where: { $0.role == .assistant && !$0.text.isEmpty })?.text {
+        if let reply = model.delegation.threads[run.id]?.last(where: { $0.role == .assistant && !$0.text.isEmpty })?.text {
             SubagentLastReply(text: reply)
         }
     }
@@ -914,19 +916,21 @@ private struct SubagentText: View {
 }
 
 /// The run's transcript: open while it's under way, folded once it has ended (then as the reader
-/// leaves it), showing its last items with the earlier ones a click away.
+/// leaves it), showing its last items as they come (`SubagentTranscriptList`), with the earlier
+/// ones a click away; once shown, those stay where they are.
 private struct SubagentTranscript: View {
     @Environment(AppModel.self) private var model
     @Environment(\.inspectorArea) private var area
     let run: SubagentRun
-    let messages: [ChatMessage]
     let tab: SubagentTabState
-    static let window = 12
 
     var body: some View {
-        let items = messages.filter { $0.role == .assistant || $0.role == .tool || $0.role == .error }
-            .filter { $0.role == .tool || !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        let start = min(tab.transcriptStart[run.id] ?? max(0, items.count - Self.window), items.count)
+        let live = model.delegation.live(run.id)
+        // Through `threads`, which reads a finished run's transcript in when it shows.
+        let messages = live.browsing == nil ? model.delegation.threads[run.id] ?? [] : live.displayMessages
+        let list = SubagentTranscriptList(messages, kind: run.account.kind)
+        let items = list.items
+        let start = list.start(pinned: tab.transcriptStart[run.id])
         SubagentDisclosure("Transcript", trailing: items.isEmpty ? nil : "\(items.count)", expanded: Binding(
             get: { tab.transcriptOpen[run.id] ?? run.phase.isActive }, set: { tab.transcriptOpen[run.id] = $0 })) {
             InspectorCard {
@@ -934,12 +938,9 @@ private struct SubagentTranscript: View {
                     Text(run.phase.isActive ? "Nothing yet" : "Nothing recorded")
                         .font(.system(size: 12)).foregroundStyle(Palette.secondaryText).padding(10)
                 }
-                if start > 0 || model.delegation.live(run.id).displayStart > 0 {
-                    let earlier = min(start + model.delegation.live(run.id).displayStart, 100)
-                    Button("Show \(earlier) earlier") {
-                        if start > 0 { tab.transcriptStart[run.id] = max(0, start - earlier) }
-                        else { model.delegation.pageEarlier(run.id) { tab.transcriptStart[run.id] = 0 } }
-                    }
+                if start > 0 || live.displayStart > 0 {
+                    let earlier = min(start + live.displayStart, 100)
+                    Button("Show \(earlier) earlier") { showEarlier(earlier, before: items.count - start, from: start) }
                         .buttonStyle(.link).font(.system(size: 12)).foregroundStyle(Palette.accent)
                         .padding(EdgeInsets(top: 8, leading: 10, bottom: 4, trailing: 10))
                 }
@@ -948,32 +949,44 @@ private struct SubagentTranscript: View {
                         .id(SubagentAnchor.block("message-" + message.id.uuidString))
                         .modifier(Placed(anchor: .block("message-" + message.id.uuidString), tab: tab))
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(InspectorScrollArea.space)) } action: { frame in
-                            if message.id == items.last?.id { loadLater(near: frame) }
+                            if message.id == items.last?.id { loadLater(near: frame, first: items[start].id) }
                         }
                 }
             }
         }
         .onAppear {
-            model.delegation.live(run.id).pinDisplay()
-            // The window's start stays put once shown, so new items add below and nothing moves.
-            if tab.transcriptStart[run.id] == nil { tab.transcriptStart[run.id] = start }
+            // Earlier items the reader asked for are held still again.
+            if tab.transcriptStart[run.id] != nil { live.pinDisplay() }
             if tab.transcriptOpen[run.id] == nil { tab.transcriptOpen[run.id] = run.phase.isActive }
         }
         .onDisappear { model.delegation.live(run.id).showLatest() }
-        .onChange(of: messages.isEmpty) { _, empty in
-            if !empty { model.delegation.live(run.id).pinDisplay() }
-        }
-        .onChange(of: model.delegation.live(run.id).hasLaterPage) { _, later in
-            guard later, let id = items.last?.id, let frame = tab.frames[.block("message-" + id.uuidString)] else { return }
-            loadLater(near: frame)
+        .onChange(of: live.hasLaterPage) { _, later in
+            guard later, start < items.count, let id = items.last?.id, let frame = tab.frames[.block("message-" + id.uuidString)] else { return }
+            loadLater(near: frame, first: items[start].id)
         }
     }
 
-    private func loadLater(near frame: CGRect) {
+    /// Shows `earlier` items before the `shown` ones, from then on held still while the run goes on,
+    /// or reads them in from its file when the ones in memory are all shown.
+    private func showEarlier(_ earlier: Int, before shown: Int, from start: Int) {
+        let live = model.delegation.live(run.id)
+        guard start > 0 else {
+            model.delegation.pageEarlier(run.id) { tab.transcriptStart[run.id] = 0 }
+            return
+        }
+        live.pinDisplay()
+        tab.transcriptStart[run.id] = SubagentTranscriptList.start(showing: earlier, before: shown,
+                                                                   in: SubagentTranscriptList(live.displayMessages, kind: run.account.kind))
+    }
+
+    /// Adds what came later below, the `first` item shown staying first (unless the page has
+    /// moved past it).
+    private func loadLater(near frame: CGRect, first: UUID) {
         guard frame.maxY > 0, frame.minY < (area?.viewport.height ?? 0) + 100,
               model.delegation.live(run.id).hasLaterPage else { return }
         model.delegation.pageLater(run.id) {
-            tab.transcriptStart[run.id] = 0
+            let items = SubagentTranscriptList(model.delegation.live(run.id).displayMessages, kind: run.account.kind).items
+            tab.transcriptStart[run.id] = items.firstIndex { $0.id == first } ?? 0
             tab.keepPlace()
         }
     }
@@ -986,6 +999,7 @@ private struct SubagentTranscriptItem: View {
     let tab: SubagentTabState
 
     var body: some View {
+        let _ = SubagentDiagnostics.didEvaluateTranscriptItem?(message.id)
         if message.role == .tool {
             let activity = ToolActivity.describe(message, root: run.workingDirectory)
             let delegated = activity.runIDs.compactMap { id in model.delegation.children(of: run.id).first { $0.id == id } }
@@ -1262,6 +1276,13 @@ private struct Placed: ViewModifier {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(InspectorScrollArea.space)) } action: { tab.frames[anchor] = $0 }
             .onDisappear { tab.frames[anchor] = nil }
     }
+}
+
+/// For tests: which runs' rows and details, and which transcript items, are evaluated (#361).
+@MainActor enum SubagentDiagnostics {
+    static var didEvaluateRow: ((UUID) -> Void)?
+    static var didEvaluateDetails: ((UUID) -> Void)?
+    static var didEvaluateTranscriptItem: ((UUID) -> Void)?
 }
 
 extension SubagentPhase {

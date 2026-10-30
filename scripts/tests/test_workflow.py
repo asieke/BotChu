@@ -288,9 +288,9 @@ struct Job {
             (folder / "macOS").mkdir()
             for name in ("deploy.sh", "test-passes.sh"):
                 shutil.copy2(ROOT / "scripts" / name, folder / "scripts" / name)
-            for name, marker in (("scripts/test.sh", "full-tests"), ("macOS/install.sh", "installs")):
+            for name, marker, code in (("scripts/test.sh", "full-tests", 0), ("macOS/install.sh", "installs", 0), ("scripts/deploy-report.sh", "reports", 3)):
                 path = folder / name
-                path.write_text(f"#!/bin/bash\nprintf 'run\\n' >> .git/{marker}\n")
+                path.write_text(f"#!/bin/bash\nprintf 'run\\n' >> .git/{marker}\nprintf '{marker}\\n' >> .git/steps\nexit {code}\n")
                 path.chmod(0o755)
             def git(*args):
                 return subprocess.check_output(["git", *args], cwd=folder, text=True, stderr=subprocess.DEVNULL).strip()
@@ -302,7 +302,7 @@ struct Job {
             env = dict(os.environ, DEPLOY_UPDATED="1", DEPLOY_FROM=git("rev-parse", "HEAD"))
             def deploy(*args):
                 return subprocess.check_output(["bash", "scripts/deploy.sh", *args], cwd=folder, env=env, text=True)
-            self.assertIn("running full tests", deploy())
+            self.assertIn("no latency report (exit 3)", deploy())
             receipts = folder / ".git/test-passes"
             receipts.write_text(f"{git('rev-parse', 'HEAD^{tree}')} {git('rev-parse', 'HEAD')} 2026-01-01T00:00:00Z\n")
             self.assertIn("already passed", deploy())
@@ -310,6 +310,8 @@ struct Job {
             self.assertIn("--skip-tests", deploy("--skip-tests"))
             self.assertEqual((folder / ".git/full-tests").read_text().splitlines(), ["run", "run"])
             self.assertEqual(len((folder / ".git/installs").read_text().splitlines()), 4)
+            # Every deploy, --skip-tests too, reports latency before it installs, and installs when the report fails.
+            self.assertEqual((folder / ".git/steps").read_text().split("installs\n"), ["full-tests\nreports\n", "reports\n", "full-tests\nreports\n", "reports\n", ""])
             for receipt in (folder / ".git/deploys").read_text().splitlines():
                 _, commit, state = receipt.split()
                 self.assertEqual(commit, git("rev-parse", "HEAD"))

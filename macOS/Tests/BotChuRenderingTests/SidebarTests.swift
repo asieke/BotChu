@@ -204,6 +204,66 @@ extension RenderingTests {
         #expect(table.selectedRow == firstBotRow)
     }
 
+    /// #359: in the list, a bot with more than eight open tasks has eight dots, in two rows of four,
+    /// and +N, all of them shown in the middle of a row as tall as a bot's without any; so is the
+    /// collapsed Specialists heading, as tall with eight dots as with none.
+    // Model changes only: no native clicks, so it can share the test process.
+    @Test func eightDotsKeepTheListsRowAndHeadingHeights() async throws {
+        _ = NSApplication.shared
+        let fixture = try SidebarFixture(taskCount: 9)
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.bot
+        // Its nine tasks' turns run: violet dots.
+        for task in fixture.tasks { model.runStates[.task(task.id, of: bot.id)] = RunState(hasOutput: true, activity: .coding) }
+        let summary = model.botRowSummary(of: bot)
+        #expect(summary.dots == Array(repeating: .working, count: 8) && summary.more == 1)
+        #expect(model.botRowSummary(of: fixture.quiet).dots.isEmpty)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 640),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let host = NSHostingView(rootView: SidebarView().environment(model).defaultAppStorage(fixture.defaults))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        window.layoutIfNeeded()
+        let snapshots = ProcessInfo.processInfo.environment["BOTCHU_TEST_SNAPSHOTS"]
+            .map { URL(fileURLWithPath: $0).appendingPathComponent("sidebar-dot-grid") }
+        let outline = try #require(sidebarTable(in: host) as? NSOutlineView)
+        func height(_ row: Int) -> CGFloat { outline.rect(ofRow: row).height }
+        #expect(outline.numberOfRows == firstBotRow + 2)
+        #expect(height(firstBotRow) == height(firstBotRow + 1), "eight dots and +1: \(height(firstBotRow)), none: \(height(firstBotRow + 1))")
+        if let snapshots { try agentsCapture(window, into: snapshots, name: "agents") }
+        let row = try #require(outline.rowView(atRow: firstBotRow, makeIfNecessary: false))
+        let dots = try #require(try violet(in: row), "the busy bot's dots")
+        // All of the grid shows, four 6-point dots 4 apart and two rows, in the middle of the row.
+        #expect(abs(dots.width - 36) < 1 && abs(dots.height - 16) < 1 && abs(dots.midY - row.bounds.height / 2) < 1.5,
+                "\(dots) in a row \(row.bounds.height) tall")
+        func heading() -> Int? { (0..<outline.numberOfRows).last { outline.level(forRow: $0) == 0 } }
+        // A specialist without dots, then one with eight and +1 too: the collapsed heading shows them.
+        var quiet = try #require(model.bot(fixture.quiet.id))
+        quiet.role = .specialist
+        model.update(quiet)
+        try await Task.sleep(for: .milliseconds(150))
+        window.layoutIfNeeded()
+        let bare = height(try #require(heading()))
+        var busy = try #require(model.bot(bot.id))
+        busy.role = .specialist
+        model.update(busy)
+        try await Task.sleep(for: .milliseconds(150))
+        window.layoutIfNeeded()
+        let merged = BotRowSummary(merging: model.specialists.map { ($0.name, model.botRowSummary(of: $0)) })
+        #expect(merged.dots == Array(repeating: .working, count: 8) && merged.more == 1)
+        let full = try #require(heading())
+        #expect(height(full) == bare, "Specialists with eight dots and +1: \(height(full)), none: \(bare)")
+        if let snapshots { try agentsCapture(window, into: snapshots, name: "specialists") }
+        let headingRow = try #require(outline.rowView(atRow: full, makeIfNecessary: false))
+        let headingDots = try #require(try violet(in: headingRow), "the Specialists heading's dots")
+        #expect(abs(headingDots.width - 36) < 1 && abs(headingDots.height - 16) < 1
+                && headingDots.minY >= 0 && headingDots.maxY <= headingRow.bounds.height,
+                "\(headingDots) in a heading \(headingRow.bounds.height) tall")
+    }
+
     // Selection and model changes only: no native clicks, so it can share the test process.
     @Test func botWithoutOpenTasksIsASingleRowUntilItsFirstTask() async throws {
         _ = NSApplication.shared
@@ -1065,6 +1125,23 @@ extension RenderingTests {
         if !window.performKeyEquivalent(with: event) { window.sendEvent(event) }
     }
 
+    /// Where a view draws violet (the working dots), in points from its top left, within its last 80 points.
+    private func violet(in view: NSView) throws -> CGRect? {
+        let rep = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        let scale = CGFloat(rep.pixelsWide) / view.bounds.width
+        var found: CGRect?
+        for y in 0..<rep.pixelsHigh {
+            for x in Int((view.bounds.width - 80) * scale)..<rep.pixelsWide {
+                guard let colour = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), colour.alphaComponent > 0.5,
+                      colour.saturationComponent > 0.4, (0.66...0.78).contains(colour.hueComponent) else { continue }
+                let pixel = CGRect(x: CGFloat(x) / scale, y: CGFloat(y) / scale, width: 1 / scale, height: 1 / scale)
+                found = found.map { $0.union(pixel) } ?? pixel
+            }
+        }
+        return found
+    }
+
     private func sidebarButtons(in view: NSView) -> [NSButton] {
         ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(sidebarButtons)
     }
@@ -1118,12 +1195,13 @@ private final class SidebarDrag: NSObject, NSDraggingInfo {
     let store: Store
     let model: AppModel
 
-    init() throws {
+    /// `taskCount` tasks for the first bot.
+    init(taskCount: Int = 3) throws {
         defaults = try #require(UserDefaults(suiteName: domain))
         bot = Bot(name: "10x Engineer", emoji: "🦊", workspace: root.appendingPathComponent("bot").path)
         quiet = Bot(name: "Scout", emoji: "🔭", workspace: root.appendingPathComponent("quiet").path)
         let checkout = root.path
-        tasks = (41...43).map { number in
+        tasks = (41..<41 + taskCount).map { number in
             BotTask(title: number == 41 ? "ScreenTimeDaddy repository improvements" : "Task \(number)",
                     repo: "fixture/repo", checkout: checkout, branch: "feat/\(number)-improve-task",
                     work: .init(number: number, isPullRequest: false, repo: "fixture/repo"),
