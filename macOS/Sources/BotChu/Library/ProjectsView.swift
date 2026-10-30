@@ -60,7 +60,11 @@ struct ProjectsView: View {
                     }
                 }
                 // Never disabled: asked for during a sync, it runs once that one ends.
-                Button { Task { await model.refreshProjects() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                Button {
+                    Task { await model.refreshProjects() }
+                    let rows = rows
+                    Task { await model.readCheckouts(of: rows) }
+                } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                 Button { model.startNewIssue() } label: { Label("New Issue", systemImage: "plus") }
                     .disabled(!model.canStartNewIssue)
                     .help("New Issue (I)")
@@ -369,6 +373,7 @@ struct ProjectsTable: View {
     var body: some View {
         let sorted = rows.sorted(using: sortOrder)
         let tasks = Dictionary(grouping: model.openTasks) { $0.task.repo.lowercased() }
+        let checkouts = model.checkoutStatuses
         let selection = Binding<ProjectRow.ID?>(get: { model.projectSelection?.repo }, set: { model.selectProject($0) })
         Table(sorted, selection: selection, sortOrder: $sortOrder, columnCustomization: Binding(get: { columns.customization }, set: { columns.customization = $0 })) {
             TableColumn("Repository", value: \ProjectRow.nameKey) { (row: ProjectRow) in RepoNameCell(row: row) }
@@ -402,18 +407,33 @@ struct ProjectsTable: View {
             TableColumn("Merge", value: \ProjectRow.mergeKey) { (row: ProjectRow) in MergeCell(row: row) }
                 .width(min: 46, ideal: 58, max: 90)
                 .customizationID("merge")
-            TableColumn("Works on", value: \ProjectRow.workplaceKey) { (row: ProjectRow) in WorkplaceCell(row: row) }
-                .width(min: 80, ideal: 110, max: 220)
-                .customizationID("workplace")
-            TableColumn("Tasks", value: \ProjectRow.openTasks) { (row: ProjectRow) in TasksCell(tasks: tasks[row.id.lowercased()] ?? []) }
-                .width(min: 42, ideal: 56, max: 110)
-                .customizationID("tasks")
+            // A builder block takes at most ten columns.
+            Group {
+                TableColumn("Works on", value: \ProjectRow.workplaceKey) { (row: ProjectRow) in
+                    Text(row.workplace).lineLimit(1).help(row.location.path)
+                }
+                    .width(min: 70, ideal: 90, max: 220)
+                    .customizationID("workplace")
+                TableColumn("Checkout") { (row: ProjectRow) in CheckoutCell(status: checkouts[row.location], path: row.location.path) }
+                    .width(min: 74, ideal: 80, max: 130)
+                    .customizationID("checkout")
+                TableColumn("Tasks", value: \ProjectRow.openTasks) { (row: ProjectRow) in TasksCell(tasks: tasks[row.id.lowercased()] ?? []) }
+                    .width(min: 42, ideal: 56, max: 110)
+                    .customizationID("tasks")
+            }
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
         .contextMenu(forSelectionType: ProjectRow.ID.self) { ids in
             if let row = sorted.first(where: { ids.contains($0.id) }) { menu(row) }
         } primaryAction: { ids in
             if let row = sorted.first(where: { ids.contains($0.id) }) { model.selectProject(row.id, tab: .overview) }
+        }
+        // Every row's checkout, read together and shown in one update, every 30 seconds (#321).
+        .task(id: Set(rows.map(\.location))) {
+            while !Task.isCancelled {
+                await model.readCheckouts(of: rows)
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            }
         }
     }
 

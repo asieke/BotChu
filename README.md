@@ -42,8 +42,8 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
   - **Projects:** one project per non-archived GitHub repository returned by `gh` for your account
     and organizations, in a sortable table modeled on GitChu's (or a gallery of cards). Columns show
     where it deploys (local machines by their BotChu name, Vercel, registry), the owner, open issues
-    and pull requests, last push, type, merge policy, the computer its tasks work on (with whether
-    the checkout exists on this Mac), and the bots' open tasks there; columns can be hidden,
+    and pull requests, last push, type, merge policy, the computer its tasks work on, its checkout
+    there, and the bots' open tasks there, each row one line; columns can be hidden,
     reordered and resized, and that is remembered. Cards show the description and visibility
     from GitHub, and the name, type and status from `PROJECT.md` on the default branch. **Docs** is
     non-code; **Library**, **Local app**, and **Hosted app** are code. Unclassified repositories can
@@ -936,9 +936,14 @@ on that pull request's branch to continue in instead). The same command run agai
     journal supports recovery after interruption; ambiguous copies remain untouched with new turns
     paused for review. Cancel stops between completed moves. An unavailable archive volume stays
     unavailable: BotChu neither creates a substitute mount directory nor picks another disk.
-    Projects' location column shows **No checkout**, **Checkout · clean**, **Checkout · local changes**,
-    **Ahead N / Behind N**, or **Elsewhere** with its path/host in the tooltip. The tooltip gives the
+    Projects' **Checkout** column (#321) shows the checkout as glyphs without words: a pencil for local
+    changes, an up arrow and N for commits ahead, a down arrow and N for commits behind, a dash for no
+    checkout, the network for one on a host, and nothing for a clean, current one. Its tooltip says
+    it in words (**Checkout · clean · Behind 9**, **No checkout**, **Elsewhere**) with the path or host and the
     last fetch time; counts compare fetched refs and never claim that local changes were uploaded.
+    Every row's checkout is read together, by git itself (not the login shell), four at a time and
+    off the main thread, when the table shows, on **Refresh** and every 30 seconds; the table takes
+    them in one update, and none when nothing changed.
   - **Storage Janitor (#316):** **Set up report-only Janitor** in General creates Security Racoon's
     normal Job, daily at 3 a.m. in the Mac's current time zone, with a one-hour missed-run window.
     Its editable `skills/storage-janitor/SKILL.md` and `janitor/policy.json` live in that agent's
@@ -2183,6 +2188,14 @@ file from other programs running as the same user.
   chat column without the sidebars. It asserts nothing about time, which varies with load, and isn't
   part of `check`. The targets, for a release build: switching under 150 ms, a streamed delta or
   new call within a frame (16 ms), opening a group under 100 ms.
+- Projects table: `BOTCHU_PROJECTS_BENCHMARK=<file> swift test --package-path macOS --filter
+  projectsTableBenchmark` shows 60 repositories (`BOTCHU_PROJECTS_ROWS`) with real checkouts (clean,
+  behind, ahead, with local changes, or none) and reports the rows' heights; the main thread's work
+  and git's CPU over two 30-second refresh cycles (`BOTCHU_PROJECTS_CYCLES`), each after every
+  checkout's `FETCH_HEAD` changed; scrolling 20 points a frame 240 times until drawn (the first way
+  down, which makes the rows, apart from later passes), with the main thread's work between the
+  steps; and scrolling a row at a time. Run it through the shared window-test gate. The file also compiles on the revision before #321, for a before/after pair
+  (copy it into a checkout of that revision). It asserts nothing about time.
 - Sidebar status: `BOTCHU_INBOX_BENCHMARK=<file> swift test --package-path macOS --filter
   inboxStatusBenchmark` compares uncached and cached status reads for 20 bots, 80 tasks and 2,000
   deliveries. `BOTCHU_SIDEBAR_BENCHMARK=<file> swift test --package-path macOS --filter

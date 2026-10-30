@@ -25,6 +25,19 @@ extension RenderingTests {
         let settings = AppSettings(defaults: defaults)
         settings.botsRoot = root.appendingPathComponent("bots").path
         settings.reposRoot = root.appendingPathComponent("repos").path
+        // The table's checkouts (#321): BotChu 9 behind and clean, Orbit 2 ahead with local
+        // changes, Fieldnotes not cloned, TinyKit on a host.
+        let origin = root.appendingPathComponent("origin").path, repos = settings.reposRoot
+        try fixtureGit(["init", "-q", "-b", "main", origin], in: root.path)
+        for n in 1...10 { try fixtureGit(["commit", "-q", "--allow-empty", "-m", "Commit \(n)"], in: origin) }
+        try fixtureGit(["clone", "-q", origin, repos + "/BotChu"], in: root.path)
+        try fixtureGit(["reset", "-q", "--hard", "HEAD~9"], in: repos + "/BotChu")
+        try fixtureGit(["clone", "-q", origin, repos + "/Orbit"], in: root.path)
+        for n in 1...2 { try fixtureGit(["commit", "-q", "--allow-empty", "-m", "Local \(n)"], in: repos + "/Orbit") }
+        try "draft".write(toFile: repos + "/Orbit/notes.txt", atomically: true, encoding: .utf8)
+        let omarchy = SSHHost(nickname: "Omarchy", destination: "test.invalid")
+        settings.hosts = [omarchy]
+        settings.repoLocations["octocat/TinyKit"] = RepoLocation(hostID: omarchy.id, path: "~/apps/TinyKit")
         let account = Account(id: "custom-research", name: "Research Codex", kind: .codex, defaultCommand: "codex-research", symbol: "terminal")
         settings.customAccounts = [account]
         #expect(AppSettings(defaults: defaults).accounts.last == account)
@@ -86,8 +99,18 @@ extension RenderingTests {
             try captureLibrary(window, name: destination.rawValue)
             if destination == .projects {
                 defaults.set("table", forKey: "projectsLayoutV2")
+                for _ in 0..<50 where app.checkoutStatuses.count < 4 { try await Task.sleep(for: .milliseconds(100)) }
                 try await Task.sleep(for: .milliseconds(200))
+                window.layoutIfNeeded()
                 try captureLibrary(window, name: "projects-table")
+                let marks = Dictionary(uniqueKeysWithValues: app.repositories!.map { repo in
+                    (repo.name, app.checkoutStatuses.first { $0.key.path.hasSuffix("/" + repo.name) }?.value.marks)
+                })
+                #expect(marks == ["BotChu": [.behind(9)], "Orbit": [.changes, .ahead(2)], "Fieldnotes": [.none], "TinyKit": [.elsewhere]])
+                // One line a row, as tall as a row with nothing to say about its checkout.
+                let table = try #require(libraryTable(in: host))
+                let heights = (0..<table.numberOfRows).map { table.rect(ofRow: $0).height }
+                #expect(heights.count == 4 && Set(heights).count == 1 && heights[0] < 30, "\(heights)")
                 window.setContentSize(NSSize(width: 820, height: 600))
                 try await Task.sleep(for: .milliseconds(200))
                 #expect(window.frame.width >= window.contentMinSize.width)
@@ -269,6 +292,54 @@ extension RenderingTests {
 
     private func secureFields(in view: NSView) -> [NSSecureTextField] {
         ((view as? NSSecureTextField).map { [$0] } ?? []) + view.subviews.flatMap(secureFields)
+    }
+
+    /// The Projects table's checkouts are read together and shown in one update a cycle, and none
+    /// when nothing changed (#321).
+    @Test func projectCheckoutsAreShownInOneUpdatePerCycle() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-checkouts-\(UUID().uuidString)")
+        let domain = "BotChu.CheckoutTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: domain) }
+        let settings = AppSettings(defaults: defaults)
+        settings.botsRoot = root.appendingPathComponent("bots").path
+        settings.reposRoot = root.appendingPathComponent("repos").path
+        let app = AppModel(store: Store(root: root.appendingPathComponent("index")), settings: settings,
+                           usage: UsageCache { _, _ in throw UsageFailure("No allowance in tests.") }, openRouterKey: { nil })
+        defer { app.stopAll() }
+        let origin = settings.reposRoot + "/repo-0"
+        try FileManager.default.createDirectory(atPath: settings.reposRoot, withIntermediateDirectories: true)
+        try fixtureGit(["init", "-q", "-b", "main", origin], in: root.path)
+        try fixtureGit(["commit", "-q", "--allow-empty", "-m", "First"], in: origin)
+        try fixtureGit(["clone", "-q", origin, settings.reposRoot + "/repo-1"], in: root.path)
+        let rows = ProjectRow.rows(repos: (0..<30).map { GitHubLookup.Repo(nameWithOwner: "octocat/repo-\($0)") }, records: [:],
+                                   chosen: [:], hosts: [], reposRoot: settings.reposRoot, taskRepos: [])
+        final class Changes { var count = 0 }
+        let changes = Changes()
+        func track() {
+            withObservationTracking { _ = app.checkoutStatuses } onChange: {
+                changes.count += 1
+                Task { @MainActor in track() }
+            }
+        }
+        track()
+        await app.readCheckouts(of: rows)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(changes.count == 1)
+        #expect(app.checkoutStatuses.count == 30)
+        #expect(app.checkoutStatuses.values.filter { $0.kind == .local }.count == 2)
+        await app.readCheckouts(of: rows)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(changes.count == 1, "Nothing changed, so nothing is shown again")
+        try "draft".write(toFile: origin + "/notes.txt", atomically: true, encoding: .utf8)
+        await app.readCheckouts(of: rows)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(changes.count == 2)
+        #expect(app.checkoutStatuses[RepoLocation(path: origin)]?.marks == [.changes])
+    }
+
+    private func libraryTable(in view: NSView) -> NSTableView? {
+        (view as? NSTableView) ?? view.subviews.lazy.compactMap { libraryTable(in: $0) }.first
     }
 
     private func captureLibrary(_ window: NSWindow, name: String) throws {

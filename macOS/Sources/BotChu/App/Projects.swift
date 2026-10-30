@@ -53,6 +53,16 @@ extension AppModel {
         await projectSync.sync(.full)
     }
 
+    /// Reads these rows' checkouts together, off the main actor, and shows what changed in one
+    /// update, so a table of them is laid out once a cycle rather than once a row (#321).
+    func readCheckouts(of rows: [ProjectRow]) async {
+        var places: [RepoLocation: String] = [:]
+        for row in rows { places[row.location] = row.workplace }
+        let read = await CheckoutStatus.read(places)
+        let statuses = checkoutStatuses.merging(read) { $1 }
+        if statuses != checkoutStatuses { checkoutStatuses = statuses }
+    }
+
     /// The projects as saved, for readers that mustn't wait on GitHub (such as `#project` completion).
     var projectCatalog: [ProjectCatalogEntry] {
         ProjectRow.rows(repos: repositories ?? [], records: projectRecords, errors: projectErrors, chosen: settings.repoLocations,

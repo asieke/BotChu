@@ -93,34 +93,121 @@ extension Store {
 /// A local, read-only view of the checkout. Counts describe the last fetched upstream, never an
 /// assertion that anything has been uploaded. Remote locations aren't probed on this Mac.
 public struct CheckoutStatus: Equatable, Sendable {
-    public var label: String
+    /// On this Mac; on a host, which isn't probed from here; not cloned yet; or one git couldn't read.
+    public enum Kind: Equatable, Sendable { case local, remote, missing, unavailable }
+
+    public var kind: Kind
+    /// Changed, staged or untracked files.
+    public var dirty = false
+    /// Commits ahead of and behind the fetched upstream.
+    public var ahead = 0
+    public var behind = 0
     public var detail: String
     public var fetchedAt: Date?
 
-    public static func read(_ location: RepoLocation, host: String) async -> Self {
-        guard location.hostID == nil else { return Self(label: "Elsewhere", detail: "\(host): \(location.path)") }
-        let path = location.path
-        guard FileManager.default.fileExists(atPath: path + "/.git") else {
-            return Self(label: "No checkout", detail: path)
+    public init(kind: Kind, dirty: Bool = false, ahead: Int = 0, behind: Int = 0, detail: String, fetchedAt: Date? = nil) {
+        self.kind = kind; self.dirty = dirty; self.ahead = ahead; self.behind = behind; self.detail = detail; self.fetchedAt = fetchedAt
+    }
+
+    /// The whole state in words, such as "Checkout · clean · Behind 9".
+    public var label: String {
+        switch kind {
+        case .remote: return "Elsewhere"
+        case .missing: return "No checkout"
+        case .unavailable: return "Checkout · unavailable"
+        case .local:
+            var parts = [dirty ? "Checkout · local changes" : "Checkout · clean"]
+            if ahead > 0 { parts.append("Ahead \(ahead)") }
+            if behind > 0 { parts.append("Behind \(behind)") }
+            return parts.joined(separator: " · ")
         }
-        let status = await Shell.run(["git", "--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=normal"], in: path)
-        guard status.ok else { return Self(label: "Checkout · unavailable", detail: path) }
-        let fetch = await Shell.run(["git", "rev-parse", "--path-format=absolute", "--git-path", "FETCH_HEAD"], in: path)
-        let fetched = fetch.ok ? fetch.lastLine.flatMap {
-            (try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate]) as? Date
-        } : nil
+    }
+
+    /// What the Projects table's Checkout column shows of it, in order (#321).
+    public enum Mark: Equatable, Sendable {
+        case changes, ahead(Int), behind(Int), none, elsewhere, unavailable
+
+        /// Its SF Symbol, beside the count if it has one; none is a dash.
+        public var symbol: String? {
+            switch self {
+            case .changes: "pencil"
+            case .ahead: "arrow.up"
+            case .behind: "arrow.down"
+            case .none: nil
+            case .elsewhere: "network"
+            case .unavailable: "exclamationmark.triangle.fill"
+            }
+        }
+
+        public var count: Int? {
+            switch self {
+            case .ahead(let count), .behind(let count): count
+            case .changes, .none, .elsewhere, .unavailable: nil
+            }
+        }
+    }
+
+    /// Local changes, then the commits ahead and behind; nothing for a clean, current checkout.
+    public var marks: [Mark] {
+        switch kind {
+        case .remote: return [.elsewhere]
+        case .missing: return [.none]
+        case .unavailable: return [.unavailable]
+        case .local: return (dirty ? [.changes] : []) + (ahead > 0 ? [.ahead(ahead)] : []) + (behind > 0 ? [.behind(behind)] : [])
+        }
+    }
+
+    /// Each location's checkout (with the name of the computer it is on), at most `atOnce` at a time
+    /// and off the caller's actor, so a whole table takes them in one update (#321).
+    public static func read(_ places: [RepoLocation: String], atOnce: Int = 4) async -> [RepoLocation: Self] {
+        // Swift 6.4 can miscompile tuple results of task-group children in optimized builds; each child
+        // returns a named struct: https://github.com/swiftlang/swift/issues/93208
+        struct Reading: Sendable { let location: RepoLocation; let status: CheckoutStatus }
+        let places = Array(places)
+        return await withTaskGroup(of: Reading.self) { group in
+            var next = 0, statuses: [RepoLocation: Self] = [:]
+            func start() {
+                let (location, host) = places[next]
+                group.addTask { Reading(location: location, status: await read(location, host: host)) }
+                next += 1
+            }
+            while next < places.count, next < atOnce { start() }
+            while let reading = await group.next() {
+                statuses[reading.location] = reading.status
+                if next < places.count { start() }
+            }
+            return statuses
+        }
+    }
+
+    public static func read(_ location: RepoLocation, host: String) async -> Self {
+        guard location.hostID == nil else { return Self(kind: .remote, detail: "\(host): \(location.path)") }
+        let path = location.path
+        var directory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path + "/.git", isDirectory: &directory) else {
+            return Self(kind: .missing, detail: path)
+        }
+        // git itself, not through the login shell: one process per checkout, every 30 seconds.
+        let status = await Shell.execute("/usr/bin/git", ["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=normal"], in: path)
+        guard status.ok else { return Self(kind: .unavailable, detail: path) }
+        var fetchHead = path + "/.git/FETCH_HEAD"
+        if !directory.boolValue {
+            // A worktree's .git is a file, and git keeps its FETCH_HEAD apart.
+            let fetch = await Shell.execute("/usr/bin/git", ["rev-parse", "--path-format=absolute", "--git-path", "FETCH_HEAD"], in: path)
+            fetchHead = fetch.ok ? fetch.lastLine ?? "" : ""
+        }
+        let fetched = (try? FileManager.default.attributesOfItem(atPath: fetchHead)[.modificationDate]) as? Date
         return parse(status.output, path: path, fetchedAt: fetched)
     }
 
     public static func parse(_ output: String, path: String, fetchedAt: Date?) -> Self {
         let lines = output.split(separator: "\n")
-        let dirty = lines.contains { !$0.hasPrefix("# ") }
-        var parts = [dirty ? "Checkout · local changes" : "Checkout · clean"]
+        var status = Self(kind: .local, dirty: lines.contains { !$0.hasPrefix("# ") }, detail: path, fetchedAt: fetchedAt)
         if let counts = lines.first(where: { $0.hasPrefix("# branch.ab ") })?.split(separator: " "), counts.count == 4 {
-            if let ahead = Int(counts[2]), ahead > 0 { parts.append("Ahead \(ahead)") }
-            if let behind = Int(counts[3]), behind < 0 { parts.append("Behind \(-behind)") }
+            status.ahead = max(0, Int(counts[2]) ?? 0)
+            status.behind = max(0, -(Int(counts[3]) ?? 0))
         }
-        return Self(label: parts.joined(separator: " · "), detail: path, fetchedAt: fetchedAt)
+        return status
     }
 }
 

@@ -304,6 +304,8 @@ final class AppModel {
     /// The open pull requests and issues across the repositories, as saved or synced.
     var openItems: [GitHubLookup.OpenItem]?
     var openItemsError: String?
+    /// The Projects table's checkouts as last read, by location (`readCheckouts`).
+    var checkoutStatuses: [RepoLocation: CheckoutStatus] = [:]
     /// The GitHub account the Projects catalog belongs to, and when it was last synced.
     var projectsLogin: String?
     var repositoriesReadAt: Date?
