@@ -191,16 +191,40 @@ final class AppUnderTest {
     }
 
     /// Waits until no mark has been written for `quiet` seconds (at most `limit`), so what an action
-    /// set going has settled before the next one.
+    /// set going has settled before the next one. Marks that keep coming while something animates
+    /// or the main thread works (`FrameMarks.isContinuous`) don't count.
     func settle(quiet: TimeInterval = 0.3, limit: TimeInterval = 5) {
         let end = Date().addingTimeInterval(limit)
-        var lastCount = marks.count, lastChange = Date()
+        func settling() -> Int { marks.count(where: { !FrameMarks.isContinuous($0.name) }) }
+        var lastCount = settling(), lastChange = Date()
         while Date() < end {
             usleep(20_000)
             readMarks()
-            if marks.count != lastCount { lastCount = marks.count; lastChange = Date() }
+            let count = settling()
+            if count != lastCount { lastCount = count; lastChange = Date() }
             else if Date().timeIntervalSince(lastChange) >= quiet { return }
         }
+    }
+
+    /// The marks between two times, read up to now.
+    func marks(from start: UInt64, to end: UInt64 = .max) -> [FrameMarks.Mark] {
+        readMarks()
+        return marks.filter { $0.nanoseconds >= start && $0.nanoseconds <= end }
+    }
+
+    /// The longest stretch the main thread was busy without a frame, among those that ended between
+    /// two times; 0 when none reached `FrameMarks.busyThreshold`.
+    func longestBusy(from start: UInt64, to end: UInt64) -> Double {
+        marks(from: start, to: end).compactMap { FrameMarks.busyMilliseconds($0.name) }.max() ?? 0
+    }
+
+    /// Stops the whole app, its main thread included, for `milliseconds`: a stall injected from
+    /// outside, to check that a journey sees one.
+    func stall(milliseconds: Double) {
+        guard pid > 0, milliseconds > 0 else { return }
+        kill(pid, SIGSTOP)
+        usleep(useconds_t(milliseconds * 1_000))
+        kill(pid, SIGCONT)
     }
 
     /// Its standard window, through accessibility.

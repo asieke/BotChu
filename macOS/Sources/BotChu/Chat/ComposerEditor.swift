@@ -109,6 +109,7 @@ struct ComposerEditor: NSViewRepresentable {
         init(_ parent: ComposerEditor) { self.parent = parent }
         func textDidChange(_ notification: Notification) {
             guard let editor = notification.object as? NSTextView else { return }
+            FrameTimings.mark(FrameMarks.composer)
             parent.text = editor.string
             guard let editor = editor as? ComposerTextView, let mentions = parent.mentions else { return }
             // A label edited into other text is no longer linked: it stays as ordinary text.

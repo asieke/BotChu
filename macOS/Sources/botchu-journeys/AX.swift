@@ -59,6 +59,38 @@ struct AXElement: CustomStringConvertible {
         guard result == .success else { throw HarnessFailure("Couldn't press \(self): AX error \(result.rawValue)") }
     }
 
+    /// Its value as text: a text area's text, a static text's string.
+    var text: String { value(kAXValueAttribute) as? String ?? "" }
+
+    var actions: [String] {
+        var names: CFArray?
+        return AXUIElementCopyActionNames(ref, &names) == .success ? (names as? [String] ?? []) : []
+    }
+
+    func perform(_ action: String) throws {
+        let result = AXUIElementPerformAction(ref, action as CFString)
+        guard result == .success else { throw HarnessFailure("Couldn't \(action) \(self): AX error \(result.rawValue)") }
+    }
+
+    /// Types `text` where the text area's selection is, as typing it does (`kAXSelectedTextAttribute`):
+    /// the app's text view takes it as an edit, with its delegate told.
+    func type(_ text: String) throws {
+        try set(kAXSelectedTextAttribute, to: text as CFString)
+    }
+
+    /// Moves a text area's caret to the end of its text.
+    func moveCaretToEnd() throws {
+        var range = CFRange(location: (text as NSString).length, length: 0)
+        guard let value = AXValueCreate(.cfRange, &range) else { return }
+        try set(kAXSelectedTextRangeAttribute, to: value)
+    }
+
+    func setSize(_ size: CGSize) throws {
+        var size = size
+        guard let value = AXValueCreate(.cgSize, &size) else { return }
+        try set(kAXSizeAttribute, to: value)
+    }
+
     func set(_ attribute: String, to value: CFTypeRef) throws {
         let result = AXUIElementSetAttributeValue(ref, attribute as CFString, value)
         guard result == .success else { throw HarnessFailure("Couldn't set \(attribute) of \(self): AX error \(result.rawValue)") }

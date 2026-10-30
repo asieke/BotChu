@@ -18,11 +18,20 @@ struct Fixture {
 
     let data: URL
     let bots: [Bot]
-    /// Each bot's Home conversation's last item (its last message), which shows when it is opened.
+    /// Each bot's Home conversation's last item (its last message), and each task's, by the bot's or
+    /// the task's id, which shows when it is opened.
     let lastItem: [UUID: UUID]
 
     var longBot: Bot { bots[0] }
     var groupBot: Bot { bots[1] }
+
+    /// A bot's open tasks, in the order they were made.
+    func tasks(of bot: Bot) -> [UUID] {
+        guard let index = bots.firstIndex(where: { $0.id == bot.id }) else { return [] }
+        return (0..<Self.tasksPerBot).map { Self.id(100 + index * Self.tasksPerBot + $0) }
+    }
+
+    func delivery(_ n: Int) -> UUID { Self.id(10_000 + n) }
 
     static func id(_ n: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-4000-8323-%012llx", UInt64(n)))!
@@ -64,7 +73,9 @@ struct Fixture {
                 task.folder = checkout
                 task.createdAt = start.addingTimeInterval(Double(n) * 600)
                 try home.save(task)
-                _ = try home.writeTranscript(conversation(count: 12, bot: name, start: task.createdAt, id: next), task: task.id)
+                let taskThread = conversation(count: 12, bot: name, start: task.createdAt, id: next)
+                _ = try home.writeTranscript(taskThread, task: task.id)
+                lastItem[task.id] = taskThread.last?.id
             }
             bots.append(bot)
             entries.append(Store.Entry(id: bot.id, workspace: bot.workspace))
@@ -79,14 +90,32 @@ struct Fixture {
             try InboxFolder(home: BotHome(workspace: bot.workspace)).save(delivery, contents: [:])
         }
         try Store(root: data).saveIndex(entries)
+        try makeRepository(at: data.appendingPathComponent("repos/\(TaskNaming.repoName(taskRepo))"))
         let fixture = Fixture(data: data, bots: bots, lastItem: lastItem)
         try fixture.markProjectsSynced()
         return fixture
     }
 
-    /// Projects' catalog as just synced, so a launch doesn't sync it with GitHub (`ProjectSync.staleAfter`).
+    /// The project New Task starts tasks in (journey 9): a local repository without an origin, in
+    /// the repositories folder BotChu uses with `BOTCHU_DATA_DIR`, so a task's worktree is made here
+    /// and nothing reaches GitHub.
+    static let taskRepo = "journeys/repo-0"
+
+    static func makeRepository(at folder: URL) throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "# repo-0\n\nThe journeys' project.\n".write(to: folder.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        for arguments in [["init", "--quiet", "--initial-branch=main"], ["add", "README.md"],
+                          ["-c", "user.name=Journeys", "-c", "user.email=journeys@example.invalid", "commit", "--quiet", "-m", "Start"]] {
+            try AppUnderTest.run("/usr/bin/git", ["-C", folder.path] + arguments)
+        }
+    }
+
+    /// Projects' catalog as just synced, listing the task project, so a launch doesn't sync it with
+    /// GitHub (`ProjectSync.staleAfter`).
     func markProjectsSynced() throws {
         var snapshot = ProjectSnapshot(login: "journeys")
+        snapshot.pages = [ProjectSnapshot.Page(etag: "", repos: [ProjectSnapshot.Listed(nameWithOwner: Self.taskRepo, description: "The journeys' project",
+                                                                                        pushedAt: Date(), updatedAt: Date())])]
         snapshot.syncedAt = Date()
         snapshot.fullSyncedAt = Date()
         try JSONEncoder().encode(snapshot).write(to: data.appendingPathComponent("projects.json"), options: .atomic)

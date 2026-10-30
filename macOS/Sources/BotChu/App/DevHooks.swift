@@ -74,7 +74,8 @@ import BotChuCore
 ///   of every kind of run (`sampleJobs`), and run no job, so nothing starts a CLI. `BOTCHU_OPEN=jobs`
 ///   opens Jobs, `job-editor` the editor for a new job, `job-edit` the editor for the job titled
 ///   `BOTCHU_JOB` (else the first), and `job-history` the first job's history.
-/// - `BOTCHU_TIMINGS`: append frame marks to this file for the journeys harness (`FrameTimings`).
+/// - `BOTCHU_TIMINGS`: append frame marks, and the main thread's long busy stretches, to this file for
+///   the journeys harness (`FrameTimings`).
 @MainActor
 enum DevHooks {
     static let env = ProcessInfo.processInfo.environment
@@ -364,6 +365,7 @@ enum DevHooks {
             }
         }
         FrameTimings.watchSidebar()
+        FrameTimings.watchBusy()
         if dataDir != nil, env["BOTCHU_JOBS"] == "sample" { sampleJobs(model: model) }
         if dataDir != nil, env["BOTCHU_FILINGS"] == "sample", let bot = model.issueWriters.first { sampleFilings(model: model, bot: bot) }
         switch env["BOTCHU_OPEN"] {
@@ -746,6 +748,9 @@ enum DevHooks {
     private static var pending: [String] = []
     private static var observer: CFRunLoopObserver?
     private static var sidebarWatch: [NSObjectProtocol] = []
+    private static var busyObservers: [CFRunLoopObserver] = []
+    /// When the main thread last woke, until it waits again.
+    private static var woke: UInt64 = 0
 
     static func mark(_ name: @autoclosure () -> String) {
         guard file != nil else { return }
@@ -767,8 +772,31 @@ enum DevHooks {
         try? file.write(contentsOf: Data(lines.utf8))
     }
 
+    /// Writes each stretch the main thread is busy for `FrameMarks.busyThreshold` or more without
+    /// letting a frame be committed: from waking until it is about to wait again, after every other
+    /// observer of that pass, Core Animation's commit included (`FrameMarks.busy`).
+    static func watchBusy() {
+        guard file != nil, busyObservers.isEmpty else { return }
+        let wake = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.afterWaiting.rawValue, true, CFIndex.min) { _, _ in
+            MainActor.assumeIsolated { woke = DispatchTime.now().uptimeNanoseconds }
+        }
+        let wait = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, CFIndex.max) { _, _ in
+            MainActor.assumeIsolated {
+                guard woke > 0, let file else { return }
+                let now = DispatchTime.now().uptimeNanoseconds
+                let milliseconds = Double(now - woke) / 1_000_000
+                woke = 0
+                guard milliseconds >= FrameMarks.busyThreshold else { return }
+                try? file.write(contentsOf: Data(FrameMarks.line(FrameMarks.busy(milliseconds: milliseconds), at: now).utf8))
+            }
+        }
+        busyObservers = [wake, wait].compactMap { $0 }
+        for observer in busyObservers { CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes) }
+    }
+
     /// Marks the sidebar starting to hide or show, once the main window's split view is there: the
-    /// first resize of its subviews that narrows or widens the part of the sidebar in view.
+    /// first resize of its subviews that narrows or widens the part of the sidebar in view. Also
+    /// marks the window's content laid out at a new size (`FrameMarks.windowResized`).
     static func watchSidebar(attempt: Int = 0) {
         guard let file, sidebarWatch.isEmpty else { return }
         func splitViews(in view: NSView) -> [NSSplitView] {
@@ -782,6 +810,8 @@ enum DevHooks {
         let watch = SidebarWatch(split: split, sidebar: sidebar)
         sidebarWatch = [NotificationCenter.default.addObserver(forName: NSSplitView.didResizeSubviewsNotification, object: split, queue: nil) { _ in
             MainActor.assumeIsolated { watch.resized() }
+        }, NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: nil) { _ in
+            MainActor.assumeIsolated { mark(FrameMarks.windowResized) }
         }]
         try? file.write(contentsOf: Data("# sidebar: \(type(of: split)), \(Int(watch.last)) pt in view\n".utf8))
     }

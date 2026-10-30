@@ -627,6 +627,7 @@ private struct InboxToolbar: View {
         .help(done ? "Move to Inbox" : "Done (E or ⌃⌘A)")
         .keyboardShortcut("a", modifiers: [.command, .control])
         .accessibilityIdentifier("inbox-done")
+        .onChange(of: done) { _, done in FrameTimings.mark(FrameMarks.inboxDone(delivery.id, done)) }
         Menu {
             DeliveryMenu(delivery: delivery)
         } label: {

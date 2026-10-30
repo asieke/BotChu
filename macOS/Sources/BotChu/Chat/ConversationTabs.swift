@@ -315,6 +315,7 @@ struct ConversationRow: View {
             .accessibilityLabel(tab.spoken(at: .now))
             .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityIdentifier(target.taskID.map { "conversation-tab-\($0)" } ?? "conversation-tab-home")
+            .onAppear { if let id = target.taskID { FrameTimings.mark(FrameMarks.tab(id)) } }
         }
     }
 

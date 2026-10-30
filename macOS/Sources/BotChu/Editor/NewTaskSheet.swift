@@ -109,6 +109,7 @@ struct NewTaskSheet: View {
         }
         .mentionPopups()
         .frame(width: 560, height: 720)
+        .onAppear { FrameTimings.mark(FrameMarks.newTask) }
         // A pull request's branch another task owns turns the task away before it is made (#215).
         .task(id: headKey) {
             guard let headKey, let repo, let work else { return }
