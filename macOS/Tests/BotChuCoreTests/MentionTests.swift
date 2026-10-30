@@ -124,6 +124,23 @@ struct MentionTests {
         #expect(MessageReference.agent(duck).label == MessageReference.agent(twin).label)
     }
 
+    /// #324: the list says what each agent runs on, as its row does, in place of its title, which
+    /// still matches; a namesake that runs on the same shows the start of its ID.
+    @Test func agentsShowWhatTheyRunOn() {
+        var duck = duck, engineer = engineer
+        duck.runsOn = "Claude Personal · Fable 5.1"
+        engineer.runsOn = "Codex Work · GPT-6.1 Sol"
+        #expect(MentionDirectory.detail(of: duck, among: [duck, engineer, fox]) == "Claude Personal · Fable 5.1")
+        #expect(MentionDirectory.detail(of: fox, among: [duck, engineer, fox]) == "Product management, QA triage")
+        #expect(MentionDirectory(agents: [duck, engineer]).agents(matching: "principal").map(\.name) == ["10x Engineer Bot"])
+        let twin = BotRosterEntry(bot: Bot(name: "QA Duck", title: "Release checks", workspace: "/tmp/duck2"), runsOn: duck.runsOn)
+        let cousin = BotRosterEntry(bot: Bot(name: "qa duck", title: "A Duck that QAs", workspace: "/tmp/duck3"), runsOn: "Muse · Wonderful")
+        let roster = [duck, twin, cousin]
+        #expect(MentionDirectory.detail(of: duck, among: roster) == "Claude Personal · Fable 5.1 · ID 42c27670")
+        #expect(MentionDirectory.detail(of: twin, among: roster).hasPrefix("Claude Personal · Fable 5.1 · ID "))
+        #expect(MentionDirectory.detail(of: cousin, among: roster) == "Muse · Wonderful")
+    }
+
     @Test func projectsRankExactAndPrefixFirstThenFavoredThenGiven() {
         let directory = MentionDirectory(projects: [bots, gitchu, ranch, botchu], favoring: nil)
         // Without a query: active projects first, then the rest, each in the catalog's order.

@@ -249,15 +249,16 @@ public struct MentionDirectory: Sendable {
         } favored: { $0.favored }.map(\.project)
     }
 
-    /// What tells an agent apart in the list: its title, and the start of its ID when another agent has
-    /// the same name and title.
+    /// What tells an agent apart in the list: what it runs on (#324), else its title, and the start of
+    /// its ID when another agent has the same name and says the same.
     public static func detail(of agent: BotRosterEntry, among agents: [BotRosterEntry]) -> String {
+        func shown(_ agent: BotRosterEntry) -> String { agent.runsOn ?? agent.title }
         let twin = agents.contains { other in
-            other.id != agent.id && fold(other.name) == fold(agent.name) && fold(other.title) == fold(agent.title)
+            other.id != agent.id && fold(other.name) == fold(agent.name) && fold(shown(other)) == fold(shown(agent))
         }
-        guard twin else { return agent.title }
+        guard twin else { return shown(agent) }
         let id = "ID " + agent.id.uuidString.lowercased().prefix(8)
-        return agent.title.isEmpty ? id : "\(agent.title) · \(id)"
+        return shown(agent).isEmpty ? id : "\(shown(agent)) · \(id)"
     }
 
     static func ranked<Key>(_ keys: [Key], tier: (Key) -> Int?, favored: (Key) -> Int) -> [Key] {

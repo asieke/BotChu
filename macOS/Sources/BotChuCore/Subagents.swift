@@ -438,8 +438,13 @@ public struct BotRosterEntry: Identifiable, Codable, Equatable, Sendable {
     /// A specialist (#250), which is only called as a sub-agent and never gets a Task.
     public var specialist: Bool?
     public var isSpecialist: Bool { specialist == true }
+    /// What it runs on, as its row in the bot list says it (`BotRowSummary.runsOn`), for the `@`
+    /// list (#324); nil where nothing shows it.
+    public var runsOn: String?
 
-    public init(bot: Bot) {
+    public init(bot: Bot) { self.init(bot: bot, runsOn: nil) }
+
+    public init(bot: Bot, runsOn: String?) {
         id = bot.id
         slug = Bot.slug(bot.name)
         name = bot.name
@@ -447,6 +452,7 @@ public struct BotRosterEntry: Identifiable, Codable, Equatable, Sendable {
         emoji = bot.emoji
         remote = bot.isRemoteQueue ? true : nil
         specialist = bot.isSpecialist ? true : nil
+        self.runsOn = runsOn
     }
 }
 

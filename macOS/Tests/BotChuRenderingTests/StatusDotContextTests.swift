@@ -87,16 +87,19 @@ extension RenderingTests {
                         let label = "\(appearance.rawValue)-\(kind)-selected-\(selected)-focused-\(focused)"
                         try row.save(label + "-sidebar")
                         try tabs.save(label + "-tabs")
-                        let rowRegion = CGRect(x: cell.bounds.width - 24, y: 0, width: 24, height: cell.bounds.height)
+                        // The bot's other five tasks are idle: three grey rings after this one's dot, then +2 (#324).
+                        let rowRegion = CGRect(x: cell.bounds.width - 80, y: 0, width: 80, height: cell.bounds.height)
                         let columnRegion = CGRect(x: 16, y: 90, width: 16, height: 70)
                         let railRegion = CGRect(x: 276, y: 60, width: 14, height: 24)
                         if kind == .idle {
-                            #expect(model.botRowSummary(of: fixture.bot).dots.isEmpty)
-                            #expect(row.dots(in: rowRegion).isEmpty, "\(label): idle omitted from sidebar")
+                            let summary = model.botRowSummary(of: fixture.bot)
+                            #expect(summary.dots == [.idle, .idle, .idle, .idle] && summary.more == 2)
+                            #expect(row.dots(in: rowRegion).isEmpty, "\(label): idle rings are grey in the sidebar")
                             #expect(tabs.dots(in: railRegion).isEmpty, "\(label): idle omitted from rail")
                             continue
                         }
-                        #expect(model.botRowSummary(of: fixture.bot).dots == [kind])
+                        let summary = model.botRowSummary(of: fixture.bot)
+                        #expect(summary.dots == [kind, .idle, .idle, .idle] && summary.more == 2)
                         let expected = StatusContextDrawing.hue(for: kind)
                         let sidebarDot = try row.dot(in: rowRegion, hue: expected, label: label + " sidebar")
                         let columnDot = try tabs.dot(in: columnRegion, hue: expected, label: label + " column")
@@ -174,9 +177,9 @@ extension RenderingTests {
         fixture.set(.idle, on: tasks[1])
         fixture.set(.news, on: tasks[2])
         model.show(home)
-        try await checkMixed("Home read", expected: [.working, .preparing, .starting, .working], more: 1)
+        try await checkMixed("Home read", expected: [.working, .preparing, .starting, .working], more: 2)
         model.show(tasks[2])
-        try await checkMixed("completion read", expected: [.working, .preparing, .starting, .working], more: 0)
+        try await checkMixed("completion read", expected: [.working, .preparing, .starting, .working], more: 2)
     }
 }
 

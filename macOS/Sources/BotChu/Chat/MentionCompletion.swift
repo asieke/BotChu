@@ -59,7 +59,7 @@ enum MentionSuggestion: Identifiable, Equatable {
         }
     }
 
-    /// An agent's title (and ID, beside a namesake), a project's `owner/name`.
+    /// What an agent runs on (and its ID, beside a namesake), a project's `owner/name`.
     var subtitle: String {
         switch self {
         case .agent(_, let detail): detail

@@ -137,7 +137,7 @@ extension RenderingTests {
         model.unread.insert(.home(bot.id))
         model.show(.task(fixture.tasks[0].id, of: bot.id))
         let summary = model.botRowSummary(of: bot)
-        #expect(summary.subtitle == "3 tasks running")
+        #expect(summary.subtitle == "Claude Personal · default")
         // The most urgent first (#218): the turns under way, then Home's finished one.
         #expect(summary.dots == [.working, .working, .working, .news])
         #expect(summary.more == 0)
@@ -212,7 +212,8 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(250))
         let table = try #require(sidebarTable(in: host))
         let rowCount = table.numberOfRows, quietRow = rowCount - 1
-        #expect(model.botRowSummary(of: quiet).subtitle == quiet.account.name)
+        #expect(model.botRowSummary(of: quiet).subtitle == "Claude Personal · default")
+        #expect(model.botRowSummary(of: quiet).dots.isEmpty)
         table.selectRowIndexes(IndexSet(integer: quietRow), byExtendingSelection: false)
         try await Task.sleep(for: .milliseconds(100))
         #expect(model.sidebarSelection == .bot(quiet.id))
@@ -221,17 +222,19 @@ extension RenderingTests {
         model.newTask(for: quiet.id)
         #expect(model.taskSheet?.botID == quiet.id)
         model.taskSheet = nil
-        // Its first task is a tab beside the chat, not a row: the row says how many it has.
+        // Its first task is a tab beside the chat, not a row: the row shows its ring (#324).
         let first = BotTask(repo: "fixture/quiet", checkout: fixture.root.path)
         model.tasks[quiet.id, default: []].append(first)
         try await Task.sleep(for: .milliseconds(150))
         #expect(table.numberOfRows == rowCount)
-        #expect(model.botRowSummary(of: quiet).subtitle == "1 task")
+        #expect(model.botRowSummary(of: quiet).subtitle == "Claude Personal · default")
+        #expect(model.botRowSummary(of: quiet).dots == [.idle])
         model.closeTask(.task(first.id, of: quiet.id))
         try await Task.sleep(for: .milliseconds(150))
         #expect(model.openTasks(of: quiet.id).isEmpty)
         #expect(table.numberOfRows == rowCount)
-        #expect(model.botRowSummary(of: quiet).subtitle == quiet.account.name)
+        #expect(model.botRowSummary(of: quiet).subtitle == "Claude Personal · default")
+        #expect(model.botRowSummary(of: quiet).dots.isEmpty)
     }
 
     @Test func sectionsGroupBotsAndAreKeptInTheIndex() throws {

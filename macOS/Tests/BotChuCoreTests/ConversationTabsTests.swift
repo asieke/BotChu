@@ -183,79 +183,83 @@ import Testing
         #expect(ConversationTab.shortcut(forTab: -1) == nil)
     }
 
-    @Test func botRowShowsDotsForBusyConversationsAndSaysWhatItDoes() {
-        let brief = BotTask(repo: "asieke/GitChu", checkout: "/w/GitChu", brief: "Speed up the sync")
+    /// #324: a bot's row says what it runs on, whatever it does, with a dot for each open task (an
+    /// idle one a ring) and for Home while it isn't idle.
+    @Test func botRowShowsADotPerOpenTaskAndWhatItRunsOn() {
         let idle = TabState.idle(since: nil)
         let working = TabState.working(.coding, since: now)
-        // Nothing open: the account.
-        let quiet = BotRowSummary(account: "Claude Dev", home: idle, tasks: [])
-        #expect(quiet.dots.isEmpty && quiet.more == 0 && quiet.subtitle == "Claude Dev" && quiet.spokenDots.isEmpty)
-        // Open tasks, all idle: how many, and no dots.
-        let open = BotRowSummary(account: "Claude Dev", home: idle, tasks: [(issue, idle), (brief, idle)])
-        #expect(open.dots.isEmpty && open.subtitle == "2 tasks")
-        #expect(BotRowSummary(account: "Claude Dev", home: idle, tasks: [(issue, idle)]).subtitle == "1 task")
-        // One running: which; a brief by its repository.
-        #expect(BotRowSummary(account: "Claude Dev", home: idle, tasks: [(issue, working), (brief, idle)]).subtitle == "Working on #113")
-        #expect(BotRowSummary(account: "Claude Dev", home: idle, tasks: [(issue, .news(pullRequest: nil, at: now)), (brief, .starting(since: now))])
-            .subtitle == "Working on GitChu")
-        // Only Home working: its activity.
-        #expect(BotRowSummary(account: "Claude Dev", home: working, tasks: [(issue, idle)]).subtitle == "Editing code…")
+        let runsOn = "Claude Dev · Opus 5.5"
+        // Nothing open: no dots.
+        let quiet = BotRowSummary(runsOn: runsOn, home: idle, tasks: [])
+        #expect(quiet.dots.isEmpty && quiet.more == 0 && quiet.subtitle == runsOn && quiet.spokenDots.isEmpty)
+        // Three idle tasks: three rings.
+        let open = BotRowSummary(runsOn: runsOn, home: idle, tasks: [idle, idle, idle])
+        #expect(open.dots == [.idle, .idle, .idle] && open.more == 0 && open.subtitle == runsOn && open.spokenDots == "3 idle")
+        // One of them working: its dot first, and the subtitle as it was.
+        let one = BotRowSummary(runsOn: runsOn, home: idle, tasks: [idle, working, idle])
+        #expect(one.dots == [.working, .idle, .idle] && one.subtitle == runsOn && one.spokenDots == "1 working, 2 idle")
+        // Only Home working: its dot, never its activity.
+        let home = BotRowSummary(runsOn: runsOn, home: working, tasks: [idle])
+        #expect(home.dots == [.working, .idle] && home.subtitle == runsOn && home.spokenDots == "1 working, 1 idle")
         // Many: at most four dots, the most urgent first (#218), in tab order among equals, then +N.
-        let busy = BotRowSummary(account: "Claude Dev", home: .failed(at: now), tasks: [
-            (issue, working), (brief, .preparing), (issue, idle), (issue, .news(pullRequest: 1, at: now)), (issue, working), (issue, .starting(since: now)),
+        let busy = BotRowSummary(runsOn: runsOn, home: .failed(at: now), tasks: [
+            working, .preparing, idle, .news(pullRequest: 1, at: now), working, .starting(since: now),
         ])
         #expect(busy.dots == [.failed, .working, .preparing, .working])
-        #expect(busy.more == 2)
-        #expect(busy.subtitle == "4 tasks running")
-        #expect(busy.spokenDots == "1 failed, 1 preparing, 1 starting, 2 working, 1 finished")
+        #expect(busy.more == 3)
+        #expect(busy.subtitle == runsOn)
+        #expect(busy.spokenDots == "1 failed, 1 preparing, 1 starting, 2 working, 1 finished, 1 idle")
     }
 
     /// #218: a full row keeps its urgent dots, however late their tabs come, and counts the rest.
     @Test func aFullRowKeepsItsUrgentDotsAndCountsTheRest() {
-        let brief = BotTask(repo: "asieke/GitChu", checkout: "/w/GitChu", brief: "Speed up the sync")
         let working = TabState.working(.coding, since: now)
         let asking = TabState.needsInput(requests: 1, at: now)
-        let row = BotRowSummary(account: "Claude Dev", home: .news(pullRequest: nil, at: now), tasks: [
-            (issue, working), (issue, working), (issue, working), (issue, .idle(since: now)), (issue, working),
-            (issue, .stopped(at: now)), (brief, asking),
+        let runsOn = "Claude Dev · default"
+        let row = BotRowSummary(runsOn: runsOn, home: .news(pullRequest: nil, at: now), tasks: [
+            working, working, working, .idle(since: now), working, .stopped(at: now), asking,
         ])
         #expect(row.dots == [.needsInput, .stopped, .working, .working])
-        #expect(row.more == 3)
-        #expect(row.spokenDots == "1 needs input, 1 stopped, 4 working, 1 finished")
-        // What waits on the owner leads the subtitle: which task, Home, or how many.
-        #expect(row.subtitle == "Needs input on GitChu")
-        #expect(BotRowSummary(account: "Claude Dev", home: asking, tasks: [(issue, working)]).subtitle == "Needs input")
-        let two = BotRowSummary(account: "Claude Dev", home: asking, tasks: [(issue, .needsInput(requests: 2, at: now))])
-        #expect(two.subtitle == "2 need input" && two.dots == [.needsInput, .needsInput] && two.spokenDots == "2 need input")
-        // An idle-only bot has no dots, however many tasks it has open.
-        let quiet = BotRowSummary(account: "Claude Dev", home: .idle(since: now), tasks: [(issue, .idle(since: now)), (brief, .idle(since: nil))])
-        #expect(quiet.dots.isEmpty && quiet.more == 0 && quiet.spokenDots.isEmpty)
+        #expect(row.more == 4)
+        #expect(row.spokenDots == "1 needs input, 1 stopped, 4 working, 1 finished, 1 idle")
+        // What waits on the owner leads the dots, never the subtitle (#324).
+        #expect(row.subtitle == runsOn)
+        let two = BotRowSummary(runsOn: runsOn, home: asking, tasks: [.needsInput(requests: 2, at: now)])
+        #expect(two.subtitle == runsOn && two.dots == [.needsInput, .needsInput] && two.spokenDots == "2 need input")
+        // An idle Home has no dot, and idle tasks are rings, however many are open.
+        let quiet = BotRowSummary(runsOn: runsOn, home: .idle(since: now), tasks: [.idle(since: now), .idle(since: nil)])
+        #expect(quiet.dots == [.idle, .idle] && quiet.more == 0 && quiet.spokenDots == "2 idle")
     }
 
     /// #250: a collapsed heading, such as the sidebar's Specialists, shows its bots' dots together:
     /// the most urgent first, at most four, then +N counting the rest and each row's own +N.
     @Test func aCollapsedHeadingShowsItsBotsDotsTogether() {
         let working = TabState.working(.coding, since: now)
-        let idle = BotRowSummary(account: "Claude Dev", home: .idle(since: now), tasks: [])
-        let thinking = BotRowSummary(account: "Codex Work", home: working, tasks: [])
-        let asking = BotRowSummary(account: "Claude Dev", home: .needsInput(requests: 1, at: now), tasks: [(issue, working)])
+        let idle = BotRowSummary(runsOn: "Claude Dev · default", home: .idle(since: now), tasks: [])
+        let thinking = BotRowSummary(runsOn: "Codex Work · default", home: working, tasks: [])
+        let asking = BotRowSummary(runsOn: "Claude Dev · default", home: .needsInput(requests: 1, at: now), tasks: [working])
         let quiet = BotRowSummary(merging: [("Mike", idle)])
         #expect(quiet.dots.isEmpty && quiet.more == 0 && quiet.spokenDots.isEmpty)
         let two = BotRowSummary(merging: [("Mike", idle), ("David", thinking), ("Ann", asking)])
         #expect(two.dots == [.needsInput, .working, .working])
         #expect(two.more == 0)
         #expect(two.spokenDots == "David: 1 working; Ann: 1 needs input, 1 working")
-        let full = BotRowSummary(account: "Claude Dev", home: working, tasks: Array(repeating: (issue, working), count: 5))
+        let full = BotRowSummary(runsOn: "Claude Dev · default", home: working, tasks: Array(repeating: working, count: 5))
         #expect(full.dots.count == 4 && full.more == 2)
         let many = BotRowSummary(merging: [("David", thinking), ("Ann", full), ("Bea", asking)])
         #expect(many.dots == [.needsInput, .working, .working, .working])
         #expect(many.more == 3 + 2)
+        // A bot's idle tasks are rings there too, after the others' busy dots (#324).
+        let resting = BotRowSummary(runsOn: "Claude Dev · default", home: .idle(since: now), tasks: [.idle(since: now)])
+        let mixed = BotRowSummary(merging: [("Mike", resting), ("David", thinking)])
+        #expect(mixed.dots == [.working, .idle] && mixed.spokenDots == "Mike: 1 idle; David: 1 working")
     }
 
     /// #237: a bot row's dots are its tabs' own states, never others. For every Home with every
     /// pair of tasks, and for rows with more than four busy tabs, the dots and +N count exactly the
-    /// tabs that aren't idle, kind for kind, the most urgent first, and the tooltip names them all;
-    /// answering a request, then reading the finished turn, changes the row's dot as the tab's.
+    /// open tasks and Home while it isn't idle (#324), kind for kind, the most urgent first, and the
+    /// tooltip names them all; answering a request, then reading the finished turn, changes the
+    /// row's dot as the tab's.
     @Test func aRowsDotsAreItsTabsOwnStates() {
         let states: [TabState] = [.idle(since: now), .preparing, .starting(since: now), .working(.coding, since: now),
                                   .news(pullRequest: 7, at: now), .failed(at: now), .stopped(at: now), .needsInput(requests: 1, at: now)]
@@ -267,16 +271,16 @@ import Testing
         }
         rows.append((home: .needsInput(requests: 2, at: now), tasks: states))
         rows.append((home: .news(pullRequest: nil, at: now), tasks: states.reversed() + states))
-        let kinds: [TabState.Kind] = [.needsInput, .failed, .stopped, .preparing, .starting, .working, .news]
+        let kinds: [TabState.Kind] = [.needsInput, .failed, .stopped, .preparing, .starting, .working, .news, .idle]
         for (home, tasks) in rows {
-            let row = BotRowSummary(account: "Claude Dev", home: home, tasks: tasks.map { (task: issue, state: $0) })
-            let busy = ([home] + tasks).map(\.kind).filter { $0 != .idle }
+            let row = BotRowSummary(runsOn: "Claude Dev · default", home: home, tasks: tasks)
+            let shown = ([home].filter { $0.kind != .idle } + tasks).map(\.kind)
             let label = "Home \(home.kind), tasks \(tasks.map(\.kind))"
-            #expect(row.dots.count + row.more == busy.count, "\(label)")
-            #expect(row.dots.map(\.urgency) == Array(busy.map(\.urgency).sorted(by: >).prefix(BotRowSummary.dotLimit)), "\(label): \(row.dots)")
-            #expect(row.spokenDots.isEmpty == busy.isEmpty, "\(label)")
+            #expect(row.dots.count + row.more == shown.count, "\(label)")
+            #expect(row.dots.map(\.urgency) == Array(shown.map(\.urgency).sorted(by: >).prefix(BotRowSummary.dotLimit)), "\(label): \(row.dots)")
+            #expect(row.spokenDots.isEmpty == shown.isEmpty, "\(label)")
             for kind in kinds {
-                let count = busy.filter { $0 == kind }.count
+                let count = shown.filter { $0 == kind }.count
                 // None made up or recoloured, and the tooltip counts those past the fourth too.
                 #expect(row.dots.filter { $0 == kind }.count <= count, "\(label): \(row.dots)")
                 if count > 0 { #expect(row.spokenDots.contains("\(count) \(kind.name(count: count))"), "\(label): \(row.spokenDots)") }
@@ -289,8 +293,8 @@ import Testing
                      TabState(status: replied, unread: false)]
         #expect(steps.map(\.kind) == [.needsInput, .news, .idle])
         for state in steps {
-            let row = BotRowSummary(account: "Claude Dev", home: .idle(since: nil), tasks: [(task: issue, state: state)])
-            #expect(row.dots == (state.kind == .idle ? [] : [state.kind]))
+            let row = BotRowSummary(runsOn: "Claude Dev · default", home: .idle(since: nil), tasks: [state])
+            #expect(row.dots == [state.kind])
         }
     }
 

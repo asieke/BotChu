@@ -256,9 +256,9 @@ struct SidebarShade: ViewModifier {
     }
 }
 
-/// A bot's row: its face, its name over what it is doing, and a small dot for each of its
-/// conversations that isn't idle (#128), at most four, the most urgent first, then +N, at its end,
-/// centred on the row (#144).
+/// A bot's row: its face, its name over what it runs on (#324), and a small dot for each of its
+/// open tasks and for Home while it isn't idle (#128), at most four, the most urgent first, then
+/// +N, at its end, centred on the row (#144).
 struct BotRow: View {
     let bot: Bot
     let status: BotStatus

@@ -11,10 +11,11 @@ this Mac, or on another computer it reaches over SSH. A task can also review a p
 - Does:
   - **Workspace:** the left sidebar has **Inbox**, **Projects**, **Agents**, **Providers**, **Skills & Tools** and **Jobs**, followed by
     the bots, one row each, in sections (below); a bot's Home and tasks are the tabs beside its chat
-    (**Tasks**). A bot's row says on its second line what it is doing ("Needs input on #113", "Working on #113", "2 tasks
-    running", its Home's activity, "4 tasks", or its account), with a small dot at the row's end,
-    centred on it, for each of its conversations that isn't idle, in the tabs' colours, at most four,
-    the most urgent first (needs input, then failed or stopped, then working, then finished), then +N; a bot whose conversations are all idle has none. Selecting a bot
+    (**Tasks**). A bot's row says on its second line what it runs on, its account and model ("Claude Personal ·
+    Fable 5.1", without the family the account implies; "default" until the CLI reports which model its default is),
+    and its state only as small dots at the row's end, centred on it: one for each open task, an idle one a ring, and
+    Home's while it isn't idle, in the tabs' colours, at most four, the most urgent first (needs input, then failed or
+    stopped, then working, then finished, then idle), then +N; a bot with no open tasks and an idle Home has none. Selecting a bot
     shows the conversation it showed last. Opening a gallery keeps the selected conversation and unsent draft;
     turns that finish while a gallery is shown still show as news (a green dot). In dark mode the sidebar
     takes the status sidebar's darker shade, with a hairline along its edge, so it stands apart from
@@ -801,8 +802,8 @@ on that pull request's branch to continue in instead). The same command run agai
     queued, paused, and the chat says so. Until then the conversation is busy, and Stop withdraws it.
   - **Mentions:** in a Home or task message box, `@` lists your other agents and `#` your projects,
     in a short list just above the line being typed, over the chat, so the box neither moves nor
-    grows. Agents match by name or title, in the sidebar's order, with their avatar and title (and
-    the start of their ID beside a namesake); projects match by name or `owner/name`, from the whole
+    grows. Agents match by name or title, in the sidebar's order, with their avatar and what they run on, as
+    their row says it (and the start of their ID beside a namesake); projects match by name or `owner/name`, from the whole
     saved Projects catalog whatever Projects' search and filter show, with the task's own repository
     and active projects first. Exact and prefix matches come first. Up and Down choose, Return or Tab
     inserts the chosen one, a click inserts it, and Escape closes the list and leaves the text; Return

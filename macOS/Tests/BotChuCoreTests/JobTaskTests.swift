@@ -92,10 +92,6 @@ import Testing
         #expect(tab.spoken(at: Date()).hasPrefix("Run of job 10x Product Analysis, "))
         // A plain task's tab is as it was.
         #expect(!ConversationTab(task: BotTask(repo: "asieke/GitChu", checkout: "/tmp"), machine: nil, state: .idle(since: nil)).isJob)
-        // The bot's row says it works on the job.
-        let row = BotRowSummary(account: "Codex Work", home: .idle(since: nil),
-                                tasks: [(scheduled, .working(.coding, since: Date()))])
-        #expect(row.subtitle == "Working on 10x Product Analysis")
     }
 
     @Test func aNewRunClosesItsJobsEarlierRunsUnlessTheOwnerTookOneOver() {

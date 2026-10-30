@@ -65,13 +65,19 @@ extension AppModel {
         }
     }
 
-    /// The bot's row in the bot list: a dot for each conversation that isn't idle, and what it does.
+    /// The bot's row in the bot list: a dot for each open task and for Home while it isn't idle, and
+    /// what it runs on.
     func botRowSummary(of bot: Bot) -> BotRowSummary {
         SidebarStatusDiagnostics.didDeriveSummary?(bot.id)
-        var result = BotRowSummary(account: bot.account.name, home: tabState(of: .home(bot.id)),
-                      tasks: openTasks(of: bot.id).map { ($0, tabState(of: .task($0.id, of: bot.id))) })
-        if bot.isRemoteQueue { result.subtitle = "\(remoteQueue.presence) · \(remoteQueue.pending) waiting" }
-        return result
+        let subtitle = bot.isRemoteQueue ? "\(remoteQueue.presence) · \(remoteQueue.pending) waiting" : runsOn(bot)
+        return BotRowSummary(runsOn: subtitle, home: tabState(of: .home(bot.id)),
+                             tasks: openTasks(of: bot.id).map { tabState(of: .task($0.id, of: bot.id)) })
+    }
+
+    /// What the bot runs on, as its row and the `@` list say it (#324): "Claude Personal · Fable 5.1".
+    func runsOn(_ bot: Bot) -> String {
+        BotRowSummary.runsOn(bot, openRouterDefault: settings.openRouterModel, sailDefault: settings.sailModel,
+                             catalog: catalogModels(for: bot), native: nativeModels(for: bot))
     }
 
     /// Shows the bot's conversation at `index` in its tabs (⌘1 for Home, ⌘2 to ⌘9 for its tasks).
