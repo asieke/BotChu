@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Deploy's latency report (#362; README, Deploy): runs the journeys when this commit has no results
-# yet, writes the report beside the newest results and sends it to the owner's Inbox as an FYI,
-# or prints its path when botchu-inbox isn't on PATH or can't send.
+# Deploy's latency report (#362; README, Deploy): reports the journeys the full suite ran on this
+# commit, or runs them when it has no results yet (after --skip-tests, or a pass reused from another
+# commit of the same tree), writes the report beside the newest results and sends it to the owner's
+# Inbox as an FYI, or prints its path when botchu-inbox isn't on PATH or can't send.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 runs=${BOTCHU_JOURNEYS_RUNS:-$HOME/Library/Caches/botchu-journeys/runs}

@@ -5,9 +5,9 @@ dir=$(cd "$(dirname "$0")" && pwd)
 test_root=$(dirname "$dir")
 source "$test_root/scripts/test-support.sh"
 mode=${1:-full}
-case "$mode" in full|--fast|--changed|--build|--prebuilt|--windows) ;; *) echo "usage: macOS/test.sh [--fast|--changed]" >&2; exit 2 ;; esac
+case "$mode" in full|--fast|--build|--prebuilt|--windows) ;; *) echo "usage: macOS/test.sh [--fast]" >&2; exit 2 ;; esac
 [ $# -le 1 ] || exit 2
-if { [ "$mode" = full ] || [ "$mode" = --prebuilt ] || [ "$mode" = --changed ]; } && test_inside_gate; then
+if { [ "$mode" = full ] || [ "$mode" = --prebuilt ]; } && test_inside_gate; then
   echo "test: run macOS/test.sh directly; only its --windows phase belongs inside the gate" >&2
   exit 2
 fi
@@ -30,19 +30,10 @@ release_build() {
   fi
   return "$result"
 }
-click_test=conversationColumnSwitchesClosesAndCollapsesByNativeClicks
 if [ "$mode" = --windows ]; then
-  # BOTCHU_WINDOW_TESTS: a --filter of the window tests to run, and whether the click test runs.
-  windows=${BOTCHU_WINDOW_TESTS:-BotChuRenderingTests} clicks=${BOTCHU_CLICK_TEST:-1}
-  if [ "$windows" != none ]; then
-    test_step 'window tests' test_run windows --skip-build --filter "$windows" --skip "$click_test"
-  fi
-  if [ "$clicks" = 1 ]; then
-    test_step 'native clicks' test_run clicks --skip-build --filter "$click_test"
-  fi
-  if [ "${BOTCHU_RELEASE_SECRET:-0}" = 1 ]; then
-    test_step 'release secure input' test_run release-secret --skip-build --configuration release --scratch-path "$release_scratch" --filter 'BotChuRenderingTests.RenderingTests/sensitiveInput'
-  fi
+  # The kept window tests (docs/testing.md), then the secure input ones again, optimized (#314).
+  test_step 'window tests' test_run windows --skip-build --filter BotChuRenderingTests
+  test_step 'release secure input' test_run release-secret --skip-build --configuration release --scratch-path "$release_scratch" --filter 'BotChuRenderingTests.RenderingTests/sensitiveInput'
   exit
 fi
 test_step 'renderer checksums' renderer_checksums
@@ -53,32 +44,19 @@ if [ "$mode" != --prebuilt ]; then
   fi
 fi
 [ "$mode" != --build ] || exit 0
-if [ "$mode" = --fast ] || [ "$mode" = --changed ]; then
+if [ "$mode" = --fast ]; then
   test_step 'core tests' test_run core --skip-build --filter BotChuCoreTests
 else
   test_step 'core tests' test_run core --skip-build --filter BotChuCoreTests --skip RunEvaluationTests
 fi
 [ "$mode" != --fast ] || exit 0
-windows=BotChuRenderingTests clicks=1 release=1
-if [ "$mode" = --changed ]; then
-  # Only what the change can reach (scripts/test-select.py); deploy still runs everything.
-  selection=$(python3 "$test_root/scripts/test-select.py" --explain --alone "$click_test")
-  windows=$(sed -n 1p <<< "$selection")
-  [ "$windows" != all ] || windows=BotChuRenderingTests
-  if grep -qx alone <<< "$selection"; then clicks=1; else clicks=0; fi
-  if grep -qx release <<< "$selection"; then release=1; else release=0; fi
-  echo "test: window tests: $windows; native clicks: $clicks; release tests: $release"
-  if [ "$release" = 1 ]; then test_step 'release test build' release_build; fi
-fi
-# Optimization is required to catch Swift 6.4's task-group regression.
-if [ "$release" = 1 ]; then
-  test_step 'release tests' test_run release --skip-build --configuration release --scratch-path "$release_scratch" --filter 'projectLoading|RunEvaluationTests|BotChuCoreTests.SensitiveInputTests/'
-fi
-[ "$windows" != none ] || [ "$clicks" = 1 ] || [ "$release" = 1 ] || exit 0
+# The Release Core subset: optimization is required to catch Swift 6.4's task-group regression
+# (#93208) and the secure input check that failed only in the optimized build (#314).
+test_step 'release tests' test_run release --skip-build --configuration release --scratch-path "$release_scratch" --filter 'projectLoading|RunEvaluationTests|BotChuCoreTests.SensitiveInputTests/'
 "$test_root/scripts/coord/install.sh"
 run_windows() {
   local gate=/tmp/botchu-coord/gate.sh id run result
-  id=$("$gate" start env BOTCHU_TEST_RESULTS="$BOTCHU_TEST_RESULTS" BOTCHU_TEST_REPORT_OWNER="$BOTCHU_TEST_REPORT_OWNER" BOTCHU_WINDOW_TESTS="$windows" BOTCHU_CLICK_TEST="$clicks" BOTCHU_RELEASE_SECRET="$release" "$dir/test.sh" --windows)
+  id=$("$gate" start env BOTCHU_TEST_RESULTS="$BOTCHU_TEST_RESULTS" BOTCHU_TEST_REPORT_OWNER="$BOTCHU_TEST_REPORT_OWNER" "$dir/test.sh" --windows)
   run="/tmp/botchu-coord/gate/runs/$id"
   echo "test: queued window tests as $id"
   while :; do

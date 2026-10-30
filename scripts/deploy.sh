@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Deploys BotChu on this Mac, in ~/Desktop/WORKSPACE/BotChu: tests it, installs it into ~/Applications
-# and smoke-tests it (README, Deploy). Reuse a full-suite pass for this tree unless --tests is given.
-# --skip-tests bypasses the suite explicitly. The install's smoke test always runs.
+# and smoke-tests it (README, Deploy). The full suite (scripts/test.sh: Core and its Release subset,
+# the kept window tests and every journey) runs unless this tree already passed it; --tests forces it
+# and --skip-tests bypasses it explicitly. The install's smoke test always runs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 test_mode=auto
@@ -30,13 +31,14 @@ trap 'rc=$?; echo "$(date -u +%FT%TZ) $(git rev-parse HEAD) $([ $rc -eq 0 ] && e
 # Restarting BotChu stops every turn under way: deploy only when the owner asks and no turns run.
 source scripts/test-passes.sh
 if [ "$test_mode" = --skip-tests ]; then
-  echo "deploy: skipping macOS/test.sh (--skip-tests)"
+  echo "deploy: skipping the full suite (--skip-tests)"
 elif [ "$test_mode" != --tests ] && test_tree_passed; then
-  echo "deploy: skipping macOS/test.sh: full suite already passed for tree $(git rev-parse 'HEAD^{tree}')"
+  echo "deploy: skipping the full suite: it already passed for tree $(git rev-parse 'HEAD^{tree}')"
 else
   echo "deploy: running full tests ($test_mode)"
   scripts/test.sh
 fi
-# The latency report reaches the Inbox before the install restarts BotChu; it never stops a deploy.
+# The latency report reaches the Inbox before the install restarts BotChu; it never stops a deploy. It
+# reports the journeys the full suite ran on this commit, running them itself when none did.
 scripts/deploy-report.sh || echo "deploy: no latency report (exit $?)"
 macOS/install.sh

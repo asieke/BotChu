@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Everything BotChu tests: shell syntax, the unit and rendering tests, and a build into a throwaway
-# folder (so it never touches an installed or running copy). Needs full Xcode. Run directly:
-# only the prebuilt window phase takes the shared test gate. --fast leaves out the window tests,
-# Release and the app build; --changed adds the window and Release tests the change can reach.
-# --journeys [names] builds the release app and runs the journeys harness on it, in the gate, then
-# prints the latency report (scripts/journeys-report.py) of the results it keeps for each run.
+# Everything BotChu tests (README.md, Test; docs/testing.md): shell syntax, the Core tests and their
+# Release subset, the kept window tests, and the journeys on a release build with their latency
+# report, building into throwaway folders so it never touches an installed or running copy. Needs
+# full Xcode. Run directly: only the window tests and the journeys take the shared test gate.
+# --fast leaves out Release, the window tests and the journeys; --journeys [names] runs only the
+# journeys. BOTCHU_JOURNEYS_RECORD=1 records the journeys' times as the new baseline.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 test_root=$PWD
@@ -20,15 +20,14 @@ journeys=
 case "${1:-}" in
   '') ;;
   --fast) tier=fast; shift ;;
-  --changed) tier=changed; shift ;;
   --journeys)
     tier=journeys; shift
     if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then journeys=$1; shift; fi ;;
-  *) echo "usage: scripts/test.sh [--fast|--changed|--journeys [names]]" >&2; exit 2 ;;
+  *) echo "usage: scripts/test.sh [--fast|--journeys [names]]" >&2; exit 2 ;;
 esac
-[ $# = 0 ] || { echo "usage: scripts/test.sh [--fast|--changed|--journeys [names]]" >&2; exit 2; }
+[ $# = 0 ] || { echo "usage: scripts/test.sh [--fast|--journeys [names]]" >&2; exit 2; }
 if [ "$tier" != fast ] && test_inside_gate; then
-  echo "test: run scripts/test.sh directly, not inside gate.sh; it gates its own window tests" >&2
+  echo "test: run scripts/test.sh directly, not inside gate.sh; it gates its own window tests and journeys" >&2
   exit 2
 fi
 test_begin "$tier"
@@ -38,13 +37,11 @@ trap 'result=$?; [ -z "$out" ] || rm -rf "$out"; test_end "$result"' EXIT
 # Fails fast when xcode-select points at the Command Line Tools instead of Xcode.app.
 test_step toolchain xcodebuild -version
 
-# The journeys (README.md, Test): a release app and the harness that drives it from outside, one
-# gated run, so no window test runs beside it. BOTCHU_JOURNEYS_RECORD=1 records a new baseline.
-if [ "$tier" = journeys ]; then
-  out=$(mktemp -d)
-  test_step 'app build' macOS/build.sh "$out"
+# The journeys (README.md, Test) on the release app in $out and the harness that drives it from
+# outside, one gated run, so no window test runs beside it; then the latency report of its results.
+test_journeys() {
   journeys_build() { swift build -c release --package-path macOS --scratch-path macOS/.build/app --product botchu-journeys 2>&1 | { grep -vE '^\[[0-9]+ ?/ ?[0-9]+\]' || true; }; }
-  test_step 'journeys build' journeys_build
+  test_step 'journeys build' journeys_build || return
   harness="$(swift build -c release --package-path macOS --scratch-path macOS/.build/app --show-bin-path)/botchu-journeys"
   commit=$(/usr/libexec/PlistBuddy -c 'Print :BotChuCommit' "$out/BotChu.app/Contents/Info.plist" 2>/dev/null || true)
   results="${BOTCHU_JOURNEYS_RUNS:-$HOME/Library/Caches/botchu-journeys/runs}/$(date -u +%Y%m%dT%H%M%SZ)-${commit:-unknown}.json"
@@ -66,6 +63,7 @@ if [ "$tier" = journeys ]; then
     fi
     return "$result"
   }
+  local result
   if test_step 'gated journeys' run_journeys; then result=0; else result=$?; fi
   [ "$result" != 0 ] || echo "test: ok (journeys)"
   if [ -f "$results" ]; then
@@ -74,7 +72,14 @@ if [ "$tier" = journeys ]; then
   else
     echo "test: the journeys left no results in $results"
   fi
-  exit "$result"
+  return "$result"
+}
+
+if [ "$tier" = journeys ]; then
+  out=$(mktemp -d)
+  test_step 'app build' macOS/build.sh "$out"
+  test_journeys
+  exit
 fi
 
 # Shell syntax for every script in the repository.
@@ -87,14 +92,20 @@ for f in macOS/build.sh macOS/install.sh macOS/test.sh; do
   [ -x "$f" ] || { echo "$f must exist and be executable" >&2; exit 1; }
 done
 
-if [ "$tier" != full ]; then
-  test_step "$tier macOS tests" macOS/test.sh "--$tier"
-  echo "test: ok ($tier)"
+if [ "$tier" = fast ]; then
+  test_step 'fast macOS tests' macOS/test.sh --fast
+  echo "test: ok (fast)"
   exit
 fi
 test_step 'test builds' macOS/test.sh --build
 out=$(mktemp -d)
 test_step 'app build' macOS/build.sh "$out"
 test_step 'macOS tests' macOS/test.sh --prebuilt
+if test_journeys; then result=0; else result=$?; fi
+if [ "$result" != 0 ]; then
+  echo "test: everything but the journeys passed. Run them again once the load is under 10" \
+    "(scripts/test.sh --journeys <names>); scripts/deploy.sh --skip-tests deploys and still reports their latency." >&2
+  exit "$result"
+fi
 test_record_pass
 echo "test: ok"
