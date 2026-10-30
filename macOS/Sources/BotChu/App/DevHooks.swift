@@ -74,6 +74,7 @@ import BotChuCore
 ///   of every kind of run (`sampleJobs`), and run no job, so nothing starts a CLI. `BOTCHU_OPEN=jobs`
 ///   opens Jobs, `job-editor` the editor for a new job, `job-edit` the editor for the job titled
 ///   `BOTCHU_JOB` (else the first), and `job-history` the first job's history.
+/// - `BOTCHU_TIMINGS`: append frame marks to this file for the journeys harness (`FrameTimings`).
 @MainActor
 enum DevHooks {
     static let env = ProcessInfo.processInfo.environment
@@ -362,6 +363,7 @@ enum DevHooks {
                 }
             }
         }
+        FrameTimings.watchSidebar()
         if dataDir != nil, env["BOTCHU_JOBS"] == "sample" { sampleJobs(model: model) }
         if dataDir != nil, env["BOTCHU_FILINGS"] == "sample", let bot = model.issueWriters.first { sampleFilings(model: model, bot: bot) }
         switch env["BOTCHU_OPEN"] {
@@ -727,6 +729,87 @@ enum DevHooks {
             view.cacheDisplay(in: view.bounds, to: rep)
             let name = window.title.isEmpty ? "window" : window.title.replacingOccurrences(of: "/", with: "-")
             try? composite(rep, root: view)?.write(to: dir.appendingPathComponent("\(n)-\(name).png"))
+        }
+    }
+}
+
+/// Frame marks for the journeys harness (#323, `FrameMarks`): with `BOTCHU_TIMINGS=<file>`, each
+/// named change is appended to that file with the time its frame was committed, taken after every
+/// other observer of the run loop pass that made the change, Core Animation's commit included.
+/// Without the variable nothing is recorded or observed.
+@MainActor enum FrameTimings {
+    private static let file: FileHandle? = {
+        guard let path = ProcessInfo.processInfo.environment[FrameMarks.environmentKey], !path.isEmpty else { return nil }
+        let descriptor = open(path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+        return descriptor < 0 ? nil : FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    }()
+    private static var pending: [String] = []
+    private static var observer: CFRunLoopObserver?
+    private static var sidebarWatch: [NSObjectProtocol] = []
+
+    static func mark(_ name: @autoclosure () -> String) {
+        guard file != nil else { return }
+        let name = name()
+        if !pending.contains(name) { pending.append(name) }
+        guard observer == nil else { return }
+        observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue | CFRunLoopActivity.exit.rawValue,
+                                                      true, CFIndex.max) { _, _ in
+            MainActor.assumeIsolated { flush() }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+    }
+
+    private static func flush() {
+        guard !pending.isEmpty, let file else { return }
+        let now = DispatchTime.now().uptimeNanoseconds
+        let lines = pending.map { FrameMarks.line($0, at: now) }.joined()
+        pending.removeAll()
+        try? file.write(contentsOf: Data(lines.utf8))
+    }
+
+    /// Marks the sidebar starting to hide or show, once the main window's split view is there: the
+    /// first resize of its subviews that narrows or widens the part of the sidebar in view.
+    static func watchSidebar(attempt: Int = 0) {
+        guard let file, sidebarWatch.isEmpty else { return }
+        func splitViews(in view: NSView) -> [NSSplitView] {
+            ((view as? NSSplitView).map { [$0] } ?? []) + view.subviews.flatMap(splitViews)
+        }
+        guard let window = NSApp.windows.first(where: { $0.styleMask.contains(.titled) && $0.contentView != nil }),
+              let split = splitViews(in: window.contentView!).first, let sidebar = split.arrangedSubviews.first else {
+            if attempt < 40 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { watchSidebar(attempt: attempt + 1) } }
+            return
+        }
+        let watch = SidebarWatch(split: split, sidebar: sidebar)
+        sidebarWatch = [NotificationCenter.default.addObserver(forName: NSSplitView.didResizeSubviewsNotification, object: split, queue: nil) { _ in
+            MainActor.assumeIsolated { watch.resized() }
+        }]
+        try? file.write(contentsOf: Data("# sidebar: \(type(of: split)), \(Int(watch.last)) pt in view\n".utf8))
+    }
+
+    /// How much of the sidebar was in view at its split view's last resize.
+    @MainActor private final class SidebarWatch {
+        let split: NSSplitView
+        let sidebar: NSView
+        var last: CGFloat
+        var shown: Bool
+
+        init(split: NSSplitView, sidebar: NSView) {
+            self.split = split
+            self.sidebar = sidebar
+            last = Self.inView(sidebar, of: split)
+            shown = last > 1
+        }
+
+        /// A collapsed sidebar keeps its frame, hidden.
+        static func inView(_ sidebar: NSView, of split: NSSplitView) -> CGFloat {
+            sidebar.isHidden || split.isSubviewCollapsed(sidebar) ? 0 : sidebar.frame.intersection(split.bounds).width
+        }
+
+        func resized() {
+            let width = Self.inView(sidebar, of: split)
+            defer { last = width }
+            if shown, width < last { shown = false; FrameTimings.mark(FrameMarks.sidebar(shown: false)) }
+            else if !shown, width > last { shown = true; FrameTimings.mark(FrameMarks.sidebar(shown: true)) }
         }
     }
 }

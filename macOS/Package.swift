@@ -11,6 +11,8 @@ let package = Package(
         .executableTarget(name: "botchu-smoke", dependencies: ["BotChuCore"]),
         // The Sail account's headless agent, shipped beside the app (`SailCommand`).
         .executableTarget(name: "botchu-sail", dependencies: ["BotChuCore"]),
+        // Drives a release build of the app from outside through its critical journeys (README.md, Test; #323).
+        .executableTarget(name: "botchu-journeys", dependencies: ["BotChuCore"]),
         .testTarget(name: "BotChuCoreTests", dependencies: ["BotChuCore"]),
         .testTarget(name: "BotChuRenderingTests", dependencies: ["BotChu"]),
     ],

@@ -1651,6 +1651,13 @@ on that pull request's branch to continue in instead). The same command run agai
     and model-supplied scripts, uses Mermaid's strict mode and disables trusted TeX commands.
   - `Sources/botchu-smoke/` — a command-line check, not shipped in the app, that runs two real
     turns on each account named the way the app does (see **Test**).
+  - `Sources/botchu-journeys/` — the journeys harness, not shipped in the app (see **Test**): the
+    fixture it writes through Core's store (`Fixture.swift`), the fake Claude Code CLI and the
+    stream it replays (`FakeClaude.swift`, `ClaudeStream.swift`), the copy of the app it launches
+    (`AppUnderTest.swift`), what it reads and presses through the Accessibility API (`AX.swift`) and
+    the journeys (`Journeys.swift`). The frame marks' format, the statistics and the baseline are in
+    Core (`Journeys.swift`, tested by `JourneyTests`); the app writes the marks (`FrameTimings` in
+    `App/DevHooks.swift`). The recorded baseline is `Journeys/baseline.json`.
   - `Sources/botchu-sail/` — the Sail account's headless agent, which `build.sh` signs and puts
     beside the app (`Contents/MacOS/botchu-sail`), where Settings' Sail account runs it. Its work
     is in Core: Sail's Responses API, request bodies and responses (`SailAPI.swift`, values as
@@ -1970,6 +1977,34 @@ file from other programs running as the same user.
   `BOTCHU_TEST_BASE=<commit>` compares against another base. Over the 30 pull requests before it,
   this chose every window test a pull request's source change made it edit but two (reached only
   through `send`), and an average of about two minutes of window tests instead of six.
+- Journeys (#323): `scripts/test.sh --journeys [names or numbers]` builds the release app into a
+  temporary folder and the `botchu-journeys` harness, then runs the journeys (all without names) in
+  one gated run. The harness is its own process, with no `@testable` import, and drives the build
+  from outside: it copies the app under its own bundle identifier (`local.BotChu.journeys`, so what
+  the copy keeps in its defaults, such as the status sidebar's visibility, never reaches the
+  installed app's), writes a fixture into a temporary `.noindex` folder (15 bots with 4 open tasks
+  each, a 5,000-message conversation, a group of 5,000 tool calls and 200 Inbox deliveries, every
+  bot on a Claude Code profile whose CLI replays a captured stream) and launches the copy on it in
+  the background (`BOTCHU_DATA_DIR`, `BOTCHU_PROFILE`, with Projects' catalog marked synced so it
+  doesn't ask GitHub). It acts and checks only through the Accessibility API, by identifier, AX
+  action and value, never moves the cursor, and fails a journey if BotChu takes keyboard focus.
+  With `BOTCHU_TIMINGS=<file>` the app appends `<uptime ns> <name>` for named changes (the window,
+  the sidebar's rows, the sidebar and status sidebar starting to hide or show, a bot's chat rows),
+  stamped after the run loop pass that committed their frame; without it, it writes nothing. Each
+  step is timed from just before the harness acts until that mark, then checked on screen,
+  repeated 6 times (`--repeats`), and prints its budget, baseline, median and p95; it fails when
+  its median is over budget or the screen doesn't show what it should. The journeys: 1 `launch`,
+  until the window, the sidebar and the first bot's latest messages show (Launch ≤ 1.5 s, the
+  median of 3 launches after an uncounted first one); 2 `sidebar`, closing and opening the sidebar
+  and the status sidebar (Instant ≤ 16 ms); 3 `switch-bot`, selecting other bots in the sidebar and
+  the one with the 5,000 messages (≤ 50 ms). A run also prints the load average, the refresh rate
+  of the display the window opened on, and an accessibility request's round trip. The harness
+  needs Accessibility for the app it runs in (System Settings ▸ Privacy & Security ▸ Accessibility;
+  Terminal, or BotChu for its bots); without it, it stops at once and names what to grant.
+  To rebaseline, run `BOTCHU_JOURNEYS_RECORD=1 scripts/test.sh --journeys`, which writes each
+  step's median with the commit, machine and load to `macOS/Journeys/baseline.json`, and commit it
+  in a pull request that says why. After a run, `macOS/.build/app/release/botchu-journeys dump --app
+  <BotChu.app>` prints the app's accessibility tree on the fixture, to write a journey against.
 - Each step prints elapsed time and the load average before and after. xUnit reports and logs stay
   in `macOS/.build/test-results/`; a run prints its 20 slowest tests and a failed run prints a command
   selecting only the failed tests with `--skip-build`. If an unrelated test fails, rerun only that
