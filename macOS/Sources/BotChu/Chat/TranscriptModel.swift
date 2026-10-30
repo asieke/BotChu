@@ -127,10 +127,13 @@ final class TranscriptModel {
     var lastWork: ActivityTranscript.Work { transcript.lastWork }
     /// How many times the cards' placement was worked out, for tests.
     var placementRebuilds: Int { placement.rebuilds }
+    /// How many times the chat asked for its items (each time its transcript was drawn), for tests.
+    @ObservationIgnored private(set) var evaluations = 0
 
     /// The conversation's items, updated for `messages`: only what changed since is looked at again.
     /// `epoch` is the conversation's (`ConversationState.epoch`).
     func items(for messages: [ChatMessage], root: String?, epoch: Int) -> ChunkedArray<ActivityItem> {
+        evaluations += 1
         _ = loaded
         if transcript.root != root {
             loading?.cancel()

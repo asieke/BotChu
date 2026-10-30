@@ -114,8 +114,9 @@ final class AppModel {
     var inbox: InboxModel!
     /// The Inbox's banners and Dock badge; their system only in BotChu.app.
     var notifier: InboxNotifier?
-    /// Each bot's tasks, open and closed, oldest first.
-    var tasks: [UUID: [BotTask]] = [:]
+    /// Each bot's tasks, open and closed, oldest first, each bot's observed on its own (`BotTasks`).
+    var tasks: BotTasks { BotTasks(model: self) }
+    @ObservationIgnored private(set) var taskLists: [UUID: BotTaskList] = [:]
     var storageMovePending = false
     var storageMoveProblem: String?
     /// Every conversation (each bot's Home, and each task), observed one by one: see
@@ -142,15 +143,13 @@ final class AppModel {
     /// The task tab shown for each bot; none shows its Home.
     var openTask: [UUID: UUID] = [:]
     /// Conversations whose turn ended while they weren't shown.
-    var unread: Set<ChatTarget> = []
-    /// What is typed in each conversation's message box and not sent yet.
-    var drafts: [ChatTarget: String] = [:]
-    /// The agents and projects chosen in each draft from `@` and `#` completion (`Mentions.swift`).
-    var draftReferences: [ChatTarget: [MessageReference]] = [:]
-    var draftImages: [ChatTarget: [ImageAttachment]] = [:]
-    /// Documents in a remote queue bot's draft (`addFiles`).
-    var draftFiles: [ChatTarget: [FileAttachment]] = [:]
-    var attachmentErrors: [ChatTarget: String] = [:]
+    var unread: ConversationFlag { ConversationFlag(model: self, flag: \.unread) }
+    /// Each conversation's draft (see `ConversationState`).
+    var drafts: ConversationField<String> { ConversationField(model: self, field: \.draft) }
+    var draftReferences: ConversationField<[MessageReference]> { ConversationField(model: self, field: \.draftReferences) }
+    var draftImages: ConversationField<[ImageAttachment]> { ConversationField(model: self, field: \.draftImages) }
+    var draftFiles: ConversationField<[FileAttachment]> { ConversationField(model: self, field: \.draftFiles) }
+    var attachmentErrors: ConversationField<String> { ConversationField(model: self, field: \.attachmentError) }
     /// How many notes each bot asked to remember that BotChu couldn't save yet (`MemoryWriter`).
     var unsavedMemory: [UUID: Int] = [:]
     /// What became of the notes each conversation asked to remember, for its next turn.
@@ -475,6 +474,14 @@ final class AppModel {
         return made
     }
 
+    /// The bot's tasks, made when first asked for.
+    func taskList(_ botID: UUID) -> BotTaskList {
+        if let existing = taskLists[botID] { return existing }
+        let made = BotTaskList()
+        taskLists[botID] = made
+        return made
+    }
+
     func thread(_ target: ChatTarget) -> [ChatMessage] { conversation(target).messages }
     /// Whether the conversation is the one in the window now.
     func isShown(_ target: ChatTarget) -> Bool { visibleBotID == target.botID && tab(of: target.botID) == target }
@@ -794,8 +801,8 @@ final class AppModel {
         remoteQueue?.reloadBot()
         sections[id] = nil
         tasks[id] = nil
-        // Its threads, turns, queues and reactions, and how its chats were shown; what waited for
-        // its history hears that it went, and a read under way finds it gone.
+        // Its threads, turns, queues, reactions, drafts and unread dots, and how its chats were
+        // shown; what waited for its history hears that it went, and a read under way finds it gone.
         for (target, conversation) in conversations where target.botID == id {
             historyBudget.remove(target)
             stopContext(target)
@@ -806,12 +813,6 @@ final class AppModel {
         conversations = conversations.filter { $0.key.botID != id }
         TranscriptCache.forget(bot: id)
         waiting = waiting.filter { $0.key.botID != id }
-        unread = unread.filter { $0.botID != id }
-        drafts = drafts.filter { $0.key.botID != id }
-        draftReferences = draftReferences.filter { $0.key.botID != id }
-        draftImages = draftImages.filter { $0.key.botID != id }
-        draftFiles = draftFiles.filter { $0.key.botID != id }
-        attachmentErrors = attachmentErrors.filter { $0.key.botID != id }
         openTask[id] = nil
         pets[id] = nil
         petJobs[id] = nil
@@ -927,11 +928,6 @@ final class AppModel {
                 for waiting in waited { waiting.cancel?() }
             }
             TranscriptCache.forget(target)
-            unread.remove(target)
-            drafts[target] = nil
-            draftReferences[target] = nil
-            draftImages[target] = nil
-            attachmentErrors[target] = nil
             // After the writes asked for in its conversation's lane and then its settings' lane.
             let folder = home.taskURL(id), taskLane = home.taskLane(id), storage = storage
             storage.submit(home.conversationLane(task: id), label: "remove", work: {
@@ -1242,8 +1238,8 @@ final class AppModel {
     /// `taskAlreadyWorking`, with the bot whose task it is.
     func taskWorking(on repo: String, hostID: UUID?, work: BotTask.Work?, review: BotTask.Review?, branch: String,
                      except id: UUID? = nil) -> (task: BotTask, botID: UUID)? {
-        for (botID, list) in tasks {
-            if let other = list.first(where: { $0.id != id && $0.alreadyWorks(on: repo, hostID: hostID, work: work, review: review, branch: branch) }) {
+        for (botID, list) in taskLists {
+            if let other = list.tasks.first(where: { $0.id != id && $0.alreadyWorks(on: repo, hostID: hostID, work: work, review: review, branch: branch) }) {
                 return (other, botID)
             }
         }

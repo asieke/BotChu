@@ -2,13 +2,14 @@ import Foundation
 import Observation
 import BotChuCore
 
-/// One conversation's live state: its thread, the turn under way, its pet's short reaction and its
-/// queue of follow-ups. Each conversation is observed on its own, so a turn streaming into one
-/// redraws only the views that read that conversation, never the one shown beside it.
+/// One conversation's live state: its thread, the turn under way, its pet's short reaction, its
+/// queue of follow-ups, its draft and whether it is unread. Each conversation is observed on its
+/// own, so a turn streaming into one redraws only the views that read that conversation, never the
+/// one shown beside it, and typing in one redraws only its composer.
 ///
-/// Views read it through `AppModel`: `thread(_:)`, `status(of:)`, `isRunning(_:)`, and
-/// `runStates`, `messageQueues` and `reactions`, which read like dictionaries by conversation.
-/// What a view reads of one conversation is all it observes.
+/// Views read it through `AppModel`: `thread(_:)`, `status(of:)`, `isRunning(_:)`, `unread`, and
+/// `runStates`, `messageQueues`, `reactions` and the drafts' fields, which read like dictionaries by
+/// conversation. What a view reads of one conversation is all it observes.
 @MainActor @Observable
 final class ConversationState {
     /// The thread, oldest first. It changes through `load`, `replace`, `append`, `stream` and
@@ -100,6 +101,16 @@ final class ConversationState {
     var run: RunState?
     var reaction: BotActivity?
     var queue: MessageQueue?
+    /// Its turn ended while it wasn't shown.
+    var unread = false
+    /// What is typed in its message box and not sent yet, the agents and projects chosen in it from
+    /// `@` and `#` completion (`Mentions.swift`), its images, a remote queue bot's documents
+    /// (`addFiles`), and why the last attachment wasn't added.
+    var draft: String?
+    var draftReferences: [MessageReference]?
+    var draftImages: [ImageAttachment]?
+    var draftFiles: [FileAttachment]?
+    var attachmentError: String?
     /// What the conversation is about, on the Activity tab (#320), and whether the one saved
     /// beside its transcript was read.
     var context: ConversationContext?
@@ -322,4 +333,42 @@ final class ConversationState {
             conversation[keyPath: field] = nil
         }
     }
+}
+
+/// One flag of every conversation, read and changed like the set of conversations it replaces
+/// (`model.unread.contains(target)`), while each conversation is observed on its own.
+@MainActor struct ConversationFlag {
+    let model: AppModel
+    let flag: ReferenceWritableKeyPath<ConversationState, Bool>
+
+    func contains(_ target: ChatTarget) -> Bool { model.conversation(target)[keyPath: flag] }
+    func insert(_ target: ChatTarget) { model.conversation(target)[keyPath: flag] = true }
+    /// Clearing it makes no conversation that isn't there.
+    func remove(_ target: ChatTarget) { model.conversations[target]?[keyPath: flag] = false }
+}
+
+/// One bot's tasks, observed apart from every other bot's.
+@MainActor @Observable
+final class BotTaskList {
+    var tasks: [BotTask] = []
+}
+
+/// Each bot's tasks, read and written like the dictionary by bot it replaces (`model.tasks[botID]`),
+/// while each bot's are observed on their own. Never nil: a bot without tasks has none, and nil
+/// empties its list.
+@MainActor struct BotTasks {
+    let model: AppModel
+
+    subscript(botID: UUID) -> [BotTask]? {
+        get { model.taskList(botID).tasks }
+        nonmutating set { model.taskList(botID).tasks = newValue ?? [] }
+    }
+
+    subscript(botID: UUID, default _: [BotTask]) -> [BotTask] {
+        get { model.taskList(botID).tasks }
+        nonmutating set { model.taskList(botID).tasks = newValue }
+    }
+
+    /// Every bot's. For the model's own work, not for views: it observes every bot's.
+    var values: [[BotTask]] { model.taskLists.values.map(\.tasks) }
 }
