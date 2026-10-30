@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- Sidebar bot rows: up to 8 task dots in a 2×4 grid (#359) (#369)
 - Journeys 4–13, the regression rule and the ratchet (#329) (#352)
 - Move the shared CLI turn loop into one Core TurnStream type (#345) (#351)
 - Fix main's build: pass input and timeout to Shell.execute (#350)
