@@ -28,9 +28,10 @@ A minimal, open-source, native macOS app for persistent AI bots, in the spirit o
   ```sh
   scripts/test.sh
   ```
-- Black-box UI journeys against `macOS/Journeys/baseline.json` (`BOTCHU_JOURNEYS_RECORD=1` records a new baseline):
+- Black-box UI journeys against `macOS/Journeys/baseline.json` (`BOTCHU_JOURNEYS_RECORD=1` records a new baseline), each run's results kept in `~/Library/Caches/botchu-journeys/runs/` (`BOTCHU_JOURNEYS_RUNS`), and the latency report of the newest run against the baseline and the last 3 on `main`:
   ```sh
   scripts/test.sh --journeys [names or numbers]
+  scripts/journeys-report.py [--results <file>] [--write <file>]
   ```
 - Isolated UI review on throwaway data:
   ```sh
@@ -45,7 +46,7 @@ A minimal, open-source, native macOS app for persistent AI bots, in the spirit o
 
 ## Deploy
 - Live checkout: `~/Desktop/WORKSPACE/BotChu` on `Alexs-MacBook-Pro-92440` (stays on `main`), installed to `~/Applications/BotChu.app`.
-- Fast-forward `~/Desktop/WORKSPACE/BotChu` to `origin/main`, reuse a recorded full-suite pass for that tree (or run `scripts/test.sh`), and install and smoke-test with `macOS/install.sh`:
+- Fast-forward `~/Desktop/WORKSPACE/BotChu` to `origin/main`, reuse a recorded full-suite pass for that tree (or run `scripts/test.sh`), send the commit's latency report to the Inbox with `scripts/deploy-report.sh` (running the journeys when it has no results), and install and smoke-test with `macOS/install.sh`:
   ```sh
   scripts/deploy.sh
   ```
