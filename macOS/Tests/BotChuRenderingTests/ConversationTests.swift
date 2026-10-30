@@ -183,6 +183,51 @@ extension RenderingTests {
         #expect(recovered.drafts[target]?.hasPrefix("first\n") == true)
     }
 
+    /// The message box observes its draft apart from the transcript (#340): typing, attaching and an
+    /// attachment's error redraw the composer, never the transcript above it. The draft starts with
+    /// an image and an error, so what changes after doesn't change the composer's height, which
+    /// would resize the transcript's visible part and lay it out again.
+    @Test func draftChangesRedrawTheComposerButNotTheTranscript() async throws {
+        _ = NSApplication.shared
+        let fixture = try ConversationFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app, target = fixture.taskTarget
+        app.show(target)
+        try await fixture.wait { app.conversation(target).isLoaded }
+        let image = try fixture.home.saveImage(Data([1, 2, 3]), name: "draft.png")
+        let second = try fixture.home.saveImage(Data([4, 5, 6]), name: "second.png")
+        app.draftImages[target] = [image]
+        app.attachmentErrors[target] = "Attach up to 8 images per message."
+        let transcript = TranscriptCache.model(for: target)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 850), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: ChatView(target: target).environment(app))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(300))
+        window.layoutIfNeeded()
+        let editor = try #require(window.firstResponder as? ComposerTextView)
+        let editorY = editor.convert(editor.bounds, to: nil).minY
+        let drawn = transcript.evaluations
+        #expect(drawn > 0)
+        app.drafts[target] = "Typed"
+        app.draftReferences[target] = []
+        app.draftImages[target] = [image, second]
+        app.attachmentErrors[target] = "Attach up to 8 files per message."
+        try await Task.sleep(for: .milliseconds(200))
+        window.layoutIfNeeded()
+        app.draftImages[target] = [image]
+        try await Task.sleep(for: .milliseconds(200))
+        window.layoutIfNeeded()
+        #expect(editor.string == "Typed")
+        #expect(editor.convert(editor.bounds, to: nil).minY == editorY)
+        #expect(transcript.evaluations == drawn, "The draft redrew the transcript")
+        app.append(ChatMessage(role: .assistant, text: "Done"), to: target)
+        try await Task.sleep(for: .milliseconds(200))
+        window.layoutIfNeeded()
+        #expect(transcript.evaluations > drawn, "A message redraws the transcript")
+    }
+
     @Test func stoppingBeforeImageDeliveryDoesNotLaunchTheCLI() async throws {
         let fixture = try ConversationFixture()
         defer { fixture.cleanUp() }

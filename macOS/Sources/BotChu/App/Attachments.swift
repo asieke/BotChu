@@ -38,7 +38,7 @@ extension AppModel {
         guard (draftImages[target]?.count ?? 0) < ImageAttachment.maximumCount else { throw ImageDelivery.Failure("Attach up to 8 images per message.") }
         let image = try ImagePaste.png(from: source)
         let saved = try BotHome(workspace: bot.persistencePath).saveImage(image.png, name: image.name)
-        draftImages[target, default: []].append(saved)
+        draftImages[target] = (draftImages[target] ?? []) + [saved]
     }
 }
 
@@ -80,7 +80,7 @@ extension AppModel {
     private func addFile(_ data: Data, name: String, type: String?, to target: ChatTarget) throws {
         guard let bot = bot(target.botID) else { return }
         guard (draftFiles[target]?.count ?? 0) < FileAttachment.maximumCount else { throw ImageDelivery.Failure("Attach up to 8 files per message.") }
-        draftFiles[target, default: []].append(try BotHome(workspace: bot.persistencePath).saveFile(data, name: name, type: type))
+        draftFiles[target] = (draftFiles[target] ?? []) + [try BotHome(workspace: bot.persistencePath).saveFile(data, name: name, type: type)]
     }
 }
 

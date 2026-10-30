@@ -50,20 +50,27 @@ extension RenderingTests {
         #expect(derivations.keys.allSatisfy { $0 == changed.botID })
         #expect(app.inbox.statusDerivations == regroupings + 1)
 
-        // The task catalog and unread set remain AppModel-wide observations. Record their fan-out
-        // separately from activity: this change deliberately doesn't reorganize those stores.
+        // Unread dots and task lists are observed by conversation and by bot, as activity is (#340).
         let inboxRows = bodies.count, inboxDerivations = derivations.values.reduce(0, +)
-        bodies.removeAll(); derivations.removeAll()
-        app.unread.insert(changed)
-        try await Task.sleep(for: .milliseconds(200))
-        window.layoutIfNeeded()
-        let unreadRows = bodies.count, unreadDerivations = derivations.values.reduce(0, +)
-        bodies.removeAll(); derivations.removeAll()
-        app.tasks[changed.botID]?[0].title = "Renamed task"
-        try await Task.sleep(for: .milliseconds(200))
-        window.layoutIfNeeded()
+        let other = fixture.bots[5].id
+        let changes: [(name: String, botID: UUID, change: () -> Void)] = [
+            ("unread", changed.botID, { app.unread.insert(changed) }),
+            ("task metadata", changed.botID, { app.tasks[changed.botID]?[0].title = "Renamed task" }),
+            ("new task", other, { app.tasks[other, default: []].append(BotTask(title: "New", repo: "fixture/repo", checkout: "/")) }),
+        ]
+        var counters: [String] = []
+        for (name, botID, change) in changes {
+            bodies.removeAll(); derivations.removeAll()
+            change()
+            try await Task.sleep(for: .milliseconds(200))
+            window.layoutIfNeeded()
+            #expect(bodies[botID, default: 0] > 0, "\(name) redraws its bot's row")
+            #expect(bodies.keys.allSatisfy { $0 == botID }, "\(name) leaves the other rows untouched: \(bodies)")
+            #expect(derivations.keys.allSatisfy { $0 == botID }, "\(name) leaves the other statuses untouched: \(derivations)")
+            counters.append("\(name) \(bodies.count)/\(derivations.values.reduce(0, +))")
+        }
         #expect(app.inbox.statusDerivations == regroupings + 1, "Metadata and unread changes never regroup the Inbox")
-        print("#271 sidebar counters (rows / summary derivations): activity \(activityRows)/\(activityDerivations), Inbox question \(inboxRows)/\(inboxDerivations), unread \(unreadRows)/\(unreadDerivations), task metadata \(bodies.count)/\(derivations.values.reduce(0, +))")
+        print("#271 sidebar counters (rows / summary derivations): activity \(activityRows)/\(activityDerivations), Inbox question \(inboxRows)/\(inboxDerivations), \(counters.joined(separator: ", "))")
     }
 
     @Test func sidebarSelectionKeepsDraftsUnreadAndKeyboardCyclingScoped() throws {
@@ -79,7 +86,8 @@ extension RenderingTests {
         // One row per bot (#128): the bot is selected whichever of its conversations shows.
         #expect(model.sidebarSelection == .bot(bot.id))
         model.selectSidebar(.library(.projects))
-        model.unread = [target, other, home]
+        for unread in [target, other, home] { model.unread.insert(unread) }
+        func unread() -> Set<ChatTarget> { Set([target, other, home].filter(model.unread.contains)) }
         #expect(model.sidebarSelection == .library(.projects))
         #expect(model.tab(of: bot.id) == target)
         #expect(model.visibleBotID == nil)
@@ -87,13 +95,13 @@ extension RenderingTests {
         model.selectSidebar(.bot(bot.id))
         #expect(model.sidebarSelection == .bot(bot.id))
         #expect(model.tab(of: bot.id) == target)
-        #expect(model.unread == [other, home])
+        #expect(unread() == [other, home])
         model.showTab(offset: 1, of: bot.id)
         #expect(model.tab(of: bot.id) == other)
-        #expect(model.unread == [home])
+        #expect(unread() == [home])
         model.showTab(offset: -2, of: bot.id)
         #expect(model.tab(of: bot.id) == home)
-        #expect(model.unread.isEmpty)
+        #expect(unread().isEmpty)
         model.showTab(offset: 1, of: bot.id)
         #expect(model.tab(of: bot.id) == target)
         #expect(model.drafts[home] == "Home draft")

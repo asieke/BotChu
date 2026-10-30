@@ -76,8 +76,8 @@ extension AppModel {
             jobs.tick()
             evaluator.pump()
             if !storageMovePending {
-                for (botID, items) in tasks {
-                    for task in items where summariesWanted.contains(task.id) {
+                for (botID, list) in taskLists {
+                    for task in list.tasks where summariesWanted.contains(task.id) {
                         summarizeIfReady(.task(task.id, of: botID))
                     }
                 }

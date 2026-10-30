@@ -12,9 +12,7 @@ struct ChatView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(ChatDensity.storageKey) private var density: ChatDensity = .detailed
-    @Environment(\.composerTakesFocus) private var composerTakesFocus
     let target: ChatTarget
-    @State private var composerFocused = false
     @State private var transcript: TranscriptModel
 
     init(target: ChatTarget) {
@@ -144,93 +142,17 @@ struct ChatView: View {
                         .help("Scroll to the newest messages and follow them")
                     }
                 }
-                VStack(spacing: 8) {
-                    if let unsaved = model.unsavedMemory[target.botID], unsaved > 0 {
-                        UnsavedMemory(count: unsaved) { model.retryMemory(for: target) }
-                    }
-                    if let queue = model.messageQueues[target], !queue.pending.isEmpty {
-                        QueuedMessages(queue: queue, running: running, preparing: model.runStates[target]?.preparing == true,
-                            midTurn: model.takesFollowUpsMidTurn(target), canInterrupt: model.canInterrupt(target),
-                            resume: { model.resumeQueuedMessages(to: target) },
-                            edit: { model.editQueuedMessage($0, in: target); composerFocused = true },
-                            remove: { model.removeQueuedMessage($0, from: target) },
-                            interrupt: { model.interruptAndSend(target) })
-                    }
-                    Composer(draft: Binding(get: { model.drafts[target] ?? "" }, set: { model.drafts[target] = $0 }),
-                         focused: $composerFocused,
-                         images: model.draftImages[target] ?? [],
-                         imageURL: { model.imageURL($0, for: target) },
-                         onRemoveImage: { id in model.draftImages[target]?.removeAll { $0.id == id } },
-                         onAddImages: { bot.isRemoteQueue ? model.addFiles($0, to: target) : model.addImages($0, to: target) },
-                         onPasteImages: { bot.isRemoteQueue ? model.pasteFiles($0, to: target) : model.pasteImages($0, to: target) },
-                         addsImages: !bot.isRemoteQueue,
-                         files: model.draftFiles[target] ?? [],
-                         fileURL: { model.fileURL($0, for: target) },
-                         onRemoveFile: { id in model.draftFiles[target]?.removeAll { $0.id == id } },
-                         addsFiles: bot.isRemoteQueue,
-                         attachmentError: model.attachmentErrors[target],
-                         references: Binding(get: { model.draftReferences[target] ?? [] },
-                                             set: { model.draftReferences[target] = $0.isEmpty ? nil : $0 }),
-                         mentions: bot.isRemoteQueue ? nil : model.mentionSources(for: target),
-                         placeholder: Self.placeholder(bot: bot, task: task),
-                         running: running, canStop: !bot.isRemoteQueue, midTurn: model.takesFollowUpsMidTurn(target), onSend: send, onStop: { model.stop(target) }) {
-                        if !bot.isRemoteQueue {
-                        ModelMenu(settings: current, disabled: running,
-                                  onModel: { model.setModel($0, for: target) },
-                                  onEffort: { model.setReasoningEffort($0, for: target) },
-                                  onFast: { model.setFastMode($0, for: target) }, onProvider: { model.setProvider($0, for: target) }, onSailCompletionWindow: { model.setSailCompletionWindow($0, for: target) })
-                            .layoutPriority(1)
-                            .id(target)
-                        Spacer(minLength: 0)
-                        ProviderLabel(current.account, size: 12)
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.tail)
-                            .help(task == nil ? "Current account. Change it in Edit Bot." : "This task's account. Change it in the status sidebar.")
-                        } else {
-                            Text("\(model.remoteQueue.presence) · \(model.remoteQueue.pending) waiting").font(.caption).foregroundStyle(.secondary)
-                            Spacer(minLength: 0)
-                        }
-                    }
-                }
-                .id(target)
-                .padding(.horizontal, 24)
-                .padding(.top, 10)
-                .padding(.bottom, 16)
-                .frame(maxWidth: Theme.chatWidth)
-                .frame(maxWidth: .infinity)
+                ChatComposer(target: target)
             }
             .environment(transcript)
             // Keep room for the model, effort and send controls when the columns are narrowed.
             .frame(minWidth: 300)
             // The tab beside the chat says which conversation it is (#128).
             .navigationTitle(bot.name)
-            // Not while the tabs beside the chat have keyboard focus, so ↑ and ↓ go on moving between them.
-            .onAppear { if composerTakesFocus { composerFocused = true } }
             // Opening the conversation again starts from its newest items.
             .onDisappear { transcript.windowStart = nil }
             // Notes left waiting by an earlier launch.
             .task(id: target.botID) { if !bot.isRemoteQueue { model.refreshUnsavedMemory(of: target.botID) } }
-        }
-    }
-
-    private func send() {
-        let draft = model.drafts[target] ?? ""
-        let images = model.draftImages[target] ?? []
-        let files = model.draftFiles[target] ?? []
-        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !files.isEmpty else { return }
-        let references = model.draftReferences[target] ?? []
-        let target = target, model = model
-        // The message shows queued at once; should the queue not save, it comes back to the draft.
-        if model.send(draft, to: target, images: images, files: files, references: references, accepted: { accepted in
-            if !accepted { model.returnToDraft(draft, references: references, images: images, files: files, in: target) }
-        }) {
-            model.drafts[target] = nil
-            model.draftReferences[target] = nil
-            model.draftImages[target] = nil
-            model.draftFiles[target] = nil
-            model.attachmentErrors[target] = nil
-            // Sending takes the reader to their message and what follows it, wherever they were.
-            transcript.follow(.sent)
         }
     }
 
@@ -269,6 +191,100 @@ struct ChatView: View {
         case .exploration(let group): group.isOpen
         case .tool(let tool): tool.state == .running
         case .message: false
+        }
+    }
+}
+
+/// The message box under the chat, with the notes not saved yet and the follow-ups waiting above
+/// it. It observes the conversation's draft on its own, so typing or attaching never redraws the
+/// transcript above it.
+struct ChatComposer: View {
+    @Environment(AppModel.self) private var model
+    @Environment(TranscriptModel.self) private var transcript
+    @Environment(\.composerTakesFocus) private var composerTakesFocus
+    let target: ChatTarget
+    @State private var composerFocused = false
+
+    var body: some View {
+        if let bot = model.bot(target.botID), let current = model.runSettings(of: target) {
+            let task = model.task(target)
+            let running = model.isRunning(target)
+            VStack(spacing: 8) {
+                if let unsaved = model.unsavedMemory[target.botID], unsaved > 0 {
+                    UnsavedMemory(count: unsaved) { model.retryMemory(for: target) }
+                }
+                if let queue = model.messageQueues[target], !queue.pending.isEmpty {
+                    QueuedMessages(queue: queue, running: running, preparing: model.runStates[target]?.preparing == true,
+                        midTurn: model.takesFollowUpsMidTurn(target), canInterrupt: model.canInterrupt(target),
+                        resume: { model.resumeQueuedMessages(to: target) },
+                        edit: { model.editQueuedMessage($0, in: target); composerFocused = true },
+                        remove: { model.removeQueuedMessage($0, from: target) },
+                        interrupt: { model.interruptAndSend(target) })
+                }
+                Composer(draft: Binding(get: { model.drafts[target] ?? "" }, set: { model.drafts[target] = $0 }),
+                     focused: $composerFocused,
+                     images: model.draftImages[target] ?? [],
+                     imageURL: { model.imageURL($0, for: target) },
+                     onRemoveImage: { id in model.draftImages[target]?.removeAll { $0.id == id } },
+                     onAddImages: { bot.isRemoteQueue ? model.addFiles($0, to: target) : model.addImages($0, to: target) },
+                     onPasteImages: { bot.isRemoteQueue ? model.pasteFiles($0, to: target) : model.pasteImages($0, to: target) },
+                     addsImages: !bot.isRemoteQueue,
+                     files: model.draftFiles[target] ?? [],
+                     fileURL: { model.fileURL($0, for: target) },
+                     onRemoveFile: { id in model.draftFiles[target]?.removeAll { $0.id == id } },
+                     addsFiles: bot.isRemoteQueue,
+                     attachmentError: model.attachmentErrors[target],
+                     references: Binding(get: { model.draftReferences[target] ?? [] },
+                                         set: { model.draftReferences[target] = $0.isEmpty ? nil : $0 }),
+                     mentions: bot.isRemoteQueue ? nil : model.mentionSources(for: target),
+                     placeholder: ChatView.placeholder(bot: bot, task: task),
+                     running: running, canStop: !bot.isRemoteQueue, midTurn: model.takesFollowUpsMidTurn(target), onSend: send, onStop: { model.stop(target) }) {
+                    if !bot.isRemoteQueue {
+                    ModelMenu(settings: current, disabled: running,
+                              onModel: { model.setModel($0, for: target) },
+                              onEffort: { model.setReasoningEffort($0, for: target) },
+                              onFast: { model.setFastMode($0, for: target) }, onProvider: { model.setProvider($0, for: target) }, onSailCompletionWindow: { model.setSailCompletionWindow($0, for: target) })
+                        .layoutPriority(1)
+                        .id(target)
+                    Spacer(minLength: 0)
+                    ProviderLabel(current.account, size: 12)
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                        .help(task == nil ? "Current account. Change it in Edit Bot." : "This task's account. Change it in the status sidebar.")
+                    } else {
+                        Text("\(model.remoteQueue.presence) · \(model.remoteQueue.pending) waiting").font(.caption).foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 10)
+            .padding(.bottom, 16)
+            .frame(maxWidth: Theme.chatWidth)
+            .frame(maxWidth: .infinity)
+            // Not while the tabs beside the chat have keyboard focus, so ↑ and ↓ go on moving between them.
+            .onAppear { if composerTakesFocus { composerFocused = true } }
+        }
+    }
+
+    private func send() {
+        let draft = model.drafts[target] ?? ""
+        let images = model.draftImages[target] ?? []
+        let files = model.draftFiles[target] ?? []
+        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !files.isEmpty else { return }
+        let references = model.draftReferences[target] ?? []
+        let target = target, model = model
+        // The message shows queued at once; should the queue not save, it comes back to the draft.
+        if model.send(draft, to: target, images: images, files: files, references: references, accepted: { accepted in
+            if !accepted { model.returnToDraft(draft, references: references, images: images, files: files, in: target) }
+        }) {
+            model.drafts[target] = nil
+            model.draftReferences[target] = nil
+            model.draftImages[target] = nil
+            model.draftFiles[target] = nil
+            model.attachmentErrors[target] = nil
+            // Sending takes the reader to their message and what follows it, wherever they were.
+            transcript.follow(.sent)
         }
     }
 }
