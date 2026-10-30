@@ -9,6 +9,10 @@ import Testing
         let transport = SubagentTransport(namespace: UUID(), invocationID: UUID(), localRoot: root)
         let endpoint = try await transport.prepare(script: "#!/bin/sh\nprintf ready", roster: Data("[]".utf8))
         let directory = URL(fileURLWithPath: endpoint.ipcDirectory)
+        // A local turn runs the app's helper, installed once beside the mailboxes, not copies of its own.
+        #expect(endpoint.binDirectory == SubagentIPC(root: root).binDirectory.path)
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("bin").path))
+        #expect(SubagentIPC().binDirectory == SubagentIPC.defaultBinDirectory)
         let id = UUID(), request = Data("{\"brief\":\"quoted ' and λ\"}".utf8)
         let filename = id.uuidString.lowercased() + ".json"
         try request.write(to: directory.appendingPathComponent("requests/" + filename), options: .atomic)
@@ -96,7 +100,11 @@ import Testing
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-env-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = SubagentTransport(namespace: UUID(), invocationID: UUID(), localRoot: root)
-        let endpoint = try await transport.prepare(script: "#!/bin/sh\nprintf '%s' \"$BOTCHU_INVOCATION_ID|$BOTCHU_IPC_DIR\"", roster: Data("[]".utf8))
+        let endpoint = try await transport.prepare(script: "", roster: Data("[]".utf8))
+        let helper = URL(fileURLWithPath: endpoint.binDirectory).appendingPathComponent("botchu-subagent")
+        try FileManager.default.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\nprintf '%s' \"$BOTCHU_INVOCATION_ID|$BOTCHU_IPC_DIR\"".write(to: helper, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
         let context = "literal ' \" $HOME $(printf injected)"
         let env = ["BOTCHU_INVOCATION_ID": context, "BOTCHU_IPC_DIR": endpoint.ipcDirectory,
                    "BOTCHU_BIN_DIR": endpoint.binDirectory, "OPENROUTER_API_KEY": "not-for-the-host", "BOTCHU_SECRET": "also-private"]

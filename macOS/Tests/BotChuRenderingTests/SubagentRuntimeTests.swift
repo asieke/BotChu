@@ -530,6 +530,53 @@ extension RenderingTests {
         #expect(restored.delegation.all.allSatisfy { !$0.phase.isActive })
     }
 
+    @Test func restartRedeliversALocalHandoffOnlyWhileItsCallerWaits() async throws {
+        let fixture = try SubagentFixture()
+        defer { fixture.cleanUp() }
+        let waiting = UUID(), ended = UUID(), answered = UUID(), old = UUID()
+        var mailboxes: [UUID: URL] = [:]
+        for invocation in [waiting, ended, answered, old] {
+            let transport = SubagentTransport(namespace: fixture.app.delegation.namespace, invocationID: invocation,
+                                             localRoot: fixture.app.delegation.root)
+            mailboxes[invocation] = URL(fileURLWithPath: try await transport.prepare(script: "", roster: Data("[]".utf8)).ipcDirectory)
+            if invocation == ended || invocation == old { try await transport.close() }
+        }
+        func record(_ title: String, _ phase: SubagentPhase, caller: UUID) throws -> (run: SubagentRun, result: URL) {
+            var run = SubagentRun(rootBotID: fixture.parent.id, rootTaskID: fixture.target.taskID, depth: 1, targetBot: fixture.worker,
+                                  title: title, brief: title, workingDirectory: fixture.folder.path, phase: phase)
+            run.callerInvocationID = caller
+            if !phase.isActive {
+                run.handoffOutput = title
+                run.finishedAt = .now
+            }
+            try fixture.home.saveSubagent(run)
+            return (run, mailboxes[caller]!.appendingPathComponent("results/\(run.id.uuidString.lowercased()).result.json"))
+        }
+        let open = try record("WAITING", .completed, caller: waiting)
+        let interrupted = try record("INTERRUPTED", .running, caller: waiting)
+        let closed = try record("ENDED", .completed, caller: ended)
+        let delivered = try record("DELIVERED", .completed, caller: answered)
+        try Data("EARLIER".utf8).write(to: delivered.result)
+        // A caller that ended more than a day ago: its mailbox is deleted, and nothing is written to it.
+        let stale = try record("STALE", .completed, caller: old)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 86_400)],
+                                              ofItemAtPath: mailboxes[old]!.appendingPathComponent("heartbeat.json").path)
+        let restored = AppModel(store: fixture.store, settings: fixture.settings)
+        defer { restored.stopAll() }
+        await restored.storage.settle()
+        try await fixture.wait {
+            FileManager.default.fileExists(atPath: open.result.path) && FileManager.default.fileExists(atPath: interrupted.result.path)
+        }
+        #expect(try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: open.result)).handoffOutput == "WAITING")
+        #expect(try SubagentIPC.decode(SubagentResult.self, from: Data(contentsOf: interrupted.result)).phase == .stopped)
+        #expect(!FileManager.default.fileExists(atPath: closed.result.path))
+        #expect(try Data(contentsOf: delivered.result) == Data("EARLIER".utf8))
+        #expect(!FileManager.default.fileExists(atPath: mailboxes[old]!.path))
+        #expect(restored.delegation.run(stale.run.id)?.phase == .completed)
+        #expect(restored.delegation.run(interrupted.run.id)?.phase == .stopped)
+        #expect(restored.delegation.error == nil)
+    }
+
     @Test func subagentFanoutReturnsNestedHandoffsToTheCallingTask() async throws {
         let fixture = try SubagentFixture()
         defer { fixture.cleanUp() }
