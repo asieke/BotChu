@@ -142,3 +142,98 @@ extension AppModel {
         }
     }
 }
+
+/// A conversation's context on the Activity tab (#320): two to four sentences on what it is about,
+/// asked for on the Quick tasks profile, never another account, as each turn ends and at most every
+/// two minutes while one runs (`ConversationContextRequests`), one at a time per conversation, and
+/// saved beside its transcript for the next launch. Without a Quick tasks profile nothing is asked,
+/// and the tab shows no card.
+extension AppModel {
+    /// The conversation's context to show; nil without a Quick tasks profile, or until there is one.
+    func context(of target: ChatTarget) -> ConversationContext? {
+        guard settings.quickTasks != nil else { return nil }
+        return conversation(target).context
+    }
+
+    /// Reads the context saved beside the conversation's transcript, once, so it shows at once after
+    /// a relaunch while the transcript is still the one it was made from. A newer one made meanwhile stays.
+    func readContext(_ target: ChatTarget) {
+        guard settings.quickTasks != nil, let bot = bot(target.botID), !bot.isRemoteQueue,
+              target.taskID == nil || task(target) != nil else { return }
+        let state = conversation(target)
+        guard !state.contextRead else { return }
+        state.contextRead = true
+        let home = BotHome(workspace: bot.persistencePath), taskID = target.taskID
+        storage.submit(home.conversationLane(task: taskID), label: "read context", work: { home.readContext(task: taskID) }) { [weak self] result in
+            guard let self, case .success(let saved?) = result, self.bot(target.botID) != nil,
+                  target.taskID == nil || self.task(target) != nil else { return }
+            let state = self.conversation(target)
+            if state.context.map({ $0.madeAt < saved.madeAt }) ?? true { state.context = saved }
+        }
+    }
+
+    /// Asks for the conversation's context when it is due: as a turn ends (`turnEnded`), or while one
+    /// runs, once it has run two minutes since it started and since the last ask. Nothing is asked
+    /// without a Quick tasks profile, for a remote queue bot or a closed task, or while BotChu moves
+    /// its storage or quits.
+    func refreshContext(_ target: ChatTarget, turnEnded: Bool, now: Date = Date()) {
+        guard !storageMovePending, !terminating, settings.quickTasks != nil, let bot = bot(target.botID), !bot.isRemoteQueue else { return }
+        if target.taskID != nil, task(target)?.isArchived != false { return }
+        let ticket: ConversationContextRequests<ChatTarget>.Ticket?
+        if turnEnded {
+            ticket = contextRequests.turnEnded(target, now: now)
+        } else if let started = runStates[target]?.startedAt {
+            ticket = contextRequests.tick(target, turnStarted: started, now: now)
+        } else {
+            ticket = nil
+        }
+        if let ticket { askForContext(ticket) }
+    }
+
+    /// Lets go of the conversation's context under way: its task closed, or it or its bot deleted.
+    func stopContext(_ target: ChatTarget) {
+        contextRequests.cancel(target)
+        contextRuns.removeValue(forKey: target)?.cancel()
+    }
+
+    /// Asks for the context from the conversation's latest messages in memory, with the stamp of
+    /// the saved transcript when it holds all of them, read in the conversation's lane after its saves.
+    private func askForContext(_ ticket: ConversationContextRequests<ChatTarget>.Ticket) {
+        let target = ticket.key
+        let state = conversation(target)
+        guard let quick = settings.quickTasks, let bot = bot(target.botID), state.isLoaded,
+              let job = ConversationContext.job(key: target.taskID?.uuidString ?? "home-\(target.botID.uuidString)",
+                                                messages: state.messages, task: task(target), botName: bot.name,
+                                                running: runStates[target] != nil, botID: target.botID, quick: quick) else {
+            endContext(ticket, with: nil)
+            return
+        }
+        let saved = state.isSaved, storage = storage
+        let home = BotHome(workspace: bot.persistencePath), taskID = target.taskID
+        let runner = summaryRunner ?? liveSummaryRunner(what: "conversation context")
+        contextRuns[target] = Task { [weak self] in
+            let stamp: FileStamp? = saved ? (try? await storage.perform(home.conversationLane(task: taskID), label: "context stamp") {
+                FileStamp.of(home.transcriptURL(task: taskID))
+            }) ?? nil : nil
+            let text = Task.isCancelled ? nil : await ConversationContext.run(job, with: runner)
+            self?.endContext(ticket, with: text.map { ConversationContext(text: $0, madeAt: Date(), stamp: stamp) })
+        }
+    }
+
+    /// Shows and saves a context that came, unless its conversation was let go meanwhile; a failure,
+    /// or a reply that isn't one, leaves the card as it was. Asks again when a turn ended meanwhile.
+    private func endContext(_ ticket: ConversationContextRequests<ChatTarget>.Ticket, with context: ConversationContext?) {
+        let target = ticket.key
+        let (keep, next) = contextRequests.finish(ticket, now: Date())
+        if !contextRequests.isAsking(target) { contextRuns[target] = nil }
+        if keep, let context, !terminating, let bot = bot(target.botID), target.taskID == nil || task(target) != nil {
+            conversation(target).context = context
+            // One made from words not saved yet is for this launch only: the saved one no longer matches either.
+            if context.stamp != nil {
+                let home = BotHome(workspace: bot.persistencePath), taskID = target.taskID
+                storage.submit(home.conversationLane(task: taskID), label: "context", work: { try home.writeContext(context, task: taskID) })
+            }
+        }
+        if let next { askForContext(next) }
+    }
+}

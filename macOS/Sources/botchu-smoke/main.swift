@@ -379,6 +379,24 @@ Task {
                 print("    title FAIL: \(reason) on \(model) in \(seconds)s")
                 failures.append(account.id)
             }
+            // The conversation's context (#320): the same messages, as the Activity tab's card asks.
+            let described = Date()
+            let contextJob = ConversationContext.job(key: task.id.uuidString, messages: messages, task: task, botName: "10x Engineer Bot",
+                                                     running: false, botID: UUID(), quick: quick)!
+            do {
+                let reply = try await EvaluationCLI.run(contextJob, command: account.defaultCommand, model: contextJob.model, log: nil,
+                                                        what: "conversation context")
+                let seconds = Int(Date().timeIntervalSince(described))
+                if let context = ConversationContext.parse(reply) {
+                    print("    context OK: “\(context)” (\(context.count) characters) on \(model) in \(seconds)s")
+                } else {
+                    print("    context FAIL: a reply that isn't two to four sentences on \(model) in \(seconds)s: \(reply.prefix(500))")
+                    failures.append(account.id)
+                }
+            } catch {
+                print("    context FAIL: \(error.localizedDescription) on \(model)")
+                failures.append(account.id)
+            }
             continue
         }
         let word = "ZEBRA\(Int.random(in: 100...999))"
