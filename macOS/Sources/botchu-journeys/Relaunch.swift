@@ -54,10 +54,19 @@ extension Journeys {
         return [result(13, "relaunch keeps the message and task", .launch, samples, problem: problem)]
     }
 
-    /// Whether the chat shows a text with these words.
-    private func chatShows(_ text: String) throws -> Bool {
-        try app.window().first(where: { element in
-            element.role == kAXStaticTextRole as String && (element.text.contains(text) || element.label.contains(text))
-        }) != nil
+    /// Whether the chat shows a text with these words, paging up through at most `pages` pages for
+    /// it (only the rows near the visible part are laid out, so a long reply after it hides it).
+    private func chatShows(_ text: String, pages: Int = 6) throws -> Bool {
+        for page in 0...pages {
+            if try app.window().first(where: { element in
+                element.role == kAXStaticTextRole as String && (element.text.contains(text) || element.label.contains(text))
+            }) != nil { return true }
+            guard page < pages, let area = try app.window().first(where: { $0.identifier.hasPrefix("chat-item-") })?.ancestor(role: kAXScrollAreaRole as String),
+                  let bar = area.children.first(where: { $0.role == kAXScrollBarRole as String }),
+                  let up = bar.children.first(where: { $0.subrole == "AXDecrementPage" }) else { return false }
+            _ = try press(up)
+            app.settle(quiet: 0.15, limit: 3)
+        }
+        return false
     }
 }
