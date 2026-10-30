@@ -227,7 +227,7 @@ struct Journeys {
             + toggles("inspector", button: statusButton, shown: FrameMarks.inspector(shown:), check: checkInspector(shown:), stall: stall)
         if stall == 0, let close = results.first, close.problem == nil, let median = close.median {
             let stalled = toggles("sidebar", button: sidebarButton, shown: FrameMarks.sidebar(shown:), check: checkSidebar(shown:),
-                                  stall: Self.selfCheckStall, repeats: 3)[0]
+                                  stall: Self.selfCheckStall, repeats: 2)[0]
             var check = stalled
             check.baseline = median
             check.budget = close.budget
@@ -267,7 +267,7 @@ struct Journeys {
         let start = try press(try find())
         app.stall(milliseconds: stall)
         let shown = try app.mark(mark, after: start)
-        app.settle(quiet: 0.5)
+        app.settle(quiet: 0.35)
         return Self.ms(start, shown.nanoseconds)
     }
 

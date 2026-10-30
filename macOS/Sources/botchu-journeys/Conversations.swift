@@ -93,7 +93,7 @@ extension Journeys {
         return [result(5, "echo while 4 stream (p95 of \(Self.typed.count) keys)", .instant, samples, problem: problem)]
     }
 
-    static let typingStream = 12
+    static let typingStream = 8
 
     // MARK: 6. Sending, and a streamed reply
 

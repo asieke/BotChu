@@ -5,12 +5,12 @@ import BotChuCore
 // in the background, through the Accessibility API, on a synthetic fixture with a fake Claude Code CLI.
 //   botchu-journeys --app <BotChu.app> [--journeys <names or numbers>] [--baseline <file>]
 //                   [--record <file>] [--repeats <n>] [--stall <ms>] [--keep]
-//   botchu-journeys dump --app <BotChu.app>     the app's accessibility tree on the fixture
+//   botchu-journeys dump --app <BotChu.app> [--bot <n>]   the app's accessibility tree on the fixture
 //   botchu-journeys fake-claude <arguments…>    the fixture's Claude Code CLI (FakeClaude)
 
 let usage = """
     usage: botchu-journeys --app <BotChu.app> [--journeys <names or numbers>] [--baseline <file>] [--record <file>] [--repeats <n>] [--stall <ms>] [--keep]
-           botchu-journeys dump --app <BotChu.app>
+           botchu-journeys dump --app <BotChu.app> [--bot <n>]
     """
 
 var arguments = Array(CommandLine.arguments.dropFirst())
@@ -24,7 +24,7 @@ var keep = false
 while let flag = arguments.first {
     arguments.removeFirst()
     if flag == "--keep" { keep = true; continue }
-    guard ["--app", "--journeys", "--baseline", "--record", "--repeats", "--stall"].contains(flag), let value = arguments.first else {
+    guard ["--app", "--journeys", "--baseline", "--record", "--repeats", "--stall", "--bot"].contains(flag), let value = arguments.first else {
         FileHandle.standardError.write(Data((usage + "\n").utf8))
         exit(2)
     }
@@ -114,8 +114,8 @@ if dumping {
         _ = try app.launch()
         _ = try app.mark(FrameMarks.chat(fixture.longBot.id), after: 0, timeout: 60)
         app.settle(quiet: 1)
-        // `--journeys <n>` with dump: the bot that journey shows first, by its place in the fixture.
-        if let index = options["--journeys"].flatMap(Int.init), fixture.bots.indices.contains(index) {
+        // `--bot <n>`: showing the fixture's bot at that place (0 is shown at launch).
+        if let index = options["--bot"].flatMap(Int.init), fixture.bots.indices.contains(index) {
             _ = try Journeys(app: app, fixture: fixture, baseline: nil, repeats: 1) { _ in }.select(fixture.bots[index])
             app.settle(quiet: 1)
         }

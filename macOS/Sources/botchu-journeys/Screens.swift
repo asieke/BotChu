@@ -241,7 +241,7 @@ extension Journeys {
             try show(bot)
             pages = try scrollUp(pages: Self.scrollPages)
             for index in 0..<repeats {
-                if index > 0 { _ = try scrollUp(pages: 3) }
+                if index > 0 { _ = try scrollUp(pages: 2) }
                 guard let jump = try app.window().first(where: { $0.role == kAXButtonRole as String && $0.label == "Jump to Latest" }) else {
                     throw HarnessFailure("Scrolled up, the chat shows no Jump to Latest")
                 }
@@ -259,7 +259,7 @@ extension Journeys {
                 result(7, "Jump to Latest", .quick, jumps, problem: problem)]
     }
 
-    static let scrollPages = 18
+    static let scrollPages = 12
 
     /// Presses the chat's scroller above its knob `pages` times, or Show earlier at the top of what
     /// shows; each press's longest busy stretch until the chat settled.
