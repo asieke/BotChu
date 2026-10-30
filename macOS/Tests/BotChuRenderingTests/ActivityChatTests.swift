@@ -220,6 +220,58 @@ extension RenderingTests {
         #expect(!TranscriptCache.contains(oldest))
     }
 
+    /// A reply's link to a file the bot wrote opens that file (#363), from the conversation's
+    /// folder: the bot's for Home, the task's worktree for a task. An app there is shown in Finder,
+    /// a file outside opens nothing, web and mail links open as before, and other schemes don't.
+    @Test func fileLinksInRepliesOpenFromTheConversationsFolder() async throws {
+        _ = NSApplication.shared
+        let fixture = try ActivityChatFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app
+        var opened: [URL] = [], revealed: [URL] = [], visited: [String] = []
+        app.openFile = { opened.append($0); return true }
+        app.revealFile = { revealed.append($0) }
+        let bot = try #require(app.bot(fixture.task.botID))
+        let worktree = fixture.root.appendingPathComponent("repo")
+        for folder in [URL(fileURLWithPath: bot.workspace), worktree] {
+            try FileManager.default.createDirectory(at: folder.appendingPathComponent("Tool.app/Contents"), withIntermediateDirectories: true)
+            try Data("<p>Rankings</p>".utf8).write(to: folder.appendingPathComponent("model-power-rankings-oct-2026.html"))
+        }
+        try Data("<p>Not this</p>".utf8).write(to: fixture.root.appendingPathComponent("outside.html"))
+        let reply = "Wrote [the rankings](model-power-rankings-oct-2026.html) and [the tool](Tool.app), not [that](../outside.html). "
+            + "See [the docs](https://example.com/docs), [mail](mailto:alex@example.com) or [run](shortcuts://run-shortcut?name=Wipe)."
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        for target in [ChatTarget.home(bot.id), fixture.task] {
+            app.conversation(target).replace([ChatMessage(role: .assistant, text: reply)])
+            app.show(target)
+            window.contentView = NSHostingView(rootView: ChatView(target: target).environment(app).environment(\.openURL, OpenURLAction { url in
+                visited.append(url.absoluteString)
+                return .handled
+            }))
+            window.makeKeyAndOrderFront(nil)
+            try await Task.sleep(for: .milliseconds(400))
+            window.contentView?.layoutSubtreeIfNeeded()
+            func surfaces(in view: NSView) -> [ReplyTextSurface] { ((view as? ReplyTextSurface).map { [$0] } ?? []) + view.subviews.flatMap(surfaces) }
+            let selection = try #require(surfaces(in: window.contentView!).lazy.compactMap(\.controller).first)
+            let links = selection.text.pieces.enumerated().flatMap { index, piece in piece.links.map { (piece: index, link: $0) } }
+            #expect(links.map(\.link.url.absoluteString) == ["model-power-rankings-oct-2026.html", "Tool.app", "../outside.html", "https://example.com/docs",
+                                                             "mailto:alex@example.com", "shortcuts://run-shortcut?name=Wipe"])
+            for (piece, link) in links {
+                let point = try #require(selection.point(at: ReplyPosition(piece: piece, offset: link.range.lowerBound + 1)))
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    window.sendEvent(try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                                     context: nil, eventNumber: 1, clickCount: 1, pressure: 1)))
+                }
+            }
+        }
+        let folders = [bot.workspace, worktree.path].map { ToolLocator.realPath($0)! }
+        #expect(opened == folders.map { URL(fileURLWithPath: $0 + "/model-power-rankings-oct-2026.html", isDirectory: false) })
+        #expect(revealed == folders.map { URL(fileURLWithPath: $0 + "/Tool.app", isDirectory: true) })
+        #expect(visited == ["https://example.com/docs", "mailto:alex@example.com", "https://example.com/docs", "mailto:alex@example.com"])
+    }
+
     /// The chat's scroll view: the widest one holding more than `minimum` points of content.
     static func chatScrollView(in view: NSView, minimum: CGFloat = 1_000) -> NSScrollView? {
         var best: NSScrollView?

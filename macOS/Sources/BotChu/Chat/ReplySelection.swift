@@ -40,6 +40,20 @@ extension EnvironmentValues {
     @Entry var inReplyChunk = false
     /// Where the texts drawn as they give their layouts keep them, for the surface behind them.
     @Entry fileprivate var replyPieces: ReplyPieces?
+    /// What a click on a link to a file does: in a conversation, opens it from the conversation's
+    /// folder; elsewhere, nothing (#363).
+    @Entry var openFileLink: FileLinkAction?
+}
+
+/// Opens the files a conversation's replies link to, from its folder (`FileLink`). Equal for the
+/// same folder, so the chat's rows aren't updated for a new one each time the chat is drawn.
+struct FileLinkAction: Equatable {
+    let root: String?
+    let model: AppModel
+
+    @MainActor func callAsFunction(_ link: URL) { model.openFileLink(link, root: root) }
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.root == rhs.root && lhs.model === rhs.model }
 }
 
 /// Whether the texts drawn here give their layouts as they are drawn.
@@ -153,6 +167,7 @@ private struct ReplySurface: NSViewRepresentable {
     func updateNSView(_ surface: ReplyTextSurface, context: Context) {
         surface.controller = context.environment.replySelection
         surface.openURL = context.environment.openURL
+        surface.openFileLink = context.environment.openFileLink
         surface.source = source
     }
 
@@ -356,6 +371,7 @@ final class ReplyTextSurface: NSView, NSMenuItemValidation {
         }
     }
     var openURL: OpenURLAction?
+    var openFileLink: FileLinkAction?
 
     /// Where its texts' layouts come from: read from SwiftUI all at once, or given by each text as
     /// it is drawn.
@@ -532,7 +548,12 @@ final class ReplyTextSurface: NSView, NSMenuItemValidation {
 
     override func mouseUp(with event: NSEvent) {
         guard let controller else { return super.mouseUp(with: event) }
-        if let url = controller.mouseUp(at: event.locationInWindow) { openURL?(url) }
+        guard let url = controller.mouseUp(at: event.locationInWindow) else { return }
+        switch ReplyLink(url) {
+        case .web: openURL?(url)
+        case .file: openFileLink?(url)
+        case .none: break
+        }
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
