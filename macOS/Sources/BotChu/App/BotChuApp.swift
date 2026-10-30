@@ -21,10 +21,10 @@ struct BotChuApp: App {
 /// The menu bar's commands. They read the settings and the model they show themselves: what the App
 /// reads draws its whole window again when it changes, and a setting it read did on every save to
 /// UserDefaults, such as a Projects column's width on each frame of the sidebar's slide (#188).
+/// The settings shown are read by their own items: the commands that read them were all made
+/// again, and the menu bar with them, at every UserDefaults write, whatever its key (#348).
 private struct BotChuCommands: Commands {
     let model: AppModel
-    @AppStorage("showsStatus") private var showsStatus = true
-    @AppStorage(ChatDensity.storageKey) private var chatDensity: ChatDensity = .detailed
 
     var body: some Commands {
         // Settings is a page of the window (#191), not a window of its own.
@@ -39,11 +39,8 @@ private struct BotChuCommands: Commands {
         CommandGroup(after: .sidebar) {
             Button("Show Inbox") { model.destination = .inbox }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
-            Button(showsStatus ? "Hide Status" : "Show Status") { showsStatus.toggle() }
-                .keyboardShortcut("i", modifiers: [.command, .option])
-            Picker("Chat Density", selection: $chatDensity) {
-                ForEach(ChatDensity.allCases) { Text($0.title).tag($0) }
-            }
+            StatusMenuButton()
+            ChatDensityMenuPicker()
             // The column of a bot's tabs beside its chat, or its rail (#128).
             ConversationColumnToggle(model: model)
         }
@@ -93,6 +90,25 @@ private struct BotChuCommands: Commands {
         CommandGroup(after: .help) {
             Button("Report a Bug or Feature…") { model.reportIssue() }
                 .disabled(!model.canReportIssue)
+        }
+    }
+}
+
+private struct StatusMenuButton: View {
+    @AppStorage("showsStatus") private var showsStatus = true
+
+    var body: some View {
+        Button(showsStatus ? "Hide Status" : "Show Status") { showsStatus.toggle() }
+            .keyboardShortcut("i", modifiers: [.command, .option])
+    }
+}
+
+private struct ChatDensityMenuPicker: View {
+    @AppStorage(ChatDensity.storageKey) private var chatDensity: ChatDensity = .detailed
+
+    var body: some View {
+        Picker("Chat Density", selection: $chatDensity) {
+            ForEach(ChatDensity.allCases) { Text($0.title).tag($0) }
         }
     }
 }

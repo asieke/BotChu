@@ -116,7 +116,9 @@ struct SidebarView: View {
     }
 
     private func row(_ bot: Bot) -> some View {
-        SidebarBotRow(bot: bot)
+        // Whether it is selected is said here, once for every row: a row that read the selection
+        // itself was drawn again, with its status and summary, whenever any bot was selected (#348).
+        SidebarBotRow(bot: bot, selected: model.visibleBotID == bot.id)
             .tag(SidebarDestination.bot(bot.id))
             .accessibilityIdentifier("sidebar-bot-\(bot.id)")
             .onAppear { FrameTimings.mark(FrameMarks.sidebarRow) }
@@ -146,11 +148,11 @@ struct SidebarView: View {
 private struct SidebarBotRow: View {
     @Environment(AppModel.self) private var model
     let bot: Bot
+    let selected: Bool
 
     var body: some View {
         let _ = SidebarStatusDiagnostics.didEvaluateRow?(bot.id)
-        BotRow(bot: bot, status: model.status(of: bot), summary: model.botRowSummary(of: bot),
-               selected: model.visibleBotID == bot.id)
+        BotRow(bot: bot, status: model.status(of: bot), summary: model.botRowSummary(of: bot), selected: selected)
     }
 }
 
