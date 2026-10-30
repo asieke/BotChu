@@ -123,7 +123,8 @@ public enum ToolSandbox {
     /// A CLI that runs its shell in a macOS sandbox of its own, which macOS won't start inside a
     /// turn's profile (`sandbox_apply: Operation not permitted`), so every shell command it ran
     /// would fail. Muse does (verified with Muse 1.4 on 2026-10-28); Claude Code, Codex and
-    /// Antigravity, as BotChu runs them, don't.
+    /// Antigravity, as BotChu runs them, don't: Codex's sandbox and Antigravity's terminal sandbox
+    /// are off for every turn (`CommandBuilder.invocation`).
     public struct SandboxedCLI: LocalizedError, Equatable {
         public let kind: AgentKind
         public var errorDescription: String? {

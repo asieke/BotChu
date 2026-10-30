@@ -219,7 +219,11 @@ public enum CommandBuilder {
             args += ["-c", "service_tier=\"\(fast ? "fast" : "default")\""]
             args.append(prompt)
         case .antigravity:
-            args = ["-p", prompt, "--output-format", "stream-json", "--dangerously-skip-permissions"]
+            // agy 1.4.10: --dangerously-skip-permissions approves tools, but commands still run in
+            // its terminal sandbox, which fails every one when a deny rule has a glob (#318). The
+            // session-only --settings turns that sandbox off, as Codex and Muse turn off theirs.
+            args = ["-p", prompt, "--output-format", "stream-json", "--dangerously-skip-permissions",
+                    "--settings", antigravitySessionSettings]
             if let sessionID { args += ["--conversation", sessionID] }
             if let model { args += ["--model", model] }
             if let effort { args += ["--effort", effort] }
@@ -255,6 +259,9 @@ public enum CommandBuilder {
         }
         return Invocation(arguments: args, environment: env, sessionID: session, input: input)
     }
+
+    /// What every Antigravity turn sets for itself only, never saved: no terminal sandbox (#318).
+    static let antigravitySessionSettings = #"{"enableTerminalSandbox":false}"#
 
     /// A prompt as an argument: one that starts with "-" would be read as an option.
     private static func argument(_ prompt: String) -> String {
