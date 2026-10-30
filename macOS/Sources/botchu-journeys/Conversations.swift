@@ -195,13 +195,19 @@ extension Journeys {
             if let listProblem { throw HarnessFailure(listProblem) }
             guard let run = try row() else { throw HarnessFailure("The status sidebar's Sub-agents doesn't show the sub-agent running") }
             try run.press()
-            let header = try waitFor("The sub-agent's Transcript") {
-                try app.window().first { element in
-                    element.role == kAXButtonRole as String && (element.label + element.title).lowercased().hasPrefix("transcript")
-                }
+            let header: AXElement
+            do {
+                header = try waitFor("The sub-agent's Transcript") { try transcriptHeader() }
+            } catch {
+                // What the details show instead, for whoever reads the log.
+                var lines: [String] = [], top = try app.window().first(identifier: "subagents-inspector")
+                for _ in 0..<4 { top = top?.parent ?? top }
+                top?.dump(maxDepth: 9, into: &lines)
+                print("journeys: the Sub-agents tab shows:\n" + lines.prefix(200).joined(separator: "\n"))
+                throw error
             }
-            print("journeys: the sub-agent's Transcript says \"\(header.label + header.title)\", \(header.text)")
-            guard header.text == "Expanded" else { throw HarnessFailure("The sub-agent's Transcript is \"\(header.text)\", not open, while it runs") }
+            print("journeys: the sub-agent's Transcript: \(header)")
+            guard Self.isExpanded(header) else { throw HarnessFailure("The sub-agent's Transcript (\(header)) isn't open while it runs") }
             app.settle(quiet: 0.2, limit: 2)
             let composer = try composer()
             let typing = AppUnderTest.now
@@ -228,6 +234,24 @@ extension Journeys {
         return [result(12, "echo while a sub-agent streams (p95 of \(Self.typed.count) keys)", .instant, list, problem: listProblem),
                 result(12, "echo with its Transcript open on \(Self.subagentTools)+ items (p95 of \(Self.typed.count) keys)", .instant,
                        transcript, problem: transcriptProblem)]
+    }
+
+    /// The run's Transcript heading, which says whether it's open: the element its title names,
+    /// or the one around its title's text (a disclosure's heading needn't be a button).
+    private func transcriptHeader() throws -> AXElement? {
+        let title = try app.window().first { element in
+            [element.label, element.title, element.text].contains { $0.lowercased().hasPrefix("transcript") }
+        }
+        guard let title else { return nil }
+        if title.role != kAXStaticTextRole as String { return title }
+        return title.ancestor { $0.role != kAXStaticTextRole as String && $0.role != kAXGroupRole as String } ?? title
+    }
+
+    /// Whether a disclosure's heading says it's open: in its value, as a word or a number, or as expanded.
+    static func isExpanded(_ element: AXElement) -> Bool {
+        let value = element.value(kAXValueAttribute)
+        return (value as? String) == "Expanded" || (value as? NSNumber)?.boolValue == true
+            || (element.value(kAXExpandedAttribute) as? Bool) == true
     }
 
     /// The sub-agent wrote while the owner typed, and still shows running.
