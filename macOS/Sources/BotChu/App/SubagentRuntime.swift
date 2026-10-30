@@ -812,41 +812,22 @@ final class SubagentRuntime {
             let runner = machine.isRemote
                 ? AgentRun(command: command, invocation: invocation, on: machine, folder: record.workingDirectory)
                 : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: record.workingDirectory))
-            var assembler = ThreadAssembler()
-            var finished = false
-            var failure: String?
+            var stream = TurnStream(account: account, invocation: invocation, usage: usageCaptures[id]?.capture)
             var persistenceFailure: String?
             // Parsed off the main thread, in batches; the transcript is checkpointed off it too.
-            runner.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak runner] events in
+            runner.deliverEvents(parsedBy: stream.parser()) { [weak self, weak runner] events in
                 guard let self, let runner, self.runners[id] === runner, self.run(id)?.phase.isActive == true else { return }
                 let live = self.live(id)
                 var state = live.state
-                state?.hasOutput = true
-                guard !events.isEmpty else {
-                    if state != live.state { live.state = state }
-                    return
-                }
-                var sessions: [String] = []
-                var reported: String?
-                live.update { messages in
-                    for event in events {
-                        self.usageCaptures[id]?.capture.record(event)
-                        switch event {
-                        case .session(let session):
-                            sessions.append(CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: session))
-                        case .model(let id): reported = id
-                        case .finished: finished = true
-                        case .failed(let reason): failure = reason
-                        default: break
-                        }
-                        if let activity = BotActivity.next(after: event) { _ = state?.move(to: activity) }
-                        state?.settle()
-                        assembler.apply(event, to: &messages)
-                    }
-                }
+                let batch = stream.apply(events, state: &state, in: live.update)
                 if state != live.state { live.state = state }
-                for session in sessions { self.modify(id) { $0.sessionID = session; $0.sessionAccountID = account.id; $0.sessionScope = record.executionScope } }
-                if let reported, self.run(id)?.resolvedModel != reported {
+                guard let batch else { return }
+                batch.settle { [weak self, weak runner] in
+                    guard let self, let runner, self.runners[id] === runner else { return }
+                    self.live(id).state?.settle()
+                }
+                for session in batch.sessions { self.modify(id) { $0.sessionID = session; $0.sessionAccountID = account.id; $0.sessionScope = record.executionScope } }
+                if let reported = batch.reportedModel, self.run(id)?.resolvedModel != reported {
                     self.modify(id) { $0.recordReportedModel(reported, requested: $0.model) }
                 }
                 guard let record = self.run(id) else { return }
@@ -870,16 +851,13 @@ final class SubagentRuntime {
                 guard self.run(id)?.phase.isActive == true else { return }
                 let live = self.live(id)
                 live.update { messages in
-                    assembler.apply(.textEnd, to: &messages)
-                    ThreadAssembler.closeRunningTools(&messages)
-                    if runner.lingered {
-                        messages.append(ChatMessage(role: .note, text: "\(account.name) didn't exit after its reply, so BotChu ended it."))
-                    }
+                    stream.close(&messages)
+                    if runner.lingered { messages.append(stream.lingerNote) }
                 }
                 let reply = live.messages.last(where: { $0.role == .assistant })?.text ?? live.lastReply ?? ""
                 // A CLI that BotChu ended for staying on after its turn (#145) exits by a signal; its handoff stands.
-                let reason = persistenceFailure ?? failure ?? ((status != 0 && !runner.lingered || !finished || reply.isEmpty)
-                    ? "\(account.name) ended without a successful handoff (exit \(status)). \(AppModel.lastLines(stderr))" : nil)
+                let reason = persistenceFailure ?? stream.outcome.failure ?? ((status != 0 && !runner.lingered || !stream.outcome.ended || reply.isEmpty)
+                    ? "\(account.name) ended without a successful handoff (exit \(status)). \(TurnStream.lastLines(stderr))" : nil)
                 self.finish(id, phase: persistenceFailure != nil ? .failed : runner.stopped ? .stopped : reason == nil ? .completed : .failed, error: reason)
             }
             replace(record)

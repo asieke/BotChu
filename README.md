@@ -1521,7 +1521,9 @@ on that pull request's branch to continue in instead). The same command run agai
     and making one (`Skills.swift`), the tool catalog, policy and SSH destinations, where tools are, skills' detected or declared
     tools and what sessions are told (`Tools.swift`), the profile that blocks tools in a turn (`ToolSandbox.swift`) and
     tools' bounded version and sign-in checks (`ToolProbe.swift`), one stream parser per
-    CLI turning its JSON lines into chat events (`StreamParsers.swift`), what a tool call does and how
+    CLI turning its JSON lines into chat events (`StreamParsers.swift`), how a chat turn's, a sub-agent's
+    or a job's run applies those events to its conversation and run state, and the note it ends with
+    (`TurnStream.swift`), what a tool call does and how
     the chat names it: read-only or not, files, folders, line ranges, diffs, failures and delegations
     (`ToolActivity.swift`, reading shell command lines with `ShellCommand.swift`), the chat's activity
     items, with exploration folded into groups whose summaries are kept as calls join and leave them,

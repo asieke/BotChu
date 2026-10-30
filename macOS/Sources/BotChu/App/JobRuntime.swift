@@ -393,42 +393,22 @@ final class JobRuntime {
         let startedAt = launch.run.startedAt ?? Date()
         let command = model.settings.command(for: account)
         let runner = AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: bot.workspace, isDirectory: true))
-        var assembler = ThreadAssembler()
-        var outcome = TurnOutcome()
+        var stream = TurnStream(account: account, invocation: invocation, usage: usageCaptures[runID]?.capture)
         var lastSave = Date()
         let home = BotHome(workspace: bot.persistencePath)
         let what = "job “\(job.title)” run"
 
-        runner.deliverEvents(parsedBy: StreamParsers.make(for: account.kind)) { [weak self, weak runner] events in
+        runner.deliverEvents(parsedBy: stream.parser()) { [weak self, weak runner] events in
             guard let self, let runner, self.runners[runID] === runner, let model = self.model else { return }
             var state = conversation.run
-            if state?.hasOutput == false { state?.hasOutput = true }
-            var session: String?
-            var reported: String?
-            var settles: [TimeInterval] = []
-            conversation.stream { messages in
-                for event in events {
-                    outcome.record(event)
-                    self.usageCaptures[runID]?.capture.record(event)
-                    switch event {
-                    case .session(let id): session = CommandBuilder.resumeID(kind: account.kind, invocation: invocation, reported: id)
-                    case .model(let id): reported = id
-                    default: break
-                    }
-                    if let activity = BotActivity.next(after: event), activity != state?.activity || state?.pending != nil,
-                       let wait = state?.move(to: activity) {
-                        settles.append(wait)
-                    }
-                    assembler.apply(event, to: &messages)
-                }
-            }
+            let batch = stream.apply(events, state: &state, in: conversation.stream)
             if state != conversation.run { conversation.run = state }
-            for wait in settles {
-                DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self, weak runner] in
-                    guard let runner, self?.runners[runID] === runner else { return }
-                    conversation.run?.settle()
-                }
+            guard let batch else { return }
+            batch.settle { [weak self, weak runner] in
+                guard let runner, self?.runners[runID] === runner else { return }
+                conversation.run?.settle()
             }
+            let session = batch.sessions.last, reported = batch.reportedModel
             if session != nil || reported != nil {
                 self.engine.amend(runID) { run in
                     if let session { run.sessionID = session }
@@ -450,15 +430,12 @@ final class JobRuntime {
             self.runners[runID] = nil
             // Quitting: the next launch records it interrupted.
             guard !self.quitting else { return }
-            conversation.stream { messages in
-                assembler.apply(.textEnd, to: &messages)
-                ThreadAssembler.closeRunningTools(&messages)
-            }
+            conversation.stream { stream.close(&$0) }
             let messages = conversation.messages
             let timedOut = self.timedOut.remove(runID) != nil
             let result = JobResult.classify(reply: messages.last(where: { $0.role == .assistant })?.text,
-                                            failure: outcome.ended ? outcome.failure : nil, status: status,
-                                            finished: outcome.ended && outcome.failure == nil, stopped: runner.stopped,
+                                            failure: stream.outcome.ended ? stream.outcome.failure : nil, status: status,
+                                            finished: stream.outcome.ended && stream.outcome.failure == nil, stopped: runner.stopped,
                                             timedOut: timedOut, timeLimit: job.timeLimit, accountName: account.name, stderr: stderr)
             if result.outcome == .stopped { conversation.append(.stopNote(byOwner: true)) }
             self.model?.log(TurnLog.ended(at: Date(), startedAt: startedAt, status: status, stopped: runner.stopped,
