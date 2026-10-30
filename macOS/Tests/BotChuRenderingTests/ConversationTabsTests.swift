@@ -404,6 +404,65 @@ extension RenderingTests {
         }
     }
 
+    /// #359: a bot row's dots, up to eight, are a grid of two rows of four at its end, the first row
+    /// filled first; past eight, +N follows the grid, centred on it. With any number of dots the row
+    /// is as tall as without, and its name and subtitle stay where they are.
+    @Test func botRowDotsAreTwoRowsOfFourAndKeepTheRowsHeight() async throws {
+        _ = NSApplication.shared
+        let fixture = try TabsFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model, bot = fixture.quiet
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        func draw<Content: View>(_ view: Content) async throws -> (size: CGSize, drawing: Drawing) {
+            let host = NSHostingView(rootView: view.environment(model))
+            window.contentView = host
+            window.setContentSize(host.fittingSize)
+            window.orderFront(nil)
+            try await settle(window)
+            return (host.fittingSize, try Drawing(of: host))
+        }
+        let working = TabState.working(.coding, since: Date())
+        func summary(_ count: Int) -> BotRowSummary {
+            BotRowSummary(runsOn: "Codex Dev · default", home: .idle(since: nil), tasks: Array(repeating: working, count: count))
+        }
+        func ink(_ drawing: Drawing, in rect: CGRect) -> CGRect? { drawing.bounds(in: rect) { $0.alphaComponent > 0.5 } }
+        // The dots alone: 6 points each, 4 apart, in up to four columns and two rows.
+        let inset: CGFloat = 4, grid = CGRect(x: 0, y: 0, width: inset + 37, height: 30)
+        func span(_ dots: Int) -> CGFloat { CGFloat(dots * 10 - 4) }
+        for count in [1, 4, 5, 8, 9, 20] {
+            let shown = min(count, 8), columns = min(shown, 4), rows = shown > 4 ? 2 : 1
+            let (size, drawing) = try await draw(BotRowDots(summary: summary(count)).padding(inset))
+            let dots = try #require(ink(drawing, in: grid), "\(count) dots")
+            #expect(abs(dots.minX - inset) < 0.75 && abs(dots.width - span(columns)) < 1 && abs(dots.height - span(rows)) < 1,
+                    "\(count) dots: \(dots), \(columns) columns and \(rows) rows")
+            if rows == 2 {
+                // The second row starts under the first dot.
+                let second = try #require(ink(drawing, in: CGRect(x: 0, y: dots.maxY - 6, width: grid.width, height: 6)), "\(count) dots")
+                #expect(abs(second.minX - dots.minX) < 0.75 && abs(second.width - span(shown - 4)) < 1, "\(count) dots: the second row \(second)")
+            }
+            // +N is in the secondary label colour, half transparent.
+            let more = drawing.bounds(in: CGRect(x: grid.maxX + 1, y: 0, width: size.width, height: size.height)) { $0.alphaComponent > 0.2 }
+            #expect((more != nil) == (count > 8), "\(count) dots: +N \(String(describing: more))")
+            if let more { #expect(abs(more.midY - dots.midY) < 1.5, "\(count) dots: +N \(more), the grid \(dots)") }
+        }
+        // The row: as tall with dots as without, centred on it, its name and subtitle drawn as they were.
+        let width: CGFloat = 260, text = CGRect(x: 0, y: 0, width: 160, height: 60)
+        func row(_ count: Int) async throws -> (size: CGSize, drawing: Drawing) {
+            try await draw(BotRow(bot: bot, status: model.status(of: bot), summary: summary(count), selected: false).frame(width: width))
+        }
+        let (plain, bare) = try await row(0)
+        #expect(ink(bare, in: CGRect(x: text.maxX, y: 0, width: width - text.maxX, height: plain.height)) == nil)
+        for count in [1, 4, 5, 8, 9, 20] {
+            let (size, drawing) = try await row(count)
+            #expect(size.height == plain.height, "\(count) dots: the row is \(size.height) points tall, \(plain.height) without")
+            let dots = try #require(ink(drawing, in: CGRect(x: text.maxX, y: 0, width: width - text.maxX, height: size.height)), "\(count) dots")
+            #expect(abs(dots.midY - size.height / 2) < 1, "\(count) dots: \(dots) in a row \(size.height) tall")
+            #expect(drawing.matches(bare, in: text), "\(count) dots: the name and subtitle moved")
+        }
+    }
+
     /// #218: a conversation waits on the owner while a Needs input delivery it sent isn't answered
     /// or Done, whatever else it does, and reading it doesn't change that; the owner's Stop shows
     /// until the next turn, also once looked at; and both come back after a relaunch.
@@ -1055,17 +1114,41 @@ private struct HoveredRow: View {
         rep.colorAt(x: Int(x * scale), y: Int(y * scale))?.usingColorSpace(.sRGB)
     }
 
+    /// The pixels of `rect` that are in the drawing, as rows and columns.
+    private func pixels(in rect: CGRect) -> (rows: Range<Int>, columns: Range<Int>) {
+        let top = max(0, Int(rect.minY * scale)), left = max(0, Int(rect.minX * scale))
+        return (top..<max(top, min(rep.pixelsHigh, Int((rect.maxY * scale).rounded(.up)))),
+                left..<max(left, min(rep.pixelsWide, Int((rect.maxX * scale).rounded(.up)))))
+    }
+
     /// The smallest rectangle holding every pixel of `rect` whose colour matches, if any does.
     func bounds(in rect: CGRect, where match: (NSColor) -> Bool) -> CGRect? {
         var found: CGRect?
-        for y in max(0, Int(rect.minY * scale))..<min(rep.pixelsHigh, Int((rect.maxY * scale).rounded(.up))) {
-            for x in max(0, Int(rect.minX * scale))..<min(rep.pixelsWide, Int((rect.maxX * scale).rounded(.up))) {
+        let (rows, columns) = pixels(in: rect)
+        for y in rows {
+            for x in columns {
                 guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), match(color) else { continue }
                 let pixel = CGRect(x: CGFloat(x) / scale, y: CGFloat(y) / scale, width: 1 / scale, height: 1 / scale)
                 found = found.map { $0.union(pixel) } ?? pixel
             }
         }
         return found
+    }
+
+    /// Whether `other`, of the same size, draws the same as this in `rect`, within antialiasing.
+    func matches(_ other: Drawing, in rect: CGRect) -> Bool {
+        guard rep.pixelsWide == other.rep.pixelsWide, rep.pixelsHigh == other.rep.pixelsHigh else { return false }
+        let (rows, columns) = pixels(in: rect)
+        for y in rows {
+            for x in columns {
+                guard let a = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                      let b = other.rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+                let apart = [a.redComponent - b.redComponent, a.greenComponent - b.greenComponent,
+                             a.blueComponent - b.blueComponent, a.alphaComponent - b.alphaComponent]
+                if apart.contains(where: { abs($0) > 0.02 }) { return false }
+            }
+        }
+        return true
     }
 
     /// The colours of the pixels whose middles are `distances` points from `centre`.

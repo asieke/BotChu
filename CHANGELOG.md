@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- Sidebar bot rows: up to 8 task dots in a 2×4 grid (#359) (#369)
 - Sub-agent Transcript follows its last 12 items and skips Sail progress rows (#361) (#377)
 - Latency report after each journeys run; every deploy sends it to the Inbox (#362) (#370)
 - Antigravity tool and run errors carry agy's message, and non-zero shell exits are recorded as failed (#367) (#374)
