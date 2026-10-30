@@ -46,10 +46,8 @@ final class SubagentRuntime {
     @ObservationIgnored private var requestCounts: [ChatTarget: Int] = [:]
     /// Runs whose end is being saved: still active until it is, so their caller waits for them.
     @ObservationIgnored private var finalizing: Set<UUID> = []
-    /// Runs found unfinished after a relaunch, which are closed (once their transcript is read, off
-    /// the main thread) and aren't reviewed, and those whose transcript is still being read.
+    /// Runs found unfinished after a relaunch, which are closed and aren't reviewed.
     @ObservationIgnored private var restored: Set<UUID> = []
-    @ObservationIgnored private var reading: Set<UUID> = []
     /// Finished runs' transcripts are read when shown (#109), and at most this many bytes of those
     /// not in the conversation shown stay in memory, the least recently read going first.
     nonisolated static let finishedThreadBytes = 16 << 20
@@ -99,7 +97,7 @@ final class SubagentRuntime {
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             try namespace.uuidString.write(to: namespaceURL, atomically: true, encoding: .utf8)
-            _ = try SubagentHookInstaller.install(binDirectory: root == SubagentIPC.defaultRoot ? SubagentIPC.defaultBinDirectory : root.appendingPathComponent("bin"))
+            _ = try SubagentHookInstaller.install(binDirectory: SubagentIPC(root: root).binDirectory)
             try refreshRoster()
         } catch { self.error = "Couldn't prepare sub-agents: \(error.localizedDescription)" }
         restore()
@@ -992,12 +990,6 @@ final class SubagentRuntime {
             for child in working { stop(child.id) }
             return
         }
-        // A run found unfinished after a relaunch is closed once its transcript is read, so an empty
-        // one is never saved over it.
-        if reading.contains(id) {
-            pendingFinishes[id] = (phase, error)
-            return
-        }
         pendingFinishes[id] = nil
         finalizing.insert(id)
         if let pending = usageCaptures.removeValue(forKey: id) {
@@ -1134,44 +1126,73 @@ final class SubagentRuntime {
     }
 
 
-    /// Every conversation's runs, from their records (also under closed tasks), without their
-    /// transcripts: a finished run's handoff goes back from its record, and its transcript is read
-    /// when it is shown. A run found unfinished is read off the main thread, then closed, once.
+    /// What a relaunch finds: every conversation's runs, the transcripts of those left unfinished,
+    /// and the runs whose caller on this Mac still waits for their handoff.
+    private struct Restored: Sendable {
+        var runs: [(target: ChatTarget, runs: [SubagentRun])] = []
+        var threads: [UUID: [ChatMessage]] = [:]
+        var awaiting: Set<UUID> = []
+    }
+
+    /// Every conversation's runs, from their records (also under closed tasks), read off the main
+    /// thread in one pass, after the mailboxes that ended a day ago are deleted. A finished run's
+    /// handoff goes back from its record while its caller still waits for it (a host's, always),
+    /// and its transcript is read when it is shown. A run found unfinished is closed, once.
     private func restore() {
         guard let model else { return }
-        for bot in model.bots {
-            let home = BotHome(workspace: bot.persistencePath)
-            for taskID in [nil] + (model.tasks[bot.id] ?? []).map({ Optional($0.id) }) {
-                let target = ChatTarget(botID: bot.id, taskID: taskID)
-                let runs = home.loadSubagents(taskID: taskID)
-                guard !runs.isEmpty else { continue }
-                setRuns(runs, for: target)
-                for record in runs {
-                    if let invocationID = record.callerInvocationID {
-                        let destination = model.settings.host(record.callerHostID)?.destination
-                        if record.callerHostID == nil || destination != nil {
-                            deliveries[record.id] = SubagentTransport(machine: Machine(destination: destination), namespace: namespace,
-                                                                    invocationID: invocationID, localRoot: root)
+        let homes = model.bots.map { bot in
+            (home: BotHome(workspace: bot.persistencePath), botID: bot.id,
+             taskIDs: [nil] + (model.tasks[bot.id] ?? []).map { Optional($0.id) })
+        }
+        let ipc = SubagentIPC(root: root)
+        archive.storage.submit(root.path, label: "restore", work: {
+            ipc.prune()
+            var found = Restored()
+            for (home, botID, taskIDs) in homes {
+                for taskID in taskIDs {
+                    let runs = home.loadSubagents(taskID: taskID)
+                    guard !runs.isEmpty else { continue }
+                    found.runs.append((ChatTarget(botID: botID, taskID: taskID), runs))
+                    for record in runs {
+                        if record.phase.isActive { found.threads[record.id] = home.loadSubagentThread(id: record.id, taskID: taskID) }
+                        if record.callerHostID == nil, let invocationID = record.callerInvocationID,
+                           ipc.mailbox(invocationID).awaitsResult(record.id) {
+                            found.awaiting.insert(record.id)
                         }
                     }
-                    if record.phase.isActive {
-                        restored.insert(record.id)
-                        reading.insert(record.id)
-                        let id = record.id
-                        archive.storage.submit(home.subagentURL(id: id, taskID: taskID).path, label: "read",
-                                               work: { home.loadSubagentThread(id: id, taskID: taskID) }) { [weak self] result in
-                            guard let self, self.reading.remove(id) != nil, self.run(id)?.phase.isActive == true else { return }
-                            let live = self.live(id)
-                            if !live.isLoaded {
-                                let messages = (try? result.get()) ?? []
-                                live.load(HistoryLoad(messages: messages, digest: ThreadDigest(messages), bytes: 0, reindexed: false))
-                            }
-                            self.pendingFinishes[id] = nil
-                            self.finish(id, phase: .stopped, error: "BotChu restarted before this sub-agent finished.")
-                        }
-                    } else { queueDelivery(record) }
                 }
             }
+            return found
+        }) { [weak self] result in
+            if case .success(let found) = result { self?.restore(found) }
+        }
+    }
+
+    private func restore(_ found: Restored) {
+        guard let model, !model.terminating else { return }
+        var interrupted: [SubagentRun] = []
+        for (target, runs) in found.runs {
+            // A run admitted while they were read stays as it is.
+            let admitted = root(target).runs
+            let restoring = runs.filter { run in !admitted.contains { $0.id == run.id } }
+            setRuns(restoring + admitted, for: target)
+            for record in restoring {
+                if let invocationID = record.callerInvocationID {
+                    let destination = model.settings.host(record.callerHostID)?.destination
+                    if found.awaiting.contains(record.id) || destination != nil {
+                        deliveries[record.id] = SubagentTransport(machine: Machine(destination: destination), namespace: namespace,
+                                                                invocationID: invocationID, localRoot: root)
+                    }
+                }
+                if record.phase.isActive { interrupted.append(record) } else { queueDelivery(record) }
+            }
+        }
+        // Deepest first, so a parent closes once its children have, with the same reason.
+        for record in interrupted.sorted(by: { $0.depth > $1.depth }) {
+            restored.insert(record.id)
+            let messages = found.threads[record.id] ?? []
+            live(record.id).load(HistoryLoad(messages: messages, digest: ThreadDigest(messages), bytes: 0, reindexed: false))
+            finish(record.id, phase: .stopped, error: "BotChu restarted before this sub-agent finished.")
         }
     }
 

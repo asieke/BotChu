@@ -24,25 +24,27 @@ public struct SubagentTransport: Sendable {
     public static let maximumBatchCount = 32
     public let machine: Machine
     private let directory: String
+    /// Where a local turn finds the helper, installed once by the app (`SubagentIPC.binDirectory`).
+    private let binDirectory: String
     private let timeout: TimeInterval
     private let sshExecutable: String
 
     /// A separate app namespace prevents two coordinators using the same SSH host from taking
-    /// each other's requests. Local tests can supply a temporary root, including their helper.
+    /// each other's requests. Local tests can supply a temporary root, with their helper beside it.
     public init(machine: Machine = .thisMac, namespace: UUID, invocationID: UUID,
                 localRoot: URL? = nil, timeout: TimeInterval = 15) {
         self.machine = machine
         self.timeout = timeout
         sshExecutable = Machine.ssh
-        let id = invocationID.uuidString.lowercased()
+        let local = SubagentIPC(root: localRoot ?? SubagentIPC.defaultRoot)
         directory = machine.isRemote
-            ? "~/.botchu/ipc/subagents/\(namespace.uuidString.lowercased())/\(id)"
-            : (localRoot ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".botchu/ipc/subagents"))
-                .appendingPathComponent(id).path
+            ? "~/.botchu/ipc/subagents/\(namespace.uuidString.lowercased())/\(invocationID.uuidString.lowercased())"
+            : local.mailbox(invocationID).root.path
+        binDirectory = local.binDirectory.path
     }
 
-    /// Installs only in this invocation's private directory. A remote Python check is part of
-    /// preparation, so an unavailable helper fails before the agent is launched.
+    /// A host's mailbox gets its own copies of the helper (`script`), after a Python check, so an
+    /// unavailable helper fails before the agent is launched; a local one uses the app's.
     public func prepare(script: String, roster: Data) async throws -> SubagentEndpoint {
         if machine.isRemote {
             let data = try await remote("prepare", [Data(script.utf8).base64EncodedString(), roster.base64EncodedString()])
@@ -52,18 +54,13 @@ public struct SubagentTransport: Sendable {
         }
         try Task.checkCancellation()
         let root = URL(fileURLWithPath: directory)
-        for name in ["", "requests", "results", "status", "bin"] {
+        for name in ["", "requests", "results", "status"] {
             let folder = name.isEmpty ? root : root.appendingPathComponent(name)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         }
-        for command in SubagentHookInstaller.commands {
-            let helper = root.appendingPathComponent("bin/\(command)")
-            try Data(script.utf8).write(to: helper, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
-        }
         try roster.write(to: root.appendingPathComponent("roster.json"), options: .atomic)
         try await heartbeat()
-        return SubagentEndpoint(ipcDirectory: directory, binDirectory: directory + "/bin")
+        return SubagentEndpoint(ipcDirectory: directory, binDirectory: binDirectory)
     }
 
     /// Files stay until acknowledge, which the coordinator calls only after recording the run.

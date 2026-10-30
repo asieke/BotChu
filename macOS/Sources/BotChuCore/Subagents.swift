@@ -538,6 +538,16 @@ public struct SubagentIPC: Sendable {
     public init(root: URL = Self.defaultRoot) { self.root = root }
     public static var defaultRoot: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".botchu/ipc/subagents", isDirectory: true) }
     public static var defaultBinDirectory: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".botchu/bin", isDirectory: true) }
+    /// Where this root's turns find the helper: `~/.botchu/bin` for the app's own mailboxes, beside
+    /// them for an isolated root (tests and development runs).
+    public var binDirectory: URL {
+        root.standardizedFileURL.path == Self.defaultRoot.standardizedFileURL.path
+            ? Self.defaultBinDirectory : root.appendingPathComponent("bin", isDirectory: true)
+    }
+    /// A turn's own mailbox on this Mac, under this root.
+    public func mailbox(_ invocationID: UUID) -> SubagentIPC {
+        SubagentIPC(root: root.appendingPathComponent(invocationID.uuidString.lowercased(), isDirectory: true))
+    }
     public var requestsURL: URL { root.appendingPathComponent("requests", isDirectory: true) }
     public var statusDirectory: URL { root.appendingPathComponent("status", isDirectory: true) }
     public var resultsURL: URL { root.appendingPathComponent("results", isDirectory: true) }
@@ -574,6 +584,27 @@ public struct SubagentIPC: Sendable {
         try write(result, to: resultURL(result.id))
     }
     public func writeHeartbeat(now: Date = Date()) throws { try write(["updatedAt": now], to: heartbeatURL) }
+
+    /// Whether the caller owning this mailbox still waits for `id`'s result: its heartbeat isn't
+    /// closed and the result isn't there yet.
+    public func awaitsResult(_ id: UUID) -> Bool {
+        guard let data = try? Data(contentsOf: heartbeatURL),
+              let heartbeat = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return false }
+        return heartbeat["closed"] as? Bool != true && !FileManager.default.fileExists(atPath: resultURL(id).path)
+    }
+
+    /// Deletes the mailboxes under this root whose heartbeat is older than `age`: a live caller
+    /// rewrites it every two seconds, so theirs ended, closed or not. A folder without a heartbeat
+    /// (a host's namespace when the host is this Mac) stays. Returns how many went.
+    @discardableResult public func prune(olderThan age: TimeInterval = 86_400, now: Date = Date()) -> Int {
+        let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        return folders.filter { folder in
+            guard UUID(uuidString: folder.lastPathComponent) != nil,
+                  let beat = try? folder.appendingPathComponent("heartbeat.json").resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate, now.timeIntervalSince(beat) > age else { return false }
+            return (try? FileManager.default.removeItem(at: folder)) != nil
+        }.count
+    }
 
     private func write<T: Encodable>(_ value: T, to url: URL) throws {
         try prepare()

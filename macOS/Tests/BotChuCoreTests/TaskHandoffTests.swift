@@ -253,9 +253,11 @@ private final class HandoffFixture {
         #expect(SubagentHookInstaller.commands == ["botchu-subagent", "botchu-task", "botchu-inbox", "botchu-message", "botchu-secret", "botchu-models"])
     }
 
-    @Test func everyTurnsMailboxHasBothCommands() async throws {
+    @Test func everyTurnFindsEveryCommand() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-handoff-mailbox-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
+        // As the app does: installed once, then each turn's mailbox points at them.
+        try SubagentHookInstaller.install(binDirectory: SubagentIPC(root: root).binDirectory)
         let transport = SubagentTransport(machine: .thisMac, namespace: UUID(), invocationID: UUID(), localRoot: root)
         let endpoint = try await transport.prepare(script: SubagentHookInstaller.script, roster: Data("[]".utf8))
         for command in SubagentHookInstaller.commands {

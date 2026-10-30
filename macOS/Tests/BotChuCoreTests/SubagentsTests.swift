@@ -440,4 +440,46 @@ private final class SubagentFixture {
         }
         #expect(!FileManager.default.fileExists(atPath: fixture.ipc.resultURL(id).path))
     }
+
+    @Test func aCallerAwaitsAResultUntilItIsWrittenOrItsHeartbeatCloses() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-ipc-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let invocation = UUID(), id = UUID(), other = UUID()
+        let transport = SubagentTransport(namespace: UUID(), invocationID: invocation, localRoot: root)
+        let mailbox = SubagentIPC(root: root).mailbox(invocation)
+        #expect(!mailbox.awaitsResult(id), "No mailbox, no caller")
+        #expect(try await transport.prepare(script: "", roster: Data("[]".utf8)).ipcDirectory == mailbox.root.path)
+        #expect(mailbox.awaitsResult(id))
+        try await transport.writeResult(id: id, data: Data("{}".utf8))
+        #expect(!mailbox.awaitsResult(id))
+        #expect(mailbox.awaitsResult(other))
+        try await transport.close()
+        #expect(!mailbox.awaitsResult(other))
+    }
+
+    @Test func pruningDeletesOnlyMailboxesWhoseHeartbeatIsADayOld() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-ipc-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ipc = SubagentIPC(root: root)
+        try ipc.writeRoster([])
+        func mailbox(closed: Bool, hours: Double) throws -> String {
+            let folder = root.appendingPathComponent(UUID().uuidString.lowercased())
+            try FileManager.default.createDirectory(at: folder.appendingPathComponent("results"), withIntermediateDirectories: true)
+            let heartbeat = folder.appendingPathComponent("heartbeat.json")
+            try Data("{\"closed\":\(closed)}".utf8).write(to: heartbeat)
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-hours * 3_600)], ofItemAtPath: heartbeat.path)
+            return folder.lastPathComponent
+        }
+        _ = try mailbox(closed: true, hours: 25)
+        // A caller BotChu never closed (a crash, or quitting) is just as gone a day later.
+        _ = try mailbox(closed: false, hours: 25)
+        let recent = try mailbox(closed: true, hours: 1), live = try mailbox(closed: false, hours: 0)
+        // A host's namespace, when the host is this Mac, holds mailboxes but no heartbeat of its own.
+        let namespace = root.appendingPathComponent(UUID().uuidString.lowercased())
+        try FileManager.default.createDirectory(at: namespace.appendingPathComponent(UUID().uuidString.lowercased()), withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.modificationDate: Date.distantPast], ofItemAtPath: namespace.path)
+        #expect(ipc.prune() == 2)
+        #expect(Set(try FileManager.default.contentsOfDirectory(atPath: root.path))
+            == [recent, live, namespace.lastPathComponent, "requests", "results", "status", "roster.json"])
+    }
 }

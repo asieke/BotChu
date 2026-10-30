@@ -113,7 +113,9 @@ and completes with its handoff and a note saying so (#145: Antigravity printed a
 never exited and ignored Stop's signals, so the run stayed running until BotChu restarted); one
 whose background tasks still run gets up to 2 hours for them (#255). A
 parent handoff waits for its descendants to finish stopping. Active records found on restart
-become stopped.
+become stopped. Records are read off the main thread at launch, in one pass; a handoff goes back
+again then only while its caller's heartbeat isn't closed and its result isn't in the mailbox (to a
+host's mailbox, always).
 
 BotChu refreshes the heartbeat every two seconds; the helper checks it and fails after thirty
 seconds without one. Its
@@ -131,9 +133,10 @@ Records and transcripts stay with the owning conversation:
 
 The standalone helper is installed in `~/.botchu/bin`, as `botchu-subagent`, `botchu-task`,
 `botchu-inbox` and `botchu-message` (one script that acts by the name it is run as). A message
-(`"kind": "message"`) stages its files as a delivery does. Each turn also receives private copies in
-its mailbox's `bin` directory, prepended to PATH after login-shell initialization. Local mailboxes
-are under `~/.botchu/ipc/subagents/<invocation id>`. A remote mailbox is under
+(`"kind": "message"`) stages its files as a delivery does. A turn on this Mac runs it from there; a
+turn on an SSH host gets private copies in its mailbox's `bin` directory. Either is prepended to PATH
+after login-shell initialization. Local mailboxes are under `~/.botchu/ipc/subagents/<invocation
+id>`, and those whose heartbeat is more than a day old are deleted at launch. A remote mailbox is under
 `~/.botchu/ipc/subagents/<app namespace>/<invocation id>` on the host. Each contains `roster.json`,
 `heartbeat.json`, `requests/<id>.json`, `status/<id>.status.json` (rewritten only when the child's
 phase or activity changes) and `results/<id>.result.json`. A Task request is a request with `"kind":
