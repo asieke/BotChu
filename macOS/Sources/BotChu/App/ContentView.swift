@@ -89,13 +89,13 @@ private struct DetailColumn: View {
     @ViewBuilder private var content: some View {
         if let destination = model.destination {
             switch destination {
-            case .inbox: InboxView()
+            case .inbox: InboxView().onAppear { FrameTimings.mark(FrameMarks.page("inbox")) }
             case .projects: ProjectsView()
             case .agents: AgentsView()
             case .providers: ProvidersView()
             case .skills: SkillsView()
             case .jobs: JobsView()
-            case .settings: SettingsView()
+            case .settings: SettingsView().onAppear { FrameTimings.mark(FrameMarks.page("settings")) }
             }
         } else if let id = model.selection, model.bot(id) != nil {
             let tab = model.tab(of: id)

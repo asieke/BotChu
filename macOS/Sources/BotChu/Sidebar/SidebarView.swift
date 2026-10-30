@@ -20,6 +20,7 @@ struct SidebarView: View {
                 ForEach(LibraryDestination.sidebar, id: \.self) { destination in
                     SidebarWorkspaceRow(destination: destination)
                         .tag(SidebarDestination.library(destination))
+                        .accessibilityIdentifier("sidebar-\(destination.rawValue)")
                 }
             }
             // The agents in no section, under Conversations, then each section the owner made. One

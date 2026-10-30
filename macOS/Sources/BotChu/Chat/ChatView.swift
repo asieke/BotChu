@@ -83,6 +83,7 @@ struct ChatView: View {
                                           open: transcript.isOpen(item.id, default: false),
                                           runs: cards.runs(for: item), after: cards.unplaced(after: item.id))
                                 .equatable()
+                                .onAppear { if let id = target.taskID { FrameTimings.mark(FrameMarks.chat(id)) } }
                         }
                         Color.clear.frame(height: plan.below)
                         if model.runStates[target]?.preparing == true {
@@ -416,6 +417,9 @@ struct ActivityRow: View, Equatable {
         switch item {
         case .message(let message):
             MessageRow(message: message, bot: bot, kind: kind, startsBotTurn: startsBotTurn).equatable()
+                .onChange(of: message.text.utf16.count) { _, length in
+                    if live { FrameTimings.mark(FrameMarks.streamed(bot.id, length: length)) }
+                }
         case .exploration(let group):
             BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
                 ExplorationCard(group: group, live: live && group.isOpen, density: density, kind: kind).equatable()

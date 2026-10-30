@@ -4,13 +4,13 @@ import BotChuCore
 // The journeys harness (#323; README.md, Test): drives a release build of BotChu from its own process,
 // in the background, through the Accessibility API, on a synthetic fixture with a fake Claude Code CLI.
 //   botchu-journeys --app <BotChu.app> [--journeys <names or numbers>] [--baseline <file>]
-//                   [--record <file>] [--repeats <n>] [--keep]
-//   botchu-journeys dump --app <BotChu.app>     the app's accessibility tree on the fixture
+//                   [--record <file>] [--repeats <n>] [--stall <ms>] [--keep]
+//   botchu-journeys dump --app <BotChu.app> [--bot <n>]   the app's accessibility tree on the fixture
 //   botchu-journeys fake-claude <arguments…>    the fixture's Claude Code CLI (FakeClaude)
 
 let usage = """
-    usage: botchu-journeys --app <BotChu.app> [--journeys <names or numbers>] [--baseline <file>] [--record <file>] [--repeats <n>] [--keep]
-           botchu-journeys dump --app <BotChu.app>
+    usage: botchu-journeys --app <BotChu.app> [--journeys <names or numbers>] [--baseline <file>] [--record <file>] [--repeats <n>] [--stall <ms>] [--keep]
+           botchu-journeys dump --app <BotChu.app> [--bot <n>]
     """
 
 var arguments = Array(CommandLine.arguments.dropFirst())
@@ -24,7 +24,7 @@ var keep = false
 while let flag = arguments.first {
     arguments.removeFirst()
     if flag == "--keep" { keep = true; continue }
-    guard ["--app", "--journeys", "--baseline", "--record", "--repeats"].contains(flag), let value = arguments.first else {
+    guard ["--app", "--journeys", "--baseline", "--record", "--repeats", "--stall", "--bot"].contains(flag), let value = arguments.first else {
         FileHandle.standardError.write(Data((usage + "\n").utf8))
         exit(2)
     }
@@ -76,9 +76,13 @@ let app: AppUnderTest
 let fixture: Fixture
 do {
     try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-    let harness = Bundle.main.executableURL?.path ?? CommandLine.arguments[0]
+    // The fake CLI runs from a copy in the work folder: the app's copy may not read the build's
+    // folder (under Desktop, say) without asking the owner.
+    let harness = work.appendingPathComponent("botchu-journeys")
+    try? FileManager.default.removeItem(at: harness)
+    try FileManager.default.copyItem(at: Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]), to: harness)
     let fake = work.appendingPathComponent("fake-claude")
-    try FakeClaude.writeWrapper(at: fake, harness: harness)
+    try FakeClaude.writeWrapper(at: fake, harness: harness.path, log: work.appendingPathComponent("fake-claude.log"))
     let began = Date()
     fixture = try Fixture.make(in: work.appendingPathComponent("data"), fakeCLI: fake.path)
     print(String(format: "journeys: fixture made in %.1f s", Date().timeIntervalSince(began)))
@@ -91,6 +95,8 @@ do {
         FrameMarks.environmentKey: marks.path,
         "BOTCHU_PROFILE": "Journey Claude|claude|\(fake.path)",
         "BOTCHU_JOURNEY_FAKE_LOG": work.appendingPathComponent("fake-claude.log").path,
+        // New Task starts in the fixture's own project.
+        "BOTCHU_TASK_REPO": Fixture.taskRepo,
     ], marksURL: marks)
 } catch {
     fail("\(error)")
@@ -108,6 +114,11 @@ if dumping {
         _ = try app.launch()
         _ = try app.mark(FrameMarks.chat(fixture.longBot.id), after: 0, timeout: 60)
         app.settle(quiet: 1)
+        // `--bot <n>`: showing the fixture's bot at that place (0 is shown at launch).
+        if let index = options["--bot"].flatMap(Int.init), fixture.bots.indices.contains(index) {
+            _ = try Journeys(app: app, fixture: fixture, baseline: nil, repeats: 1) { _ in }.select(fixture.bots[index])
+            app.settle(quiet: 1)
+        }
         var lines: [String] = []
         try app.window().dump(into: &lines)
         print(lines.joined(separator: "\n"))
@@ -120,9 +131,25 @@ if dumping {
 }
 
 var results: [JourneyResult] = []
-let journeys = Journeys(app: app, fixture: fixture, baseline: baseline, repeats: repeats) { print("journey \($0.report)") }
+var journeys = Journeys(app: app, fixture: fixture, baseline: baseline, repeats: repeats) { print("journey \($0.report)") }
+journeys.stall = options["--stall"].flatMap(Double.init) ?? 0
+journeys.recording = options["--record"] != nil
+if journeys.stall > 0 { print("journeys: injecting a \(Int(journeys.stall)) ms stall into each of journey 2's toggles") }
+// A journey with a failed step is measured again once, after the others (not while recording a
+// baseline, which keeps what it measured), so a slow spell of the Mac's has time to pass.
+var failedFirst: [(number: Int, journey: () -> [JourneyResult], first: [JourneyResult])] = []
+func record(_ number: Int, _ journey: @escaping () -> [JourneyResult]) {
+    let measured = journeys.measure(number, journey)
+    if measured.allSatisfy(\.passed) || journeys.recording {
+        measured.forEach(journeys.report)
+        results += measured
+    } else {
+        print("journeys: journey \(number) failed (\(Journeys.failures(measured))); measuring it again after the others")
+        failedFirst.append((number, journey, measured))
+    }
+}
 if selection.numbers.contains(1) {
-    results += journeys.launch()
+    record(1) { journeys.launch() }
 } else {
     do {
         let start = try app.launch()
@@ -147,9 +174,24 @@ if app.isRunning, let window = try? app.window(), let button = window.first(iden
         print("journeys: window \(Int(frame.width))×\(Int(frame.height)) on a \(screen.maximumFramesPerSecond) Hz display")
     }
 }
-for (number, run) in [(2, journeys.sidebarAndInspector), (3, journeys.switchBots)] where selection.numbers.contains(number) {
-    if app.isRunning { results += run() }
-    else { results.append(journeys.notRun(number, because: "BotChu isn't running")) }
+let later: [(Int, () -> [JourneyResult])] = [
+    (2, journeys.sidebarAndInspector), (3, journeys.switchBots), (4, journeys.switchTasks), (5, journeys.typingWhileStreaming),
+    (6, journeys.sendAndStream), (7, journeys.scrollHistory), (8, journeys.expandGroup), (9, journeys.newTask), (10, journeys.resize),
+    (11, journeys.inboxAndSettings), (12, journeys.typingWhileSubagentStreams), (13, journeys.relaunch),
+]
+func notRun(_ number: Int) {
+    let result = journeys.notRun(number, because: "BotChu isn't running")
+    print("journey \(result.report)")
+    results.append(result)
+}
+for (number, journey) in later where selection.numbers.contains(number) {
+    if app.isRunning { record(number, journey) } else { notRun(number) }
+}
+for (number, journey, first) in failedFirst {
+    if !app.isRunning, number != 1 { notRun(number); continue }
+    let again = journeys.again(number, journey, after: first)
+    again.forEach(journeys.report)
+    results += again
 }
 
 let loadAfter = load()

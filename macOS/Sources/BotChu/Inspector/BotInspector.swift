@@ -387,6 +387,7 @@ struct StatusAvatar: View {
         // Driven by the clock rather than implicit animations, which would also animate layout.
         TimelineView(.animation(minimumInterval: 1 / 30, paused: !moving)) { context in
             let t = moving ? context.date.timeIntervalSinceReferenceDate : 0
+            let _ = moving ? FrameTimings.mark(FrameMarks.avatarFrame) : ()
             ZStack {
                 ring(look, angle: .degrees(t.truncatingRemainder(dividingBy: 1.4) / 1.4 * 360))
                 Circle().fill(Palette.card).padding(4)

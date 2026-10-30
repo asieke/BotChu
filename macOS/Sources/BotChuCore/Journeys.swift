@@ -28,8 +28,55 @@ public enum FrameMarks {
     /// The status sidebar (the inspector) started to show or hide.
     public static func inspector(shown: Bool) -> String { shown ? "inspector.shown" : "inspector.hidden" }
 
-    /// A row of this bot's shown conversation showed.
-    public static func chat(_ botID: UUID) -> String { "chat \(botID.uuidString)" }
+    /// A row of this bot's shown conversation showed; for a task's conversation, also under the task's id.
+    public static func chat(_ id: UUID) -> String { "chat \(id.uuidString)" }
+
+    /// A task's tab showed beside the chat.
+    public static func tab(_ taskID: UUID) -> String { "tab \(taskID.uuidString)" }
+
+    /// A message box's text changed (typed, set or cleared).
+    public static let composer = "composer"
+
+    /// The window's content was laid out at a new size.
+    public static let windowResized = "window.resized"
+
+    /// The chat's visible part moved.
+    public static let chatScrolled = "chat.scrolled"
+
+    /// The New Task sheet showed.
+    public static let newTask = "new-task"
+
+    /// A page of the window (`inbox`, `settings`) showed.
+    public static func page(_ name: String) -> String { "page \(name)" }
+
+    /// The Done button of the delivery being read says it is done, or not.
+    public static func inboxDone(_ id: UUID, _ done: Bool) -> String { "inbox.done \(id.uuidString) \(done)" }
+
+    /// A frame of the working ring round the bot's face in the status sidebar.
+    public static let avatarFrame = "avatar.frame"
+
+    /// The streaming reply of this bot's shown conversation showed this much text (UTF-16 units).
+    public static func streamed(_ botID: UUID, length: Int) -> String { "streamed \(botID.uuidString) \(length)" }
+
+    /// The length a `streamed` mark of this bot names.
+    public static func streamedLength(_ name: String, of botID: UUID) -> Int? {
+        let prefix = "streamed \(botID.uuidString) "
+        return name.hasPrefix(prefix) ? Int(name.dropFirst(prefix.count)) : nil
+    }
+
+    /// The main thread was busy this long without letting a frame be committed: from waking until
+    /// it waited again, Core Animation's commit included. Written as it ends, for stretches of
+    /// `busyThreshold` or more.
+    public static func busy(milliseconds: Double) -> String { String(format: "busy %.2f", milliseconds) }
+    public static let busyThreshold = 4.0
+
+    public static func busyMilliseconds(_ name: String) -> Double? {
+        name.hasPrefix("busy ") ? Double(name.dropFirst(5)) : nil
+    }
+
+    /// Marks that keep coming while something animates or the main thread works, which waiting
+    /// for the app to settle leaves out.
+    public static func isContinuous(_ name: String) -> Bool { name == avatarFrame || name.hasPrefix("busy ") }
 
     public static func line(_ name: String, at nanoseconds: UInt64) -> String { "\(nanoseconds) \(name)\n" }
 
@@ -56,12 +103,16 @@ public struct JourneyBudget: Equatable, Sendable {
     /// Two frames at 120 Hz.
     public static let instant = JourneyBudget(milliseconds: 16, tier: "Instant")
     public static let quick = JourneyBudget(milliseconds: 100, tier: "Quick")
+    /// No frame over 33 ms while something goes on (two frames at 60 Hz).
+    public static let smooth = JourneyBudget(milliseconds: 33, tier: "Smooth")
     public static let launch = JourneyBudget(milliseconds: 1_500, tier: "Launch")
     public static func within(_ milliseconds: Double) -> JourneyBudget { JourneyBudget(milliseconds: milliseconds, tier: "≤ \(Int(milliseconds)) ms") }
 }
 
 /// One measured step of a journey: its samples in milliseconds and how they compare with the budget
-/// and the recorded baseline.
+/// and the recorded baseline (#323): it fails when its median is over budget, or more than 25 % and
+/// more than 3 ms slower than the baseline. While the baseline itself misses the budget, the budget
+/// is the baseline + 10 % (the ratchet), until a fix and a new baseline bring it back.
 public struct JourneyResult: Equatable, Sendable {
     public var journey: Int
     public var step: String
@@ -70,30 +121,65 @@ public struct JourneyResult: Equatable, Sendable {
     public var samples: [Double]
     /// Why the step couldn't be measured or didn't show what it should: it fails whatever its times.
     public var problem: String?
+    /// The 1-minute load average when the step was measured.
+    public var load: Double?
+    /// How its first attempt failed, when it was measured again.
+    public var retried: String?
 
-    public init(journey: Int, step: String, budget: JourneyBudget, baseline: Double? = nil, samples: [Double], problem: String? = nil) {
+    public init(journey: Int, step: String, budget: JourneyBudget, baseline: Double? = nil, samples: [Double], problem: String? = nil,
+                load: Double? = nil, retried: String? = nil) {
         self.journey = journey
         self.step = step
         self.budget = budget
         self.baseline = baseline
         self.samples = samples
         self.problem = problem
+        self.load = load
+        self.retried = retried
     }
+
+    public static let slowerShare = 0.25
+    public static let slowerMilliseconds = 3.0
+    public static let ratchetShare = 0.10
 
     /// The key a baseline keeps this step's median under.
     public var key: String { "\(journey) \(step)" }
     public var median: Double? { JourneyStats.median(samples) }
     public var p95: Double? { JourneyStats.percentile(95, of: samples) }
-    public var passed: Bool { problem == nil && (median.map { $0 <= budget.milliseconds } ?? false) }
 
-    /// `2 sidebar · close  Instant 16 ms  baseline 9.1 ms  median 8.7 ms  p95 12.0 ms  ok`, or why it failed.
+    /// Whether the baseline misses the budget, so the budget is the baseline + 10 % for now.
+    public var ratcheted: Bool { (baseline ?? 0) > budget.milliseconds }
+
+    /// What the median is held to: the budget, or the ratchet's.
+    public var limit: Double {
+        guard ratcheted, let baseline else { return budget.milliseconds }
+        return (baseline * (1 + Self.ratchetShare) * 10).rounded() / 10
+    }
+
+    /// Why it failed, or nil when it passed.
+    public var failure: String? {
+        if let problem { return problem }
+        guard let median else { return "no samples" }
+        if median > limit { return String(format: "median %.1f ms over its budget of %.1f ms", median, limit) }
+        if let baseline, median > baseline * (1 + Self.slowerShare), median - baseline > Self.slowerMilliseconds {
+            return String(format: "median %.1f ms is %.0f %% (%.1f ms) slower than the baseline %.1f ms",
+                          median, (median / baseline - 1) * 100, median - baseline, baseline)
+        }
+        return nil
+    }
+
+    public var passed: Bool { failure == nil }
+
+    /// `2 sidebar · close: budget Instant 16.0 ms, baseline 9.1 ms, median 8.7 ms, p95 12.0 ms, 6 samples, load 4.2 — ok`,
+    /// or why it failed, with the ratchet and a retry when there was one.
     public var report: String {
         func ms(_ value: Double?) -> String { value.map { String(format: "%.1f ms", $0) } ?? "—" }
-        var line = "\(journey) \(step): budget \(budget.tier) \(ms(budget.milliseconds)), baseline \(ms(baseline)), "
-            + "median \(ms(median)), p95 \(ms(p95)), \(samples.count) samples"
-        if let problem { line += " — FAILED: \(problem)" }
-        else if passed { line += " — ok" }
-        else { line += " — FAILED: median over budget" }
+        var line = "\(journey) \(step): budget \(budget.tier) \(ms(budget.milliseconds))"
+        if ratcheted { line += " (ratcheted to \(ms(limit)): the baseline is over budget)" }
+        line += ", baseline \(ms(baseline)), median \(ms(median)), p95 \(ms(p95)), \(samples.count) samples"
+        if let load { line += String(format: ", load %.1f", load) }
+        if let retried { line += "; measured again after: \(retried)" }
+        line += failure.map { " — FAILED: \($0)" } ?? " — ok"
         return line
     }
 }

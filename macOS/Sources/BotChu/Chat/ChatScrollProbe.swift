@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import BotChuCore
 
 /// Watches the chat's scroll view from the top of its rows (#110): tells the conversation's
 /// transcript where the visible part is, in the rows' coordinates, as the reader scrolls and the
@@ -105,6 +106,7 @@ final class ChatScrollProbeView: NSView {
     /// The visible part moved or resized. Resized, a pinned chat goes back to its end at once;
     /// moved, once AppKit has said whether the reader moved it (`liveScrolled`).
     @objc private func changed(_ notification: Notification) {
+        if notification.name == NSView.boundsDidChangeNotification { FrameTimings.mark(FrameMarks.chatScrolled) }
         report()
         guard !correcting else { return }
         if notification.name == NSView.frameDidChangeNotification { keepEnd() } else { settleLater() }
