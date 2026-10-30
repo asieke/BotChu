@@ -1,24 +1,42 @@
 {
-  "commit" : "e8e3654",
+  "commit" : "d6c373c",
   "loadAfter" : [
-    15.68,
-    16.29,
-    22.81
+    4.19,
+    5.58,
+    5.7
   ],
   "loadBefore" : [
-    21.71,
-    17.32,
-    23.4
+    5.03,
+    6.6,
+    6.03
   ],
   "machine" : "Mac16,5, 14 cores, macOS Version 27.0 (Build 26A428)",
   "medians" : {
-    "1 launch" : 721.1,
-    "2 inspector · close" : 31.2,
-    "2 inspector · open" : 30.5,
-    "2 sidebar · close" : 44.1,
-    "2 sidebar · open" : 49.3,
-    "3 switch bot" : 47.8,
-    "3 switch to 5,000 messages" : 37.3
+    "1 launch" : 653.4,
+    "10 resize step (p95 of 12)" : 112.3,
+    "11 Done" : 30.6,
+    "11 Inbox opens" : 47.6,
+    "11 Settings opens" : 35.5,
+    "12 echo while a sub-agent streams (p95 of 19 keys)" : 5.6,
+    "13 relaunch keeps the message and task" : 740.2,
+    "2 inspector · close" : 31.3,
+    "2 inspector · open" : 30.9,
+    "2 sidebar · close" : 39.8,
+    "2 sidebar · open" : 36.2,
+    "3 switch bot" : 56.7,
+    "3 switch to 5,000 messages" : 36.1,
+    "4 switch task" : 35.3,
+    "4 switch to Home (5,000 messages)" : 38.7,
+    "5 echo while 4 stream (p95 of 19 keys)" : 3.3,
+    "6 chunk shows (worst per 5 s)" : 56,
+    "6 longest frame while streaming (per 5 s)" : 21.1,
+    "6 message shows" : 19.8,
+    "7 Jump to Latest" : 41,
+    "7 longest frame per page scrolled up (12 pages)" : 26.2,
+    "8 expand group of calls" : 45.2,
+    "8 longest frame after expanding" : 51.7,
+    "9 New Task opens" : 327.6,
+    "9 task shows after Start Task" : 35.7
   },
-  "recordedAt" : "2026-10-30T04:52:49Z"
+  "recordedAt" : "2026-10-30T07:19:47Z"
 }
