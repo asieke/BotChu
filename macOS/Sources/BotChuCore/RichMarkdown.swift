@@ -187,8 +187,11 @@ public enum RichMarkdown {
                 if intent.contains(.emphasized) { html = "<em>\(html)</em>" }
                 if intent.contains(.strikethrough) { html = "<s>\(html)</s>" }
                 if intent.contains(.lineBreak) { html = "<br>" }
-                if let link = run.link, let scheme = link.scheme?.lowercased(), ["http", "https", "mailto"].contains(scheme) {
+                if let link = run.link, ReplyLink(link) == .web {
                     html = "<a href=\"\(restore(link.absoluteString).htmlEscaped)\">\(html)</a>"
+                } else if let link = run.link, let page = URL(string: restore(link.absoluteString)).flatMap(FileLink.pageLink) {
+                    // A file the reply links to, resolved by the chat, not against this page (#363).
+                    html = "<a href=\"\(page.htmlEscaped)\">\(html)</a>"
                 }
                 return html
             }.joined()

@@ -3,6 +3,11 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- Sub-agent Transcript follows its last 12 items and skips Sail progress rows (#361) (#377)
+- Latency report after each journeys run; every deploy sends it to the Inbox (#362) (#370)
+- Antigravity tool and run errors carry agy's message, and non-zero shell exits are recorded as failed (#367) (#374)
+- `timeout` on every CLI session's PATH, the Mac's shell facts in the preamble, and ChildProcess ends what a stopped program left (#366) (#371)
+- Open reply links to files from the conversation's folder; other schemes besides web and mail open nothing (#363) (#372)
 - Journeys 4–13, the regression rule and the ratchet (#329) (#352)
 - Move the shared CLI turn loop into one Core TurnStream type (#345) (#351)
 - Fix main's build: pass input and timeout to Shell.execute (#350)

@@ -43,11 +43,13 @@ public struct SubagentTransport: Sendable {
         binDirectory = local.binDirectory.path
     }
 
-    /// A host's mailbox gets its own copies of the helper (`script`), after a Python check, so an
-    /// unavailable helper fails before the agent is launched; a local one uses the app's.
+    /// A host's mailbox gets its own copies of the helper (`script`) and of `timeout` (`TimeoutShim`),
+    /// after a Python check, so an unavailable helper fails before the agent is launched; a local one
+    /// uses the app's.
     public func prepare(script: String, roster: Data) async throws -> SubagentEndpoint {
         if machine.isRemote {
-            let data = try await remote("prepare", [Data(script.utf8).base64EncodedString(), roster.base64EncodedString()])
+            let data = try await remote("prepare", [Data(script.utf8).base64EncodedString(), roster.base64EncodedString(),
+                                                    Data(TimeoutShim.script.utf8).base64EncodedString()])
             let result = try JSONDecoder().decode([String: String].self, from: data)
             guard let root = result["directory"], root.hasPrefix("/") else { throw Failure(message: "The host did not return an absolute sub-agent mailbox path.") }
             return SubagentEndpoint(ipcDirectory: root, binDirectory: root + "/bin")
@@ -244,7 +246,7 @@ def atomic(path, data):
 def valid(name):
     return len(name) <= 128 and not name.startswith('.') and '/' not in name and '\\' not in name and name.endswith('.json')
 if operation == 'prepare':
-    for part in ['', 'requests', 'results', 'status', 'bin']:
+    for part in ['', 'requests', 'results', 'status', 'bin', 'bin/fallback']:
         folder = root / part
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(folder, 0o700)
@@ -252,6 +254,9 @@ if operation == 'prepare':
         helper = root / 'bin' / command
         atomic(helper, base64.b64decode(parameters[0]))
         os.chmod(helper, 0o755)
+    shim = root / 'bin' / 'fallback' / 'timeout'
+    atomic(shim, base64.b64decode(parameters[2]))
+    os.chmod(shim, 0o755)
     atomic(root / 'roster.json', base64.b64decode(parameters[1]))
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     atomic(root / 'heartbeat.json', json.dumps({'updatedAt': stamp, 'closed': False}).encode())
