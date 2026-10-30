@@ -49,7 +49,7 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         switch self {
         case .activity: "list.bullet"
         case .subagents: "arrow.triangle.branch"
-        case .model: "slider.horizontal.3"
+        case .model: "cpu"
         case .session: "clock.arrow.circlepath"
         case .memory: "touchid"
         }
