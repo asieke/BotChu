@@ -97,11 +97,9 @@ private struct InspectorAreas<Header: View, Content: View>: View {
         }
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    content(selection)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(EdgeInsets(top: 4, leading: 16, bottom: 24, trailing: 16))
+                InspectorArea(tab: selection, content: content)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(EdgeInsets(top: 4, leading: 16, bottom: 24, trailing: 16))
             }
             .coordinateSpace(.named(InspectorScrollArea.space))
             .onGeometryChange(for: CGSize.self) { $0.size } action: { area.viewport = $0 }
@@ -112,6 +110,19 @@ private struct InspectorAreas<Header: View, Content: View>: View {
         }
         .onAppear {
             if let tab = DevHooks.inspectorTab { selection = tab }
+        }
+    }
+}
+
+/// The selected tab's sections, built only when the tab or what they show changes: given the same
+/// tab, the areas around it are evaluated again at a UserDefaults write without building them anew.
+private struct InspectorArea<Content: View>: View {
+    let tab: InspectorTab
+    let content: (InspectorTab) -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            content(tab)
         }
     }
 }
