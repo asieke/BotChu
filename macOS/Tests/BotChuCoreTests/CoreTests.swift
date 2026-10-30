@@ -46,8 +46,12 @@ import Testing
     }
 
     @Test func antigravityContinuesItsConversation() {
+        let first = CommandBuilder.invocation(kind: .antigravity, prompt: "hi", model: nil, sessionID: nil)
+        #expect(first.arguments == ["-p", "hi", "--output-format", "stream-json", "--dangerously-skip-permissions",
+                                    "--settings", #"{"enableTerminalSandbox":false}"#])
         let next = CommandBuilder.invocation(kind: .antigravity, prompt: "hi", model: nil, sessionID: "c1")
-        #expect(next.arguments == ["-p", "hi", "--output-format", "stream-json", "--dangerously-skip-permissions", "--conversation", "c1"])
+        #expect(next.arguments == ["-p", "hi", "--output-format", "stream-json", "--dangerously-skip-permissions",
+                                   "--settings", #"{"enableTerminalSandbox":false}"#, "--conversation", "c1"])
     }
 
     @Test func museAndPiKeepTheirOwnIDs() {

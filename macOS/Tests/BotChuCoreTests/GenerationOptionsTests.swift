@@ -130,6 +130,8 @@ import Testing
             let invocation = CommandBuilder.invocation(kind: .antigravity, prompt: "hello",
                 model: "gemini-4-argon-medium", sessionID: session, reasoningEffort: effort)
             #expect(invocation.arguments.contains("gemini-4-argon-" + effort.rawValue))
+            let settings = invocation.arguments.firstIndex(of: "--settings")
+            #expect(settings.map { invocation.arguments[$0 + 1] } == #"{"enableTerminalSandbox":false}"#)
         }
         #expect(GenerationOptions.efforts(for: .antigravity, model: "gemini-4-argon-high") == [.low, .medium, .high])
         #expect(GenerationOptions.modelArgument("custom", kind: .antigravity, effort: effort) == "custom")
