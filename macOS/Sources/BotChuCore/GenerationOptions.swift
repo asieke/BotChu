@@ -72,10 +72,12 @@ public enum GenerationOptions {
         let extended = common + [.xhigh, .max]
         switch kind {
         case .claude:
-            // Each alias, then the version it resolved to on every Claude profile (2026-10-24),
-            // which stays put when the alias moves on.
+            // Each alias, then the version it resolved to on every Claude profile (2026-10-24;
+            // Fable and its efforts: Claude Code 2.1.312, 2026-10-29), which stays put when the alias moves on.
             return [ModelOption(id: "opus", name: "Claude Opus", efforts: extended, moving: true),
                     ModelOption(id: "claude-opus-5-5", name: "Claude Opus 5.5", efforts: extended),
+                    ModelOption(id: "fable", name: "Claude Fable", efforts: extended, moving: true),
+                    ModelOption(id: "claude-fable-5-1", name: "Claude Fable 5.1", efforts: extended),
                     ModelOption(id: "sonnet", name: "Claude Sonnet", efforts: extended, moving: true),
                     ModelOption(id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", efforts: extended),
                     ModelOption(id: "haiku", name: "Claude Haiku", efforts: [], moving: true),
@@ -207,7 +209,7 @@ public enum GenerationOptions {
     }
 
     /// Claude Code's aliases, which follow the newest version it knows for the account: the
-    /// starters, and those it documents besides (`fable`, and any with `[1m]` for 1M context).
+    /// starters, and those it documents besides (any with `[1m]` for 1M context).
     private static func movingAlias(_ model: String, kind: AgentKind) -> String? {
         guard kind == .claude else { return nil }
         let (base, context) = model.lowercased().hasSuffix("[1m]") ? (String(model.dropLast(4)), " (1M context)") : (model, "")

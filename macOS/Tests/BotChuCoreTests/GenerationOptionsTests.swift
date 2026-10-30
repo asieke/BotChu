@@ -3,6 +3,85 @@ import Testing
 @testable import BotChuCore
 
 @Suite struct GenerationOptionsTests {
+    private static let claudeProfiles = Accounts.all.filter { $0.kind == .claude } + [
+        Account(id: "custom-claude", name: "Custom Claude", kind: .claude, defaultCommand: "my-claude", symbol: "sparkle")
+    ]
+
+    @Test(arguments: claudeProfiles)
+    func fableIsAvailableWithoutChangingProfileDefaultsOrSelections(account: Account) throws {
+        var bot = Bot(name: "Test", workspace: "/tmp/test")
+        bot.selectAccount(account)
+        #expect(bot.account == account)
+        #expect(bot.model.isEmpty)
+        #expect(bot.reasoningEffort == nil)
+        #expect(QuickTasks.suggestedModel(for: account.kind) == "haiku")
+        for chosen in ["", "opus", "my-custom-model", "fable", "claude-fable-5-1"] {
+            let picker = ModelPickerData(kind: bot.account.kind, model: chosen, openRouterDefault: "")
+            #expect(picker.selectedID == chosen)
+            #expect(picker.effectiveID == chosen)
+            #expect(picker.choices.first?.id == "")
+            #expect(picker.choices.contains { $0.id == chosen })
+            #expect(picker.matching("fable").map(\.id).sorted() == ["claude-fable-5-1", "fable"])
+            let quickChoices = QuickTasks.models(for: bot.account.kind, catalog: nil, chosen: chosen)
+            #expect(quickChoices.contains { $0.id == "fable" })
+            #expect(quickChoices.contains { $0.id == "claude-fable-5-1" })
+            if !chosen.isEmpty {
+                #expect(quickChoices.contains { $0.id == chosen })
+                let quick = try #require(QuickTasks(accountID: account.id, model: chosen, accounts: [account]))
+                #expect(quick.account == account)
+                #expect(quick.model == chosen)
+            }
+        }
+    }
+
+    @Test(arguments: claudeProfiles, ["fable", "claude-fable-5-1"])
+    func fableSelectionsKeepHomeAndTaskSessionsAndReachTheCLI(account: Account, model: String) throws {
+        var bot = Bot(name: "Test", accountID: account.id, model: "opus", reasoningEffort: .max,
+                      workspace: "/tmp/test", sessionID: "home-session", sessionAccountID: account.id)
+        var task = BotTask(repo: "owner/repo", checkout: "/tmp/repo", accountID: account.id, model: "sonnet",
+                           reasoningEffort: .max, sessionID: "task-session", sessionAccountID: account.id)
+        bot.accountProfile = account
+        task.accountProfile = account
+        bot.selectModel(model)
+        task.selectModel(model)
+        #expect(bot.model == model)
+        #expect(task.model == model)
+        #expect(bot.reasoningEffort == .max)
+        #expect(task.reasoningEffort == .max)
+        #expect(bot.resumableSessionID == "home-session")
+        #expect(task.resumableSessionID == "task-session")
+        #expect(try JSONDecoder().decode(Bot.self, from: JSONEncoder().encode(bot)).model == model)
+        #expect(try JSONDecoder().decode(BotTask.self, from: JSONEncoder().encode(task)).model == model)
+
+        let conversations: [any RunSettings] = [bot, task]
+        let efforts: [ReasoningEffort?] = [nil, .low, .medium, .high, .xhigh, .max]
+        for settings in conversations {
+            for session in [nil, settings.resumableSessionID] {
+                for effort in efforts {
+                    var selected = settings
+                    selected.reasoningEffort = effort
+                    let args = CommandBuilder.invocation(for: selected, prompt: "hello", sessionID: session,
+                                                         openRouterDefault: "").arguments
+                    let index = try #require(args.firstIndex(of: "--model"))
+                    #expect(args[index + 1] == model)
+                    if let effort {
+                        let index = try #require(args.firstIndex(of: "--effort"))
+                        #expect(args[index + 1] == effort.rawValue)
+                    } else {
+                        #expect(!args.contains("--effort"))
+                    }
+                    if let session {
+                        let index = try #require(args.firstIndex(of: "--resume"))
+                        #expect(args[index + 1] == session)
+                    } else {
+                        #expect(args.contains("--session-id"))
+                        #expect(!args.contains("--resume"))
+                    }
+                }
+            }
+        }
+    }
+
     @Test(arguments: AgentKind.allCases)
     func effortIsPassedOnNewAndResumedTurns(kind: AgentKind) {
         for session in [nil, "saved-session"] {
