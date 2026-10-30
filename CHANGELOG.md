@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- Window tests sorted into journeys, Core and 22 kept; `--changed` and `test-select.py` retired; each PR runs `--fast` plus its journeys, the full suite runs after a batch and on deploy (#330) (#379)
 - Latency report after each journeys run; every deploy sends it to the Inbox (#362) (#370)
 - Antigravity tool and run errors carry agy's message, and non-zero shell exits are recorded as failed (#367) (#374)
 - `timeout` on every CLI session's PATH, the Mac's shell facts in the preamble, and ChildProcess ends what a stopped program left (#366) (#371)
