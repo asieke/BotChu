@@ -550,6 +550,7 @@ private struct SubagentStateSymbol: View {
         case .queued: "clock"
         case .preparing: "circle.dashed"
         case .stopped: "stop.circle"
+        case .interrupted: "pause.circle"
         default: "checkmark.circle"
         }
     }
@@ -827,7 +828,7 @@ private struct SubagentResult: View {
             lastReply
         case .stopped:
             if let reason = SubagentRowState.stopReason(run) {
-                SubagentDisclosure("Stopped", expanded: $expanded) { SubagentText(text: reason) }
+                SubagentDisclosure(run.isInterrupted ? "Interrupted" : "Stopped", expanded: $expanded) { SubagentText(text: reason) }
             }
             lastReply
         case .queued, .preparing, .running:

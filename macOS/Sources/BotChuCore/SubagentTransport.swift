@@ -71,7 +71,7 @@ public struct SubagentTransport: Sendable {
     public func poll(heartbeat: Bool = false) async throws -> [SubagentEnvelope] {
         if machine.isRemote {
             struct Entry: Decodable { var filename: String; var data: Data; var problem: String? }
-            return try JSONDecoder().decode([Entry].self, from: await remote("poll", heartbeat ? ["heartbeat"] : []))
+            return try JSONDecoder().decode([Entry].self, from: await remote("poll", heartbeat ? ["heartbeat"] + Self.load : []))
                 .map { SubagentEnvelope(filename: $0.filename, data: $0.data, problem: $0.problem) }
         }
         if heartbeat { try await self.heartbeat() }
@@ -188,7 +188,7 @@ public struct SubagentTransport: Sendable {
     }
 
     public func heartbeat() async throws {
-        if machine.isRemote { _ = try await remote("heartbeat"); return }
+        if machine.isRemote { _ = try await remote("heartbeat", Self.load); return }
         try await write(Self.heartbeatData(closed: false), relativePath: "heartbeat.json")
     }
 
@@ -210,7 +210,16 @@ public struct SubagentTransport: Sendable {
 
     private static func heartbeatData(closed: Bool) -> Data {
         let date = ISO8601DateFormatter().string(from: closed ? Date(timeIntervalSince1970: 0) : Date())
-        return Data("{\"updatedAt\":\"\(date)\",\"closed\":\(closed ? "true" : "false")}".utf8)
+        let load = Self.load
+        return Data("{\"updatedAt\":\"\(date)\",\"closed\":\(closed ? "true" : "false"),\"load\":\(load[0]),\"cpus\":\(load[1])}".utf8)
+    }
+
+    /// This Mac's one-minute load average and its CPUs, written with each heartbeat, so a helper
+    /// waiting on a host gives a loaded Mac's late heartbeats as long as one here would (#368).
+    static var load: [String] {
+        var averages = [Double](repeating: 0, count: 3)
+        let load = getloadavg(&averages, 3) > 0 ? averages[0] : 0
+        return [String(format: "%.2f", load), String(ProcessInfo.processInfo.activeProcessorCount)]
     }
 
     /// Unlike a long-lived AgentRun, a mailbox command must release its coordinator after a network
@@ -243,6 +252,12 @@ def atomic(path, data):
         os.replace(name, path)
     finally:
         if os.path.exists(name): os.unlink(name)
+def beat(stamp, closed, load):
+    value = {'updatedAt': stamp, 'closed': closed}
+    try:
+        value['load'], value['cpus'] = float(load[0]), int(load[1])
+    except (IndexError, ValueError, TypeError): pass
+    return value
 def valid(name):
     return len(name) <= 128 and not name.startswith('.') and '/' not in name and '\\' not in name and name.endswith('.json')
 if operation == 'prepare':
@@ -264,7 +279,7 @@ if operation == 'prepare':
 elif operation == 'poll':
     if parameters and parameters[0] == 'heartbeat':
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-        atomic(root / 'heartbeat.json', json.dumps({'updatedAt': stamp, 'closed': False}).encode())
+        atomic(root / 'heartbeat.json', json.dumps(beat(stamp, False, parameters[1:])).encode())
     entries = []
     for name in sorted(os.listdir(root / 'requests')):
         if not valid(name): continue
@@ -312,7 +327,7 @@ elif operation == 'drop':
 elif operation in ['heartbeat', 'close']:
     closed = operation == 'close'
     stamp = '1970-01-01T00:00:00Z' if closed else datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    atomic(root / 'heartbeat.json', json.dumps({'updatedAt': stamp, 'closed': closed}).encode())
+    atomic(root / 'heartbeat.json', json.dumps(beat(stamp, closed, parameters)).encode())
 else: raise ValueError('Unknown mailbox operation')
 """#
 }

@@ -481,7 +481,7 @@ public enum Analytics {
             let last = index == starts.count - 1
             let opened = messages[start].role == .user
             let work = segment.filter { $0.role == .assistant || $0.role == .tool || $0.role == .error }
-            let stop = segment.last { $0.role == .note && ($0.stopped == true || $0.text == "Stopped") }
+            let stop = segment.last(where: \.isStopNote)
             if last && running && opened {
                 turns.append(AnalyticsTurn(start: max(messages[start].date, previousEnd ?? .distantPast), end: nil, outcome: .inProgress, messageID: messages[start].id))
                 break
