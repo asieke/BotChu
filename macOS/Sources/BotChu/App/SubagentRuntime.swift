@@ -398,6 +398,11 @@ final class SubagentRuntime {
             await receiveTaskList(data, id: fileID, filename: filename, from: caller)
             return
         }
+        // Model lists checked now, as Refresh models does (#326).
+        if ModelRefreshRequest.isRequest(data) {
+            await receiveModelRefresh(data, id: fileID, filename: filename, from: caller)
+            return
+        }
         if let rejected = rejections[caller.id]?[fileID] {
             do {
                 try await caller.transport.writeResult(id: fileID, data: SubagentIPC.encode(rejected))
@@ -635,6 +640,38 @@ final class SubagentRuntime {
             try await caller.transport.writeResult(id: id, data: SubagentIPC.encode(result))
             try await caller.transport.acknowledge(filename: filename)
         } catch { if isWatching(caller.id) { report("Couldn't answer a Tasks list request: \(error.localizedDescription)") } }
+    }
+
+    // MARK: Model lists (#326)
+
+    /// Takes a `botchu-models refresh` request: checks the lists it names, or every one, as Refresh
+    /// models does, outside the watcher's loop so the caller's mailbox goes on meanwhile, then answers
+    /// with each list as its picker shows it. Asking again checks again.
+    private func receiveModelRefresh(_ data: Data, id: UUID, filename: String, from caller: Caller) async {
+        let request: ModelRefreshRequest
+        do {
+            guard model != nil else { throw InboxRequest.Problem("BotChu is shutting down") }
+            request = try ModelRefreshRequest.parse(data)
+            guard request.id == id else { throw InboxRequest.Problem("the request's ID doesn't match its file") }
+            try request.validate(SubagentCallerContext(invocationID: caller.id, botID: caller.target.botID, taskID: caller.target.taskID,
+                                                       parentSubagentID: caller.parent, depth: caller.depth,
+                                                       workingDirectory: caller.directory, hostID: caller.hostID))
+            guard contexts[caller.id] != nil else { throw InboxRequest.Problem("the asking turn has ended") }
+        } catch {
+            await answer(ModelRefreshResult(id: id, errorMessage: (error as? InboxRequest.Problem)?.message ?? error.localizedDescription), to: caller)
+            try? await caller.transport.acknowledge(filename: filename)
+            return
+        }
+        try? await caller.transport.acknowledge(filename: filename)
+        Task { [weak self] in
+            guard let result = await self?.model?.refreshModelLists(request) else { return }
+            await self?.answer(result, to: caller)
+        }
+    }
+
+    private func answer(_ result: ModelRefreshResult, to caller: Caller) async {
+        do { try await caller.transport.writeResult(id: result.id, data: SubagentIPC.encode(result)) }
+        catch { if isWatching(caller.id) { report("Couldn't answer a model list request: \(error.localizedDescription)") } }
     }
 
     private static func mimeType(of name: String) -> String? {

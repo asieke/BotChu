@@ -266,7 +266,7 @@ public enum CommandBuilder {
                                    catalog: [ModelOption]? = nil) -> (model: String?, effort: String?) {
         let model = model.flatMap { value -> String? in
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : GenerationOptions.modelArgument(trimmed, kind: kind, effort: reasoningEffort)
+            return trimmed.isEmpty ? nil : GenerationOptions.modelArgument(trimmed, kind: kind, effort: reasoningEffort, catalog: catalog)
         }
         let effort = GenerationOptions.effectiveEffort(reasoningEffort, kind: kind, model: model ?? "",
             catalog: catalog, providerID: providerID)?.rawValue

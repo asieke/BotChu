@@ -212,6 +212,34 @@ extension RenderingTests {
         #expect(child.contains("Worker has no open Tasks.") && !child.contains(intake), "\(child)")
     }
 
+    /// #326: `botchu-models refresh` from a turn checks the lists it names now, as Refresh models
+    /// does, and prints each profile's models once its check ends; a profile BotChu doesn't have is
+    /// refused, saying which it has.
+    @Test func anAgentChecksModelListsNowAndHearsWhatTheyHold() async throws {
+        let fixture = try HandoffFixture()
+        defer { fixture.cleanUp() }
+        let app = fixture.app, home = ChatTarget.home(fixture.fox.id)
+        let work = try #require(app.modelCatalogScope(for: fixture.settings.account("codex-work")))
+        let listed = [ModelOption(id: "gpt-7-sol", name: "GPT-7 Sol", efforts: [.low]), ModelOption(id: "gpt-6.1-sol", name: "GPT-6.1 Sol", efforts: [.low])]
+        let asked = ModelListsAsked()
+        app.modelCatalog.listModels = { scope in
+            await asked.add(scope.accountID)
+            try await Task.sleep(for: .milliseconds(200))
+            return listed
+        }
+        app.send("REFRESH_MODELS", to: home)
+        try await fixture.wait { !app.isRunning(home) }
+        let reply = try #require(app.thread(home).last { $0.role == .assistant }?.text)
+        #expect(reply.contains("Checked 1 model list; every picker set to them shows them now:\n"
+            + "- Codex Work (codex-work): Checked just now · 2 models: gpt-7-sol, gpt-6.1-sol\nEXIT=0"), "\(reply)")
+        #expect(reply.contains("botchu-models: No model lists checked: no profile nobody lists models; the profiles are ")
+                && reply.contains("codex-work") && reply.contains("EXIT=1"), "\(reply)")
+        // Only the profile named was checked, once, and every picker set to it has its list.
+        #expect(await asked.ids == ["codex-work"])
+        #expect(app.modelCatalog.models(for: work) == listed)
+        #expect(app.nativeModels(for: Bot(name: "Any", accountID: "codex-work", workspace: "/tmp/any")) == listed)
+    }
+
     /// The batch journey: one Task for the destination bot, whose parallel workers are its own
     /// sub-agent runs; the asking turn ends while they work, and stopping the Task stops them.
     @Test func aBatchHandoffIsOneTaskWhoseWorkersAreItsOwnSubagents() async throws {
@@ -232,6 +260,12 @@ extension RenderingTests {
         #expect(app.delegation.records[target]?.allSatisfy { $0.phase == .stopped } == true)
         #expect(app.task(target) != nil)
     }
+}
+
+/// The profiles whose lists were asked for, in order.
+private actor ModelListsAsked {
+    private(set) var ids: [String] = []
+    func add(_ id: String) { ids.append(id) }
 }
 
 @MainActor private final class HandoffFixture {
@@ -378,6 +412,8 @@ extension RenderingTests {
         answer = "Written"
     elif brief == "LIST_MINE":
         answer = run("botchu-task", "list", "--mine") + "\n---\n" + run("botchu-task", "list", "--mine", "--json")
+    elif brief == "REFRESH_MODELS":
+        answer = run("botchu-models", "refresh", "--account", "codex-work") + "\n---\n" + run("botchu-models", "refresh", "--account", "nobody")
     elif brief == "LIST_AS_SUBAGENT":
         answer = run("botchu-subagent", "call", "--agent", "Worker", "--brief", "LIST_MINE")
     elif brief == "HAND_OFF_BATCH":

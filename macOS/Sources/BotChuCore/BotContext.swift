@@ -437,6 +437,10 @@ public enum BotContext {
             read or print the saved file, or include it in logs or tool output. Configure the intended program
             to consume the file directly without echoing it. If cancelled or rejected, do not repeatedly ask.
 
+            ### Model lists: `botchu-models refresh`
+            BotChu checks each profile's model list daily. When a model came out since, `botchu-models refresh` \
+            checks every list now (`--account <profile id>` for one) and prints each profile's models.
+
             ### Task: `botchu-task create`
             A Task is an independent, parent-level conversation that the named bot owns, a tab beside its chat in \
             BotChu, in its own worktree of the repository, on its account. It goes on by itself after your turn ends \

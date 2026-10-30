@@ -10,7 +10,8 @@
 // turn's Claude Code report is printed with the turn too. `--summary`
 // names a new task the way Quick tasks do (#192), on each account's smallest model unless
 // BOTCHU_SMOKE_MODEL names one: it must reply with a label of three or four words. `--models`
-// lists each Codex or Muse account's models the way its pickers read them (#220, #248), starting no turn.
+// lists each account's models the way its pickers read them (#220, #248, #326), starting no turn;
+// Sail's needs SAIL_API_KEY.
 // `--issue` writes up a New Issue request the way Projects does (#245), on each account's default
 // model unless BOTCHU_SMOKE_MODEL names one: its reply must be an issue BotChu can file (none is filed).
 //
@@ -259,9 +260,12 @@ Task {
             do {
                 let scope = ModelCatalogScope(accountID: account.id, command: account.defaultCommand, kind: account.kind)
                 let adapter = RuntimeAdapters.adapter(for: account.kind)
-                let key = adapter.usesLegacyOpenRouterKey(account: account, provider: nil) ? ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] : nil
-                for model in try await adapter.catalog(scope, environment: key.map { ["OPENROUTER_API_KEY": $0] } ?? [:]) {
-                    print("    \(model.id) · \(model.name) · \(model.efforts.map(\.rawValue).joined(separator: " "))")
+                let environment = ProcessInfo.processInfo.environment
+                var keys: [String: String] = [:]
+                if adapter.usesLegacyOpenRouterKey(account: account, provider: nil) { keys["OPENROUTER_API_KEY"] = environment["OPENROUTER_API_KEY"] }
+                if account.kind == .sail { keys[Sail.keyVariable] = environment[Sail.keyVariable] }
+                for model in try await adapter.catalog(scope, environment: keys) {
+                    print("    \(model.id) · \(model.name) · \(model.efforts.map(\.rawValue).joined(separator: " "))\(model.moving ? " · moving alias" : "")")
                 }
                 print("    OK in \(Int(Date().timeIntervalSince(started)))s")
             } catch {

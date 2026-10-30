@@ -27,7 +27,8 @@ import Testing
         #expect(GenerationOptions.efforts(for: .muse, model: "muse-wonder-2.0", catalog: listed) == [.low, .high])
         #expect(GenerationOptions.fullName("muse-wonder-2.0", kind: .muse, catalog: listed) == "Muse Wonder 2.0")
         #expect(NativeModelList.lists(.muse) && NativeModelList.lists(.codex))
-        #expect(!NativeModelList.lists(.claude) && !NativeModelList.lists(.antigravity) && NativeModelList.lists(.pi))
+        // Every family lists its own since #326.
+        #expect(NativeModelList.lists(.claude) && NativeModelList.lists(.antigravity) && NativeModelList.lists(.pi))
     }
 
     @Test func aBundledFallbackIsntTheAccountsList() throws {

@@ -8,10 +8,8 @@ struct ModelPicker: View {
     let catalog: ModelCatalog
     let disabled: Bool
     let select: (String) -> Void
-    /// The profile whose own list `data` shows (#220), checked as the picker opens when it is due.
+    /// The profile whose own list `data` shows (#220, #326), checked as the picker opens when it is due.
     var scope: ModelCatalogScope?
-    /// Look up the saved key only when a Sail picker opens.
-    var sailKey: @MainActor () -> String? = { nil }
     @State private var query = ""
     @State private var highlighted: String?
     @State private var showsCustom = false
@@ -52,7 +50,6 @@ struct ModelPicker: View {
         }
         .onChange(of: disabled) { _, running in if running { dismiss() } }
         .task {
-            if data.kind == .sail { await catalog.loadSail(key: sailKey()) }
             if let scope { await catalog.refresh(scope) }
         }
     }

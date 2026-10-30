@@ -27,9 +27,11 @@ public struct ModelOption: Identifiable, Equatable, Sendable {
     public var moving = false
     /// Whether it has Codex's Fast tier (#249).
     public var fast = false
+    /// The context window a list reported (Sail's), in tokens.
+    public var contextLength: Int?
 
     public init(id: String, name: String, efforts: [ReasoningEffort], moving: Bool = false, fast: Bool = false,
-                providerID: String? = nil, effortsKnown: Bool = true, provider: String? = nil) {
+                providerID: String? = nil, effortsKnown: Bool = true, provider: String? = nil, contextLength: Int? = nil) {
         self.id = id
         self.name = name
         self.efforts = efforts
@@ -37,6 +39,7 @@ public struct ModelOption: Identifiable, Equatable, Sendable {
         self.fast = fast
         self.providerID = providerID ?? provider
         self.effortsKnown = effortsKnown
+        self.contextLength = contextLength
     }
 }
 
@@ -54,8 +57,8 @@ public struct ModelLabel: Equatable, Sendable {
 }
 
 /// Starter choices verified against the installed CLIs. Custom ids remain available because
-/// catalogs and account access change independently of BotChu. No login files are read. A Codex or
-/// Muse profile's own list (`catalog`, #220, #248) replaces its starters once read; they stand in until then.
+/// catalogs and account access change independently of BotChu. No login files are read. A profile's
+/// own list (`catalog`, #220, #248, #326) replaces its starters once read; they stand in until then.
 public enum GenerationOptions {
     public static func models(for kind: AgentKind, catalog: [ModelOption]?, providerID: String? = nil) -> [ModelOption] {
         if kind == .pi {
@@ -114,7 +117,8 @@ public enum GenerationOptions {
         if kind == .pi {
             return models(for: kind, catalog: catalog, providerID: providerID).first { $0.id == model }?.efforts ?? []
         }
-        if let option = option(for: model, kind: kind, catalog: catalog) { return option.efforts }
+        // A list that doesn't say (Sail's) leaves the family's.
+        if let option = option(for: model, kind: kind, catalog: catalog), option.effortsKnown { return option.efforts }
         switch kind {
         case .claude, .antigravity: return [.low, .medium, .high, .xhigh, .max]
         case .codex: return [.low, .medium, .high, .xhigh, .max, .ultra]
@@ -160,9 +164,10 @@ public enum GenerationOptions {
     }
 
     /// AGY rejects a suffixed model id that disagrees with --effort. Resolve known model
-    /// families to the matching variant; preserve custom ids and the default verbatim.
-    public static func modelArgument(_ model: String, kind: AgentKind, effort: ReasoningEffort?) -> String {
-        guard kind == .antigravity, let effort, let option = option(for: model, kind: kind),
+    /// families (the profile's list, else the starters) to the matching variant; preserve custom
+    /// ids and the default verbatim.
+    public static func modelArgument(_ model: String, kind: AgentKind, effort: ReasoningEffort?, catalog: [ModelOption]? = nil) -> String {
+        guard kind == .antigravity, let effort, let option = option(for: model, kind: kind, catalog: catalog),
               option.efforts.contains(effort) else { return model }
         return antigravityFamily(option.id) + "-" + effort.rawValue
     }
@@ -187,7 +192,7 @@ public enum GenerationOptions {
             }
             return ModelLabel(title: "\(kind.displayName) default", detail: "Chosen by \(kind.displayName) · \(pending)")
         }
-        if let alias = movingAlias(model, kind: kind) {
+        if let alias = movingAlias(model, kind: kind, catalog: catalog) {
             if let resolved {
                 return ModelLabel(title: "\(fullName(resolved, kind: kind)) · latest",
                                   detail: "\(model) · moving alias · last ran \(resolved)")
@@ -208,10 +213,11 @@ public enum GenerationOptions {
         return claudeName(model) ?? (kind == .muse ? museName(model) : nil) ?? model
     }
 
-    /// Claude Code's aliases, which follow the newest version it knows for the account: the
-    /// starters, and those it documents besides (any with `[1m]` for 1M context).
-    private static func movingAlias(_ model: String, kind: AgentKind) -> String? {
+    /// Claude Code's aliases, which follow the newest version it knows for the account: those its
+    /// list reports, the starters, and those it documents besides (any with `[1m]` for 1M context).
+    private static func movingAlias(_ model: String, kind: AgentKind, catalog: [ModelOption]?) -> String? {
         guard kind == .claude else { return nil }
+        if let option = catalog?.first(where: { $0.id == model }), option.moving { return option.name }
         let (base, context) = model.lowercased().hasSuffix("[1m]") ? (String(model.dropLast(4)), " (1M context)") : (model, "")
         let names = ["opus": "Claude Opus", "sonnet": "Claude Sonnet", "haiku": "Claude Haiku", "fable": "Claude Fable"]
         return names[base.lowercased()].map { $0 + context }

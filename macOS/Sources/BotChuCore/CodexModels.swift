@@ -1,8 +1,8 @@
 import Foundation
 
-/// A configured profile as its command runs it on this Mac, whose CLI lists its own models (#220,
-/// Muse's #248). A changed command is another scope; a host's task has none, since a list read here
-/// says nothing about what the host can run.
+/// A configured profile as its command runs it, on this Mac or on a host, whose CLI lists its own
+/// models (#220, Muse's #248, every family's #326). A changed command, configuration or host is
+/// another scope: a list read here says nothing about what a host can run, so a host's is read there.
 public struct ModelCatalogScope: Hashable, Sendable {
     public var accountID: String
     public var command: String
@@ -22,9 +22,13 @@ public struct ModelCatalogScope: Hashable, Sendable {
     }
     public var configurationDirectory: String?
     public var legacyOpenRouterCredential: Bool
+    /// Which key Sail's list was read with (`AppSettings.sailUsageCredentialRevision`): a new key is
+    /// another account's list. A count, never the key.
+    public var credentialRevision: Int
 
     public init(accountID: String, command: String, kind: AgentKind, configurationDirectory: String? = nil,
-                legacyOpenRouterCredential: Bool = false, machine: Machine = .thisMac, folder: String = NSHomeDirectory(), usesLegacyOpenRouterKey: Bool = false) {
+                legacyOpenRouterCredential: Bool = false, machine: Machine = .thisMac, folder: String = NSHomeDirectory(), usesLegacyOpenRouterKey: Bool = false,
+                credentialRevision: Int = 0) {
         self.accountID = accountID
         self.command = command
         self.kind = kind
@@ -32,12 +36,18 @@ public struct ModelCatalogScope: Hashable, Sendable {
         self.folder = folder
         self.configurationDirectory = machine.isRemote ? nil : configurationDirectory
         self.legacyOpenRouterCredential = kind == .pi && !machine.isRemote && (legacyOpenRouterCredential || usesLegacyOpenRouterKey)
+        self.credentialRevision = kind == .sail ? credentialRevision : 0
     }
 
     /// How the scope is saved: opaque, so `model-catalogs.json` holds no command.
     public var key: String {
-        // Preserve existing native cache keys; Pi is a new catalog with explicit runtime scope.
-        ConnectorScope.profile(accountID: accountID, command: kind == .pi ? "pi\0\(configurationDirectory ?? "")\0\(legacyOpenRouterCredential)\0\(command)\(machine.destination.map { "@" + $0 + ":" + folder } ?? "")" : command)
+        // Preserve existing native cache keys on this Mac; Pi is a new catalog with explicit runtime scope.
+        if kind == .pi {
+            return ConnectorScope.profile(accountID: accountID, command: "pi\0\(configurationDirectory ?? "")\0\(legacyOpenRouterCredential)\0\(command)\(machine.destination.map { "@" + $0 + ":" + folder } ?? "")")
+        }
+        let host = machine.destination.map { "\0@" + $0 } ?? ""
+        let key = kind == .sail ? "\0key \(credentialRevision)" : ""
+        return ConnectorScope.profile(accountID: accountID, command: command + host + key)
     }
 }
 
@@ -63,45 +73,47 @@ public struct ModelListFailure: Error, Equatable, Sendable {
 }
 
 /// The CLIs that list their own models, each through its profile's command in a bounded, read-only
-/// JSON-RPC query that starts no model turn and reads no login.
+/// query that starts no model turn and reads no login: JSON-RPC (Codex, Muse, Pi), Claude Code's
+/// control protocol, or Antigravity's `agy models`. Sail's list comes from its API (`SailRuntimeAdapter`).
 public enum NativeModelList {
     public static let timeout: TimeInterval = 20
 
     public static func lists(_ kind: AgentKind) -> Bool { kind.adapter.listsModels }
 
-    /// The scope's models, run from `folder` (the home folder).
+    /// The scope's models, run from `folder` (the home folder), or on a host from the scope's own.
     public static func list(_ scope: ModelCatalogScope, folder: String = NSHomeDirectory(), timeout: TimeInterval = timeout,
                             openRouterKey: String? = nil) async throws -> [ModelOption] {
+        let machine = scope.machine, folder = machine.isRemote ? scope.folder : folder
         switch scope.kind {
-        case .codex: try await CodexModelList.list(command: scope.command, folder: folder, timeout: timeout)
-        case .muse: try await MuseModelList.list(command: scope.command, folder: folder, timeout: timeout)
-        case .pi: try await PiModelList.list(command: scope.command, machine: scope.machine, folder: scope.folder,
+        case .claude: return try await ClaudeModelList.list(command: scope.command, machine: machine, folder: folder, timeout: timeout)
+        case .codex: return try await CodexModelList.list(command: scope.command, machine: machine, folder: folder, timeout: timeout)
+        case .antigravity: return try await AntigravityModelList.list(command: scope.command, machine: machine, folder: folder, timeout: timeout)
+        case .muse: return try await MuseModelList.list(command: scope.command, machine: machine, folder: folder, timeout: timeout)
+        case .pi: return try await PiModelList.list(command: scope.command, machine: scope.machine, folder: scope.folder,
             environment: scope.profileEnvironment.merging(scope.usesLegacyOpenRouterKey ? openRouterKey.map { ["OPENROUTER_API_KEY": $0] } ?? [:] : [:]) { _, value in value },
             unsetEnvironment: scope.unsetEnvironment, timeout: timeout)
-        case .claude, .antigravity, .sail: throw ModelListFailure.unsupported(scope.kind.displayName)
+        case .sail: throw ModelListFailure.unsupported(scope.kind.displayName)
         }
     }
 
-    /// Starts `arguments` through `command` as a JSON-RPC host, initializes it and hands `body` its
-    /// calls; the host is stopped after, whatever happens. Off the main thread.
-    static func query(_ cli: String, command: String, arguments: [String], capabilities: [String: Any], folder: String,
-                      timeout: TimeInterval, _ body: @escaping @Sendable (_ call: (String, [String: Any]) throws -> [String: Any]) throws -> [ModelOption]) async throws -> [ModelOption] {
-        nonisolated(unsafe) let capabilities = capabilities
-        return try await Task.detached(priority: .utility) {
+    /// Starts `arguments` through `command`, on this Mac in `folder` or on `machine` in its own, with
+    /// the output bounded and a deadline, and hands `body` the running process, which is stopped and
+    /// reaped after, whatever happens. Off the main thread.
+    static func run(_ cli: String, command: String, arguments: [String], machine: Machine, folder: String, timeout: TimeInterval,
+                    _ body: @escaping @Sendable (UsageProcess) throws -> [ModelOption]) async throws -> [ModelOption] {
+        try await Task.detached(priority: .utility) {
             let started = Date()
             let process: UsageProcess
             do {
-                process = try UsageProcess(command: command, arguments: arguments, directory: URL(fileURLWithPath: folder, isDirectory: true),
-                                           timeout: timeout, frameLimit: 8 << 20)
+                process = try UsageProcess(command: command, arguments: arguments,
+                                           directory: URL(fileURLWithPath: machine.isRemote ? NSHomeDirectory() : folder, isDirectory: true),
+                                           machine: machine, remoteFolder: folder, timeout: timeout, frameLimit: 8 << 20)
             } catch {
                 throw ModelListFailure("Could not start \(cli). Check the profile’s command in Settings.")
             }
             defer { process.stop() }
             do {
-                _ = try process.call("initialize", ["clientInfo": ["name": "botchu", "title": "BotChu", "version": "1"],
-                                                    "capabilities": capabilities])
-                try process.send(["jsonrpc": "2.0", "method": "initialized"])
-                return try body { try call(process, cli, $0, $1) }
+                return try body(process)
             } catch let failure as ModelListFailure {
                 throw failure
             } catch {
@@ -109,6 +121,20 @@ public enum NativeModelList {
                     ? ModelListFailure("\(cli) didn’t list its models within \(Int(timeout)) seconds.") : ModelListFailure.failed(cli)
             }
         }.value
+    }
+
+    /// Starts `arguments` through `command` as a JSON-RPC host, initializes it and hands `body` its
+    /// calls; the host is stopped after, whatever happens. Off the main thread.
+    static func query(_ cli: String, command: String, arguments: [String], capabilities: [String: Any], machine: Machine = .thisMac,
+                      folder: String, timeout: TimeInterval,
+                      _ body: @escaping @Sendable (_ call: (String, [String: Any]) throws -> [String: Any]) throws -> [ModelOption]) async throws -> [ModelOption] {
+        nonisolated(unsafe) let capabilities = capabilities
+        return try await run(cli, command: command, arguments: arguments, machine: machine, folder: folder, timeout: timeout) { process in
+            _ = try process.call("initialize", ["clientInfo": ["name": "botchu", "title": "BotChu", "version": "1"],
+                                                "capabilities": capabilities])
+            try process.send(["jsonrpc": "2.0", "method": "initialized"])
+            return try body { try call(process, cli, $0, $1) }
+        }
     }
 
     /// One JSON-RPC call, telling a CLI too old for the method from any other error.
@@ -164,10 +190,11 @@ public enum CodexModelList {
         return models
     }
 
-    /// The profile's models, run from `folder` (the home folder).
-    public static func list(command: String, folder: String = NSHomeDirectory(), timeout: TimeInterval = timeout) async throws -> [ModelOption] {
+    /// The profile's models, run from `folder` (the home folder), or on `machine` from its own.
+    public static func list(command: String, machine: Machine = .thisMac, folder: String = NSHomeDirectory(),
+                            timeout: TimeInterval = timeout) async throws -> [ModelOption] {
         try await NativeModelList.query("Codex", command: command, arguments: ["app-server"], capabilities: ["experimentalApi": true],
-                                        folder: folder, timeout: timeout) { call in
+                                        machine: machine, folder: folder, timeout: timeout) { call in
             var pages: [[String: Any]] = []
             var cursor: String?
             repeat {
@@ -321,12 +348,16 @@ public enum NativeCatalogFile {
         var fast: Bool?
         var providerID: String?
         var effortsKnown: Bool?
+        /// A moving alias (Claude Code's `opus`); nil in lists saved before #326, which had none.
+        var moving: Bool?
+        var contextLength: Int?
     }
 
     public static func encode(_ catalogs: [String: NativeCatalog]) -> Data? {
         let file = File(version: version, catalogs: catalogs.sorted { $0.key < $1.key }.map { key, catalog in
             Catalog(key: key, checkedAt: catalog.checkedAt,
-                    models: catalog.models.map { Model(id: $0.id, name: $0.name, efforts: $0.efforts.map(\.rawValue), fast: $0.fast, providerID: $0.providerID, effortsKnown: $0.effortsKnown) })
+                    models: catalog.models.map { Model(id: $0.id, name: $0.name, efforts: $0.efforts.map(\.rawValue), fast: $0.fast, providerID: $0.providerID,
+                                                       effortsKnown: $0.effortsKnown, moving: $0.moving ? true : nil, contextLength: $0.contextLength) })
         })
         return try? JSONEncoder().encode(file)
     }
@@ -336,7 +367,8 @@ public enum NativeCatalogFile {
         guard let file = try? JSONDecoder().decode(File.self, from: data), file.version == version else { return [:] }
         return Dictionary(file.catalogs.compactMap { catalog -> (String, NativeCatalog)? in
             let models = catalog.models.filter { !$0.id.isEmpty }.map {
-                ModelOption(id: $0.id, name: $0.name, efforts: $0.efforts.compactMap(ReasoningEffort.init), fast: $0.fast ?? true, providerID: $0.providerID, effortsKnown: $0.effortsKnown ?? true)
+                ModelOption(id: $0.id, name: $0.name, efforts: $0.efforts.compactMap(ReasoningEffort.init), moving: $0.moving ?? false, fast: $0.fast ?? true,
+                            providerID: $0.providerID, effortsKnown: $0.effortsKnown ?? true, contextLength: $0.contextLength)
             }
             return models.isEmpty ? nil : (catalog.key, NativeCatalog(models: models, checkedAt: catalog.checkedAt))
         }) { $1 }
