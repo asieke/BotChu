@@ -261,27 +261,38 @@ struct MergeCell: View {
     }
 }
 
-/// The computer tasks work on, and whether its checkout exists yet on this Mac.
-struct WorkplaceCell: View {
-    var row: ProjectRow
-    @State private var status: CheckoutStatus?
+/// The checkout tasks work in, as glyphs: local changes, commits ahead and behind its fetched
+/// upstream, none yet, or on another computer. The sentence is its tooltip (#321).
+struct CheckoutCell: View {
+    /// Nil until read.
+    var status: CheckoutStatus?
+    var path: String
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(row.workplace).lineLimit(1)
-            Text(status?.label ?? "Checking checkout…").font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
-        }
-        .help((status?.detail ?? row.location.path) + "\n" + (status?.fetchedAt.map {
+        marks
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .help(help)
+            .accessibilityLabel(status?.label ?? "Checking checkout")
+    }
+
+    /// One Text, however many marks: the table lays out every cell of a row as it scrolls in.
+    private var marks: Text {
+        (status?.marks ?? []).reduce(nil as Text?) { text, mark in
+            let tint = mark == .changes || mark == .unavailable ? GitHubColors.attention : GitHubColors.neutral
+            var shown = mark.symbol.map { Text(Image(systemName: $0)).font(.system(size: 10, weight: .semibold)).foregroundStyle(tint) }
+                ?? Text("—").foregroundStyle(.quaternary)
+            if let count = mark.count { shown = shown + Text(" \(count)").monospacedDigit() }
+            return text.map { $0 + Text("   ") + shown } ?? shown
+        } ?? Text("")
+    }
+
+    private var help: String {
+        guard let status else { return "Checking checkout…\n" + path }
+        return status.label + "\n" + status.detail + "\n" + (status.fetchedAt.map {
             "Last fetched \($0.formatted(date: .abbreviated, time: .shortened)); ahead/behind compares local fetched refs."
-        } ?? "No recorded fetch. Checkout state does not mean changes have been uploaded."))
-        .task(id: row.location) {
-            status = nil
-            while !Task.isCancelled {
-                let reading = await CheckoutStatus.read(row.location, host: row.workplace)
-                guard !Task.isCancelled else { return }
-                status = reading
-                do { try await Task.sleep(for: .seconds(30)) } catch { return }
-            }
-        }
+        } ?? "No recorded fetch. Checkout state does not mean changes have been uploaded.")
     }
 }
 
