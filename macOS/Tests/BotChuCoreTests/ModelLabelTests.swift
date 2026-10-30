@@ -5,19 +5,28 @@ import Testing
 @Suite struct ModelLabelTests {
     @Test func claudeChoicesHaveFullNamesAndSayWhichMove() {
         let options = GenerationOptions.models(for: .claude)
-        #expect(options.map(\.id) == ["opus", "claude-opus-5-5", "sonnet", "claude-sonnet-5-5", "haiku", "claude-haiku-5-5"])
+        #expect(options.map(\.id) == ["opus", "claude-opus-5-5", "fable", "claude-fable-5-1",
+                                    "sonnet", "claude-sonnet-5-5", "haiku", "claude-haiku-5-5"])
         let picker = ModelPickerData(kind: .claude, model: "", openRouterDefault: "")
         let titles = Dictionary(uniqueKeysWithValues: picker.choices.map { ($0.id, $0.title) })
         #expect(titles["opus"] == "Claude Opus · latest")
         #expect(titles["claude-opus-5-5"] == "Claude Opus 5.5")
+        #expect(titles["fable"] == "Claude Fable · latest")
+        #expect(titles["claude-fable-5-1"] == "Claude Fable 5.1")
         #expect(titles["sonnet"] == "Claude Sonnet · latest")
         #expect(titles["claude-sonnet-5-5"] == "Claude Sonnet 5.5")
         #expect(titles["haiku"] == "Claude Haiku · latest")
         #expect(titles["claude-haiku-5-5"] == "Claude Haiku 5.5")
-        #expect(!picker.choices.contains { ["Opus", "Sonnet", "Haiku"].contains($0.title) })
+        #expect(!picker.choices.contains { ["Opus", "Fable", "Sonnet", "Haiku"].contains($0.title) })
+        #expect(options.first { $0.id == "fable" }?.moving == true)
+        #expect(options.first { $0.id == "claude-fable-5-1" }?.moving == false)
         // Pinned versions keep their alias's effort choices.
         #expect(GenerationOptions.efforts(for: .claude, model: "claude-opus-5-5") == GenerationOptions.efforts(for: .claude, model: "opus"))
         #expect(GenerationOptions.efforts(for: .claude, model: "claude-haiku-5-5").isEmpty)
+        for id in ["fable", "claude-fable-5-1"] {
+            #expect(GenerationOptions.efforts(for: .claude, model: id) == [.low, .medium, .high, .xhigh, .max])
+        }
+        #expect(picker.matching("fable").map(\.id) == ["fable", "claude-fable-5-1"])
         #expect(picker.matching("5.5").map(\.id) == ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"])
     }
 
@@ -46,6 +55,8 @@ import Testing
         #expect(GenerationOptions.label(for: "opusplan", kind: .claude).title == "opusplan")
         #expect(GenerationOptions.label(for: "opus[1m]", kind: .claude).title == "Claude Opus (1M context) · latest")
         #expect(GenerationOptions.label(for: "fable", kind: .claude, resolved: "claude-fable-5-1").title == "Claude Fable 5.1 · latest")
+        #expect(GenerationOptions.label(for: "fable", kind: .claude) ==
+                ModelLabel(title: "Claude Fable · latest", detail: "fable · moving alias · version unresolved"))
     }
 
     @Test func pinnedAndCustomIDsAreSpelledOutWithoutGuessing() {
