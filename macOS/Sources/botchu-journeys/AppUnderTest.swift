@@ -3,7 +3,8 @@ import BotChuCore
 
 /// The release build under test: a copy with its own bundle identifier, so what it keeps in its
 /// defaults (the status sidebar's visibility, the window's frame) never reaches the installed app's,
-/// launched in the background on the fixture, and read through its frame marks and accessibility.
+/// and without App Nap, launched in the background on the fixture, and read through its frame marks
+/// and accessibility.
 final class AppUnderTest {
     static let bundleIdentifier = "local.BotChu.journeys"
 
@@ -33,6 +34,9 @@ final class AppUnderTest {
         }
         plist["CFBundleIdentifier"] = bundleIdentifier
         plist["CFBundleName"] = "BotChu Journeys"
+        // The owner uses BotChu in front, where App Nap never slows it; the copy runs behind their
+        // windows, where macOS would nap it whenever they cover it, and its times would follow.
+        plist["LSAppNapIsDisabled"] = true
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: plistURL)
         // As macOS/build.sh signs: with the development identity when there is one, else ad hoc.
         if (try? run("/usr/bin/codesign", ["-fs", "Apple Development", copy.path])) == nil {

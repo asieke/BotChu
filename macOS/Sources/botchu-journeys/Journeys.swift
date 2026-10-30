@@ -28,6 +28,8 @@ struct Journeys {
         var task: (bot: Bot, id: UUID)?
         /// How many of the Inbox's deliveries journey 11 marked Done.
         var deliveriesDone = 0
+        /// The conversations sent messages, whose latest isn't the fixture's any more.
+        var sentTo: Set<UUID> = []
     }
 
     let app: AppUnderTest
@@ -57,6 +59,8 @@ struct Journeys {
     /// Runs one journey; when a step fails, measures the journey again once, saying why and the load
     /// (not while recording a baseline, which keeps what it measured).
     func run(_ number: Int, _ journey: () -> [JourneyResult]) -> [JourneyResult] {
+        let began = Date()
+        defer { print(String(format: "journeys: journey %d took %.1f s", number, Date().timeIntervalSince(began))) }
         let first = journey()
         let failed = first.filter { !$0.passed }
         guard !failed.isEmpty, !recording else { first.forEach(report); return first }
@@ -113,6 +117,7 @@ struct Journeys {
             throw HarnessFailure("The message box has no Send button")
         }
         start = try press(button)
+        left.sentTo.insert(bot.id)
         let shown = try app.mark(FrameMarks.chat(bot.id), after: start)
         return Self.ms(start, shown.nanoseconds)
     }
@@ -205,7 +210,9 @@ struct Journeys {
         if window.first(identifier: "sidebar-bot-\(bot.id.uuidString)") == nil {
             throw HarnessFailure("The sidebar shows no row for \(bot.name)")
         }
-        guard let last = fixture.lastItem[bot.id], window.first(identifier: "chat-item-\(last.uuidString)") != nil else {
+        if left.sentTo.contains(bot.id) {
+            guard window.first(where: { $0.identifier.hasPrefix("chat-item-") }) != nil else { throw HarnessFailure("The chat shows none of \(bot.name)'s messages") }
+        } else if let last = fixture.lastItem[bot.id], window.first(identifier: "chat-item-\(last.uuidString)") == nil {
             throw HarnessFailure("The chat doesn't show \(bot.name)'s latest message")
         }
     }

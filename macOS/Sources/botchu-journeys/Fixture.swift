@@ -110,14 +110,14 @@ struct Fixture {
         }
     }
 
-    /// Projects' catalog as just synced, listing the task project, so a launch doesn't sync it with
-    /// GitHub (`ProjectSync.staleAfter`).
+    /// Projects' catalog as synced a day from now, listing the task project, so BotChu doesn't sync
+    /// it with GitHub at launch or in the rest of the run (`ProjectSync.staleAfter` is two minutes).
     func markProjectsSynced() throws {
         var snapshot = ProjectSnapshot(login: "journeys")
         snapshot.pages = [ProjectSnapshot.Page(etag: "", repos: [ProjectSnapshot.Listed(nameWithOwner: Self.taskRepo, description: "The journeys' project",
                                                                                         pushedAt: Date(), updatedAt: Date())])]
-        snapshot.syncedAt = Date()
-        snapshot.fullSyncedAt = Date()
+        snapshot.syncedAt = Date().addingTimeInterval(86_400)
+        snapshot.fullSyncedAt = Date().addingTimeInterval(86_400)
         try JSONEncoder().encode(snapshot).write(to: data.appendingPathComponent("projects.json"), options: .atomic)
     }
 
