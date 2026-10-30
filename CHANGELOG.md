@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- `botchu-subagent resume <id>` and a Resume row relaunch an interrupted run with its brief, session and worktree once no CLI of it still runs; `wait` from a later turn collects a run this conversation started (#368)
 - Sub-agent runs BotChu interrupts end Interrupted with how far they got (tool calls, last action, worktree, branch, uncommitted files), stopped turns say how far they got, and a loaded Mac's late heartbeat no longer fails `botchu-subagent wait` (#368) (#376)
 - `timeout` on every CLI session's PATH, the Mac's shell facts in the preamble, and ChildProcess ends what a stopped program left (#366) (#371)
 - Open reply links to files from the conversation's folder; other schemes besides web and mail open nothing (#363) (#372)

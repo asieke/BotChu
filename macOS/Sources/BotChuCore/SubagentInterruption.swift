@@ -59,6 +59,12 @@ public struct SubagentInterruption: Codable, Equatable, Sendable {
     /// raw diagnostic: what ended it, how far it got, its last action and its workspace. `failure`
     /// is why a failed run's CLI ended.
     public func outcome(for run: SubagentRun, failure: String? = nil) -> String {
+        // A failure says what went wrong first, as it did.
+        cause == .failed ? Self.failureText(failure) + "\n\n" + facts(for: run) : facts(for: run)
+    }
+
+    /// What ended it (but a failure's own words), how far it got, its last action and its workspace.
+    public func facts(for run: SubagentRun) -> String {
         let calls = toolCalls == 0 ? "before any tool call" : "after \(toolCalls) tool \(toolCalls == 1 ? "call" : "calls")"
         // A restart is seen at the next launch, so how long it ran isn't known.
         let took = cause == .restart ? "" : run.startedAt.map { Self.duration(at.timeIntervalSince($0)) }.map { " in \($0)" } ?? ""
@@ -72,9 +78,7 @@ public struct SubagentInterruption: Codable, Equatable, Sendable {
         }
         if let lastAction { parts.append("Last action: \(lastAction).") }
         parts.append(Self.workspaceText(run.workingDirectory, workspace))
-        let facts = parts.joined(separator: " ")
-        // A failure says what went wrong first, as it did.
-        return cause == .failed ? Self.failureText(failure) + "\n\n" + facts : facts
+        return parts.joined(separator: " ")
     }
 
     /// A tool call in one bounded line: a command as it ran (`bun run test`), anything else as its

@@ -574,9 +574,53 @@ private struct SubagentMenu: View {
         if run.phase.isActive {
             Button(tab.isStopping(run) ? "Stopping…" : "Stop") { tab.stop(run.id) }.disabled(tab.isStopping(run))
         } else {
+            if run.isResumable {
+                Button("Resume") { model.delegation.resumeByOwner(run.id) }.disabled(model.delegation.isResuming(run.id))
+            }
             Button("Clear Run") { model.delegation.clear(run.id) }
                 .disabled(model.delegation.children(of: run.id).contains { $0.phase.isActive })
         }
+    }
+}
+
+/// Resume for a run that can be relaunched (#368): with its brief, session and worktree. Why the
+/// last Resume didn't relaunch it shows beside it until the next.
+private struct SubagentResumeRow: View {
+    @Environment(AppModel.self) private var model
+    let run: SubagentRun
+
+    var body: some View {
+        if run.isResumable {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                SubagentResumeButton(run: run)
+                if let problem = model.delegation.resumeProblems[run.id] {
+                    Text(problem).font(.system(size: 12)).foregroundStyle(failureRed).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+}
+
+private struct SubagentResumeButton: View {
+    @Environment(AppModel.self) private var model
+    let run: SubagentRun
+
+    var body: some View {
+        let resuming = model.delegation.isResuming(run.id)
+        Button { model.delegation.resumeByOwner(run.id) } label: {
+            Label(resuming ? "Resuming…" : "Resume", systemImage: "play.fill")
+                .font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 10)
+                .frame(height: 24)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Palette.button))
+                .foregroundStyle(Palette.buttonText)
+                .opacity(resuming ? 0.55 : 1)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(resuming)
+        .accessibilityIdentifier("subagent-resume-\(run.id.uuidString)")
     }
 }
 
@@ -823,11 +867,13 @@ private struct SubagentResult: View {
         case .failed:
             let error = run.errorMessage ?? "Failed without a message."
             SubagentDisclosure("Error", copy: error, expanded: $expanded) { SubagentText(text: error, mono: true) }
+            SubagentResumeRow(run: run)
             lastReply
         case .stopped:
             if let reason = SubagentRowState.stopReason(run) {
                 SubagentDisclosure(run.isInterrupted ? "Interrupted" : "Stopped", expanded: $expanded) { SubagentText(text: reason) }
             }
+            SubagentResumeRow(run: run)
             lastReply
         case .queued, .preparing, .running:
             EmptyView()

@@ -176,7 +176,78 @@ def caller_depth():
         fail("Maximum sub-agent depth (3) reached.")
     return depth
 
-def wait_for(ids):
+def resume(args):
+    """Asks BotChu to resume an interrupted run (#368), or to send this turn the handoff of one under
+    way or ended, then waits for it as call does."""
+    run_id = canonical(args.id)
+    live()
+    depth = caller_depth()
+    # An earlier result of this run in this turn's mailbox isn't the resumed run's.
+    try:
+        (ROOT / "results" / (run_id + ".result.json")).unlink()
+    except OSError:
+        pass
+    request_id = str(uuid.uuid4())
+    atomic_json(ROOT / "requests" / (request_id + ".json"), {
+        "kind": "resume",
+        "id": request_id,
+        "runID": run_id,
+        "invocationID": caller_uuid("BOTCHU_INVOCATION_ID", True),
+        "callerBotID": caller_uuid("BOTCHU_CALLER_BOT_ID", True),
+        "callerTaskID": caller_uuid("BOTCHU_CALLER_TASK_ID"),
+        "parentSubagentID": caller_uuid("BOTCHU_CALLER_SUBAGENT_ID"),
+        "depth": depth,
+        "createdAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
+    path = ROOT / "results" / (request_id + ".result.json")
+    started = time.monotonic()
+    timeout = seconds("BOTCHU_WAIT_TIMEOUT_SECONDS", 120, 86400)
+    stale_since = None
+    while not path.exists():
+        if time.monotonic() - started > timeout:
+            fail("BotChu hasn't answered yet; run botchu-subagent resume " + run_id + " again.")
+        stale_since = responding([request_id], stale_since, "botchu-subagent resume " + run_id)
+        time.sleep(0.25)
+    answer = read_json(path)
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    if answer.get("kind") != "resume" or canonical(answer.get("id")) != request_id or canonical(answer.get("runID")) != run_id:
+        fail("Mismatched resume answer: " + request_id)
+    if not answer.get("accepted"):
+        fail("Not resumed: " + str(answer.get("errorMessage") or "BotChu couldn't resume it."))
+    print(("Resumed " if answer.get("resumed") else "Waiting for ") + run_id, file=sys.stderr, flush=True)
+    if args.no_wait:
+        print(run_id, flush=True)
+        return 0
+    return wait_for([run_id], attaching=False)
+
+def attach(pending):
+    """Asks BotChu for the runs this turn's mailbox knows nothing of, runs of an earlier turn of this
+    conversation's (#368), whose handoffs then come here. Not while BotChu doesn't answer."""
+    unknown = [request_id for request_id in pending
+               if not any((ROOT / folder / (request_id + suffix)).exists()
+                          for folder, suffix in (("results", ".result.json"), ("status", ".status.json"), ("requests", ".json")))]
+    if not unknown:
+        return
+    age, load = heartbeat()
+    if not -60 <= age <= heartbeat_limit(load):
+        return
+    request_id = str(uuid.uuid4())
+    atomic_json(ROOT / "requests" / (request_id + ".json"), {
+        "kind": "attach",
+        "id": request_id,
+        "runIDs": unknown,
+        "invocationID": caller_uuid("BOTCHU_INVOCATION_ID", True),
+        "callerBotID": caller_uuid("BOTCHU_CALLER_BOT_ID", True),
+        "callerTaskID": caller_uuid("BOTCHU_CALLER_TASK_ID"),
+        "parentSubagentID": caller_uuid("BOTCHU_CALLER_SUBAGENT_ID"),
+        "depth": caller_depth(),
+        "createdAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
+
+def wait_for(ids, attaching=True):
     pending = list(dict.fromkeys(canonical(value) for value in ids))
     started = time.monotonic()
     timeout = seconds("BOTCHU_WAIT_TIMEOUT_SECONDS", 7200, 86400)
@@ -184,6 +255,8 @@ def wait_for(ids):
     last_notice = started
     stale_since = None
     failed = False
+    if attaching:
+        attach(pending)
     while pending:
         for request_id in list(pending):
             result_path = ROOT / "results" / (request_id + ".result.json")
@@ -204,6 +277,8 @@ def wait_for(ids):
                 if result.get("errorMessage"):
                     print(("Interrupted: " if interrupted and phase == "stopped" else "Error: ") + str(result["errorMessage"]))
                 print("Status: " + ("interrupted" if interrupted and phase == "stopped" else phase), flush=True)
+                if interrupted:
+                    print("Resume it with: botchu-subagent resume " + request_id, flush=True)
                 failed = failed or phase != "completed"
                 pending.remove(request_id)
                 continue
@@ -758,13 +833,20 @@ def main():
         child.add_argument("--title")
         child.add_argument("--workspace", choices=("shared", "bot_home"), default="shared")
         child.add_argument("--brief", required=True)
-    waiter = commands.add_parser("wait")
+    waiter = commands.add_parser("wait", help="Wait for runs and print their handoffs, also runs an earlier turn of "
+        "this conversation's started")
     waiter.add_argument("ids", nargs="+")
+    resumer = commands.add_parser("resume", help="Relaunch an interrupted run of this conversation's with its brief, "
+        "session and workspace, and wait for its handoff as call does")
+    resumer.add_argument("id")
+    resumer.add_argument("--no-wait", action="store_true", help="Print its ID for a later botchu-subagent wait instead")
     args = parser.parse_args()
     if args.command == "list":
         return roster()
     if args.command == "wait":
         return wait_for(args.ids)
+    if args.command == "resume":
+        return resume(args)
     request_id = submit(args)
     if args.command == "spawn":
         print(request_id, flush=True)
