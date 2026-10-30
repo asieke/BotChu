@@ -86,5 +86,17 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(200))
         window.layoutIfNeeded()
         #expect(Set(bodies.keys) == [first, second], "Only the two rows whose selection changed redraw: \(bodies)")
+
+        // SwiftUI evaluates a view that reads a setting once more at the first write after it shows.
+        fixture.defaults.set(0, forKey: "settings.unrelated")
+        try await Task.sleep(for: .milliseconds(100))
+        window.layoutIfNeeded()
+        bodies.removeAll()
+        for n in 1...3 {
+            fixture.defaults.set(n, forKey: "settings.unrelated")
+            try await Task.sleep(for: .milliseconds(100))
+            window.layoutIfNeeded()
+        }
+        #expect(bodies.isEmpty, "An unrelated UserDefaults write redrew sidebar rows: \(bodies)")
     }
 }
