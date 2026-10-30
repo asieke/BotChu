@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- Keep composer drafts between launches, owner-only and outside the bot's folder (#357) (#373)
 - Sidebar bot rows: up to 8 task dots in a 2×4 grid (#359) (#369)
 - Sub-agent Transcript follows its last 12 items and skips Sail progress rows (#361) (#377)
 - Latency report after each journeys run; every deploy sends it to the Inbox (#362) (#370)
