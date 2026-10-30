@@ -57,6 +57,7 @@ struct ContentView: View {
             JobHistorySheet(request: request)
                 .environment(model)
         }
+        .onAppear { FrameTimings.mark(FrameMarks.window) }
         .task {
             guard !hooksStarted else { return }
             hooksStarted = true
@@ -82,6 +83,7 @@ private struct DetailColumn: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) { ReportIssueButton() }
             }
+            .onChange(of: showsStatus) { _, shown in FrameTimings.mark(FrameMarks.inspector(shown: shown)) }
     }
 
     @ViewBuilder private var content: some View {
