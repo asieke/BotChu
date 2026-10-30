@@ -159,43 +159,89 @@ extension Journeys {
 
     // MARK: 12. Typing while a sub-agent streams
 
-    /// A bot delegates to a sub-agent run that streams for a while, shown in the status sidebar's
-    /// Sub-agents, while the owner types in the bot's own message box: each repeat's sample is the
-    /// p95 of its echoes.
+    /// A bot delegates to a sub-agent run that streams a working transcript for a while (`subagentTools`
+    /// tool calls first, more as it goes), shown in the status sidebar's Sub-agents, while the owner
+    /// types in the bot's own message box: first with the list of runs shown, then with the run's
+    /// details and their open Transcript. Each repeat's sample is the p95 of its echoes.
     func typingWhileSubagentStreams() -> [JourneyResult] {
         let bot = fixture.bots[9]
-        var samples: [Double] = []
-        var problem: String?
+        var list: [Double] = [], transcript: [Double] = []
+        var listProblem: String?, transcriptProblem: String?
+        let began = AppUnderTest.now
+        func running() throws -> Bool {
+            try app.window().first(identifier: "inspector-tab-subagents")?.label.hasSuffix("1 running") == true
+        }
+        func row() throws -> AXElement? {
+            guard try running() else { return nil }
+            return try app.window().first { $0.role == kAXButtonRole as String && $0.label.hasPrefix("Journey sub-agent, \(bot.name)") }
+        }
         do {
-            let began = AppUnderTest.now
-            try send("Ask a sub-agent for a long reply. journey-subagent=\(Self.subagentStream)", to: bot)
+            try send("Ask a sub-agent for a long reply. journey-subagent=\(Self.subagentStream) journey-tools=\(Self.subagentTools)", to: bot)
             guard let tab = try app.window().first(identifier: "inspector-tab-subagents") else { throw HarnessFailure("The status sidebar has no Sub-agents tab") }
             try tab.press()
             try FakeLog.waitFor(app, "the sub-agent's stream", after: began, timeout: 20) { !FakeLog.streaming($0).isEmpty }
             app.settle(quiet: 0.2, limit: 2)
-            func running() throws -> AXElement? {
-                guard try app.window().first(identifier: "inspector-tab-subagents")?.label.hasSuffix("1 running") == true else { return nil }
-                return try app.window().first { $0.role == kAXButtonRole as String && $0.label.hasPrefix("Journey sub-agent, \(bot.name)") }
-            }
-            guard try running() != nil else { throw HarnessFailure("The status sidebar's Sub-agents doesn't show the sub-agent running") }
+            guard try row() != nil else { throw HarnessFailure("The status sidebar's Sub-agents doesn't show the sub-agent running") }
             let composer = try composer()
             try composer.set(kAXValueAttribute, to: "" as CFString)
             let typing = AppUnderTest.now
-            for _ in 0..<repeats { samples.append(Self.p95(try type(Self.typed, into: composer))) }
-            let typed = AppUnderTest.now
-            let streamed = FakeLog.read(app).filter { $0.time >= typing && $0.time <= typed && $0.length != nil }.count
-            guard streamed > 0 else { throw HarnessFailure("The sub-agent wrote nothing while the owner typed") }
-            guard try running() != nil else { throw HarnessFailure("The sub-agent stopped running in the status sidebar while the owner typed") }
-            try composer.set(kAXValueAttribute, to: "" as CFString)
+            for _ in 0..<repeats { list.append(Self.p95(try type(Self.typed, into: composer))) }
+            try checkStreamed(since: typing, running: try row() != nil)
+        } catch {
+            listProblem = "\(error)"
+        }
+        // Then the run's details, its Transcript open while it runs, on a long transcript.
+        do {
+            if let listProblem { throw HarnessFailure(listProblem) }
+            guard let run = try row() else { throw HarnessFailure("The status sidebar's Sub-agents doesn't show the sub-agent running") }
+            try run.press()
+            let header = try waitFor("The sub-agent's Transcript") {
+                try app.window().first { element in
+                    element.role == kAXButtonRole as String && (element.label + element.title).lowercased().hasPrefix("transcript")
+                }
+            }
+            print("journeys: the sub-agent's Transcript says \"\(header.label + header.title)\", \(header.text)")
+            guard header.text == "Expanded" else { throw HarnessFailure("The sub-agent's Transcript is \"\(header.text)\", not open, while it runs") }
+            app.settle(quiet: 0.2, limit: 2)
+            let composer = try composer()
+            let typing = AppUnderTest.now
+            for _ in 0..<repeats { transcript.append(Self.p95(try type(Self.typed, into: composer))) }
+            try checkStreamed(since: typing, running: try running())
+        } catch {
+            transcriptProblem = "\(error)"
+        }
+        do {
+            try composer().set(kAXValueAttribute, to: "" as CFString)
+            if let back = try button("Back to Sub-agents") { try back.press() }
             if let activity = try app.window().first(identifier: "inspector-tab-activity") { try activity.press() }
             try app.requireBackground()
         } catch {
-            problem = "\(error)"
+            listProblem = listProblem ?? "\(error)"
+            transcriptProblem = transcriptProblem ?? "\(error)"
         }
-        return [result(12, "echo while a sub-agent streams (p95 of \(Self.typed.count) keys)", .instant, samples, problem: problem)]
+        // The run ends before the next journey, or this one's second attempt.
+        _ = try? FakeLog.waitFor(app, "the sub-agent's end", after: began, timeout: Double(Self.subagentStream) + 15) { lines in
+            let streamed = FakeLog.streaming(lines)
+            return !streamed.isEmpty && FakeLog.ended(lines).isSuperset(of: streamed)
+        }
+        app.settle(quiet: 0.5)
+        return [result(12, "echo while a sub-agent streams (p95 of \(Self.typed.count) keys)", .instant, list, problem: listProblem),
+                result(12, "echo with its Transcript open on \(Self.subagentTools)+ items (p95 of \(Self.typed.count) keys)", .instant,
+                       transcript, problem: transcriptProblem)]
     }
 
-    static let subagentStream = 12
+    /// The sub-agent wrote while the owner typed, and still shows running.
+    private func checkStreamed(since typing: UInt64, running: Bool) throws {
+        let typed = AppUnderTest.now
+        let streamed = FakeLog.read(app).filter { $0.time >= typing && $0.time <= typed && $0.length != nil }.count
+        guard streamed > 0 else { throw HarnessFailure("The sub-agent wrote nothing while the owner typed") }
+        guard running else { throw HarnessFailure("The sub-agent stopped running in the status sidebar while the owner typed") }
+    }
+
+    /// Long enough for both rounds of typing.
+    static let subagentStream = 30
+    /// More than the Sub-agents tab lists at once (#361).
+    static let subagentTools = 160
 }
 
 /// What the fake CLI logged (`FakeClaude`): `<uptime ns> <text>` lines.

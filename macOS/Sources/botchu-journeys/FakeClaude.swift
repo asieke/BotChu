@@ -10,13 +10,16 @@ import Foundation
 ///
 /// A journey steers a turn with words in its message (`Directive`): `journey-stream=<seconds>`
 /// replays the reply's text over and over for that long (`0`: the captured reply at once), logging
-/// each text chunk as `<uptime ns> delta <reply length in UTF-16 units> <pid>`; `journey-subagent=<seconds>`
-/// first starts a sub-agent run of the same bot through BotChu's `botchu-subagent`, told to stream
-/// for that long, and waits for it, as a bot that delegates does.
+/// each text chunk as `<uptime ns> delta <reply length in UTF-16 units> <pid>`; `journey-tools=<n>` makes
+/// that stream a working transcript: n tool calls first, then one after every few chunks;
+/// `journey-subagent=<seconds>` first starts a sub-agent run of the same bot through BotChu's
+/// `botchu-subagent`, told to stream for that long (with the same tools), and waits for it, as a
+/// bot that delegates does.
 enum FakeClaude {
     struct Directive: Equatable {
         var stream: Double?
         var subagent: Double?
+        var tools: Int?
 
         init(_ text: String) {
             func seconds(_ key: String) -> Double? {
@@ -25,6 +28,7 @@ enum FakeClaude {
             }
             stream = seconds("journey-stream")
             subagent = seconds("journey-subagent")
+            tools = seconds("journey-tools").map { Int(min($0, 10_000)) }
         }
     }
 
@@ -50,10 +54,10 @@ enum FakeClaude {
             if arguments.contains("--replay-user-messages") { write(echo(line, session: session)) }
         }
         let directive = Directive(message)
-        if let seconds = directive.subagent { delegate(streaming: seconds, record: record) }
+        if let seconds = directive.subagent { delegate(streaming: seconds, tools: directive.tools, record: record) }
         if directive.stream == 0 { interval = 0 }
         if let seconds = directive.stream, seconds > 0 {
-            stream(for: seconds, interval: interval, session: session, record: record)
+            stream(for: seconds, interval: interval, tools: directive.tools ?? 0, session: session, record: record)
             return 0
         }
         for (index, line) in ClaudeStream.turn.enumerated() {
@@ -66,16 +70,28 @@ enum FakeClaude {
     }
 
     /// The captured turn with its text chunks replayed, a paragraph after another, until `seconds`
-    /// have gone; the full message and the result then carry all of it.
-    private static func stream(for seconds: Double, interval: Double, session: String, record: (String) -> Void) {
+    /// have gone; the full message and the result then carry all of it. With `tools`, that many
+    /// tool calls come first, and another after every `toolEvery` chunks.
+    private static func stream(for seconds: Double, interval: Double, tools: Int, session: String, record: (String) -> Void) {
         let lines = ClaudeStream.turn.map { $0.replacingOccurrences(of: ClaudeStream.session, with: session) }
         let deltas = lines.indices.filter { lines[$0].contains(#""type":"text_delta""#) }
         guard let first = deltas.first, let last = deltas.last else { return }
         for line in lines[..<first] { write(line) }
+        var calls = 0
+        func call() {
+            for line in ClaudeStream.toolCall(calls, session: session) { write(line) }
+            record("\(DispatchTime.now().uptimeNanoseconds) tool \(calls) \(getpid())")
+            calls += 1
+        }
+        while calls < tools {
+            call()
+            usleep(2_000)
+        }
         let end = DispatchTime.now().uptimeNanoseconds + UInt64(seconds * 1_000_000_000)
         var text = "", cycle = 0
         while DispatchTime.now().uptimeNanoseconds < end {
             for (n, index) in deltas.enumerated() {
+                if tools > 0, n > 0, n % toolEvery == 0 { call() }
                 var line = lines[index]
                 var chunk = ClaudeStream.text(of: line) ?? ""
                 if cycle > 0, n == 0 {
@@ -98,8 +114,11 @@ enum FakeClaude {
         record("\(DispatchTime.now().uptimeNanoseconds) end \(getpid())")
     }
 
+    /// Chunks between a working stream's tool calls: about one every 300 ms at the captured pace.
+    static let toolEvery = 10
+
     /// Starts a sub-agent run of this bot that streams for `seconds`, and waits for its handoff.
-    private static func delegate(streaming seconds: Double, record: (String) -> Void) {
+    private static func delegate(streaming seconds: Double, tools: Int?, record: (String) -> Void) {
         let environment = ProcessInfo.processInfo.environment
         guard let bin = environment["BOTCHU_BIN_DIR"], let bot = environment["BOTCHU_CALLER_BOT_ID"] else {
             record("\(DispatchTime.now().uptimeNanoseconds) subagent unavailable")
@@ -107,7 +126,7 @@ enum FakeClaude {
         }
         let tool = (bin as NSString).appendingPathComponent("botchu-subagent")
         let spawned = run(tool, ["spawn", "--agent", bot, "--title", "Journey sub-agent",
-                                 "--brief", "Stream a long reply. journey-stream=\(Int(seconds))"])
+                                 "--brief", "Stream a long reply. journey-stream=\(Int(seconds))" + (tools.map { " journey-tools=\($0)" } ?? "")])
         let id = spawned.trimmingCharacters(in: .whitespacesAndNewlines)
         record("\(DispatchTime.now().uptimeNanoseconds) subagent \(id.isEmpty ? "failed" : id)")
         if !id.isEmpty { _ = run(tool, ["wait", id]) }
@@ -149,6 +168,13 @@ enum FakeClaude {
 }
 
 extension ClaudeStream {
+    /// A finished shell call as Claude Code 2.1.308 writes one (`StreamParserTests`): the call in an
+    /// assistant message, then its result; `n` tells the calls apart.
+    static func toolCall(_ n: Int, session: String) -> [String] {
+        [#"{"type":"assistant","message":{"id":"msg_journey_\#(n)","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_journey_\#(n)","name":"Bash","input":{"command":"ls notes/\#(n)","description":"List notes"}}]},"parent_tool_use_id":null,"session_id":"\#(session)"}"#,
+         #"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_journey_\#(n)","type":"tool_result","content":"notes/\#(n)/plan.md","is_error":false}]},"parent_tool_use_id":null,"session_id":"\#(session)"}"#]
+    }
+
     /// A text chunk's text.
     static func text(of line: String) -> String? {
         guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
