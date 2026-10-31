@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-31
+- `@mention` cameo turns in Project Areas: mentioned bots answer in the area's transcript with their own identity, account, memory and session, replies' mentions go two hops at most, rows show the speaking bot (#406) (#414)
 - Project Areas column beside the chat (Home, areas with their tasks, `n hidden`), Attach Project Area sheet, area Move to/Hide menu and drag onto a bot; specialists leave the sidebar (#402) (#413)
 - `botchu-task create`, dispatch files, Telegram `/task` and Projects actions post a turn into the repository's Project Area instead of opening a tab; AGENTS.md lists the bot's areas (#404) (#412)
 - Area conversations: lead-bot pill atop the chat, `Message <area>` placeholder, the area's name as window title, and shared children told to make their own worktree (#403) (#411)

@@ -476,6 +476,21 @@ public enum ActivityItem: Equatable, Sendable, Identifiable {
         }
     }
 
+    /// The bot whose cameo turn it is part of (`ChatMessage.speakerBotID`); nil for the conversation's own bot.
+    public var speaker: UUID? {
+        switch self {
+        case .message(let message): message.speakerBotID
+        case .tool(let tool): tool.message.speakerBotID
+        case .exploration(let group): group.calls.first?.speakerBotID
+        }
+    }
+
+    /// Whether, as a bot's, it starts a run of that bot's turn after `previous`, whose avatar (and,
+    /// for a cameo, name) it shows: `previous` isn't a bot's, or is another bot's.
+    public func startsBotTurn(after previous: ActivityItem) -> Bool {
+        !previous.isBotTurn || previous.speaker != speaker
+    }
+
     /// No call of it is still running.
     var isFinished: Bool {
         switch self {
@@ -850,6 +865,10 @@ public struct ActivityTranscript: Sendable {
             if message.role == .tool {
                 let activity = describe(message, keep: index >= undoFrom, &work)
                 if activity.intent.isExploration {
+                    // Another bot's calls start a group of their own.
+                    if group != nil, group!.calls.first?.speakerBotID != message.speakerBotID {
+                        store(&group, &state, at: slot, open: false, &work)
+                    }
                     if group == nil {
                         group = ExplorationGroup(id: message.id, isOpen: true)
                         state = GroupLive(root: root, start: index)

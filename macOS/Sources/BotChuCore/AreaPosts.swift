@@ -96,8 +96,9 @@ extension TaskReceipt {
         "Asked \(bot) in \(area.title)"
     }
 
-    /// The request named `asked`, but `owner` has the repository's area, so it went there.
+    /// The request named `asked`, but `owner` has the repository's area, so it went there, where
+    /// `asked` answers it in a cameo turn (#406).
     public static func posted(in area: BotTask, of owner: String, for asked: String) -> String {
-        "Asked \(owner) in \(area.title) for \(asked): \(owner) has \(area.repo)"
+        "Asked \(asked) in \(owner)'s area \(area.title): \(owner) has \(area.repo)"
     }
 }
