@@ -73,7 +73,7 @@ struct InboxView: View {
         .navigationTitle("Inbox")
         .toolbar {
             if let id = inbox.selected, let delivery = inbox.delivery(id), visible.contains(id) {
-                ToolbarItem(id: "inbox-actions", placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
                     InboxToolbar(delivery: delivery) { setDone(id, $0, in: groups, visible: visible) }
                 }
             }
@@ -634,35 +634,33 @@ private struct InboxToolbar: View {
     let setDone: (Bool) -> Void
 
     var body: some View {
-        // Host the actions together so a selection change updates one SwiftUI toolbar view.
-        // This reduces the measured Done update cost compared with separate native items (#356).
-        HStack(spacing: 12) {
-            let inbox = model.inbox!
-            let origin = InboxOrigin(model: model, delivery: delivery)
-            Button { model.openOrigin(of: delivery) } label: {
-                Label(origin.open, systemImage: "arrow.up.forward.app")
-                    .labelStyle(.titleAndIcon)
-            }
-            .help("\(origin.open) (⌘O)")
-            .keyboardShortcut("o")
-            .accessibilityIdentifier("inbox-open")
-            let done = inbox.isDone(delivery.id)
-            Button { setDone(!done) } label: {
-                Label(done ? "Move to Inbox" : "Done", systemImage: done ? "tray.and.arrow.up" : "checkmark")
-                    .labelStyle(.titleAndIcon)
-            }
-            .help(done ? "Move to Inbox" : "Done (E or ⌃⌘A)")
-            .keyboardShortcut("a", modifiers: [.command, .control])
-            .accessibilityIdentifier("inbox-done")
-            .onChange(of: done) { _, done in FrameTimings.mark(FrameMarks.inboxDone(delivery.id, done)) }
-            Menu {
-                DeliveryMenu(delivery: delivery)
-            } label: {
-                Label("More", systemImage: "ellipsis")
-            }
-            .menuIndicator(.hidden)
-            .help("More")
+        // Separate native items: hosted together in one item, each button reads as the item's first
+        // label to accessibility, so Done is announced as "Open Task" (#420).
+        let inbox = model.inbox!
+        let origin = InboxOrigin(model: model, delivery: delivery)
+        Button { model.openOrigin(of: delivery) } label: {
+            Label(origin.open, systemImage: "arrow.up.forward.app")
+                .labelStyle(.titleAndIcon)
         }
+        .help("\(origin.open) (⌘O)")
+        .keyboardShortcut("o")
+        .accessibilityIdentifier("inbox-open")
+        let done = inbox.isDone(delivery.id)
+        Button { setDone(!done) } label: {
+            Label(done ? "Move to Inbox" : "Done", systemImage: done ? "tray.and.arrow.up" : "checkmark")
+                .labelStyle(.titleAndIcon)
+        }
+        .help(done ? "Move to Inbox" : "Done (E or ⌃⌘A)")
+        .keyboardShortcut("a", modifiers: [.command, .control])
+        .accessibilityIdentifier("inbox-done")
+        .onChange(of: done) { _, done in FrameTimings.mark(FrameMarks.inboxDone(delivery.id, done)) }
+        Menu {
+            DeliveryMenu(delivery: delivery)
+        } label: {
+            Label("More", systemImage: "ellipsis")
+        }
+        .menuIndicator(.hidden)
+        .help("More")
     }
 }
 
