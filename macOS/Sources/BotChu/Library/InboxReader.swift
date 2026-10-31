@@ -30,12 +30,12 @@ struct InboxReader: View {
                         .padding(.top, 6)
                     Color.clear.frame(height: 24)
                 }
-                // Cards and their page/document state belong to this delivery only.
-                .id(delivery.id)
                 .frame(maxWidth: Self.column, alignment: .leading)
                 .padding(.horizontal, 32)
                 .padding(.top, 26)
                 .frame(maxWidth: .infinity)
+                // Reset the reading contents, including their top inset, but retain the reply editor.
+                .id(delivery.id)
             }
             .onChange(of: delivery.id) { _, id in scroll.scrollTo(id, anchor: .top) }
         }
