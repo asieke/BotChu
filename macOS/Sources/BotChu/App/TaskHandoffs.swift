@@ -1,23 +1,31 @@
 import Foundation
 import BotChuCore
 
-/// Tasks one conversation hands to a bot with `botchu-task create` (#111): an independent Task under
-/// that bot, a tab beside its chat, on its identity and account, which goes on whatever becomes of
-/// the conversation that asked. A sub-agent run (`SubagentRuntime`) is the other kind of handoff.
+/// Work one conversation hands to a bot with `botchu-task create` (#111), which goes on whatever
+/// becomes of the conversation that asked: a turn in the repository's Project Area (#399 decision 9,
+/// `postToArea`), or, for a repository on another computer, an independent Task under that bot
+/// there. A sub-agent run (`SubagentRuntime`) is the other kind of handoff.
 extension AppModel {
     struct Handoff {
+        /// The bot whose area (or Task) it is.
         var bot: Bot
+        /// The area, or the Task.
         var task: BotTask
-        /// The Task the same request made before, rather than a new one.
+        /// The same request posted it (or made the Task) before; nothing more was.
         var existing: Bool
-        /// Why the new Task's record couldn't be saved; it is in the sidebar all the same.
+        /// For a Task: why its record couldn't be saved (it is in the sidebar all the same). For an
+        /// area: why the message couldn't be queued (nothing was posted).
         var unsaved: String?
+        /// The message posted into the area; nil for a Task.
+        var messageID: UUID?
     }
 
-    /// Makes the Task `handoff` asks for under the bot it names and starts it, or finds the one the
-    /// same request made before (`TaskHandoff.key`); throws why it can't. Returns once the Task's
-    /// record is saved (or couldn't be), with a receipt that opens it in `caller`, the conversation
-    /// that asked (`subagent`, when a sub-agent run there asked).
+    /// Posts what `handoff` asks into the repository's area (`postToArea`), from the conversation
+    /// that asked, `caller` (`subagent`, when a sub-agent run there asked), or finds the message the
+    /// same request posted before (`TaskHandoff.key`); throws why it can't. A repository on another
+    /// computer gets a Task of its own there, made and started as before areas. Returns once the
+    /// message is queued (or the Task's record saved), with a receipt that opens the area or Task
+    /// in `caller`.
     func handOffTask(_ handoff: TaskHandoff, from caller: ChatTarget, subagent: SubagentRun?) async throws -> Handoff {
         let named = try resolveTaskBot(handoff.request.agent ?? "")
         let key = handoff.key(for: named.id)
@@ -31,6 +39,18 @@ extension AppModel {
         if let task = made() { return Handoff(bot: named, task: task, existing: true) }
         guard let owner = bot(named.id), let asking = bot(caller.botID) else {
             throw TaskRequest.Problem(message: "the bot was deleted meanwhile")
+        }
+        if let place = try areaRepository(of: handoff.request, checkouts: checkouts) {
+            let link = AgentLink(botID: asking.id, name: subagent?.targetBotName ?? asking.name, taskID: caller.taskID)
+            guard let posting = try await postToArea(handoff.request, repo: place.repo, checkout: place.checkout, for: owner,
+                                                     from: link, id: AreaPost.messageID(key: key)) else {
+                throw TaskRequest.Problem(message: "it couldn't be posted")
+            }
+            if !posting.existing, posting.unsaved == nil {
+                postReceipt(posting.receipt, task: posting.area.id, of: posting.bot.id, in: caller)
+            }
+            return Handoff(bot: posting.bot, task: posting.area, existing: posting.existing, unsaved: posting.unsaved,
+                           messageID: posting.messageID)
         }
         var task: BotTask
         do {

@@ -462,7 +462,7 @@ struct ProjectsTable: View {
         Button("Show Issues") { model.selectProject(row.id, tab: .issues) }.disabled(row.openIssues == 0)
         Divider()
         Menu("Start Task with") {
-            ForEach(model.taskOwners) { bot in Button("\(bot.emoji) \(bot.name)") { model.newTask(for: bot.id, repo: row.id) } }
+            ForEach(model.taskOwners) { bot in Button("\(bot.emoji) \(bot.name)") { model.startInArea(repo: row.id, with: bot.id) } }
         }
         .disabled(model.taskOwners.isEmpty)
     }
@@ -566,13 +566,15 @@ struct WorkMenu: View {
         }
         Divider()
         if item.isPullRequest {
-            botMenu("Review with") { model.newTask(for: $0, repo: item.repo, work: item.work, purpose: .review) }
-            botMenu("Review and Comment with") { model.newTask(for: $0, repo: item.repo, work: item.work, purpose: .comment) }
+            botMenu("Review with") { model.startInArea(repo: item.repo, work: item.work, review: .review, with: $0) }
+            botMenu("Review and Comment with") {
+                model.startInArea(repo: item.repo, work: item.work, review: .comment, with: $0)
+            }
             // A fork's branch isn't on origin: it can be reviewed, not continued.
-            botMenu("Continue with") { model.newTask(for: $0, repo: item.repo, work: item.work) }
+            botMenu("Continue with") { model.startInArea(repo: item.repo, work: item.work, with: $0) }
                 .disabled(item.fromFork)
         } else {
-            botMenu("Start Task with") { model.newTask(for: $0, repo: item.repo, work: item.work) }
+            botMenu("Start Task with") { model.startInArea(repo: item.repo, work: item.work, with: $0) }
             Divider()
             IssueClosureActions(repo: item.repo, number: item.number, title: item.title)
             Button("Delete Issue…", role: .destructive) { model.askToDeleteIssue(item.number, of: item.repo, title: item.title) }

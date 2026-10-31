@@ -98,6 +98,27 @@ private final class HandoffFixture {
         #expect(finished.error.contains("pending") && finished.error.contains("created"))
     }
 
+    @Test func theHelperReportsARequestPostedIntoAnAreaThenItsTurnStarting() throws {
+        let fixture = try HandoffFixture()
+        let started = try fixture.start("botchu-task", ["create", "--agent", "Fox", "--repo", "o/r", "--brief", "Fix it", "--wait", "10"])
+        defer { if started.0.isRunning { started.0.terminate() } }
+        let handoff = try TaskHandoff.parse(try fixture.request().data)
+        let bot = UUID(), area = UUID()
+        let posted = TaskHandoffResult(id: handoff.id, phase: .created, targetBotID: bot, targetBotName: "Fox", taskID: area,
+                                       taskTitle: "r", existing: true, area: true)
+        try fixture.answer(posted)
+        Thread.sleep(forTimeInterval: 0.4)
+        #expect(started.0.isRunning, "posted isn't started: it waits for the area's turn")
+        try fixture.answer(posted.starting(failure: nil))
+        let finished = fixture.finish(started)
+        #expect(finished.code == 0, "\(finished.error)")
+        #expect(finished.output.contains("Area: r (\(area.uuidString))"))
+        #expect(finished.output.contains("Agent: Fox (\(bot.uuidString))"))
+        #expect(finished.output.contains("Status: started — Fox's turn on it is running in the area"))
+        #expect(finished.output.contains("The same request posted it before; nothing more was posted."))
+        #expect(!finished.output.contains("Task"))
+    }
+
     @Test func theHelperTellsPendingCreatedAndFailedApartAndRefusesTheOtherKind() throws {
         let fixture = try HandoffFixture()
         // Only created when its wait ends: created, still starting, and a success.
@@ -242,11 +263,13 @@ private final class HandoffFixture {
     @Test func agentsAreToldBothWaysToHandOffWorkInTheSameTerms() throws {
         let roster = [BotRosterEntry(bot: Bot(name: "Worker", title: "Builds things", workspace: "/tmp/worker"))]
         let section = BotContext.subagentsSection(availableBots: roster)
-        for text in ["### Task: `botchu-task create`", "### Sub-agent run: `botchu-subagent`", "new task @bot", "new subagent @bot",
-                     "a tab beside its chat", "Sub-agents inspector", "botchu-task create --agent", "botchu-subagent call --agent",
+        for text in ["### Area turn: `botchu-task create`", "### Sub-agent run: `botchu-subagent`", "new task @bot", "new subagent @bot",
+                     "posts your request there as a turn", "attached to it first when no bot has the repository",
+                     "the area of the bot that has it", "Sub-agents inspector", "botchu-task create --agent", "botchu-subagent call --agent",
                      "never a second one", "spawns a sub-agent run per issue", "outstanding children stop"] {
             #expect(section.contains(text), "Missing \(text)")
         }
+        #expect(!section.contains("tab beside"))
         let bot = Bot(name: "Fox", workspace: "/tmp/fox")
         let agents = BotContext.agentsFile(bot: bot, sharedMemoryPath: "/shared", availableBots: roster)
         #expect(agents.contains("`agent` (optional)") && agents.contains("botchu-task create"))

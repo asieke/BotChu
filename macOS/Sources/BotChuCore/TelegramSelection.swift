@@ -322,7 +322,7 @@ extension TelegramReply {
         if let bot { parts.append("Now talking to \(bot): your messages go to its Home until you choose another bot with @.") }
         if let repo {
             let to = bot == nil ? recipient.map { " (to \($0))" } ?? "" : ""
-            parts.append("#\(repo) goes with your next message\(to). Start that message with /task to make it a task of its own in \(repo).")
+            parts.append("#\(repo) goes with your next message\(to). Start that message with /task to post it in \(repo)'s area.")
         }
         return parts.joined(separator: " ")
     }
@@ -344,7 +344,12 @@ extension TelegramReply {
         "Started “\(title)” for \(bot) in \(repo): a task of its own in BotChu, under \(bot), with its own conversation. Its replies stay in BotChu."
     }
 
-    static func taskAlreadyStarted(_ title: String) -> String { "This task was already started: “\(title)”." }
+    public static func taskPosted(in area: String, bot: String, owner: String?, repo: String) -> String {
+        guard let owner else { return "Posted in \(bot)'s area “\(area)” for \(repo). Its replies stay in BotChu." }
+        return "Posted in \(owner)'s area “\(area)” for \(repo), for \(bot): \(owner) has that repository. Its replies stay in BotChu."
+    }
+
+    static func taskAlreadyStarted(_ title: String) -> String { "BotChu already has this request: “\(title)”." }
 
     static func taskNotStarted(_ reason: String) -> String { "BotChu couldn't start this task: \(reason)" }
 }

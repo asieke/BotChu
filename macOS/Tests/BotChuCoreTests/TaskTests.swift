@@ -455,10 +455,11 @@ private func tempDir(_ name: String = "botchu-tasks") -> URL {
 
     @Test func homeLearnsToDispatchAndHearsOfItsTasks() {
         let agents = BotContext.agentsFile(bot: bot, sharedMemoryPath: "/Users/a/BOTS/MEMORY.md", repositoriesPath: "/Users/a/WORKSPACE")
-        #expect(agents.contains("## Tasks"))
+        #expect(agents.contains("## Project Areas"))
+        #expect(!agents.contains("## Tasks") && !agents.contains("tab beside") && !agents.contains(" a tab"))
         #expect(agents.contains("`.botchu/dispatch/`"))
         #expect(agents.contains("    {\"repo\": \"octocat/hello-world\", \"issue\": 12"))
-        #expect(agents.contains("clones the repository if it isn't checked out there yet (into `/Users/a/WORKSPACE` on this Mac)"))
+        #expect(agents.contains("The repository is cloned when it isn't checked out yet (into `/Users/a/WORKSPACE` on this Mac)"))
 
         let report = BotContext.taskReport(task(), status: BotStatus.make(task: task(), messages: [ChatMessage(role: .assistant, text: "Opened it.")], run: nil),
                                            pullRequest: 49, lastReply: "Opened it.")

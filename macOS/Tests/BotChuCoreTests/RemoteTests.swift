@@ -253,7 +253,8 @@ private func tempDir(_ name: String) -> URL {
         #expect(agents.contains("`owner/name` of one of your owner's GitHub repositories"))
         #expect(agents.contains("the computer to work on: This Mac, Omarchy, Humanist"))
         #expect(agents.contains("`review`: a pull request's number"))
-        #expect(agents.contains("clones the repository if it isn't checked out there yet (into `/Users/a/WORKSPACE` on this Mac)"))
+        #expect(agents.contains("The repository is cloned when it isn't checked out yet (into `/Users/a/WORKSPACE` on this Mac)"))
+        #expect(agents.contains("a repository on another computer (this field, or where your owner chose for it) gets a task of its own there"))
     }
 
     @Test func requestsNameAMachineAndReviews() throws {

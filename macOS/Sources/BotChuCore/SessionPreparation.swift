@@ -11,9 +11,11 @@ public final class SessionPreparation: @unchecked Sendable {
         public var repositoriesPath: String?
         public var machines: [String]
         public var availableBots: [BotRosterEntry]
+        /// The bot's Project Areas its `AGENTS.md` lists.
+        public var areas: [AreaListing]
 
         public init(bot: Bot, sharedMemoryPath: String, repositoriesPath: String? = nil,
-                    machines: [String] = [], availableBots: [BotRosterEntry] = []) {
+                    machines: [String] = [], availableBots: [BotRosterEntry] = [], areas: [AreaListing] = []) {
             // Session IDs, model reports, pets, etc. do not change the bot's context.
             var identity = Bot(name: bot.name, emoji: bot.emoji, title: bot.title,
                                instructions: bot.instructions, accountID: "", workspace: bot.workspace, createdAt: .distantPast)
@@ -25,6 +27,7 @@ public final class SessionPreparation: @unchecked Sendable {
             self.repositoriesPath = repositoriesPath
             self.machines = machines
             self.availableBots = availableBots
+            self.areas = areas
         }
     }
 
@@ -135,7 +138,7 @@ public final class SessionPreparation: @unchecked Sendable {
             // it here, but cannot write newer owned content until this work has left the lane.
             try Workspace.prepareOwned(bot: migrated, sharedMemoryPath: input.sharedMemoryPath,
                 instructions: snapshot.instructions, team: snapshot.team, repositoriesPath: input.repositoriesPath,
-                machines: input.machines, availableBots: input.availableBots, skills: snapshot.skills)
+                machines: input.machines, availableBots: input.availableBots, skills: snapshot.skills, areas: input.areas)
             try BotHome(workspace: bot.workspace).prepareDispatch()
             guard before == (try stamps(input)) else { continue }
             let owned = try ownedStamps(bot)

@@ -1,9 +1,10 @@
 import Foundation
 
-/// A Task one conversation hands to a bot with `botchu-task create` (#111), as it reaches BotChu
+/// Work one conversation hands to a bot with `botchu-task create` (#111), as it reaches BotChu
 /// through the conversation's mailbox, beside its sub-agent requests. Unlike a sub-agent run
-/// (`SubagentRequest`), it makes an independent Task of that bot's, a tab beside its chat, which goes
-/// on whatever becomes of the conversation that asked for it.
+/// (`SubagentRequest`), it goes on whatever becomes of the conversation that asked for it: as a turn
+/// in the repository's Project Area (`AreaPost`), or, for a repository on another computer, as an
+/// independent Task of that bot's there.
 public struct TaskHandoff: Equatable, Sendable {
     /// The `kind` that tells a handoff from a sub-agent request in the mailbox.
     public static let kind = "task"
@@ -106,12 +107,15 @@ public struct TaskHandoffResult: Codable, Equatable, Sendable {
     /// For a failed request: `taskID` is the open Task, of `targetBotID`, already working on what
     /// was asked (its pull request's branch), to continue in instead; no Task was made (#215).
     public var alreadyWorking: Bool
+    /// The request was posted as a turn in a Project Area (#399): `taskID` and `taskTitle` are the
+    /// area's, of `targetBotID`, and `started` means that turn started. Nil for a Task.
+    public var area: Bool?
     public var errorMessage: String?
     public var updatedAt: Date
 
     public init(id: UUID, phase: Phase, targetBotID: UUID? = nil, targetBotName: String? = nil, taskID: UUID? = nil,
-                taskTitle: String? = nil, existing: Bool = false, alreadyWorking: Bool = false, errorMessage: String? = nil,
-                updatedAt: Date = Date()) {
+                taskTitle: String? = nil, existing: Bool = false, alreadyWorking: Bool = false, area: Bool = false,
+                errorMessage: String? = nil, updatedAt: Date = Date()) {
         self.id = id
         kind = TaskHandoff.kind
         self.phase = phase
@@ -121,6 +125,7 @@ public struct TaskHandoffResult: Codable, Equatable, Sendable {
         self.taskTitle = taskTitle
         self.existing = existing
         self.alreadyWorking = alreadyWorking
+        self.area = area ? true : nil
         self.errorMessage = errorMessage
         self.updatedAt = updatedAt
     }
