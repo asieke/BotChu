@@ -50,16 +50,12 @@ extension RenderingTests {
         #expect(below < 40)
     }
 
-    /// The chat's scroll view: the widest one holding more than `minimum` points of content.
+    /// Identify the chat by its viewport probe, not its width: a narrow native chat can be
+    /// the same width as the inspector, and both can be less than 400 points wide.
     static func chatScrollView(in view: NSView, minimum: CGFloat = 1_000) -> NSScrollView? {
-        var best: NSScrollView?
-        func visit(_ view: NSView) {
-            if let scroll = view as? NSScrollView, (scroll.documentView?.frame.height ?? 0) > minimum,
-               scroll.frame.width > (best?.frame.width ?? 400) { best = scroll }
-            view.subviews.forEach(visit)
-        }
-        visit(view)
-        return best
+        if let probe = view as? ChatScrollProbeView, let scroll = probe.enclosingScrollView,
+           (scroll.documentView?.frame.height ?? 0) > minimum { return scroll }
+        return view.subviews.lazy.compactMap { chatScrollView(in: $0, minimum: minimum) }.first
     }
 }
 
