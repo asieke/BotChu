@@ -184,6 +184,13 @@ public enum SubagentResume {
         return "\(id) failed before it started: delegate it again."
     }
 
+    /// Whether a resumed launch that ended starts again in a new session, with its brief: one that
+    /// continued its session and failed before any tool call, as a session killed mid-tool (a call
+    /// without its result) can't always be continued. Once: the new launch continues no session.
+    public static func startsANewSession(continuedSession: Bool, failed: Bool, toolCallsSinceLaunch: Int) -> Bool {
+        continuedSession && failed && toolCallsSinceLaunch == 0
+    }
+
     /// The message a resumed run starts with: what interrupted it and how far it got, its workspace
     /// as it is now, the runs it started that were interrupted with it, and what to do. With its
     /// session (`session`), only this; without, after its brief. Every name in it is bounded data.

@@ -893,7 +893,8 @@ final class SubagentRuntime {
                 guard phase != .completed, persistenceFailure == nil else { self.finish(id, phase: phase, error: reason); return }
                 // A session killed mid-tool can't always be continued (a call without its result): the
                 // resumed run starts a new one with its brief, once (#368).
-                if continued != nil, let delta, phase == .failed, live.counts.tools == toolsAtLaunch {
+                if let delta, SubagentResume.startsANewSession(continuedSession: continued != nil, failed: phase == .failed,
+                                                               toolCallsSinceLaunch: live.counts.tools - toolsAtLaunch) {
                     if let pending = self.usageCaptures.removeValue(forKey: id) { pending.capture.finish(.failed, in: pending.home, queue: self.archive.storage) }
                     live.messages.append(ChatMessage(role: .note, text: "Its session couldn't be continued, so it starts a new one with its brief."))
                     self.preparations[id] = Task { [weak self] in await self?.launch(id, targetBot: targetBot, resume: delta, session: false) }
