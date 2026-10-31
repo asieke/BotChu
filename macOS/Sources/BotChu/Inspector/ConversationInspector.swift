@@ -172,37 +172,40 @@ private struct AreaRepoTab: View {
         }
     }
 
-    @ViewBuilder private func repository(_ repo: GitHubLookup.Repo, task: BotTask) -> some View {
-        Picker("Show", selection: Binding(get: { tab }, set: { tab = $0; opened = nil })) {
-            Text("Overview").tag(ProjectSelection.Tab.overview)
-            Text(repo.openIssues > 0 ? "Issues \(repo.openIssues)" : "Issues").tag(ProjectSelection.Tab.issues)
-            Text(repo.openPullRequests > 0 ? "PRs \(repo.openPullRequests)" : "PRs").tag(ProjectSelection.Tab.pulls)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .padding(EdgeInsets(top: 0, leading: 16, bottom: 12, trailing: 16))
-        Rectangle().fill(Palette.hairline).frame(height: 1)
-        Group {
-            switch tab {
-            case .overview:
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        ProjectOverviewTab(repo: repo, startsWork: false) { tab = $0; opened = nil }
-                        FolderButtons(path: task.checkout, remote: task.isRemote)
+    /// One stack, so the frame `body` puts on it applies once and the list takes the height left (#423).
+    private func repository(_ repo: GitHubLookup.Repo, task: BotTask) -> some View {
+        VStack(spacing: 0) {
+            Picker("Show", selection: Binding(get: { tab }, set: { tab = $0; opened = nil })) {
+                Text("Overview").tag(ProjectSelection.Tab.overview)
+                Text(repo.openIssues > 0 ? "Issues \(repo.openIssues)" : "Issues").tag(ProjectSelection.Tab.issues)
+                Text(repo.openPullRequests > 0 ? "PRs \(repo.openPullRequests)" : "PRs").tag(ProjectSelection.Tab.pulls)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(EdgeInsets(top: 0, leading: 16, bottom: 12, trailing: 16))
+            Rectangle().fill(Palette.hairline).frame(height: 1)
+            Group {
+                switch tab {
+                case .overview:
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 20) {
+                            ProjectOverviewTab(repo: repo, startsWork: false) { tab = $0; opened = nil }
+                            FolderButtons(path: task.checkout, remote: task.isRemote)
+                        }
+                        .padding(16)
                     }
-                    .padding(16)
-                }
-            case .issues, .pulls:
-                if let opened {
-                    WorkDetailView(repo: repo, number: opened, pulls: tab == .pulls, back: { self.opened = nil }, startsWork: false)
-                        .id("\(repo.id)#\(opened)")
-                } else {
-                    workList(repo, pulls: tab == .pulls)
+                case .issues, .pulls:
+                    if let opened {
+                        WorkDetailView(repo: repo, number: opened, pulls: tab == .pulls, back: { self.opened = nil }, startsWork: false)
+                            .id("\(repo.id)#\(opened)")
+                    } else {
+                        workList(repo, pulls: tab == .pulls)
+                    }
                 }
             }
+            // What a tab read or opened belongs to its repository.
+            .id(repo.id)
         }
-        // What a tab read or opened belongs to its repository.
-        .id(repo.id)
     }
 
     private func workList(_ repo: GitHubLookup.Repo, pulls: Bool) -> some View {
