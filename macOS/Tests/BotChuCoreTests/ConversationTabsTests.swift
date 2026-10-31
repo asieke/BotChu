@@ -145,11 +145,9 @@ import Testing
         #expect(working.help(shortcut: "⌘2").hasPrefix("Show repository issues and their count in the Task Activity sidebar\n"))
         #expect(working.spoken(at: now) == "BotChu #113, Issue count sidebar, Show repository issues and their count in the Task Activity sidebar, "
                 + "Thinking…, 4 minutes 12 seconds")
-        #expect(working.railHelp(at: now, shortcut: "⌘2") == "BotChu #113\nIssue count sidebar\nThinking… · 4:12 · ⌘2")
         // Idle, its state says so, rather than repeating what it is about.
         let idle = ConversationTab(task: task, machine: "Far Mac", state: .idle(since: now.addingTimeInterval(-120)))
         #expect(idle.status == "Idle")
-        #expect(idle.railHelp(at: now, shortcut: nil) == "BotChu #113 · Far Mac\nIssue count sidebar\nIdle · 2m")
         #expect(ConversationTab(task: task, machine: nil, state: .failed(at: now)).status == "Turn failed")
         // A task from before summaries, or one whose summary didn't come: what it is about, as before.
         let old = ConversationTab(task: issue, machine: nil, state: .idle(since: nil))
@@ -160,9 +158,7 @@ import Testing
         // Home keeps its two lines: its account, or what it is doing.
         let home = ConversationTab.home(account: "Claude Dev", state: .idle(since: now.addingTimeInterval(-120)))
         #expect(home.status == "Claude Dev")
-        #expect(home.railHelp(at: now, shortcut: "⌘1") == "Home\nClaude Dev · 2m · ⌘1")
-        let busyHome = ConversationTab.home(account: "Claude Dev", state: .working(.thinking, since: now.addingTimeInterval(-5)))
-        #expect(busyHome.railHelp(at: now, shortcut: "⌘1") == "Home\nThinking… · 0:05 · ⌘1")
+        #expect(ConversationTab.home(account: "Claude Dev", state: .working(.thinking, since: now.addingTimeInterval(-5))).status == "Thinking…")
     }
 
     @Test func homeNamesItsAccountOrItsState() {
@@ -235,30 +231,6 @@ import Testing
         #expect(quiet.dots == [.idle, .idle] && quiet.more == 0 && quiet.spokenDots == "2 idle")
     }
 
-    /// #250: a collapsed heading, such as the sidebar's Specialists, shows its bots' dots together:
-    /// the most urgent first, at most eight (#359), then +N counting the rest and each row's own +N.
-    @Test func aCollapsedHeadingShowsItsBotsDotsTogether() {
-        let working = TabState.working(.coding, since: now)
-        let idle = BotRowSummary(runsOn: "Claude Dev · default", home: .idle(since: now), tasks: [])
-        let thinking = BotRowSummary(runsOn: "Codex Work · default", home: working, tasks: [])
-        let asking = BotRowSummary(runsOn: "Claude Dev · default", home: .needsInput(requests: 1, at: now), tasks: [working])
-        let quiet = BotRowSummary(merging: [("Mike", idle)])
-        #expect(quiet.dots.isEmpty && quiet.more == 0 && quiet.spokenDots.isEmpty)
-        let two = BotRowSummary(merging: [("Mike", idle), ("David", thinking), ("Ann", asking)])
-        #expect(two.dots == [.needsInput, .working, .working])
-        #expect(two.more == 0)
-        #expect(two.spokenDots == "David: 1 working; Ann: 1 needs input, 1 working")
-        let full = BotRowSummary(runsOn: "Claude Dev · default", home: working, tasks: Array(repeating: working, count: 9))
-        #expect(full.dots.count == 8 && full.more == 2)
-        let many = BotRowSummary(merging: [("David", thinking), ("Ann", full), ("Bea", asking)])
-        #expect(many.dots == [.needsInput] + Array(repeating: .working, count: 7))
-        #expect(many.more == 3 + 2)
-        // A bot's idle tasks are rings there too, after the others' busy dots (#324).
-        let resting = BotRowSummary(runsOn: "Claude Dev · default", home: .idle(since: now), tasks: [.idle(since: now)])
-        let mixed = BotRowSummary(merging: [("Mike", resting), ("David", thinking)])
-        #expect(mixed.dots == [.working, .idle] && mixed.spokenDots == "Mike: 1 idle; David: 1 working")
-    }
-
     /// #389: a specialist's delegated sessions do not run in its Home or task conversations.
     /// Their aggregate working dot exists only while at least one call remains active.
     @Test func delegatedWorkHasItsOwnDotWithoutChangingConversationDots() {
@@ -271,8 +243,6 @@ import Testing
         #expect(summary(true).spokenDots == "1 working")
         #expect(summary(true).subtitle == "Worker")
         // The caller keeps this flag true while another call survives a completed/stopped one.
-        #expect(BotRowSummary(merging: [("Specialist", summary(true))]).dots == [.working])
-        #expect(BotRowSummary(merging: [("Specialist", summary(false))]).dots.isEmpty)
         // An independent Home turn and task still retain their own dots and overflow count.
         let busy = TabState.working(.coding, since: now)
         let mixed = BotRowSummary(runsOn: "Worker", home: busy, tasks: [.needsInput(requests: 1, at: now)], workingAsSubagent: true)

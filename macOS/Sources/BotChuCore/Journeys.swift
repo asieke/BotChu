@@ -43,8 +43,8 @@ public enum FrameMarks {
     /// The chat's visible part moved.
     public static let chatScrolled = "chat.scrolled"
 
-    /// The New Task sheet started to show: the first frame of its opening animation.
-    public static let newTask = "new-task"
+    /// Attach Project Area started to show: the first frame of its opening animation.
+    public static let attachArea = "attach-area"
 
     /// A page of the window (`inbox`, `settings`) showed.
     public static func page(_ name: String) -> String { "page \(name)" }

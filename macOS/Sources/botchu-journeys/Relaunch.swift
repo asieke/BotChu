@@ -27,8 +27,8 @@ extension Journeys {
                 try awaitIdle()
                 left.sent = (bot, text)
             }
-            if left.task == nil { _ = newTask() }
-            guard let draft = left.draft, let sent = left.sent, let task = left.task else { throw HarnessFailure("Couldn't leave a draft, a message and an area") }
+            if left.area == nil { _ = attachArea() }
+            guard let draft = left.draft, let sent = left.sent, let area = left.area else { throw HarnessFailure("Couldn't leave a draft, a message and an area") }
             app.settle()
             app.quit()
             let start = try app.launch()
@@ -49,14 +49,14 @@ extension Journeys {
             guard sentBox.isEmpty else {
                 throw HarnessFailure("After a relaunch, \(sent.bot.name)'s message box says \"\(sentBox.prefix(40))\", though its message was sent")
             }
-            try show(task.bot)
-            guard try app.window().first(identifier: "conversation-tab-\(task.id.uuidString)") != nil else {
-                throw HarnessFailure("After a relaunch, \(task.bot.name) has no row for the area attached in Attach Project Area")
+            try show(area.bot)
+            guard try app.window().first(identifier: "conversation-tab-\(area.id.uuidString)") != nil else {
+                throw HarnessFailure("After a relaunch, \(area.bot.name) has no row for the area attached in Attach Project Area")
             }
         } catch {
             problem = "\(error)"
         }
-        return [result(13, "relaunch keeps the message and task", .launch, samples, problem: problem)]
+        return [result(13, "relaunch keeps the message and area", .launch, samples, problem: problem)]
     }
 
     /// Whether the chat shows a text with these words, paging up through at most `pages` pages for

@@ -73,7 +73,7 @@ final class IssueReportRequest: Identifiable {
 extension AppModel {
     /// Whether Report a Bug or Feature can open: not over another sheet, nor while one is opening.
     var canReportIssue: Bool {
-        editor == nil && taskSheet == nil && documentEditor == nil && issueReport == nil && !openingReport
+        editor == nil && documentEditor == nil && issueReport == nil && !openingReport
     }
 
     /// Opens Report a Bug or Feature (`openReport(text:)`).
@@ -93,7 +93,7 @@ extension AppModel {
         let snapshot = issueSnapshot(window: window)
         let screenshot = await WindowCapture.take(window, with: windowCapture)
         // Another sheet opened meanwhile.
-        guard editor == nil, taskSheet == nil, documentEditor == nil else { return nil }
+        guard editor == nil, documentEditor == nil else { return nil }
         let request = IssueReportRequest(snapshot: snapshot, text: text, screenshot: screenshot)
         issueReport = request
         return request

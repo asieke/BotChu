@@ -9,7 +9,7 @@ import BotChuCore
 ///   their own `defaults` domain (`local.BotChu.dev`), so a throwaway run never changes the real ones.
 /// - `BOTCHU_SNAPSHOT`: write a PNG of each window into this folder every second, and of the sidebar's
 ///   rows (`sidebar.png`), which the window's picture leaves out.
-/// - `BOTCHU_OPEN`: open `editor` (a new bot), `task` (New Task), `memory`, `soul`, or `settings` at launch;
+/// - `BOTCHU_OPEN`: open `editor` (a new bot), `memory`, `soul`, or `settings` at launch;
 ///   `BOTCHU_SETTINGS=<page>` (`general`, `accounts`, `github`, `hosts`, `run-reviews`, `pets`,
 ///   `openrouter`, `telegram`, `remote-queue`) opens Settings on that page, else on the one shown last.
 /// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
@@ -33,10 +33,11 @@ import BotChuCore
 ///   (`family` as in `AgentKind`), several separated by `;`.
 /// - `BOTCHU_SEND`: send this message to the selected bot's shown conversation at launch (its Home,
 ///   or the tab `BOTCHU_TAB` shows).
-/// - `BOTCHU_TASK`: start a task for the selected bot at launch from `repo|task|host`, as New Task does
+/// - `BOTCHU_TASK`: start a task from before areas for the selected bot at launch from `repo|task|host`
 ///   (`repo` is `owner/name` or a checkout's folder in the repositories folder, `host` an optional
 ///   host's nickname, where the checkout is in its repositories folder; a real turn).
-/// - `BOTCHU_TAB`: show the selected bot's tab with this number at launch (0 is Home, 1 its first task).
+/// - `BOTCHU_TAB`: show the selected bot's conversation with this number at launch (0 is Home, 1 the
+///   first row of its Project Areas column).
 /// - `BOTCHU_DRAFT`: with `BOTCHU_DATA_DIR`, put this draft in the shown conversation's message box at
 ///   launch (`\n` starts a new line), to review how the box grows and scrolls.
 /// - `BOTCHU_TYPE`: with `BOTCHU_DATA_DIR`, type this into the shown conversation's message box a moment
@@ -56,7 +57,6 @@ import BotChuCore
 ///   separated by `;`.
 /// - `BOTCHU_SSH`: with `BOTCHU_DATA_DIR`, the program BotChu runs as `ssh` (a stand-in that runs the
 ///   command here lets a review exercise tasks on a host without one).
-/// - `BOTCHU_TASK_REPO`: with `BOTCHU_OPEN=task`, the repository (`owner/name`) New Task chooses.
 /// - `BOTCHU_PROJECT`: with `BOTCHU_OPEN=projects`, the repository (`owner/name`) its sidebar shows;
 ///   `BOTCHU_PROJECT_TAB` (`overview`, `issues` or `pulls`) and `BOTCHU_PROJECT_ITEM` (a number) open
 ///   a tab and an issue or pull request there.
@@ -403,7 +403,6 @@ enum DevHooks {
         case "job-edit":
             if let job = model.jobs.jobs.first(where: { $0.title == env["BOTCHU_JOB"] }) ?? model.jobs.jobs.first { model.jobs.edit(job.id) }
         case "job-history": if let job = model.jobs.jobs.first { model.jobs.showHistory(job.id) }
-        case "task": if let id = model.selection { model.newTask(for: id) }
         case "memory": if let id = model.selection { model.editDocument(.memory, for: id) }
         case "soul": if let id = model.selection { model.editDocument(.soul, for: id) }
         case "settings": model.openSettings(env["BOTCHU_SETTINGS"].flatMap(SettingsPage.init(rawValue:)))

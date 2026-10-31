@@ -120,7 +120,7 @@ private func tempDir() -> URL {
         let folder = ConversationTab(task: BotTask(folderArea: "Kalshi 15m Crypto", folder: NSHomeDirectory() + "/BOTS/t/areas/kalshi-15m-crypto",
                                                    for: fox, at: date), machine: nil, state: .idle(since: nil))
         #expect(folder.area == .folder && folder.title == "Kalshi 15m Crypto" && folder.subject == "~/BOTS/t/areas/kalshi-15m-crypto")
-        #expect(ConversationTab.abbreviated("/Users/ab", home: "/Users/a") == "/Users/ab")
+        #expect(AreaHeading.abbreviated("/Users/ab", home: "/Users/a") == "/Users/ab")
         #expect(ConversationTab(task: openTask("a/b", of: fox), machine: nil, state: .idle(since: nil)).area == nil)
     }
 

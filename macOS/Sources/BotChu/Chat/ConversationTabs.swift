@@ -18,9 +18,9 @@ extension Palette {
     static let chat = Color(nsColor: .windowBackgroundColor)
 }
 
-/// Where the column's width is kept.
-enum ConversationColumnSettings {
-    static let widthKey = "conversationColumn.width"
+/// Where the Project Areas column's width is kept.
+enum ProjectAreasColumnSettings {
+    static let widthKey = "projectAreasColumn.width"
 }
 
 extension EnvironmentValues {
@@ -38,7 +38,7 @@ struct StatusDot: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let kind: TabState.Kind
     var size: CGFloat = 8
-    /// Cuts the dot out of what is behind it, with a ring of this colour (a rail tile's corner).
+    /// Cuts the dot out of what is behind it, with a ring of this colour (a bot row's dots).
     var cutout: Color?
     @State private var pops = 0
 
@@ -111,7 +111,7 @@ struct ConversationSplit<Chat: View>: View {
 /// Reads the owner's column width itself, not the split around the chat: a view whose body reads
 /// an `@AppStorage` value is evaluated again at every UserDefaults write, whatever its key (#348).
 private struct ProjectAreasColumnHost: View {
-    @AppStorage(ConversationColumnSettings.widthKey) private var width = ConversationColumnLayout.width
+    @AppStorage(ProjectAreasColumnSettings.widthKey) private var width = ConversationColumnLayout.width
     let botID: UUID
     let focus: FocusState<ChatTarget?>.Binding
 
@@ -476,7 +476,7 @@ private struct CloseTabButton: View {
     }
 }
 
-/// A 24-point borderless button in the column's heading or at the rail's foot.
+/// A 24-point borderless button in the column's heading.
 private struct ColumnButton: View {
     let symbol: String
     let help: String

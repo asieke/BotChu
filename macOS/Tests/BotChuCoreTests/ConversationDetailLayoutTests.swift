@@ -2,12 +2,12 @@ import Testing
 @testable import BotChuCore
 
 @Suite struct ConversationDetailLayoutTests {
-    @Test func taskColumnAndRailAreIncludedBeforeReservingTheInspector() {
+    /// #407: the Project Areas column is always beside the chat, so the minimum is the same for a
+    /// bot with areas or none, and the owner's saved width is kept within its range.
+    @Test func theAreasColumnIsIncludedBeforeReservingTheInspector() {
         typealias L = ConversationDetailLayout
-        #expect(L.conversationMinimum(hasTasks: false, collapsed: false, taskWidth: 320) == 300)
-        #expect(L.conversationMinimum(hasTasks: true, collapsed: true, taskWidth: 320) == 356)
         for (saved, expected) in [(100.0, 500.0), (240, 540), (320, 620), (500, 620)] {
-            let chat = L.conversationMinimum(hasTasks: true, collapsed: false, taskWidth: saved)
+            let chat = L.conversationMinimum(areasWidth: saved)
             #expect(chat == expected)
             #expect(L.minimum(conversation: chat, showsInspector: true) == expected + 281)
             #expect(L.minimum(conversation: chat, showsInspector: false) == expected)

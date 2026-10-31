@@ -3,9 +3,8 @@ import SwiftUI
 import BotChuCore
 
 /// The repository selected in Projects, on the right: its overview, and its open issues and pull
-/// requests, each of which opens in place to read and to start work on. Every start goes through
-/// New Task, with the bot, the repository and the work (or a brief) chosen, so its account and
-/// workspace can be checked first.
+/// requests, each of which opens in place to read and to start work on. Every start goes into the
+/// repository's Project Area (`startInArea`), with the bot and the work (or a brief) chosen.
 struct ProjectSidebar: View {
     @Environment(AppModel.self) private var model
     let selection: ProjectSelection

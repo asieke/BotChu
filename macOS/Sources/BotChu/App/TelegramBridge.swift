@@ -7,7 +7,7 @@ import BotChuCore
 /// chats, change. A chat's text goes into its bot's Home (or the one it chose with `@`, #114)
 /// through that conversation's queue, as the owner's own messages do, so it resumes the Home's CLI
 /// session and waits behind a turn under way; the gateway sends back what the turn said. `/task`
-/// makes a task of its own for the bot, as New Task and `botchu-task create` do.
+/// asks the bot for work in a repository's Project Area, as `botchu-task create` does.
 @MainActor @Observable
 final class TelegramBridge {
     enum State: Equatable {

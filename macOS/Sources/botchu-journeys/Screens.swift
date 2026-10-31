@@ -67,7 +67,7 @@ extension Journeys {
 
     /// Opens Attach Project Area from `+` in the Project Areas column (#402), timed until the sheet
     /// shows; names a new folder area and presses Attach, timed until its row shows; `repeats` times.
-    func newTask() -> [JourneyResult] {
+    func attachArea() -> [JourneyResult] {
         let bot = fixture.bots[7]
         var sheets: [Double] = [], tabs: [Double] = []
         var problem: String?
@@ -78,7 +78,7 @@ extension Journeys {
                 guard let plus = try app.window().first(identifier: "conversation-new-task") else { throw HarnessFailure("The Project Areas column has no + button") }
                 var start = AppUnderTest.now
                 try plus.press()
-                let sheet = try app.mark(FrameMarks.newTask, after: start)
+                let sheet = try app.mark(FrameMarks.attachArea, after: start)
                 sheets.append(Self.ms(start, sheet.nanoseconds))
                 var name = try waitFor("Attach Project Area's folder name") { try app.window().first(identifier: "area-name") }
                 guard name.text.isEmpty, name.label.contains(bot.name) else {
@@ -94,7 +94,7 @@ extension Journeys {
                           let reopen = try app.window().first(identifier: "conversation-new-task") else {
                         throw HarnessFailure("Cancel did not dismiss Attach Project Area")
                     }
-                    _ = try press(reopen, until: FrameMarks.newTask)
+                    _ = try press(reopen, until: FrameMarks.attachArea)
                     name = try waitFor("Attach Project Area's fresh name") { try app.window().first(identifier: "area-name") }
                     guard name.text.isEmpty, name.label.contains(bot.name) else {
                         throw HarnessFailure("Reopening Attach Project Area kept the cancelled name or another bot")
@@ -117,7 +117,7 @@ extension Journeys {
                 guard let tab, let id = UUID(uuidString: String(tab.name.dropFirst(4))) else { throw HarnessFailure("No new area's row showed after Attach") }
                 tabs.append(Self.ms(start, tab.nanoseconds))
                 known.insert(id)
-                left.task = (bot, id)
+                left.area = (bot, id)
                 app.settle()
                 guard try app.window().first(identifier: "area-name") == nil else { throw HarnessFailure("Attach left the sheet open") }
                 guard try app.window().first(identifier: "conversation-tab-\(id.uuidString)") != nil else { throw HarnessFailure("The new area's row isn't in the column") }
@@ -209,7 +209,7 @@ extension Journeys {
 
     private func checkComposerFitsChat(_ window: AXElement) throws {
         let input = try composer()
-        guard let column = window.first(where: { ["conversation-column", "conversation-rail"].contains($0.identifier) }),
+        guard let column = window.first(identifier: "conversation-column"),
               let columnFrame = column.frame,
               let split = column.ancestor(role: kAXSplitGroupRole as String),
               let inputFrame = input.frame,

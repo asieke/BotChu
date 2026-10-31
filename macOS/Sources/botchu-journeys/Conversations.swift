@@ -3,19 +3,19 @@ import BotChuCore
 
 /// Journeys 4, 5, 6 and 12: a bot's conversations, typing and streaming.
 extension Journeys {
-    // MARK: 4. Switching task tabs
+    // MARK: 4. Switching between Home and areas
 
-    /// Selects the first bot's areas and tasks in the Project Areas column, each followed by its Home (the
-    /// 5,000-message conversation), `repeats` times each, timed until the chat shows the tab's rows.
-    /// A first round isn't counted: going back to Home the first time after a launch shows it, but
-    /// SwiftUI doesn't tell its rows they appeared, so no mark comes.
-    func switchTasks() -> [JourneyResult] {
-        var tasks: [Double] = [], home: [Double] = []
+    /// Selects the first bot's Project Areas in its column, each followed by its Home (the
+    /// 5,000-message conversation), `repeats` times each, timed until the chat shows the row's
+    /// conversation. A first round isn't counted: going back to Home the first time after a launch
+    /// shows it, but SwiftUI doesn't tell its rows they appeared, so no mark comes.
+    func switchAreas() -> [JourneyResult] {
+        var areas: [Double] = [], home: [Double] = []
         var problem: String?
         do {
             let bot = fixture.longBot
             try show(bot)
-            let ids = fixture.tasks(of: bot)
+            let ids = fixture.areas(of: bot)
             if let first = try app.window().first(identifier: "conversation-tab-\(ids[ids.count - 1].uuidString)"),
                let homeTab = try app.window().first(identifier: "conversation-tab-home") {
                 _ = try press(first)
@@ -24,26 +24,26 @@ extension Journeys {
                 app.settle()
             }
             for index in 0..<repeats {
-                tasks.append(try selectTab(ids[index % ids.count], of: bot))
+                areas.append(try selectTab(ids[index % ids.count], of: bot))
                 home.append(try selectTab(nil, of: bot))
             }
             try app.requireForeground()
         } catch {
             problem = "\(error)"
         }
-        return [result(4, "switch task", .within(50), tasks, problem: problem),
+        return [result(4, "switch area", .within(50), areas, problem: problem),
                 result(4, "switch to Home (5,000 messages)", .within(50), home, problem: problem)]
     }
 
-    /// Presses a task's tab, or Home's; the time until its chat shows a row, then checks its latest
-    /// message shows.
+    /// Presses an area's row (or a task's), or Home's; the time until its chat shows a row, then
+    /// checks its latest message shows.
     private func selectTab(_ task: UUID?, of bot: Bot) throws -> Double {
         let identifier = task.map { "conversation-tab-\($0.uuidString)" } ?? "conversation-tab-home"
         guard let tab = try app.window().first(identifier: identifier) else { throw HarnessFailure("The Project Areas column has no \(identifier)") }
         let (start, shown) = try press(tab, until: FrameMarks.chat(task ?? bot.id))
         app.settle()
         guard let last = fixture.lastItem[task ?? bot.id], try app.window().first(identifier: "chat-item-\(last.uuidString)") != nil else {
-            throw HarnessFailure("After its tab was pressed, the chat doesn't show \(task.map { "task \($0.uuidString)" } ?? "Home")'s latest message")
+            throw HarnessFailure("After its row was pressed, the chat doesn't show \(task.map { "area \($0.uuidString)" } ?? "Home")'s latest message")
         }
         return Self.ms(start, shown.nanoseconds)
     }

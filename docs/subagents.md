@@ -57,8 +57,8 @@ as before, with the usual issue, pull request and worktree checks (`Task:` and `
 in its output). It doesn't count against sub-agent limits and never waits for the asking turn;
 it counts as one of the turn's sixty-four delegations.
 
-`list --mine` (#262) prints the asking bot's open Tasks as its Tasks column in BotChu shows them,
-in its order, with the column's count: each row's title, summary and state (`Idle`, `Thinking…`,
+`list --mine` (#262) prints the asking bot's open areas and Tasks, the rows of its Project Areas
+column in BotChu, in the order they were opened, with their count: each row's title, summary and state (`Idle`, `Thinking…`,
 `Running a tool…`, `Finished · PR #12`, `Needs input`), the running turn's elapsed time or the time
 since its last activity, its issue or pull request, branch, host and Task ID; `--json` prints the
 same fields. BotChu answers from its live run state, so a Task closed in the sidebar isn't listed

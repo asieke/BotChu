@@ -62,7 +62,7 @@ struct AttachAreaSheet: View {
         .onChange(of: name) { _, typed in
             if !typed.trimmingCharacters(in: .whitespaces).isEmpty { selected = nil }
         }
-        .onAppear { FrameTimings.mark(FrameMarks.newTask) }
+        .onAppear { FrameTimings.mark(FrameMarks.attachArea) }
     }
 
     private func filtered(_ catalog: [ProjectCatalogEntry]) -> [ProjectCatalogEntry] {

@@ -16,14 +16,13 @@ struct ContentView: View {
             DetailColumn()
         }
         // The columns publish their minimum widths, including the composer's current controls.
-        // A fixed window minimum would miss changes to the task column, inspector or model options.
+        // A fixed window minimum would miss changes to the inspector or model options.
         .frame(minHeight: 520)
         .background { DocumentEditorPresentation() }
         .sheet(item: $model.editor) { request in
             BotEditor(request: request)
                 .environment(model)
         }
-        .modifier(NewTaskPresentationModifier())
         .sheet(item: $model.issueReport) { request in
             ReportIssueSheet(request: request)
                 .environment(model)
