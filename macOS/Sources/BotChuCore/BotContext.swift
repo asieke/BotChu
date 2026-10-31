@@ -230,7 +230,9 @@ public enum BotContext {
                 which is yours: read, scope and coordinate its work here. Read PROJECT.md, README.md and AGENTS.md \
                 (those it has) first. The main checkout stays on its default branch: never switch a branch, edit or \
                 commit in it. Code changes happen only in `botchu-subagent` children, each in a worktree of its own \
-                that it makes under \(task.checkout)/.claude/worktrees/<type>-<slug>, as your team's rules say.
+                that it makes under \(task.checkout)/.claude/worktrees/<type>-<slug>, as your team's rules say. \
+                A `--workspace shared` child starts here too, in the main checkout, and makes its own worktree before \
+                it edits anything.
                 """
         case .folder:
             return """
