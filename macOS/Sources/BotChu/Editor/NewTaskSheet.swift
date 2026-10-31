@@ -23,6 +23,8 @@ struct NewTaskSheet: View {
     @Environment(\.dismiss) private var dismiss
     let botID: UUID
     let initialRepo: String?
+    /// A prepared native sheet stays idle until it is attached to its parent window.
+    let presentation: TaskSheetPresentation?
     /// The repository a task started in last time, chosen again first.
     @AppStorage("newTaskRepo") private var lastRepo = ""
     @State private var query = ""
@@ -46,9 +48,11 @@ struct NewTaskSheet: View {
     ///     what to do with a pull request.
     ///   - initialBrief: what to tell the bot, written already: a task over many issues or pull requests.
     init(botID: UUID, initialRepo: String? = nil, initialWork: BotTask.Work? = nil, initialPurpose: Purpose = .work,
-         initialBrief: String = "") {
+         initialBrief: String = "", cachedRepo: String? = nil, presentation: TaskSheetPresentation? = nil) {
         self.botID = botID
         self.initialRepo = initialRepo
+        self.presentation = presentation
+        _repo = State(initialValue: cachedRepo)
         _work = State(initialValue: initialRepo == nil ? nil : initialWork)
         _purpose = State(initialValue: initialWork?.isPullRequest == true ? initialPurpose : .work)
         _brief = State(initialValue: initialBrief)
@@ -97,7 +101,7 @@ struct NewTaskSheet: View {
             Divider()
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
+                Button("Cancel", role: .cancel) { close() }
                     .keyboardShortcut(listOpen ? nil : .cancelAction)
                 Button("Start Task") { start() }
                     .keyboardShortcut(.return, modifiers: .command)
@@ -109,19 +113,23 @@ struct NewTaskSheet: View {
         }
         .mentionPopups()
         .frame(width: 560, height: 720)
-        .onAppear { FrameTimings.mark(FrameMarks.newTask) }
+        .onAppear { if presentation == nil { FrameTimings.mark(FrameMarks.newTask) } }
         // A pull request's branch another task owns turns the task away before it is made (#215).
         .task(id: headKey) {
             guard let headKey, let repo, let work else { return }
             if let found = await model.pullRequestHead(work, repo: repo) {
+                guard !Task.isCancelled else { return }
                 head = PullHead(key: headKey, work: found.work, branch: found.branch)
             } else {
+                guard !Task.isCancelled else { return }
                 head = PullHead(key: headKey, work: work, branch: "")
             }
         }
-        .task {
+        .task(id: presentation?.shown ?? true) {
+            guard presentation?.shown != false else { return }
             await model.loadRepositories()
-            let wanted = initialRepo ?? (DevHooks.dataDir == nil ? lastRepo : DevHooks.env["BOTCHU_TASK_REPO"] ?? "")
+            guard !Task.isCancelled, presentation?.shown != false else { return }
+            let wanted = initialRepo ?? (DevHooks.dataDir == nil ? presentation?.rememberedRepo ?? lastRepo : DevHooks.env["BOTCHU_TASK_REPO"] ?? "")
             if repo == nil, let last = model.repositories?.first(where: { $0.nameWithOwner == wanted }) { choose(last.nameWithOwner) }
         }
     }
@@ -305,8 +313,12 @@ struct NewTaskSheet: View {
         let task = BotTask(for: bot, repo: repo, checkout: location.path, work: currentHead?.work ?? work,
                            brief: brief, branch: currentHead?.branch ?? "",
                            host: model.settings.host(location.hostID), review: purpose.review)
-        lastRepo = repo
+        if let presentation { presentation.remember(repo) } else { lastRepo = repo }
         model.startTask(task, for: botID, show: true, images: attachments, references: references)
-        dismiss()
+        close()
+    }
+
+    private func close() {
+        if let presentation { presentation.close(presentation) } else { dismiss() }
     }
 }
