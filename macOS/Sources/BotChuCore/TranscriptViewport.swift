@@ -15,9 +15,9 @@ import Foundation
 /// output), whether it is opened, the layout inputs but the width (density, appearance) and the
 /// conversation's `epoch`. A height measured for anything else is never used, and a measurement
 /// that comes from a row no longer laid out, or laid out since with other content, is dropped.
-/// The width only guesses at rows not measured yet: a row laid out measures itself again at a new
-/// width, and one out of view keeps its last height until it is laid out again, as an estimate is
-/// kept. So a resize, and the frames AppKit and SwiftUI go through on the way to its size, leave
+/// The width only guesses at rows not measured yet (those guessed before the chat knew its width
+/// are guessed again once it does): a row laid out measures itself again at a new width, and one
+/// out of view keeps its last height until it is laid out again, as an estimate is kept. So a resize, and the frames AppKit and SwiftUI go through on the way to its size, leave
 /// the rows laid out as they are (#354). Heights are kept only for the items that can be scrolled
 /// to, and a few more (`spareItems`), and `forgetHeights()` lets them all go.
 ///
@@ -149,6 +149,8 @@ public struct TranscriptViewport: Sendable {
         var rows: [Measure]
         var total: Double
         var generation: Int
+        /// The width its rows were guessed for: 0 before the chat knew it.
+        var width: Int
     }
 
     private struct Anchor: Equatable, Sendable {
@@ -285,6 +287,11 @@ public struct TranscriptViewport: Sendable {
             let signature = Self.signature(item, style: style, startsTurn: turn, inputs: inputs, expanded: expanded, expansions: expansions)
             let id = item.id
             if cache[id]?.signature != signature {
+                cache[id] = rows(of: item, style: style, startsTurn: turn, inputs: inputs, expanded: expanded,
+                                 signature: signature, previous: cache[id])
+            } else if cache[id]?.width == 0, inputs.width > 0 {
+                // Guessed before the chat knew its width (its first plan): the rows not measured yet
+                // are guessed again at it; those measured keep their heights.
                 cache[id] = rows(of: item, style: style, startsTurn: turn, inputs: inputs, expanded: expanded,
                                  signature: signature, previous: cache[id])
             }
@@ -543,7 +550,8 @@ public struct TranscriptViewport: Sendable {
             let rowSignature = style.split == .whole
                 ? signature
                 : Self.signature(item, part: part, style: style, startsTurn: startsTurn, inputs: inputs, expanded: expanded)
-            if let old = reusable?.rows, part < old.count, old[part].signature == rowSignature {
+            if let old = reusable?.rows, part < old.count, old[part].signature == rowSignature,
+               old[part].measured || old[part].width > 0 || inputs.width == 0 {
                 rows.append(old[part])
                 total += old[part].height
                 continue
@@ -555,7 +563,7 @@ public struct TranscriptViewport: Sendable {
             total += height
             rebuiltRows += 1
         }
-        return ItemRows(signature: signature, split: style.split, rows: rows, total: total, generation: generation)
+        return ItemRows(signature: signature, split: style.split, rows: rows, total: total, generation: generation, width: inputs.width)
     }
 
     static func parts(of item: ActivityItem, split: Split) -> Int {
