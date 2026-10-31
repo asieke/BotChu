@@ -71,7 +71,7 @@ import Testing
         let area = BotTask(repoArea: "o/r", checkout: "/w/r", for: builder)
         #expect(TaskReceipt.posted(in: area, of: "10x Engineer Bot") == "Asked 10x Engineer Bot in r")
         #expect(TaskReceipt.posted(in: area, of: "10x Engineer Bot", for: "Product Fox")
-            == "Asked 10x Engineer Bot in r for Product Fox: 10x Engineer Bot has o/r")
+            == "Asked Product Fox in 10x Engineer Bot's area r: 10x Engineer Bot has o/r")
     }
 
     @Test func homesAgentsFileListsItsAreasAndHowToPostIntoThem() {

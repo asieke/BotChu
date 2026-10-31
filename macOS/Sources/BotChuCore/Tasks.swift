@@ -123,6 +123,9 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     /// folder, run in `checkout` itself (`folder == checkout`, `branch` empty) rather than a worktree
     /// of its own. Nil for any other task.
     public var area: AreaInfo?
+    /// In an area, the CLI session of each bot that took a cameo turn there (`CameoSession`), by its
+    /// bot ID, lowercased. Nil before the first, and for any other task.
+    public var cameos: [String: CameoSession]?
 
     public init(
         id: UUID = UUID(), title: String? = nil, repo: String, checkout: String, branch: String = "", folder: String? = nil,

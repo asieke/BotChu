@@ -106,7 +106,7 @@ message:
   refused too.
 - **`/task`** posts the brief as your message in the repository's Project Area: the chosen bot's
   (attached to it first when no bot has the repository), else the area of the bot that has it,
-  which the reply names. A repository on another computer gets a task of its own there instead.
+  which the reply names, where the chosen bot answers in a cameo turn. A repository on another computer gets a task of its own there instead.
   `/task` without a repository posts nothing. The chat is told where it went; what the bot does
   stays in BotChu. Telegram sending the request again posts nothing more.
 - **Changing who you talk to** moves nothing already sent. Messages queued for a bot stay in its

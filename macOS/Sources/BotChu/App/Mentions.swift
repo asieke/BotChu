@@ -5,9 +5,10 @@ import BotChuCore
 /// message with them tells its bot. Everything is read locally: the configured bots and the saved
 /// Projects catalog, never GitHub while the owner types.
 extension AppModel {
-    /// What a conversation's message box completes `@` and `#` from.
+    /// What a conversation's message box completes `@` and `#` from. In an area, `@` offers its own
+    /// bot too: a message there is answered by the bots it chooses (#406).
     func mentionSources(for target: ChatTarget) -> MentionSources {
-        mentionSources(for: target.botID, favoring: task(target)?.repo)
+        mentionSources(for: task(target)?.isArea == true ? nil : target.botID, favoring: task(target)?.repo)
     }
 
     /// What a sheet's text completes `@` and `#` from, for a conversation it starts (#268): every bot
@@ -43,15 +44,17 @@ extension AppModel {
         ReferenceStatus.of(reference, agentIDs: bots.map(\.id), repos: repositories?.map(\.nameWithOwner), login: projectsLogin)
     }
 
-    /// What `references` point at, for `recipient` (`ReferenceContext`); nil without any.
-    func referenceContext(_ references: [MessageReference], for recipient: UUID?) -> String? {
+    /// What `references` point at, for `recipient` (`ReferenceContext`); nil without any. `inArea`:
+    /// the message is in a Project Area, where an agent mentioned takes its own turn.
+    func referenceContext(_ references: [MessageReference], for recipient: UUID?, inArea: Bool = false) -> String? {
         ReferenceContext.section(for: references, recipient: recipient, agents: bots.map(BotRosterEntry.init),
-                                 projects: repositories == nil ? nil : projectCatalog, login: projectsLogin)
+                                 projects: repositories == nil ? nil : projectCatalog, login: projectsLogin, inArea: inArea)
     }
 
     /// The text a message reaches its bot with: what its mentions point at (`ReferenceContext`), then
-    /// the message. A message without mentions goes as it is.
-    func deliveredText(of message: ChatMessage, for target: ChatTarget) -> String {
+    /// the message. A message without mentions goes as it is. `recipient` is the bot answering it in
+    /// an area when that isn't the area's own (a cameo turn); nil for the conversation's bot.
+    func deliveredText(of message: ChatMessage, for target: ChatTarget, recipient: UUID? = nil) -> String {
         // Another bot's request posted into an area (`AreaPost`) says who asks, and from where.
         if let link = message.fromAgent, link.messageID == nil, target.taskID != nil {
             return AreaPost.prompt(message.text, from: link, place: conversationName(of: link))
@@ -65,9 +68,10 @@ extension AppModel {
         if let id = message.delivery, let delivery = inbox?.delivery(id) {
             var plain = message
             plain.delivery = nil
-            return InboxReply.prompt(deliveredText(of: plain, for: target), delivery: delivery)
+            return InboxReply.prompt(deliveredText(of: plain, for: target, recipient: recipient), delivery: delivery)
         }
-        guard let section = referenceContext(message.mentions, for: target.botID) else { return message.text }
+        let inArea = target.taskID != nil && task(target)?.isArea == true
+        guard let section = referenceContext(message.mentions, for: recipient ?? target.botID, inArea: inArea) else { return message.text }
         return BotContext.prompt(for: message.text, preamble: nil, updates: section)
     }
 }

@@ -13,6 +13,16 @@ A remote queue bot, which runs on its own computer, is neither: a turn messages 
 ([Remote queue: messages from other bots](remote-queue.md#messages-from-other-bots)). The roster
 marks remote bots (`"remote": true`); `botchu-subagent list` leaves them out.
 
+In a Project Area (not Home), an `@bot` mention is a turn (#406): the bots the owner's message
+chooses from `@` completion answer it in that order, in the area's transcript, each with its own
+identity, account, memory and CLI session (its session slot is kept on the area, `cameos`), in
+the area's checkout, which it leaves as it is; the area's bot answers only when chosen or when no
+bot is. A bot's reply that mentions `@<name or slug>` gives each bot it mentions one turn after it,
+one hop on (the owner's message is hop 0), up to hop 2, and none to a bot already running or
+waiting there. Turns stay one at a time; Stop or a failure calls off those waiting. A cameo
+turn's rows show its bot's avatar and name, its `<remember>` notes go to its own memory, and its
+Inbox deliveries credit it.
+
 BotChu supplies both commands to every Home, task and delegated turn. They work through shell
 tools on all five CLI families. Python 3 is required on the execution machine.
 
@@ -33,8 +43,8 @@ botchu-task list --mine [--json]
 on pull request #n …") then the brief, as a message from the asking bot (`fromAgent`), which
 its bot reads with who asks and from where. The area is the named bot's when it has the
 repository or no bot does (attached to it first, the repository cloned when it isn't checked out);
-when another bot has it, the request goes into that bot's area, and the receipt says so (until
-#406's cameo turns let the named bot answer there). A hidden area is shown again. The asking
+when another bot has it, the request goes into that bot's area, where the named bot answers it in
+a cameo turn (below), and the receipt says so. A hidden area is shown again. The asking
 conversation gets a receipt that opens the area, and the command prints the area, its bot and ID
 and one status: `pending`, `posted` (its turn not started yet when `--wait`, 120 seconds by
 default, ran out), `started` (the turn that takes the message started), `start failed` or

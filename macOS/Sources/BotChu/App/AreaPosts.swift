@@ -40,8 +40,8 @@ extension AppModel {
 
     /// Posts what `wanted` asks of `asked` (`AreaPost.text`) as a turn in the repository's area, under
     /// message ID `id`, from `requester` (nil for the owner): in `asked`'s own area, attached to it
-    /// first when no bot has it, or else in the area of the bot that has it (#406's cameo turns will
-    /// let `asked` answer there). A hidden area is shown again, without opening it. The repository is
+    /// first when no bot has it, or else in the area of the bot that has it, where `asked` answers it
+    /// in a cameo turn (#406). A hidden area is shown again, without opening it. The repository is
     /// cloned into the area's folder first when it isn't there. A message with this ID posted before
     /// isn't posted again (`existing`). `claim`, asked just before posting with no wait after it,
     /// can still refuse (nil): a dispatch file taken, a Telegram chat still allowed. `work` is the
@@ -104,7 +104,8 @@ extension AppModel {
                 answered = true
                 continuation.resume(returning: accepted)
             }
-            if !send(text, to: target, id: id, fromAgent: requester, accepted: { answer($0) }) { answer(false) }
+            if !send(text, to: target, id: id, fromAgent: requester, answeredBy: owner.id == asked.id ? nil : asked.id,
+                     accepted: { answer($0) }) { answer(false) }
         }
         if !accepted { posting.unsaved = "Couldn't post it in \(area.title): \(owner.name)'s queue couldn't be saved." }
         return posting

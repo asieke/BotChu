@@ -271,7 +271,8 @@ public enum BotContext {
     public static func taskPreamble(bot: Bot, task: BotTask, memory: String, sharedMemory: String, history: [ChatMessage],
                                     machine: String? = nil, home: [ChatMessage] = [], soul: String = "",
                                     instructions: String = "", team: String = "",
-                                    availableBots: [BotRosterEntry] = [], skills: [Skill] = []) -> String {
+                                    availableBots: [BotRosterEntry] = [], skills: [Skill] = [],
+                                    voices: TurnVoices? = nil) -> String {
         let memoryPath = (bot.workspace as NSString).appendingPathComponent(memoryFile)
         var parts: [String] = []
         if let machine {
@@ -341,7 +342,7 @@ public enum BotContext {
         }
         var brief: String
         if let area = task.area {
-            brief = "This is your Project Area “\(area.name)”, your own lasting conversation with your owner about it; the message below is theirs."
+            brief = "This is your Project Area “\(area.name)”, your own lasting conversation with your owner about it; the message below is theirs. \(areaMentionRule)"
         } else if let work = task.work, let review = task.review {
             brief = review == .comment
                 ? "Your task is to review and comment on \(work.reference) (\(work.url.absoluteString)) in \(task.repo). \(Self.reviewSteps) Then post your review there, as one review, without asking again: `gh api repos/\(task.repo)/pulls/\(work.number)/reviews --method POST` with the commit you reviewed, `\"event\": \"COMMENT\"`, the verdict and findings in its body, and each finding as an inline comment on its line where GitHub takes one; give the review's URL."
@@ -385,8 +386,61 @@ public enum BotContext {
                 BotChu passes it on to your Home conversation.
                 """)
         }
-        parts += continuity(history)
+        parts += continuity(history, voices: voices)
         if !availableBots.isEmpty { parts.append(subagentsSection(availableBots: availableBots)) }
+        return "<botchu_context>\n\(parts.joined(separator: "\n\n"))\n</botchu_context>"
+    }
+
+    /// What every bot taking turns in an area hears about the others (#399 decision 8).
+    static let areaMentionRule = "Other bots may take turns in this conversation too, each shown by name. `@<bot name>` in "
+        + "your reply gives that bot a turn here after yours, so mention a bot that way only when you want it to take one."
+
+    /// Context put before the first message of a bot's new cameo session in another bot's Project
+    /// Area (#399 decision 8): its own identity, instructions and memories, whose area it is and
+    /// where, and that it leaves the area's files as they are: a repository's main checkout, or the
+    /// owner's folder. Code changes happen in `botchu-subagent` children's own worktrees.
+    public static func cameoPreamble(bot: Bot, owner: Bot, area: BotTask, memory: String, sharedMemory: String,
+                                     history: [ChatMessage], voices: TurnVoices? = nil, soul: String = "",
+                                     instructions: String = "", team: String = "", skills: [Skill] = []) -> String {
+        let memoryPath = (bot.workspace as NSString).appendingPathComponent(memoryFile)
+        let name = area.area?.name ?? area.title
+        var parts: [String] = []
+        parts.append("""
+            You are \(bot.name)\(bot.title.isEmpty ? "" : " — \(bot.title)"), a persistent bot in BotChu, taking a turn in \
+            \(owner.name)'s Project Area “\(name)” at \(area.checkout), because a message there mentioned you. Your own \
+            workspace is \(bot.workspace), where your owner also talks with you in your Home conversation.
+            """)
+        parts += identity(bot: bot, memory: memory, sharedMemory: sharedMemory, soul: soul,
+                          instructions: instructions, team: team, saving: """
+            Your memory is \(memoryPath), in your workspace, not in this area: save to it what you would want in any \
+            project (your owner's preferences, lessons, how you work) with <\(rememberTag)> as below, not to your CLI's \
+            own memory feature. Never commit it, or any other file of yours, to this area.
+            \(memoryCaptureRules(usesRememberTag: false))
+            """)
+        if let skills = skillsContext(skills, remote: false) { parts.append(skills) }
+        if let facts = shellFacts(remote: false) { parts.append(facts) }
+        switch area.area?.kind {
+        case .folder:
+            parts.append("""
+                You are in \(area.checkout), the folder of \(owner.name)'s area, which isn't yours: read it, but never \
+                change its files. When the work needs a repository's code changed, hand it to a `botchu-subagent` \
+                child that makes a worktree of its own under that checkout's .claude/worktrees/<type>-<slug>.
+                """)
+        default:
+            parts.append("""
+                You are in the main checkout of \(area.repo) at \(area.checkout), \(owner.name)'s area. Read PROJECT.md, \
+                README.md and AGENTS.md (those it has) first. The main checkout stays on its default branch: never switch \
+                a branch, edit or commit in it. Code changes happen only in `botchu-subagent` children, each in a worktree \
+                of its own that it makes under \(area.checkout)/.claude/worktrees/<type>-<slug>, as your team's rules say.
+                """)
+        }
+        let botchu = (owner.persistencePath as NSString).appendingPathComponent(BotHome.folderName)
+        parts.append("""
+            Your owner writes in this conversation, and \(owner.name) answers there; your replies show under your own \
+            name. \(areaMentionRule) The conversation is kept in \
+            \(botchu)/tasks/\(area.id.uuidString.lowercased())/thread.jsonl: read it when you need earlier context, never edit it.
+            """)
+        parts += continuity(history, voices: voices)
         return "<botchu_context>\n\(parts.joined(separator: "\n\n"))\n</botchu_context>"
     }
 
@@ -757,8 +811,8 @@ public enum BotContext {
     }
 
     /// A recap of the conversation so far, for a new session of it.
-    static func continuity(_ history: [ChatMessage]) -> [String] {
-        let recap = recap(history)
+    static func continuity(_ history: [ChatMessage], voices: TurnVoices? = nil) -> [String] {
+        let recap = recap(history, voices: voices)
         guard !recap.isEmpty else { return [] }
         return ["""
             This is a new session of an existing conversation, possibly on another model. Its most recent \
@@ -824,14 +878,15 @@ public enum BotContext {
     static let maxRecapMessageCharacters = 1_500
 
     /// The newest user and assistant messages, oldest first, within `limit` characters.
-    static func recap(_ history: [ChatMessage], limit: Int = maxRecapCharacters) -> String {
+    /// In an area conversation (`voices`), each line names who wrote it.
+    static func recap(_ history: [ChatMessage], limit: Int = maxRecapCharacters, voices: TurnVoices? = nil) -> String {
         var lines: [String] = []
         var total = 0
         for message in history.reversed() where message.role == .user || message.role == .assistant {
             var text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
             if text.count > maxRecapMessageCharacters { text = String(text.prefix(maxRecapMessageCharacters)) + " […]" }
-            let line = "\(message.role == .user ? "Owner" : "You"): \(text)"
+            let line = "\(voices?.label(message) ?? (message.role == .user ? "Owner" : "You")): \(text)"
             if total + line.count > limit { break }
             total += line.count
             lines.append(line)

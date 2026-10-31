@@ -16,8 +16,10 @@ public struct TurnStream {
     private var toolCalls: Set<String> = []
     private var lastTool: ChatMessage?
 
-    /// `usage` records the turn's tokens, model and session, and the follow-ups it took.
-    public init(account: Account, invocation: Invocation, usage: UsageLedger.Capture? = nil) {
+    /// `usage` records the turn's tokens, model and session, and the follow-ups it took; `speaker`
+    /// is the bot of a cameo turn, which its messages name (`ChatMessage.speakerBotID`).
+    public init(account: Account, invocation: Invocation, usage: UsageLedger.Capture? = nil, speaker: UUID? = nil) {
+        assembler = ThreadAssembler(speaker: speaker)
         self.account = account
         adapter = RuntimeAdapters.adapter(for: account.kind)
         self.invocation = invocation
@@ -147,13 +149,17 @@ public struct TurnStream {
         if lingered { return lingerNote }
         guard !outcome.ended else { return nil }
         let detail = Self.lastLines(stderr)
+        var error: ChatMessage
         if let host, status == 255 {
             // ssh's own failure: the host didn't answer, or refused the connection.
-            return ChatMessage(role: .error, text: "Couldn't reach \(host) over SSH" + (detail.isEmpty ? "." : ":\n\(detail)"))
+            error = ChatMessage(role: .error, text: "Couldn't reach \(host) over SSH" + (detail.isEmpty ? "." : ":\n\(detail)"))
+        } else {
+            error = ChatMessage(role: .error, text: detail.isEmpty
+                ? "\(account.name) exited with status \(status) without replying."
+                : "\(account.name) exited with status \(status):\n\(detail)")
         }
-        return ChatMessage(role: .error, text: detail.isEmpty
-            ? "\(account.name) exited with status \(status) without replying."
-            : "\(account.name) exited with status \(status):\n\(detail)")
+        error.speakerBotID = assembler.speaker
+        return error
     }
 
     /// A CLI still running a while after it said its turn ended was ended (#145); its turn stands.

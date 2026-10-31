@@ -234,6 +234,11 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     /// On BotChu's heartbeat message (`Heartbeat`), sent in the owner's place, its number in a row.
     /// Nil otherwise, and in threads saved before.
     public var heartbeat: Int?
+    /// In a Project Area, the bot whose turn wrote it when that isn't the area's own bot (a cameo
+    /// turn, #399 decision 8): on its replies, tool calls and errors. On a user message posted into
+    /// an area for another bot (`AreaPost`), the bot that answers it. Nil otherwise, and in threads
+    /// saved before.
+    public var speakerBotID: UUID?
 
     public init(
         id: UUID = UUID(), role: Role, text: String = "", date: Date = Date(), toolID: String? = nil,
@@ -340,8 +345,17 @@ public enum AgentEvent: Equatable, Sendable {
 public struct ThreadAssembler {
     /// The assistant message text is being appended to, if any.
     public private(set) var openTextID: UUID?
+    /// The bot whose cameo turn this is (`ChatMessage.speakerBotID`), which the messages it adds carry.
+    public var speaker: UUID?
 
-    public init() {}
+    public init(speaker: UUID? = nil) { self.speaker = speaker }
+
+    private func spoken(_ message: ChatMessage) -> ChatMessage {
+        guard let speaker else { return message }
+        var message = message
+        message.speakerBotID = speaker
+        return message
+    }
 
     public mutating func apply(_ event: AgentEvent, to messages: inout [ChatMessage]) {
         switch event {
@@ -361,13 +375,13 @@ public struct ThreadAssembler {
                 guard !trimmed.isEmpty else { return }
                 let message = ChatMessage(role: .assistant, text: trimmed)
                 openTextID = message.id
-                messages.append(message)
+                messages.append(spoken(message))
             }
         case .text(let text):
             openTextID = nil
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            messages.append(ChatMessage(role: .assistant, text: trimmed))
+            messages.append(spoken(ChatMessage(role: .assistant, text: trimmed)))
         case .textEnd:
             if let id = openTextID, let i = Self.index(of: id, in: messages) {
                 messages[i].text = messages[i].text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -380,8 +394,8 @@ public struct ThreadAssembler {
                 if !input.isEmpty { messages[i].toolInput = input }
                 if let arguments { messages[i].toolArguments = arguments }
             } else {
-                messages.append(ChatMessage(role: .tool, toolID: id, toolName: name, toolInput: input, toolState: .running,
-                                            toolArguments: arguments))
+                messages.append(spoken(ChatMessage(role: .tool, toolID: id, toolName: name, toolInput: input, toolState: .running,
+                                            toolArguments: arguments)))
             }
         case let .toolFinished(id, name, output, isError, exitCode):
             apply(.textEnd, to: &messages)
@@ -396,12 +410,12 @@ public struct ThreadAssembler {
                 if messages[i].toolDuration == nil, elapsed > 0.05 { messages[i].toolDuration = elapsed }
                 if messages[i].toolName?.isEmpty ?? true { messages[i].toolName = name }
             } else {
-                messages.append(ChatMessage(role: .tool, toolID: id, toolName: name, toolInput: "", toolOutput: output, toolState: state,
-                                            toolExitCode: exitCode))
+                messages.append(spoken(ChatMessage(role: .tool, toolID: id, toolName: name, toolInput: "", toolOutput: output, toolState: state,
+                                            toolExitCode: exitCode)))
             }
         case .failed(let reason):
             apply(.textEnd, to: &messages)
-            messages.append(ChatMessage(role: .error, text: reason))
+            messages.append(spoken(ChatMessage(role: .error, text: reason)))
         }
     }
 

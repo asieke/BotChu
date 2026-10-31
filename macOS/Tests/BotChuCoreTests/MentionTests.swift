@@ -250,6 +250,18 @@ struct MentionTests {
         #expect(ReferenceContext.section(for: [], recipient: nil, agents: [duck], projects: nil, login: nil) == nil)
     }
 
+    /// In a Project Area an agent mentioned takes its own turn there (#406), so the bot isn't told to delegate to it.
+    @Test func inAnAreaContextSaysAnAgentMentionedTakesItsOwnTurn() throws {
+        let references = [MessageReference.agent(duck, at: 0), MessageReference.agent(fox, at: 12), MessageReference.project(botchu, login: "asieke", at: 30)]
+        let section = try #require(ReferenceContext.section(for: references, recipient: fox.id, agents: [duck, fox],
+                                                             projects: [botchu], login: "asieke", inArea: true))
+        #expect(section.contains("In this Project Area, each agent mentioned takes its own turn here, in the order mentioned; anything else starts nothing by itself"))
+        let lines = section.split(separator: "\n").filter { $0.hasPrefix("- ") }
+        #expect(lines[0] == "- `@QA Duck` is the BotChu agent QA Duck, “A Duck that QAs” (ID 42c27670-0000-4000-8000-000000000001), which takes its own turn in this conversation.")
+        #expect(lines[1] == "- `@Product Fox` is you.")
+        #expect(!section.contains("delegate with `botchu-subagent`"))
+    }
+
     @Test func contextSaysWhatNoLongerResolves() throws {
         let me = BotRosterEntry(bot: Bot(name: "Pixel Designer", workspace: "/tmp/pixel"))
         let references = [

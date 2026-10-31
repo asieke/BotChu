@@ -269,8 +269,16 @@ struct ReceiptRow: View {
     }
 }
 
-/// A row of the bot's turn: its avatar (or the avatar's space) and the content beside it.
+extension EnvironmentValues {
+    /// In a Project Area's chat, the area's own bot: another bot's turn there (a cameo, #406) shows
+    /// its name with its avatar. Nil elsewhere.
+    @Entry var areaBotID: UUID?
+}
+
+/// A row of the bot's turn: its avatar (or the avatar's space) and the content beside it; in an
+/// area, another bot's turn also starts with its name.
 struct BotTurnRow<Content: View>: View {
+    @Environment(\.areaBotID) private var areaBotID
     let bot: Bot
     let showsAvatar: Bool
     @ViewBuilder let content: Content
@@ -282,8 +290,15 @@ struct BotTurnRow<Content: View>: View {
             } else {
                 Color.clear.frame(width: Theme.messageAvatar, height: 1)
             }
-            content
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                if showsAvatar, let areaBotID, areaBotID != bot.id {
+                    Text(bot.name)
+                        .font(.callout.weight(.semibold))
+                        .accessibilityIdentifier("cameo-speaker")
+                }
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.top, showsAvatar ? 6 : 0)
     }

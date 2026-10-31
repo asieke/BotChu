@@ -286,7 +286,7 @@ public struct TranscriptViewport: Sendable {
         for index in start..<items.count {
             let item = items[index]
             let style = style(index, item)
-            let turn = index == 0 ? inputs.startsBotTurn : !items[index - 1].isBotTurn
+            let turn = index == 0 ? inputs.startsBotTurn : item.startsBotTurn(after: items[index - 1])
             let signature = Self.signature(item, style: style, startsTurn: turn, inputs: inputs, expanded: expanded, expansions: expansions)
             let id = item.id
             if cache[id]?.signature != signature {
