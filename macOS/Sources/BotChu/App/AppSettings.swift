@@ -8,6 +8,9 @@ import BotChuCore
 @MainActor @Observable
 final class AppSettings {
     private let defaults: UserDefaults
+    /// AppKit-hosted panes share the app's preference domain without copying a parent view's
+    /// presentation, enabled or activation environment into a different hosting hierarchy.
+    var preferenceStore: UserDefaults { defaults }
 
     var customAccounts: [Account] { didSet { save(customAccounts, forKey: "customAccounts") } }
     var accounts: [Account] { Accounts.all + customAccounts }

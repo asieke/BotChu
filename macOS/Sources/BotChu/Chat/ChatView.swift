@@ -123,6 +123,7 @@ private struct ChatContent: View {
                 // Opening a conversation, or switching to it, shows its newest message.
                 .onAppear {
                     conversation.showLatest()
+                    transcript.prepareToOpenCard = { [weak conversation] in conversation?.pinDisplay() }
                     transcript.hasLaterPage = false
                     transcript.loadLater = {
                         model.pageLater(target) { transcript.hasLaterPage = conversation.hasLaterPage }
@@ -132,6 +133,7 @@ private struct ChatContent: View {
                 .onDisappear {
                     conversation.showLatest()
                     transcript.loadLater = nil
+                    transcript.prepareToOpenCard = nil
                 }
                 .onChange(of: conversation.hasLaterPage) { _, later in transcript.hasLaterPage = later }
                 .onChange(of: transcript.isPinned) { _, pinned in
@@ -166,10 +168,6 @@ private struct ChatContent: View {
             .environment(transcript)
             // Its replies' links to files open from its folder (#363).
             .environment(\.openFileLink, FileLinkAction(root: FileLink.root(workspace: bot.workspace, task: task), model: model))
-            // Keep room for the model, effort and send controls when the columns are narrowed.
-            .frame(minWidth: 300)
-            // The tab beside the chat says which conversation it is (#128).
-            .navigationTitle(bot.name)
             // Opening the conversation again starts from its newest items.
             .onDisappear { transcript.windowStart = nil }
             // Notes left waiting by an earlier launch.

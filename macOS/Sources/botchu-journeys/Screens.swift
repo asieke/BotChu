@@ -17,8 +17,17 @@ extension Journeys {
         do {
             try show(bot)
             print("journeys: 8 expands \"\(try groupHead().label)\"")
+            var expectedGroup: String?
+            var expectedLabel: String?
             for _ in 0..<repeats {
                 let (head, group) = try groupHeadAndID()
+                let label = head.label
+                guard let before = head.frame else { throw HarnessFailure("The group header has no frame") }
+                if let expectedGroup, let expectedLabel {
+                    guard group == expectedGroup, label == expectedLabel else {
+                        throw HarnessFailure("Closing and reopening changed the displayed group")
+                    }
+                } else { expectedGroup = group; expectedLabel = label }
                 let (start, shown) = try press(head, until: FrameMarks.chat(bot.id))
                 opened.append(Self.ms(start, shown.nanoseconds))
                 let after = shown.nanoseconds + 1_000_000_000
@@ -27,7 +36,12 @@ extension Journeys {
                 frames.append(app.longestBusy(from: shown.nanoseconds + 1, to: after))
                 let rows = try app.window().all(identifier: group).count
                 guard rows > 1 else { throw HarnessFailure("Pressed, the group of calls still shows as one row") }
-                _ = try press(try groupHeadAndID().head, until: FrameMarks.chat(bot.id))
+                let expanded = try groupHeadAndID()
+                guard expanded.group == group, expanded.head.label == label, let afterFrame = expanded.head.frame,
+                      abs(afterFrame.minY - before.minY) <= 1 else {
+                    throw HarnessFailure("Opening the group changed its content or moved its header")
+                }
+                _ = try press(expanded.head, until: FrameMarks.chat(bot.id))
                 app.settle(quiet: 0.3, limit: 3)
             }
             try app.requireForeground()
@@ -176,6 +190,11 @@ extension Journeys {
             }
             app.settle()
             try checkShown(fixture.longBot)
+            // Outside the timed sweeps: the native minimum must keep the composer's controls
+            // inside the actual chat pane, even when asked for less width than they require.
+            try window.setSize(CGSize(width: 600, height: frame.height))
+            app.settle()
+            try checkComposerFitsChat(window)
             try app.requireForeground()
         } catch {
             problem = "\(error)"
@@ -185,6 +204,58 @@ extension Journeys {
 
     static let resizeStep = 20
     static let resizeSteps = 12
+
+    private func checkComposerFitsChat(_ window: AXElement) throws {
+        let input = try composer()
+        guard let column = window.first(where: { ["conversation-column", "conversation-rail"].contains($0.identifier) }),
+              let columnFrame = column.frame,
+              let split = column.ancestor(role: kAXSplitGroupRole as String),
+              let inputFrame = input.frame,
+              let composerGroup = input.ancestor(where: { group in
+                  group.first(where: { $0.label == "Attach images" }) != nil
+                      && group.first(where: { $0.label == "Send" }) != nil
+              }),
+              let windowFrame = window.frame else {
+            throw HarnessFailure("Couldn't locate the chat pane for the minimum-width check")
+        }
+        // The conversation list's right edge starts the chat. The next vertical native divider
+        // ends it; a hidden inspector leaves the chat extending to the window's right edge.
+        let left = columnFrame.maxX
+        var right = windowFrame.maxX
+        var queue = [split], index = 0
+        while index < queue.count, index < 20_000 {
+            let element = queue[index]
+            index += 1
+            queue += element.children
+            guard let bounds = element.frame, bounds.height > 0 else { continue }
+            if element.role == kAXSplitterRole as String, bounds.height > bounds.width,
+               bounds.minX > left + 0.5 { right = min(right, bounds.minX) }
+        }
+        var controls: [(String, CGRect)] = []
+        let required = ["Model:", "Reasoning effort", "Attach images", "Send"]
+        let prefixes = required + ["Fast mode", "Provider:", "Completion window:"]
+        queue = [composerGroup]
+        index = 0
+        while index < queue.count, index < 20_000 {
+            let element = queue[index]
+            index += 1
+            queue += element.children
+            guard let bounds = element.frame, bounds.height > 0 else { continue }
+            if bounds.width > 0, bounds.minY >= inputFrame.maxY - 1,
+               prefixes.contains(where: { element.label.hasPrefix($0) }) {
+                controls.append((element.label, bounds))
+            }
+        }
+        guard right > left, inputFrame.minX >= left - 1, inputFrame.maxX <= right + 1 else {
+            throw HarnessFailure("The message editor extends outside the chat pane at minimum width")
+        }
+        for prefix in required where !controls.contains(where: { $0.0.hasPrefix(prefix) }) {
+            throw HarnessFailure("The minimum-width composer has no visible \(prefix) control")
+        }
+        for (label, bounds) in controls where bounds.minX < left - 1 || bounds.maxX > right + 1 {
+            throw HarnessFailure("\(label) extends outside the chat pane at minimum width")
+        }
+    }
 
     // MARK: 11. Inbox and Settings
 

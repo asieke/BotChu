@@ -58,6 +58,8 @@ final class TranscriptModel {
     @ObservationIgnored private var revealNext = false
     @ObservationIgnored var hasLaterPage = false
     @ObservationIgnored var loadLater: (() -> Void)?
+    /// Freeze the visible conversation before an opened card is first planned.
+    @ObservationIgnored var prepareToOpenCard: (() -> Void)?
     /// Grouping the whole thread, off the main thread.
     @ObservationIgnored private var loading: Task<Void, Never>?
     /// While it loads, the newest messages couldn't be grouped on their own: nothing shows yet.
@@ -281,7 +283,10 @@ final class TranscriptModel {
         let opening = !(overrides[id] ?? open)
         // The first plan of an opened card must keep the clicked row in place. Waiting for the
         // view's onChange plans the enlarged group's tail first, then the reader's rows (#355).
-        if opening { follow(.openedCard) }
+        if opening {
+            prepareToOpenCard?()
+            follow(.openedCard)
+        }
         overrides[id] = opening
     }
 

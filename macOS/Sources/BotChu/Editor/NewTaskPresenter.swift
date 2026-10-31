@@ -204,7 +204,10 @@ private struct TaskSheetWindow: NSViewRepresentable {
             // Keep cleanup alive through dismissal, but release its owner before reusing the
             // window: AppKit may keep a completed sheet callback until the next presentation.
             let completion = DismissalCompletion(owner: self)
-            parent.beginSheet(sheet) { _ in completion.finish() }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+                parent.beginSheet(sheet) { _ in completion.finish() }
+            }
         }
 
         @MainActor private final class DismissalCompletion {

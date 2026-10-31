@@ -6,7 +6,6 @@ import BotChuCore
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @State private var hooksStarted = false
-    @State private var contentSize = CGSize(width: 1240, height: 800)
 
     var body: some View {
         @Bindable var model = model
@@ -16,27 +15,15 @@ struct ContentView: View {
         } detail: {
             DetailColumn()
         }
-        // No minimum width of our own: the window's narrowest is what the columns need, which grows
-        // with the sidebar's and the status's widths (the split view counts the sidebar twice). A
-        // window narrower than that, which a fixed minimum allowed, lays out forever and AppKit aborts.
+        // The columns publish their minimum widths, including the composer's current controls.
+        // A fixed window minimum would miss changes to the task column, inspector or model options.
         .frame(minHeight: 520)
-        .background {
-            GeometryReader { geometry in
-                Color.clear
-                    .onAppear { contentSize = geometry.size }
-                    .onChange(of: geometry.size) { _, size in contentSize = size }
-            }
-        }
+        .background { DocumentEditorPresentation() }
         .sheet(item: $model.editor) { request in
             BotEditor(request: request)
                 .environment(model)
         }
         .modifier(NewTaskPresentationModifier())
-        .sheet(item: $model.documentEditor) { request in
-            BotDocumentEditor(request: request)
-                .environment(model)
-                .frame(width: contentSize.width * 0.5, height: contentSize.height * 0.5)
-        }
         .sheet(item: $model.issueReport) { request in
             ReportIssueSheet(request: request)
                 .environment(model)
@@ -58,6 +45,24 @@ struct ContentView: View {
             guard !hooksStarted else { return }
             hooksStarted = true
             DevHooks.start(model: model)
+        }
+    }
+}
+
+/// Only the document sheet needs the window's current dimensions. Observing them here keeps a
+/// live resize from invalidating the entire navigation split view at every intermediate size.
+private struct DocumentEditorPresentation: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        GeometryReader { geometry in
+            Color.clear
+                .sheet(item: $model.documentEditor) { request in
+                    BotDocumentEditor(request: request)
+                        .environment(model)
+                        .frame(width: geometry.size.width * 0.5, height: geometry.size.height * 0.5)
+                }
         }
     }
 }
@@ -92,28 +97,9 @@ private struct DetailColumn: View {
             case .settings: SettingsView().onAppear { FrameTimings.mark(FrameMarks.page("settings")) }
             }
         } else if let id = model.selection, model.bot(id) != nil {
-            let tab = model.tab(of: id)
-            // The bot's Home and open tasks as tabs beside the chat, while it has an open task (#128).
-            ConversationSplit(botID: id) {
-                ChatView(target: tab)
-                    .id(tab)
-                    // Its history is read when it shows, if it isn't in memory (#109).
-                    .onAppear { model.hydrate(tab) }
-            }
-            .modifier(ChatToolbar())
-            .modifier(StatusSidebar {
-                Group {
-                    if tab.taskID != nil {
-                        // A view of its own per task, so nothing it read about one task shows on another.
-                        TaskInspector(target: tab)
-                            .id(tab)
-                    } else {
-                        BotInspector(botID: id)
-                    }
-                }
-                // Opens at its widest, and narrows from there.
-                .inspectorColumnWidth(min: 280, ideal: 380, max: 380)
-            })
+            NativeConversationColumns()
+                .navigationTitle(model.bot(id)?.name ?? "")
+                .modifier(ChatToolbar())
         } else {
             ContentUnavailableView {
                 Label("No Bot Selected", systemImage: "bubble.left.and.text.bubble.right")
@@ -124,20 +110,5 @@ private struct DetailColumn: View {
                     .buttonStyle(.borderedProminent)
             }
         }
-    }
-}
-
-/// The status sidebar beside the conversation, shown or hidden as the owner chose. Only this reads
-/// whether it shows: a view whose body reads an `@AppStorage` value is evaluated again at every
-/// UserDefaults write, whatever its key (the toggle itself, a split view saving its widths), so the
-/// column around it, which rebuilt the whole conversation each time, reads none (#348).
-private struct StatusSidebar<Inspector: View>: ViewModifier {
-    @AppStorage("showsStatus") private var showsStatus = true
-    @ViewBuilder let inspector: Inspector
-
-    func body(content: Content) -> some View {
-        content
-            .inspector(isPresented: $showsStatus) { inspector }
-            .onChange(of: showsStatus) { _, shown in FrameTimings.mark(FrameMarks.inspector(shown: shown)) }
     }
 }

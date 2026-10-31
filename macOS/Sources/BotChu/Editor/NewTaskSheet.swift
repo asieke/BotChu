@@ -125,12 +125,13 @@ struct NewTaskSheet: View {
                 head = PullHead(key: headKey, work: work, branch: "")
             }
         }
-        .task(id: presentation?.shown ?? true) {
-            guard presentation?.shown != false else { return }
-            await model.loadRepositories()
-            guard !Task.isCancelled, presentation?.shown != false else { return }
-            let wanted = initialRepo ?? (DevHooks.dataDir == nil ? presentation?.rememberedRepo ?? lastRepo : DevHooks.env["BOTCHU_TASK_REPO"] ?? "")
-            if repo == nil, let last = model.repositories?.first(where: { $0.nameWithOwner == wanted }) { choose(last.nameWithOwner) }
+        .background {
+            TaskSheetActivation(presentation: presentation) {
+                await model.loadRepositories()
+                guard !Task.isCancelled, presentation?.shown != false else { return }
+                let wanted = initialRepo ?? (DevHooks.dataDir == nil ? presentation?.rememberedRepo ?? lastRepo : DevHooks.env["BOTCHU_TASK_REPO"] ?? "")
+                if repo == nil, let last = model.repositories?.first(where: { $0.nameWithOwner == wanted }) { choose(last.nameWithOwner) }
+            }
         }
     }
 
@@ -320,5 +321,18 @@ struct NewTaskSheet: View {
 
     private func close() {
         if let presentation { presentation.close(presentation) } else { dismiss() }
+    }
+}
+
+/// Activation starts repository loading without invalidating the prepared form's layout.
+private struct TaskSheetActivation: View {
+    let presentation: TaskSheetPresentation?
+    let activate: @MainActor () async -> Void
+
+    var body: some View {
+        Color.clear.task(id: presentation?.shown ?? true) {
+            guard presentation?.shown != false else { return }
+            await activate()
+        }
     }
 }
