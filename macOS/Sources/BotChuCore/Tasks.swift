@@ -119,6 +119,10 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     /// from its conversation, or the name the owner gave it (#236); nil for a task from before, or
     /// when none came, which its tab names as before.
     public var summary: String?
+    /// Set for a Project Area (#399): the bot's one lasting conversation about a repository or a
+    /// folder, run in `checkout` itself (`folder == checkout`, `branch` empty) rather than a worktree
+    /// of its own. Nil for any other task.
+    public var area: AreaInfo?
 
     public init(
         id: UUID = UUID(), title: String? = nil, repo: String, checkout: String, branch: String = "", folder: String? = nil,
@@ -165,6 +169,13 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
     public var isRemote: Bool { hostID != nil }
 
     public var isArchived: Bool { archivedAt != nil }
+
+    /// Whether it is a Project Area (`area`).
+    public var isArea: Bool { area != nil }
+
+    /// Whether BotChu makes a worktree for its turns: a job's run works in its agent's workspace,
+    /// and an area in its checkout or folder.
+    public var makesWorktree: Bool { jobRun == nil && area == nil }
 
     /// The repository's name without its owner.
     public var repoName: String { TaskNaming.repoName(repo) }
