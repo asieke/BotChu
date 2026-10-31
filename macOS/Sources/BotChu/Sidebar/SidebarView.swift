@@ -8,29 +8,23 @@ import BotChuCore
 /// split view saving its widths), and the list, which updates every row it shows, needn't be (#348).
 struct SidebarView: View {
     @AppStorage(CollapsedSections.storageKey) private var collapsed = CollapsedSections()
-    @AppStorage("sidebar.specialistsExpanded") private var specialistsExpanded = false
 
     var body: some View {
-        SidebarList(collapsed: collapsed, specialistsExpanded: specialistsExpanded,
-                    collapse: { change in change(&collapsed) }, expandSpecialists: { specialistsExpanded = $0 })
+        SidebarList(collapsed: collapsed, collapse: { change in change(&collapsed) })
             .equatable()
     }
 }
 
-/// Compared by the settings it shows, not by its actions, which are made anew each time and always
-/// set the same two settings.
+/// Compared by the setting it shows, not by its action, which is made anew each time and always
+/// sets the same setting.
 private struct SidebarList: View, Equatable {
     @Environment(AppModel.self) private var model
     @State private var pendingDelete: Bot?
     @State private var naming = SectionNaming()
     let collapsed: CollapsedSections
-    let specialistsExpanded: Bool
     let collapse: ((inout CollapsedSections) -> Void) -> Void
-    let expandSpecialists: (Bool) -> Void
 
-    static func == (a: Self, b: Self) -> Bool {
-        a.collapsed == b.collapsed && a.specialistsExpanded == b.specialistsExpanded
-    }
+    static func == (a: Self, b: Self) -> Bool { a.collapsed == b.collapsed }
 
     var body: some View {
         let _ = SidebarStatusDiagnostics.didEvaluateList?()
@@ -47,8 +41,9 @@ private struct SidebarList: View, Equatable {
                         .accessibilityIdentifier("sidebar-\(destination.rawValue)")
                 }
             }
-            // The agents in no section, under Conversations, then each section the owner made. One
-            // row per bot: its Home and tasks are the tabs beside the chat (#128).
+            // The principal bots in no section, under Conversations, then each section the owner
+            // made. One row per bot: its Home and areas are the column beside the chat (#128, #402).
+            // Specialists aren't listed: Agents lists them, and they are called by @mention.
             let specialists = model.specialists
             ForEach(model.agentSections.groups.filter { !$0.botIDs.isEmpty || specialists.isEmpty }) { group in
                 Section(isExpanded: isExpanded(group)) {
@@ -82,40 +77,12 @@ private struct SidebarList: View, Equatable {
                         }
                 }
             }
-            // The specialists, last and collapsed until opened (#250): only called as sub-agents, so
-            // they start no tasks, aren't moved into sections, and take no drops.
-            if !specialists.isEmpty {
-                Section(isExpanded: Binding(get: { specialistsExpanded }, set: expandSpecialists)) {
-                    ForEach(specialists) { bot in
-                        row(bot)
-                            .contextMenu {
-                                Button("Edit…") { model.edit(bot.id) }
-                                Button("New Session") { model.newSession(.home(bot.id)) }
-                                    .disabled(model.isRunning(.home(bot.id)))
-                                Button("Show Workspace in Finder") { model.revealWorkspace(bot.id) }
-                                Divider()
-                                Button("Delete…", role: .destructive) { pendingDelete = bot }
-                            }
-                    }
-                } header: {
-                    HStack {
-                        Text("Specialists")
-                        Spacer(minLength: 0)
-                        // While collapsed, what its busy specialists are doing, as their rows' dots.
-                        if !specialistsExpanded {
-                            SidebarSpecialistSummary(bots: specialists)
-                        }
-                    }
-                    .accessibilityIdentifier("sidebar-specialists")
-                }
-            }
         }
         .listStyle(.sidebar)
         // What is selected from elsewhere (Agents, a new bot or task, ⌃Tab) shows, in its section.
         .onChange(of: model.sidebarSelection) { _, selection in
-            guard let id = selection?.botID else { return }
-            if model.bot(id)?.isSpecialist == true { expandSpecialists(true) }
-            else { reveal(model.sections[id] ?? BotSections.unsectioned) }
+            guard let id = selection?.botID, model.bot(id)?.isSpecialist == false else { return }
+            reveal(model.sections[id] ?? BotSections.unsectioned)
         }
         // Above New Bot, while the sidebar's changes aren't saved.
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -168,15 +135,26 @@ private struct SidebarList: View, Equatable {
 }
 
 /// Each row owns its status reads. Activity in one conversation updates its bot's row without
-/// evaluating the statuses of the other bots in the sidebar.
+/// evaluating the statuses of the other bots in the sidebar. A Project Area's row dropped on it
+/// moves the area to its bot (#402), which it shows by a ring while one is over it.
 private struct SidebarBotRow: View {
     @Environment(AppModel.self) private var model
     let bot: Bot
     let selected: Bool
+    @State private var targeted = false
 
     var body: some View {
         let _ = SidebarStatusDiagnostics.didEvaluateRow?(bot.id)
         BotRow(bot: bot, status: model.status(of: bot), summary: model.botRowSummary(of: bot), selected: selected)
+            .background {
+                if targeted {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2).padding(-4)
+                }
+            }
+            .onDrop(of: [AreaDrag.contentType], isTargeted: bot.canOwnTasks ? $targeted : nil) { providers in
+                guard bot.canOwnTasks else { return false }
+                return AreaDrag.load(providers) { model.dropArea($0, on: bot.id) }
+            }
     }
 }
 
@@ -190,16 +168,6 @@ private struct SidebarWorkspaceRow: View {
         Label(destination.title, systemImage: destination.symbol)
             .badge(count)
             .accessibilityValue(count > 0 ? "\(count) not done" : "")
-    }
-}
-
-private struct SidebarSpecialistSummary: View {
-    @Environment(AppModel.self) private var model
-    let bots: [Bot]
-
-    var body: some View {
-        let summary = BotRowSummary(merging: bots.map { ($0.name, model.botRowSummary(of: $0)) })
-        if !summary.dots.isEmpty { BotRowDots(summary: summary) }
     }
 }
 

@@ -115,6 +115,34 @@ enum BotDrag {
     }
 }
 
+/// A Project Area's row dragged from the column onto a bot in the sidebar, which moves it there
+/// (#402). Its own type, so a bot's section takes none, and nothing from elsewhere reads as one.
+enum AreaDrag {
+    /// Declared in the app's Info.plist (`build.sh`).
+    static let contentType = UTType(exportedAs: "local.BotChu.area", conformingTo: .data)
+
+    static func provider(botID: UUID, areaID: UUID) -> NSItemProvider {
+        let provider = NSItemProvider()
+        let payload = Areas.dragPayload(botID: botID, areaID: areaID)
+        provider.registerDataRepresentation(forTypeIdentifier: contentType.identifier, visibility: .ownProcess) { load in
+            load(payload, nil)
+            return nil
+        }
+        return provider
+    }
+
+    /// Reads the area a drop carries and gives it to `dropped` on the main thread; false, taking
+    /// nothing, when the drop doesn't carry one.
+    static func load(_ providers: [NSItemProvider], into dropped: @escaping ((botID: UUID, areaID: UUID)) -> Void) -> Bool {
+        guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(contentType.identifier) }) else { return false }
+        _ = provider.loadDataRepresentation(forTypeIdentifier: contentType.identifier) { data, _ in
+            guard let area = Areas.draggedArea(data) else { return }
+            DispatchQueue.main.async { dropped(area) }
+        }
+        return true
+    }
+}
+
 /// The sidebar's collapsed sections, by heading, remembered across launches.
 struct CollapsedSections: RawRepresentable, Equatable {
     static let storageKey = "sidebar.collapsedSections"

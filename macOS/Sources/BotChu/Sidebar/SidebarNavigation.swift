@@ -35,9 +35,14 @@ extension AppModel {
         destination = .settings
     }
 
-    /// The bot's conversations in their tabs' order: Home, then its open tasks, as they were opened.
+    /// The bot's Project Areas column (#399): its open areas with their tasks, its other open
+    /// tasks, and its hidden areas.
+    func areaLayout(of botID: UUID) -> ProjectAreasLayout { ProjectAreasLayout(tasks: tasks[botID, default: []]) }
+
+    /// The bot's conversations in the Project Areas column's order: Home, then its open areas,
+    /// each followed by its tasks, then its other open tasks.
     func tabs(of botID: UUID) -> [ChatTarget] {
-        [.home(botID)] + openTasks(of: botID).map { .task($0.id, of: botID) }
+        [.home(botID)] + areaLayout(of: botID).rows.map { .task($0.id, of: botID) }
     }
 
     /// How a conversation is doing, as its tab's dot and second line say it (#128): waiting on the
@@ -65,13 +70,15 @@ extension AppModel {
         }
     }
 
-    /// The bot's row in the bot list: a dot for each open task and for Home while it isn't idle, and
-    /// what it runs on.
+    /// The bot's row in the bot list: a dot for each open task, and for Home and each open area
+    /// while it isn't idle, and what it runs on.
     func botRowSummary(of bot: Bot) -> BotRowSummary {
         SidebarStatusDiagnostics.didDeriveSummary?(bot.id)
         let subtitle = bot.isRemoteQueue ? "\(remoteQueue.presence) · \(remoteQueue.pending) waiting" : runsOn(bot)
-        return BotRowSummary(runsOn: subtitle, home: tabState(of: .home(bot.id)),
-                             tasks: openTasks(of: bot.id).map { tabState(of: .task($0.id, of: bot.id)) },
+        let open = openTasks(of: bot.id)
+        func states(_ tasks: [BotTask]) -> [TabState] { tasks.map { tabState(of: .task($0.id, of: bot.id)) } }
+        return BotRowSummary(runsOn: subtitle, home: tabState(of: .home(bot.id)), areas: states(open.filter(\.isArea)),
+                             tasks: states(open.filter { !$0.isArea }),
                              workingAsSubagent: bot.isSpecialist && delegation.usesBot(bot.id))
     }
 
@@ -82,7 +89,7 @@ extension AppModel {
                              native: nativeModels(for: bot))
     }
 
-    /// Shows the bot's conversation at `index` in its tabs (⌘1 for Home, ⌘2 to ⌘9 for its tasks).
+    /// Shows the bot's conversation at `index` in its tabs (⌘1 for Home, ⌘2 to ⌘9 for its areas and tasks).
     func showTab(at index: Int, of botID: UUID) {
         let tabs = tabs(of: botID)
         guard tabs.indices.contains(index) else { return }

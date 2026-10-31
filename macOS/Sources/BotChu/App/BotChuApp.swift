@@ -41,8 +41,6 @@ private struct BotChuCommands: Commands {
                 .keyboardShortcut("i", modifiers: [.command, .shift])
             StatusMenuButton()
             ChatDensityMenuPicker()
-            // The column of a bot's tabs beside its chat, or its rail (#128).
-            ConversationColumnToggle(model: model)
         }
         // A page in the browser on this Mac, made from what BotChu has recorded (#233).
         CommandGroup(after: .toolbar) {

@@ -1,7 +1,8 @@
 import Foundation
 import BotChuCore
 
-/// The synthetic data the journeys run on (#323): 15 bots with 4 open tasks each, a 5,000-message
+/// The synthetic data the journeys run on (#323): 15 bots, each with 2 Project Areas (its
+/// repository's and a folder's) and 2 open tasks from before areas in that repository (#402), a 5,000-message
 /// conversation (the first bot's Home, shown at launch), a group of 5,000 tool calls (the second
 /// bot's Home) and 200 Inbox deliveries, every bot on the fake Claude Code profile. Identities are
 /// fixed and dates follow from the time it is made, so each run shows the same thing.
@@ -13,6 +14,7 @@ struct Fixture {
     static let accountID = "custom-review-0"
     static let longConversation = 5_000
     static let groupCalls = 5_000
+    /// Each bot's conversations beside Home: its 2 areas, then its 2 tasks.
     static let tasksPerBot = 4
     static let deliveries = 200
 
@@ -25,7 +27,7 @@ struct Fixture {
     var longBot: Bot { bots[0] }
     var groupBot: Bot { bots[1] }
 
-    /// A bot's open tasks, in the order they were made.
+    /// A bot's areas, then its open tasks, in the order they were made.
     func tasks(of bot: Bot) -> [UUID] {
         guard let index = bots.firstIndex(where: { $0.id == bot.id }) else { return [] }
         return (0..<Self.tasksPerBot).map { Self.id(100 + index * Self.tasksPerBot + $0) }
@@ -66,12 +68,22 @@ struct Fixture {
             lastItem[bot.id] = thread.last?.id
             for n in 0..<tasksPerBot {
                 let checkout = data.appendingPathComponent("repos/repo-\(index)").path
-                var task = BotTask(for: bot, repo: "journeys/repo-\(index)", checkout: checkout, work: nil,
+                let made = start.addingTimeInterval(Double(n) * 600)
+                var task: BotTask
+                switch n {
+                case 0: task = BotTask(repoArea: "journeys/repo-\(index)", checkout: checkout, for: bot, at: made)
+                case 1:
+                    let folder = (bot.workspace as NSString).appendingPathComponent("\(Areas.folderName)/notes")
+                    try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+                    task = BotTask(folderArea: "Notes", folder: folder, for: bot, at: made)
+                default:
+                    task = BotTask(for: bot, repo: "journeys/repo-\(index)", checkout: checkout, work: nil,
                                    brief: "Task \(n + 1) of \(name): tidy the module and open a pull request.",
                                    branch: "feat/\(name.lowercased())-\(n + 1)", title: "repo-\(index) · Task \(n + 1)")
+                    task.folder = checkout
+                    task.createdAt = made
+                }
                 task.id = id(100 + index * tasksPerBot + n)
-                task.folder = checkout
-                task.createdAt = start.addingTimeInterval(Double(n) * 600)
                 try home.save(task)
                 let taskThread = conversation(count: 12, bot: name, start: task.createdAt, id: next)
                 _ = try home.writeTranscript(taskThread, task: task.id)

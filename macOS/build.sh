@@ -59,6 +59,10 @@ cat > "$out/Contents/Info.plist" <<PLIST
     <key>UTTypeIdentifier</key><string>local.BotChu.bot</string>
     <key>UTTypeDescription</key><string>BotChu bot</string>
     <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+  </dict><dict>
+    <key>UTTypeIdentifier</key><string>local.BotChu.area</string>
+    <key>UTTypeDescription</key><string>BotChu Project Area</string>
+    <key>UTTypeConformsTo</key><array><string>public.data</string></array>
   </dict></array>
 </dict></plist>
 PLIST

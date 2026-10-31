@@ -1,7 +1,7 @@
 import AppKit
 import BotChuCore
 
-/// Journeys 8 to 11: the group of 5,000 calls, New Task, resizing the window, the Inbox and Settings.
+/// Journeys 8 to 11: the group of 5,000 calls, Attach Project Area, resizing the window, the Inbox and Settings.
 extension Journeys {
     // MARK: 8. Expanding the group of 5,000 calls
 
@@ -63,10 +63,10 @@ extension Journeys {
         return (head, row.identifier)
     }
 
-    // MARK: 9. New Task
+    // MARK: 9. Attach Project Area
 
-    /// Opens New Task from the tabs beside a bot's chat, timed until the sheet shows; writes a brief
-    /// and presses Start Task, timed until the new task's tab shows; `repeats` times.
+    /// Opens Attach Project Area from `+` in the Project Areas column (#402), timed until the sheet
+    /// shows; names a new folder area and presses Attach, timed until its row shows; `repeats` times.
     func newTask() -> [JourneyResult] {
         let bot = fixture.bots[7]
         var sheets: [Double] = [], tabs: [Double] = []
@@ -75,43 +75,36 @@ extension Journeys {
             try show(bot)
             var known = Set(fixture.tasks(of: bot))
             for index in 0..<repeats {
-                guard let plus = try app.window().first(identifier: "conversation-new-task") else { throw HarnessFailure("The tabs beside the chat have no New Task button") }
+                guard let plus = try app.window().first(identifier: "conversation-new-task") else { throw HarnessFailure("The Project Areas column has no + button") }
                 var start = AppUnderTest.now
                 try plus.press()
                 let sheet = try app.mark(FrameMarks.newTask, after: start)
                 sheets.append(Self.ms(start, sheet.nanoseconds))
-                var brief = try waitFor("New Task's brief") { try app.window().first(identifier: "task-brief") }
-                guard brief.text.isEmpty, brief.label.contains(bot.name) else {
-                    throw HarnessFailure("New Task kept a previous brief or opened for the wrong bot")
+                var name = try waitFor("Attach Project Area's folder name") { try app.window().first(identifier: "area-name") }
+                guard name.text.isEmpty, name.label.contains(bot.name) else {
+                    throw HarnessFailure("Attach Project Area kept a previous name or opened for the wrong bot")
                 }
                 if index == 0 {
-                    // A prepared native window must discard its form on Cancel (#353). This is
-                    // outside the opening measurement above; it does not prewarm that sample.
-                    try brief.type("Discard this draft")
-                    guard let cancel = try button("Cancel") else { throw HarnessFailure("New Task has no Cancel") }
+                    // Cancel discards what was typed. This is outside the opening measurement above.
+                    try enter("Discard this name", into: name)
+                    guard let cancel = try button("Cancel") else { throw HarnessFailure("Attach Project Area has no Cancel") }
                     try cancel.press()
                     app.settle()
-                    guard try app.window().first(identifier: "task-brief") == nil,
+                    guard try app.window().first(identifier: "area-name") == nil,
                           let reopen = try app.window().first(identifier: "conversation-new-task") else {
-                        throw HarnessFailure("Cancel did not dismiss New Task")
+                        throw HarnessFailure("Cancel did not dismiss Attach Project Area")
                     }
                     _ = try press(reopen, until: FrameMarks.newTask)
-                    brief = try waitFor("New Task's fresh brief") { try app.window().first(identifier: "task-brief") }
-                    guard brief.text.isEmpty, brief.label.contains(bot.name) else {
-                        throw HarnessFailure("Reopening New Task restored its cancelled draft or another bot")
+                    name = try waitFor("Attach Project Area's fresh name") { try app.window().first(identifier: "area-name") }
+                    guard name.text.isEmpty, name.label.contains(bot.name) else {
+                        throw HarnessFailure("Reopening Attach Project Area kept the cancelled name or another bot")
                     }
                 }
-                try brief.set(kAXValueAttribute, to: "Journey task \(index + 1): tidy the README. journey-stream=0" as CFString)
-                // The project New Task chose last time, or the fixture's.
-                func startTask() throws -> AXElement? { try button("Start Task") }
-                if (try startTask()?.value(kAXEnabledAttribute) as? Bool) != true,
-                   let project = try app.window().first(where: { $0.role == kAXButtonRole as String && $0.label.hasPrefix(Fixture.taskRepo + ",") }) {
-                    try project.press()
+                try enter("Journey area \(index + 1)", into: name)
+                let attach = try waitFor("An enabled Attach") {
+                    try app.window().first(identifier: "area-attach").flatMap { ($0.value(kAXEnabledAttribute) as? Bool) == true ? $0 : nil }
                 }
-                let startButton = try waitFor("An enabled Start Task") {
-                    try startTask().flatMap { ($0.value(kAXEnabledAttribute) as? Bool) == true ? $0 : nil }
-                }
-                start = try press(startButton)
+                start = try press(attach)
                 let deadline = Date().addingTimeInterval(5)
                 var tab: FrameMarks.Mark?
                 while tab == nil {
@@ -121,12 +114,13 @@ extension Journeys {
                     guard tab == nil, Date() < deadline else { break }
                     usleep(1_000)
                 }
-                guard let tab, let id = UUID(uuidString: String(tab.name.dropFirst(4))) else { throw HarnessFailure("No new task's tab showed after Start Task") }
+                guard let tab, let id = UUID(uuidString: String(tab.name.dropFirst(4))) else { throw HarnessFailure("No new area's row showed after Attach") }
                 tabs.append(Self.ms(start, tab.nanoseconds))
                 known.insert(id)
                 left.task = (bot, id)
                 app.settle()
-                guard try app.window().first(identifier: "conversation-tab-\(id.uuidString)") != nil else { throw HarnessFailure("The new task's tab isn't beside the chat") }
+                guard try app.window().first(identifier: "area-name") == nil else { throw HarnessFailure("Attach left the sheet open") }
+                guard try app.window().first(identifier: "conversation-tab-\(id.uuidString)") != nil else { throw HarnessFailure("The new area's row isn't in the column") }
             }
             try awaitIdle()
             _ = try selectTabHome(of: bot)
@@ -139,8 +133,16 @@ extension Journeys {
                 app.settle()
             }
         }
-        return [result(9, "New Task opens", .instant, sheets, problem: problem),
-                result(9, "task shows after Start Task", .quick, tabs, problem: problem)]
+        return [result(9, "Attach Project Area opens", .instant, sheets, problem: problem),
+                result(9, "area shows after Attach", .quick, tabs, problem: problem)]
+    }
+
+    /// Types into a text field as the owner would, so SwiftUI hears it: setting its value alone
+    /// changes what it shows, not what it is bound to.
+    private func enter(_ text: String, into field: AXElement) throws {
+        try field.set(kAXFocusedAttribute, to: kCFBooleanTrue)
+        app.settle(quiet: 0.1, limit: 2)
+        try field.type(text)
     }
 
     private func selectTabHome(of bot: Bot) throws -> Bool {

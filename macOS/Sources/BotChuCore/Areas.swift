@@ -52,6 +52,17 @@ public enum Areas {
     /// A bot's folder areas are made in `<workspace>/areas/<slug>`.
     public static let folderName = "areas"
 
+    /// What an area's row gives a drag onto a bot in the sidebar (#402): its bot's id and its own.
+    public static func dragPayload(botID: UUID, areaID: UUID) -> Data { Data("\(botID.uuidString)/\(areaID.uuidString)".utf8) }
+
+    /// The bot and area a dragged row carries; nil for anything else.
+    public static func draggedArea(_ payload: Data?) -> (botID: UUID, areaID: UUID)? {
+        guard let payload, payload.count == 73, let text = String(data: payload, encoding: .utf8) else { return nil }
+        let parts = text.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 2, let bot = UUID(uuidString: String(parts[0])), let area = UUID(uuidString: String(parts[1])) else { return nil }
+        return (bot, area)
+    }
+
     /// The bot's areas, hidden ones too, in the order it took them on.
     public static func areas(in tasks: [BotTask]) -> [BotTask] {
         tasks.filter(\.isArea).sorted { order($0) < order($1) }

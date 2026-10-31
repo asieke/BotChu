@@ -536,7 +536,7 @@ final class AppModel {
 
     /// Shows the tab `offset` places after the shown one (before, when negative), wrapping around.
     func showTab(offset: Int, of botID: UUID) {
-        let tabs = [ChatTarget.home(botID)] + openTasks(of: botID).map { .task($0.id, of: botID) }
+        let tabs = tabs(of: botID)
         guard let index = tabs.firstIndex(of: tab(of: botID)), tabs.count > 1 else { return }
         show(tabs[(index + offset % tabs.count + tabs.count) % tabs.count])
     }
@@ -957,9 +957,8 @@ final class AppModel {
     /// makes a new one at the pull request's head.
     func closeTask(_ target: ChatTarget) {
         guard target.taskID != nil, !isRunning(target), delegation.activeCount(target) == 0, let i = taskIndex(target) else { return }
-        // The tab above it shows in its place: the task opened before it, or Home (#128).
-        let above = openTasks(of: target.botID).prefix { $0.id != target.taskID }.last.map { ChatTarget.task($0.id, of: target.botID) }
-            ?? .home(target.botID)
+        // The tab above it shows in its place: the row above it in the column, or Home (#128).
+        let above = tabs(of: target.botID).prefix { $0 != target }.last ?? .home(target.botID)
         tasks[target.botID]?[i].archivedAt = Date()
         let task = tasks[target.botID]![i]
         saveTask(task, of: target.botID)

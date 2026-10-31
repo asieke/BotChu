@@ -5,7 +5,7 @@ import BotChuCore
 extension Journeys {
     /// Quits BotChu as the owner would and launches it again, timed until the first bot's chat
     /// shows; then checks that the draft journey 5 typed is back in its message box, and the
-    /// message journey 6 sent and the task journey 9 started are there (any of them this journey
+    /// message journey 6 sent and the area journey 9 attached are there (any of them this journey
     /// leaves itself when that journey didn't run).
     func relaunch() -> [JourneyResult] {
         var samples: [Double] = []
@@ -28,7 +28,7 @@ extension Journeys {
                 left.sent = (bot, text)
             }
             if left.task == nil { _ = newTask() }
-            guard let draft = left.draft, let sent = left.sent, let task = left.task else { throw HarnessFailure("Couldn't leave a draft, a message and a task") }
+            guard let draft = left.draft, let sent = left.sent, let task = left.task else { throw HarnessFailure("Couldn't leave a draft, a message and an area") }
             app.settle()
             app.quit()
             let start = try app.launch()
@@ -51,7 +51,7 @@ extension Journeys {
             }
             try show(task.bot)
             guard try app.window().first(identifier: "conversation-tab-\(task.id.uuidString)") != nil else {
-                throw HarnessFailure("After a relaunch, \(task.bot.name) has no tab for the task started in New Task")
+                throw HarnessFailure("After a relaunch, \(task.bot.name) has no row for the area attached in Attach Project Area")
             }
         } catch {
             problem = "\(error)"

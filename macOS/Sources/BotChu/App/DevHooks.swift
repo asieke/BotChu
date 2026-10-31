@@ -633,19 +633,6 @@ enum DevHooks {
                     ForEach(group.botIDs.compactMap(model.bot)) { bot in snapshotRow(bot, model: model) }
                 }
             }
-            // Specialists last, collapsed with its busy dots unless opened (#250).
-            if !specialists.isEmpty {
-                let expanded = UserDefaults.standard.bool(forKey: "sidebar.specialistsExpanded")
-                let summary = BotRowSummary(merging: specialists.map { ($0.name, model.botRowSummary(of: $0)) })
-                HStack {
-                    Text("Specialists").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    Spacer()
-                    if !expanded, !summary.dots.isEmpty { BotRowDots(summary: summary) }
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 6)
-                if expanded { ForEach(specialists) { bot in snapshotRow(bot, model: model) } }
-            }
             // What sits above New Bot while the sidebar's changes aren't saved.
             if let failure = model.indexFailure { IndexFailureBanner(failure: failure).padding(.horizontal, -10) }
         }
