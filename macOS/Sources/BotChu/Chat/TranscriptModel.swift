@@ -278,7 +278,11 @@ final class TranscriptModel {
     func isOpen(_ id: UUID, default open: Bool) -> Bool { overrides[id] ?? open }
 
     func toggle(_ id: UUID, default open: Bool) {
-        overrides[id] = !(overrides[id] ?? open)
+        let opening = !(overrides[id] ?? open)
+        // The first plan of an opened card must keep the clicked row in place. Waiting for the
+        // view's onChange plans the enlarged group's tail first, then the reader's rows (#355).
+        if opening { follow(.openedCard) }
+        overrides[id] = opening
     }
 
     func isExpanded(_ id: UUID) -> Bool { expanded.contains(id) }
