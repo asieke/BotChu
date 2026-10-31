@@ -98,8 +98,10 @@ private struct ChatContent: View {
                         Color.clear.frame(height: plan.above)
                         ForEach(plan.rows) { row in
                             let item = items[row.index]
-                            TranscriptRow(row: row, item: item, bot: bot, kind: kind,
-                                          startsBotTurn: row.index == 0 ? conversation.startsBotTurn : !items[row.index - 1].isBotTurn,
+                            // A cameo turn's rows are its own bot's (#406).
+                            let speaker = item.speaker.flatMap(model.bot)
+                            TranscriptRow(row: row, item: item, bot: speaker ?? bot, kind: speaker?.account.kind ?? kind,
+                                          startsBotTurn: row.index == 0 ? conversation.startsBotTurn : item.startsBotTurn(after: items[row.index - 1]),
                                           density: density, live: turnRunning && row.index == items.count - 1,
                                           open: transcript.isOpen(item.id, default: false),
                                           runs: cards.runs(for: item), after: cards.unplaced(after: item.id))
@@ -107,11 +109,12 @@ private struct ChatContent: View {
                                 .onAppear { if let id = target.taskID { FrameTimings.mark(FrameMarks.chat(id)) } }
                         }
                         Color.clear.frame(height: plan.below)
+                        let turnBot = model.cameoSpeaker(of: target) ?? bot
                         if model.runStates[target]?.preparing == true {
-                            PreparingRow(bot: bot, place: task.flatMap { $0.isRemote ? model.machineName($0.hostID, fallback: $0.hostName) : nil })
+                            PreparingRow(bot: turnBot, place: task.flatMap { $0.isRemote ? model.machineName($0.hostID, fallback: $0.hostName) : nil })
                                 .padding(.bottom, 12)
                         } else if running, messages.last?.role != .assistant, !(items.last.map { Self.showsProgress($0) } ?? false) {
-                            TypingIndicator(bot: bot, showsAvatar: !(items.last?.isBotTurn ?? false))
+                            TypingIndicator(bot: turnBot, showsAvatar: !(items.last.map { $0.isBotTurn && ($0.speaker ?? bot.id) == turnBot.id } ?? false))
                                 .padding(.bottom, 12)
                         }
                         // The chat's bottom margin, part of the end a pinned chat keeps in view.
@@ -123,6 +126,8 @@ private struct ChatContent: View {
                     .frame(maxWidth: .infinity)
                 }
                 .scrollsOnlyWithTheProbe()
+                // In an area, a cameo turn's rows name their bot (#406).
+                .environment(\.areaBotID, task?.isArea == true ? bot.id : nil)
                 // Opening a conversation, or switching to it, shows its newest message.
                 .onAppear {
                     conversation.showLatest()

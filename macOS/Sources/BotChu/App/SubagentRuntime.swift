@@ -97,6 +97,11 @@ final class SubagentRuntime {
         var hostID: UUID?
         var transport: SubagentTransport
         var environment: [String: String] = [:]
+        /// The bot of a cameo turn in an area (#406), whose turn this is rather than the area's own bot's.
+        var speaker: UUID?
+
+        /// The bot whose turn calls: a sub-agent run's own bot, a cameo turn's, or the conversation's.
+        func callingBotID(run: (UUID) -> SubagentRun?) -> UUID { parent.flatMap(run)?.targetBotID ?? speaker ?? target.botID }
     }
 
     init(model: AppModel, root: URL, archive: SubagentArchive = SubagentArchive()) {
@@ -239,12 +244,12 @@ final class SubagentRuntime {
     }
 
     func prepareCaller(target: ChatTarget, parent: UUID? = nil, directory: String,
-                       machine: Machine, hostID: UUID?) async throws -> Caller {
+                       machine: Machine, hostID: UUID?, speaker: UUID? = nil) async throws -> Caller {
         let id = UUID()
         let depth = parent.flatMap { run($0)?.depth } ?? 0
         let transport = SubagentTransport(machine: machine, namespace: namespace, invocationID: id, localRoot: root)
         var caller = Caller(id: id, target: target, parent: parent, depth: depth,
-                            directory: directory, hostID: hostID, transport: transport)
+                            directory: directory, hostID: hostID, transport: transport, speaker: speaker)
         contexts[id] = caller
         if parent == nil {
             requestCounts[target] = 0
@@ -548,7 +553,9 @@ final class SubagentRuntime {
                                                        parentSubagentID: caller.parent, depth: caller.depth,
                                                        workingDirectory: caller.directory, hostID: caller.hostID))
             guard contexts[caller.id] != nil else { throw InboxRequest.Problem("the sending turn has ended") }
+            // A sub-agent run's delivery credits its bot, and a cameo turn's its own (#406).
             let subagent = caller.parent.flatMap { run($0) }.map { Delivery.Credit(botID: $0.targetBotID, name: $0.targetBotName) }
+                ?? caller.speaker.flatMap { id in model.bot(id).map { Delivery.Credit(botID: id, name: $0.name) } }
             var credits = subagent.map { [$0] } ?? []
             for name in request.credits {
                 let bot = try SubagentResolver.resolve(name, bots: model.bots.filter { !$0.isRemoteQueue }, list: "botchu-subagent list")
@@ -646,7 +653,7 @@ final class SubagentRuntime {
             }
             do { try await Task.detached { try SensitiveInputDestination.check(request.destination) }.value }
             catch { throw SensitiveInputResult.Reason.unavailableDestination }
-            let botID = caller.parent.flatMap { run($0) }?.targetBotID ?? caller.target.botID
+            let botID = caller.callingBotID(run: run)
             guard let bot = model.bot(botID) else { throw SensitiveInputResult.Reason.unknownBot }
             do { try await caller.transport.acknowledge(filename: filename) }
             catch { throw SensitiveInputResult.Reason.ackFailed }
@@ -678,7 +685,7 @@ final class SubagentRuntime {
                                                        parentSubagentID: caller.parent, depth: caller.depth,
                                                        workingDirectory: caller.directory, hostID: caller.hostID))
             guard contexts[caller.id] != nil else { throw InboxRequest.Problem("the asking turn has ended") }
-            let botID = caller.parent.flatMap { run($0) }?.targetBotID ?? caller.target.botID
+            let botID = caller.callingBotID(run: run)
             guard let bot = model.bot(botID) else { throw InboxRequest.Problem("the asking bot is no longer in BotChu") }
             result = TaskListResult(id: id, botID: bot.id, botName: bot.name, tasks: model.taskList(of: bot.id))
         } catch {
