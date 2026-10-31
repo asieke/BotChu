@@ -1925,9 +1925,10 @@ final class AppModel {
         let account = current.account
         let resume = current.resumableSessionID
         let requestedModel = current.effectiveModel(openRouterDefault: settings.openRouterModel, sailDefault: settings.sailModel)
-        let usageHome = BotHome(workspace: speakerBot.persistencePath)
+        // Usage stays the conversation's, as Analytics reads its turns; the account is the cameo's own.
+        let usageHome = BotHome(workspace: bot.persistencePath)
         let usageCapture = UsageLedger.Capture(.init(startedAt: Date(), kind: task == nil ? .home : .task,
-            botID: speakerBot.id, taskID: target.taskID, messageID: thread(target).last(where: { $0.role == .user })?.id,
+            botID: id, taskID: target.taskID, messageID: thread(target).last(where: { $0.role == .user })?.id,
             accountID: account.id, provider: account.kind, providerID: current.resolvedProvider,
             remote: task?.isRemote == true, usesLegacyOpenRouterKey: current.usesLegacyOpenRouterKey(remote: task?.isRemote == true),
             model: requestedModel.isEmpty ? nil : requestedModel, modelSource: requestedModel.isEmpty ? .unreported : .requested,
