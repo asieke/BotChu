@@ -281,8 +281,9 @@ public enum TaskNaming {
     /// The newest pull request of `repo` (`owner/name`; of any repository when nil) the messages
     /// link to, in their text or a tool's output.
     public static func pullRequest(in messages: [ChatMessage], repo: String?) -> Int? {
+        guard let regex = pullRequestPattern(repo) else { return nil }
         for message in messages.reversed() {
-            if let number = pullRequests(in: message.toolOutput ?? "", repo: repo).last ?? pullRequests(in: message.text, repo: repo).last {
+            if let number = pullRequests(in: message.toolOutput ?? "", regex).last ?? pullRequests(in: message.text, regex).last {
                 return number
             }
         }
@@ -292,10 +293,19 @@ public enum TaskNaming {
     /// The numbers of the pull request URLs in `text`, in order: of `repo` (`owner/name`), or of any
     /// repository when nil.
     public static func pullRequests(in text: String, repo: String?) -> [Int] {
+        pullRequestPattern(repo).map { pullRequests(in: text, $0) } ?? []
+    }
+
+    private static let anyPullRequest = pullRequestPattern("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", escaped: true)
+
+    private static func pullRequestPattern(_ repo: String?, escaped: Bool = false) -> NSRegularExpression? {
+        guard let repo else { return anyPullRequest }
+        let owner = escaped ? repo : NSRegularExpression.escapedPattern(for: repo)
+        return try? NSRegularExpression(pattern: "https://github\\.com/" + owner + "/pull/([0-9]+)", options: [.caseInsensitive])
+    }
+
+    private static func pullRequests(in text: String, _ regex: NSRegularExpression) -> [Int] {
         guard text.holds(any: ["/pull/"]) else { return [] }
-        let owner = repo.map(NSRegularExpression.escapedPattern(for:)) ?? "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
-        guard let regex = try? NSRegularExpression(pattern: "https://github\\.com/" + owner + "/pull/([0-9]+)", options: [.caseInsensitive])
-        else { return [] }
         return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
             Range(match.range(at: 1), in: text).flatMap { Int(text[$0]) }
         }
