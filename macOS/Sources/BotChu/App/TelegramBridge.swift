@@ -149,10 +149,11 @@ final class TelegramBridge {
         return .queued(busy: waiting && model.isRunning(target))
     }
 
-    /// A task of its own for the bot, in the repository's checkout, as New Task makes one: in the
-    /// left sidebar under that bot, with its own conversation and session, never a sub-agent run of
-    /// another conversation. Its ID is the Telegram message's, so a request Telegram sends again
-    /// finds the task it made.
+    /// The brief posted as the owner's message in the repository's Project Area (#399 decision 9,
+    /// `postToArea`): the bot's own (attached first when no bot has it), else the area of the bot
+    /// that has it. Its message ID is the Telegram message's, so a request Telegram sends again finds
+    /// what it posted. A repository on another computer gets a task of its own there, as before
+    /// areas, under the same ID.
     fileprivate func startTask(_ brief: String, in repo: String, id: UUID, for botID: UUID, from chat: Int64, mapped: UUID?,
                                generation: Int) async -> TelegramTaskStart {
         guard case .allowed = authorization(for: chat, botID: mapped, generation: generation) else { return .discarded }
@@ -162,10 +163,33 @@ final class TelegramBridge {
         // Off the main thread: the first look into ~/Desktop or ~/Documents waits on macOS's question.
         let checkouts = await Task.detached { Repositories.scan(root: root) }.value
         await model.loadRepositories()
+        let wanted = TaskRequest(repo: repo, task: brief)
+        let place: (repo: String, checkout: String)?
+        do { place = try model.areaRepository(of: wanted, checkouts: checkouts) }
+        catch { return .failed((error as? TaskRequest.Problem)?.message ?? error.localizedDescription) }
+        if let place {
+            guard let asked = model.bot(botID) else { return .unavailable }
+            var refusal = TelegramTaskStart.discarded
+            // No suspension between the final checks and the message being queued.
+            let allowed = { [self] () -> Bool in
+                guard case .allowed = authorization(for: chat, botID: mapped, generation: generation) else { return false }
+                guard model.bot(botID) != nil else { refusal = .unavailable; return false }
+                return true
+            }
+            do {
+                guard let posting = try await model.postToArea(wanted, repo: place.repo, checkout: place.checkout, for: asked, from: nil,
+                                                               id: id, claim: allowed) else { return refusal }
+                if posting.existing { return .duplicate(title: posting.area.title) }
+                if let unsaved = posting.unsaved { return .failed(unsaved) }
+                return .posted(area: posting.area.title, owner: posting.asked == nil ? nil : posting.bot.name)
+            } catch {
+                return .failed((error as? TaskRequest.Problem)?.message ?? error.localizedDescription)
+            }
+        }
         var task: BotTask
         do {
             guard let owner = model.bot(botID) else { return .unavailable }
-            task = try await model.plannedTask(TaskRequest(repo: repo, task: brief), for: owner, checkouts: checkouts, origin: .owner)
+            task = try await model.plannedTask(wanted, for: owner, checkouts: checkouts, origin: .owner)
         } catch {
             return .failed((error as? TaskRequest.Problem)?.message ?? error.localizedDescription)
         }

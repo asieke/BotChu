@@ -288,6 +288,10 @@ final class AppModel {
     @ObservationIgnored private var dispatchTimer: Timer?
     /// Who waits to hear that a task's first turn started (nil) or why it couldn't (#111).
     @ObservationIgnored private var startWatchers: [ChatTarget: [(String?) -> Void]] = [:]
+    /// Who waits for the turn that takes a message posted into an area to start (`whenMessageStarts`).
+    @ObservationIgnored private var messageStartWatchers: [ChatTarget: [(id: UUID, report: (String?) -> Void)]] = [:]
+    /// Messages being posted into areas (`postToArea`), so the same request asked twice at once posts once.
+    @ObservationIgnored var postingMessages: Set<UUID> = []
     /// Bots whose dispatch requests are being started.
     @ObservationIgnored private var dispatching: Set<UUID> = []
     /// Worktrees being made, by task: one at a time, so a message sent meanwhile waits for it.
@@ -979,7 +983,7 @@ final class AppModel {
         }
     }
 
-    func reopenTask(_ target: ChatTarget) {
+    func reopenTask(_ target: ChatTarget, show shown: Bool = true) {
         guard let i = taskIndex(target), bot(target.botID) != nil else { return }
         tasks[target.botID]?[i].archivedAt = nil
         saveTask(tasks[target.botID]![i], of: target.botID)
@@ -988,7 +992,7 @@ final class AppModel {
         if conversation(target).history.recovery != .recovered {
             recover(target, load: true)
         }
-        show(target)
+        if shown { show(target) }
         sendNextQueued(to: target)
     }
 
@@ -1064,16 +1068,29 @@ final class AppModel {
         }
     }
 
-    /// Starts the task one request asks for, where its repository lives (or on the machine it
-    /// names), or says in Home why it can't. The request is taken just before its task is recorded,
-    /// so it is never lost in between, nor taken twice. A request naming another bot (`agent`) hands
-    /// the task to that bot, and Home gets a receipt that opens it.
+    /// Posts what one request asks into its repository's area (`postToArea`), from the asking bot's
+    /// Home, or says in Home why it can't; a repository on another computer (or the machine it
+    /// names) gets a task of its own there, as before areas. The request is taken just before it is
+    /// posted (or its task recorded), so it is never lost in between, nor taken twice. A request
+    /// naming another bot (`agent`) asks that bot, and Home gets a receipt that opens the area.
     private func startTask(requestedIn file: URL, data: Data, checkouts: [RepoCheckout], for botID: UUID) async {
         let name = "dispatch/\(file.lastPathComponent)"
         do {
             let wanted = try TaskRequest.parse(data)
             guard let asking = bot(botID) else { return }
             let owner = try wanted.agent.map { try resolveTaskBot($0) } ?? asking
+            if let place = try areaRepository(of: wanted, checkouts: checkouts) {
+                let link = AgentLink(botID: botID, name: asking.name)
+                let take = { BotHome(workspace: asking.workspace).take(dispatch: file) }
+                guard let posting = try await postToArea(wanted, repo: place.repo, checkout: place.checkout, for: owner, from: link,
+                                                         id: UUID(), claim: take) else { return }
+                if let unsaved = posting.unsaved {
+                    postReceipt(TaskReceipt.couldNotStart(name, reason: unsaved), task: nil, for: botID)
+                } else {
+                    postReceipt(posting.receipt, task: posting.area.id, of: posting.bot.id, in: .home(botID))
+                }
+                return
+            }
             var task = try await plannedTask(wanted, for: owner, checkouts: checkouts, origin: owner.id == botID ? .home : .agent)
             if owner.id != botID {
                 task.requestedBy = BotTask.Requester(name: asking.name, botID: botID, conversation: "\(asking.name)'s Home")
@@ -1186,8 +1203,34 @@ final class AppModel {
         startWatchers[target, default: []].append(report)
     }
 
+    /// Calls `report` once the turn that takes message `id`, posted into the area (`postToArea`), has
+    /// started (with nil) or couldn't (with why): at once when it already has. A turn that couldn't
+    /// start pauses the queue, so the message's own turn reports that too.
+    func whenMessageStarts(_ id: UUID, in target: ChatTarget, _ report: @escaping (String?) -> Void) {
+        let thread = thread(target)
+        if let i = thread.firstIndex(where: { $0.id == id }) {
+            let after = thread[(i + 1)...]
+            if runs[target] != nil || after.contains(where: { $0.role == .assistant || $0.role == .tool }) { return report(nil) }
+            if waiting[target] == nil, makings[target] == nil, let error = after.last(where: { $0.role == .error }) {
+                return report(error.text)
+            }
+        } else if !postingMessages.contains(id), messageQueues[target]?.messages.contains(where: { $0.id == id }) != true {
+            // Neither queued nor in the part of the transcript in memory: its turn was long ago.
+            return report(nil)
+        }
+        messageStartWatchers[target, default: []].append((id, report))
+    }
+
     private func reportTaskStart(_ target: ChatTarget, failure: String?) {
-        guard target.taskID != nil, let watchers = startWatchers.removeValue(forKey: target) else { return }
+        guard target.taskID != nil else { return }
+        if var waiting = messageStartWatchers[target] {
+            let delivered = Set(thread(target).map(\.id))
+            let due = waiting.filter { failure != nil || delivered.contains($0.id) }
+            waiting.removeAll { failure != nil || delivered.contains($0.id) }
+            messageStartWatchers[target] = waiting.isEmpty ? nil : waiting
+            for watcher in due { watcher.report(failure) }
+        }
+        guard let watchers = startWatchers.removeValue(forKey: target) else { return }
         for watcher in watchers { watcher(failure) }
     }
 
@@ -2734,7 +2777,8 @@ final class AppModel {
 
     private func sessionInput(_ bot: Bot) -> SessionPreparation.Input {
         SessionPreparation.Input(bot: bot, sharedMemoryPath: settings.sharedMemoryPath,
-            repositoriesPath: settings.expandedReposRoot, machines: settings.hosts.map(\.nickname), availableBots: delegation.roster)
+            repositoriesPath: settings.expandedReposRoot, machines: settings.hosts.map(\.nickname), availableBots: delegation.roster,
+            areas: AreaListing.of(tasks[bot.id, default: []]))
     }
 
     private func prepareWorkspace(_ bot: Bot, then: (() -> Void)? = nil) {

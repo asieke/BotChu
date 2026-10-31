@@ -99,7 +99,7 @@ import Testing
 
     @Test func agentsAreToldHowToListTheirTasks() {
         let section = BotContext.subagentsSection(availableBots: [BotRosterEntry(bot: Bot(name: "Worker", workspace: "/tmp/worker"))])
-        #expect(section.contains("`botchu-task list --mine` lists your own open Tasks as BotChu's sidebar shows them"))
+        #expect(section.contains("`botchu-task list --mine` lists your own areas and open Tasks as BotChu's sidebar shows them"))
         #expect(section.contains("(`--json` for the same fields)"))
     }
 

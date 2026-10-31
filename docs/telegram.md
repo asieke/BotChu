@@ -2,8 +2,8 @@
 
 BotChu can take messages from Telegram: your private chat with a Telegram bot of your own reaches
 one of your BotChu bots, in its Home, and the bot's replies come back to that chat. From the same
-chat you can talk to any other BotChu bot with `@`, name a repository with `#`, and start a task
-of its own with `/task` ([Choosing a bot, a repository or a task](#choosing-a-bot-a-repository-or-a-task)).
+chat you can talk to any other BotChu bot with `@`, name a repository with `#`, and post into
+its Project Area with `/task` ([Choosing a bot, a repository or a task](#choosing-a-bot-a-repository-or-a-task)).
 BotChu stays the runtime: the turn runs on this Mac with the bot's own CLI, account, memory and
 conversation, and Telegram only carries the messages. It is off until you turn it on.
 
@@ -35,7 +35,7 @@ polling, `getUpdates`), so nothing on this Mac has to be reachable from the inte
   queue, as a message typed in BotChu does. That's the bot chosen for the chat in Settings, or the
   one the chat chose with `@`. The exchange is part of the Home conversation, and the turn resumes
   the Home's CLI session on its account, model and effort. Several chats can reach the same bot;
-  they share its Home. `/task` starts a task of its own, whose conversation stays in BotChu. An
+  they share its Home. `/task` posts into a repository's Project Area, whose conversation stays in BotChu. An
   existing task's conversation can't be reached from Telegram.
 - **While a turn works:** a message waits in the queue and the chat is told so. Claude Code on this
   Mac takes it when its current step ends; every other account gets it as the next turn. If the queue
@@ -88,11 +88,11 @@ message:
 |---|---|---|
 | `@Danny` (a BotChu bot's whole name) | The message and those after it go to Danny's Home. Danny's replies start with `Danny:`. | Until you choose another bot with `@`, or Settings gives the chat another bot. `@` and the name of the chat's own bot goes back to it. |
 | `#owner/repo` (or `#repo` when only one of your Projects has that name) | Names the repository for that message. It reaches the bot as a `#` mention, as it does from BotChu's message box. | That message only. Sent alone, it goes with your next message. |
-| `/task` | Starts a task of its own for the bot, in the repository named, with the rest of the message as its brief. | That message. |
+| `/task` | Posts the rest of the message into the repository's Project Area, for the bot. | That message. |
 
 - **Examples:** `@Danny what's on today?` · `@QA Duck #asieke/BotChu does the login work?` ·
   `/task @Danny #asieke/BotChu Fix the login bug`. Sent alone, `@Danny` only switches the chat
-  to Danny. `#asieke/BotChu`, then `/task Fix the login bug`, starts that task for the bot the
+  to Danny. `#asieke/BotChu`, then `/task Fix the login bug`, posts it there for the bot the
   chat talks to.
 - **Bots** are matched by their whole name, ignoring case and accents, never by part of a name.
   When two bots share a name, the gateway lists them with the start of their IDs: write
@@ -104,11 +104,11 @@ message:
   that is later deleted isn't replaced by the chat's own bot: messages are refused until you
   choose another. Before Projects have been loaded, `#owner/repo` can't be checked, so it's
   refused too.
-- **Tasks** are top-level tasks of the chosen bot, made as New Task makes them. Each runs in its own
-  worktree on the bot's account, has its own conversation and session, and shows under that bot in
-  BotChu's sidebar. It isn't a sub-agent of another bot, and nothing is nested under the chat's own
-  bot. A task needs a repository: `/task` without one starts nothing. The chat is told the task
-  started; what it does stays in BotChu. Telegram sending the request again finds the same task.
+- **`/task`** posts the brief as your message in the repository's Project Area: the chosen bot's
+  (attached to it first when no bot has the repository), else the area of the bot that has it,
+  which the reply names. A repository on another computer gets a task of its own there instead.
+  `/task` without a repository posts nothing. The chat is told where it went; what the bot does
+  stays in BotChu. Telegram sending the request again posts nothing more.
 - **Changing who you talk to** moves nothing already sent. Messages queued for a bot stay in its
   queue, and replies owed go to the chat that asked, from the bot that took the message. Each chat
   has its own choice.

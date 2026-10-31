@@ -80,9 +80,9 @@ import Testing
                                           availableBots: roster)
         let specialist = BotContext.agentsFile(bot: Bot(name: "Mike", workspace: "/tmp/mike", role: .specialist),
                                                sharedMemoryPath: "/shared", availableBots: roster)
-        #expect(agent.contains("## Tasks") && agent.contains(".botchu/dispatch/"))
+        #expect(agent.contains("## Project Areas") && agent.contains(".botchu/dispatch/"))
         #expect(!agent.contains("## Role"))
-        #expect(!specialist.contains("## Tasks") && !specialist.contains(".botchu/dispatch/"))
+        #expect(!specialist.contains("## Project Areas") && !specialist.contains(".botchu/dispatch/"))
         #expect(specialist.contains("## Role\nYou are a specialist: other bots call you as a sub-agent with `botchu-subagent`"))
         // The rest of the file is the same.
         #expect(specialist.contains("## Your history") && specialist.contains("## Replies") && specialist.contains("<subagents>"))

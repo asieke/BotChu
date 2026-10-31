@@ -173,9 +173,9 @@ struct ProjectOverviewTab: View {
             VStack(alignment: .leading, spacing: 8) {
                 // With no agent to start a task, the action makes one (#232).
                 if !model.taskOwners.isEmpty {
-                    BotMenu(title: "Start Task with", systemImage: "plus") { model.newTask(for: $0, repo: repo.id) }
+                    BotMenu(title: "Start Task with", systemImage: "plus") { model.startInArea(repo: repo.id, with: $0) }
                         .buttonStyle(InspectorButtonStyle(prominent: true, fill: true))
-                        .help("Choose an agent, then what it works on, in New Task")
+                        .help("Open this repository's area")
                 } else {
                     Button { model.newBot() } label: { Label("New Agent…", systemImage: "plus") }
                         .buttonStyle(InspectorButtonStyle(prominent: true, fill: true))
@@ -521,19 +521,19 @@ struct WorkDetailView: View {
             if pulls {
                 HStack(spacing: 8) {
                     ReviewMenu(title: "Review") { botID, comment in
-                        model.newTask(for: botID, repo: repo.id, work: work, purpose: comment ? .comment : .review)
+                        model.startInArea(repo: repo.id, work: work, review: comment ? .comment : .review, with: botID)
                     }
                     .buttonStyle(InspectorButtonStyle(prominent: true, fill: true))
                     .help("Review it with an agent, here or also on GitHub")
-                    BotMenu(title: "Continue", systemImage: "arrow.triangle.branch") { model.newTask(for: $0, repo: repo.id, work: work) }
+                    BotMenu(title: "Continue", systemImage: "arrow.triangle.branch") { model.startInArea(repo: repo.id, work: work, with: $0) }
                         .buttonStyle(InspectorButtonStyle(fill: true))
                         .disabled(fromFork)
                         .help(fromFork ? "This pull request comes from a fork: review it instead" : "Work on its branch with an agent")
                 }
             } else {
-                BotMenu(title: "Fix with", systemImage: "wand.and.stars") { model.newTask(for: $0, repo: repo.id, work: work) }
+                BotMenu(title: "Fix with", systemImage: "wand.and.stars") { model.startInArea(repo: repo.id, work: work, with: $0) }
                     .buttonStyle(InspectorButtonStyle(prominent: true, fill: true))
-                    .help("Start a task on this issue with an agent")
+                    .help("Ask an agent to fix it in this repository's area")
             }
             if !tasks.isEmpty {
                 InspectorCard {

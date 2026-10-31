@@ -728,10 +728,11 @@ final class SubagentRuntime {
 
     // MARK: Tasks handed to bots (#111)
 
-    /// Takes a `botchu-task create` request: answers it at once (pending, or why not), then makes
-    /// the Task outside the watcher's loop, so the caller's mailbox and heartbeat go on meanwhile, and
-    /// writes how that went, then how the Task's first turn started, into the caller's mailbox. The
-    /// Task goes on whatever becomes of the caller. A request seen again gets the same answer.
+    /// Takes a `botchu-task create` request: answers it at once (pending, or why not), then posts it
+    /// into the repository's area (or makes the Task) outside the watcher's loop, so the caller's
+    /// mailbox and heartbeat go on meanwhile, and writes how that went, then how its turn started,
+    /// into the caller's mailbox. It goes on whatever becomes of the caller. A request seen again
+    /// gets the same answer.
     private func receiveHandoff(_ data: Data, id: UUID, filename: String, from caller: Caller) async {
         if let known = handoffs[id] {
             await deliver(known, to: caller)
@@ -766,11 +767,13 @@ final class SubagentRuntime {
     private func handOff(_ handoff: TaskHandoff, from caller: Caller) async {
         guard let model else { return }
         var result = TaskHandoffResult(id: handoff.id, phase: .failed)
+        var message: UUID?
         do {
             let made = try await model.handOffTask(handoff, from: caller.target, subagent: caller.parent.flatMap { run($0) })
             result = TaskHandoffResult(id: handoff.id, phase: made.unsaved == nil ? .created : .failed, targetBotID: made.bot.id,
                                        targetBotName: made.bot.name, taskID: made.task.id, taskTitle: made.task.title,
-                                       existing: made.existing, errorMessage: made.unsaved)
+                                       existing: made.existing, area: made.task.isArea, errorMessage: made.unsaved)
+            message = made.messageID
         } catch {
             result.errorMessage = Self.reason(error)
             // Turned away from a Task already working on it: that Task, to continue in (#215).
@@ -785,12 +788,15 @@ final class SubagentRuntime {
         handoffs[handoff.id] = result
         await deliver(result, to: caller)
         guard result.phase == .created, let taskID = result.taskID, let botID = result.targetBotID else { return }
-        model.whenTaskStarts(.task(taskID, of: botID)) { [weak self] failure in
+        let report: (String?) -> Void = { [weak self] failure in
             guard let self, let created = self.handoffs[handoff.id] else { return }
             let started = created.starting(failure: failure)
             self.handoffs[handoff.id] = started
             Task { await self.deliver(started, to: caller) }
         }
+        // An area's turn on the request: the one that takes its message.
+        if let message { model.whenMessageStarts(message, in: .task(taskID, of: botID), report) }
+        else { model.whenTaskStarts(.task(taskID, of: botID), report) }
     }
 
     /// Writes a Task request's answer; after the caller's turn has ended, quietly, as nothing waits.
