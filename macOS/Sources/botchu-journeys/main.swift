@@ -104,8 +104,9 @@ do {
 }
 
 func finish(_ code: Int32) -> Never {
+    let restoreFocus = app.running?.isActive == true
     app.quit()
-    previousFrontmost?.activate(options: [])
+    if restoreFocus { previousFrontmost?.activate(options: []) }
     AppUnderTest.forgetDefaults()
     if !keep { try? FileManager.default.removeItem(at: work) }
     exit(code)

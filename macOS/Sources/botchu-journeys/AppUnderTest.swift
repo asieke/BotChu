@@ -242,7 +242,7 @@ final class AppUnderTest {
     }
 
     /// A covered, inactive app can be demoted even with App Nap disabled (#388). Measure the
-    /// foreground interaction the journey describes; a focus change invalidates the measurement.
+    /// foreground interaction the journey describes, and check that it still has focus at the end.
     func requireForeground() throws {
         guard let focused = AXElement.systemWide.element(kAXFocusedApplicationAttribute), focused.pid == pid else {
             throw HarnessFailure("BotChu lost keyboard focus; foreground journeys cannot measure a background app")
