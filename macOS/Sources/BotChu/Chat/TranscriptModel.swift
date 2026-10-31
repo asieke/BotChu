@@ -81,11 +81,12 @@ final class TranscriptModel {
     /// The shown part of the items as last planned: where it starts, and how many there were.
     @ObservationIgnored private var shown = (start: 0, count: 0)
     /// Bumped when the rows laid out should be worked out again: the reader scrolled past them,
-    /// measured rows no longer cover what is near the visible part, or the chat changed size.
+    /// measured rows no longer cover what is near the visible part, or the chat grew taller.
     private var replans = 0
     /// The scroll view's watcher, which moves the visible part to keep the reader's place.
     @ObservationIgnored weak var probe: ChatScrollProbeView?
-    /// The width the rows are laid out at, as the scroll view last said.
+    /// The width the rows are laid out at, as the scroll view last said: for estimating rows not
+    /// measured yet. A new width plans nothing again; the rows laid out measure themselves (#354).
     @ObservationIgnored private(set) var width = 0
     /// Rows laid out now, and the most at once, counted as they appear and go (for tests and the
     /// benchmark: what is realized, not what was planned).
@@ -305,12 +306,8 @@ final class TranscriptModel {
     /// The scroll view's visible part, in the rows' coordinates, and the rows' width.
     func scrolled(top: Double, height: Double, width: Double) {
         let width = Int(width.rounded())
-        var replan = viewport.scrolled(top: top, height: height)
-        if width != self.width, width > 0 {
-            self.width = width
-            replan = true
-        }
-        if replan { replans += 1 }
+        if width > 0 { self.width = width }
+        if viewport.scrolled(top: top, height: height) { replans += 1 }
     }
 
     /// A row's height as laid out.

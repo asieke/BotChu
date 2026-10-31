@@ -300,7 +300,8 @@ private struct Layout {
     }
 
     /// A height measured for other content or another layout is never used, and a measurement
-    /// from a row no longer laid out, or laid out since with other content, is dropped.
+    /// from a row no longer laid out, or laid out since with other content, is dropped. (Another
+    /// width keeps the heights: `aResizeKeepsTheRowsLaidOutAndMeasuresThemAgain`.)
     @Test func heightsAreKeptOnlyForTheSameContentAndLayout() {
         var thread = Thread(conversation(400) + [ChatMessage(role: .assistant, text: "Writing")])
         var layout = Layout(thread.items)
@@ -327,19 +328,51 @@ private struct Layout {
         let gone = layout.viewport.measured(away.id, signature: away.signature, height: 5)
         #expect(!gone)
         #expect(layout.viewport.droppedMeasurements == dropped + 2)
-        // Each layout input, and the conversation's epoch, measures again.
-        for change in 0..<4 {
+        // Each layout input but the width, and the conversation's epoch, measures again.
+        for change in 0..<3 {
             switch change {
-            case 0: layout.width -= 100
-            case 1: layout.density = 0
-            case 2: layout.scale = 1.1
+            case 0: layout.density = 0
+            case 1: layout.scale = 1.1
             default: layout.epoch += 1
             }
             let before = layout.viewport.plan.rows.map(\.signature)
             layout.settle()
             // No height is reused: they're reused only for the same signature.
-            if change != 2 { #expect(Set(layout.viewport.plan.rows.map(\.signature)).isDisjoint(with: before)) }
+            if change != 1 { #expect(Set(layout.viewport.plan.rows.map(\.signature)).isDisjoint(with: before)) }
         }
+    }
+
+    /// A resize leaves the rows laid out as they are (#354): the frames a window goes through on the
+    /// way to its new size, where the chat is briefly a strip and at other widths, plan nothing
+    /// again; a new width keeps every row and its signature, and the rows laid out measure
+    /// themselves again at it, as do those out of view once they're laid out.
+    @Test func aResizeKeepsTheRowsLaidOutAndMeasuresThemAgain() throws {
+        var layout = Layout(items(conversation(2_000)))
+        layout.start = 0
+        layout.settle()
+        let inputs = { (width: Int) in TranscriptViewport.Inputs(width: width, density: 1, dark: false, epoch: 0) }
+        // A strip, then the height it was planned for: the rows planned cover both.
+        for height in [52.0, layout.height] {
+            let replan = layout.viewport.scrolled(top: max(0, layout.viewport.plan.total - height), height: height)
+            #expect(!replan)
+        }
+        for width in [492, 392, 567] {
+            let before = layout.viewport.plan(layout.items, from: 0, inputs: inputs(layout.width), pinned: true) { _, _ in .init() }
+            layout.width = width
+            let plan = layout.viewport.plan(layout.items, from: 0, inputs: inputs(width), pinned: true) { _, _ in .init() }
+            #expect(plan == before)
+            #expect(layout.viewport.rebuiltRows == 0)
+            layout.settle()
+            for row in layout.viewport.plan.rows { #expect(abs(row.height - layout.trueHeight(row)) < 0.01) }
+        }
+        // Rows out of view kept their heights; laid out again, they're measured at the new width.
+        layout.pinned = false
+        layout.jump(to: 0)
+        let first = try #require(layout.viewport.plan.rows.first)
+        #expect(abs(first.height - layout.trueHeight(first)) < 0.01)
+        // Taller than the rows were planned for, the chat plans again.
+        let taller = layout.viewport.scrolled(top: 0, height: layout.height + 200)
+        #expect(taller)
     }
 
     /// The reader's row stays where it is on the screen while rows above it change: measured for
