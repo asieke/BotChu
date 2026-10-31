@@ -772,6 +772,7 @@ enum DevHooks {
         return descriptor < 0 ? nil : FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     }()
     private static var pending: [String] = []
+    private static var waiting: [String: @MainActor () -> Bool?] = [:]
     private static var observer: CFRunLoopObserver?
     private static var sidebarWatch: [NSObjectProtocol] = []
     private static var busyObservers: [CFRunLoopObserver] = []
@@ -782,6 +783,18 @@ enum DevHooks {
         guard file != nil else { return }
         let name = name()
         if !pending.contains(name) { pending.append(name) }
+        observe()
+    }
+
+    /// Checks readiness at the same committed-frame boundary as ordinary marks. `nil` withdraws
+    /// a cancelled presentation; a hidden native sheet cannot produce its first-visible-frame mark.
+    static func mark(_ name: String, when ready: @escaping @MainActor () -> Bool?) {
+        guard file != nil else { return }
+        waiting[name] = ready
+        observe()
+    }
+
+    private static func observe() {
         guard observer == nil else { return }
         observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue | CFRunLoopActivity.exit.rawValue,
                                                       true, CFIndex.max) { _, _ in
@@ -791,6 +804,15 @@ enum DevHooks {
     }
 
     private static func flush() {
+        for (name, ready) in waiting {
+            switch ready() {
+            case .some(true):
+                if !pending.contains(name) { pending.append(name) }
+                waiting[name] = nil
+            case .none: waiting[name] = nil
+            case .some(false): break
+            }
+        }
         guard !pending.isEmpty, let file else { return }
         let now = DispatchTime.now().uptimeNanoseconds
         let lines = pending.map { FrameMarks.line($0, at: now) }.joined()

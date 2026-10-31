@@ -66,7 +66,27 @@ extension Journeys {
                 try plus.press()
                 let sheet = try app.mark(FrameMarks.newTask, after: start)
                 sheets.append(Self.ms(start, sheet.nanoseconds))
-                let brief = try waitFor("New Task's brief") { try app.window().first(identifier: "task-brief") }
+                var brief = try waitFor("New Task's brief") { try app.window().first(identifier: "task-brief") }
+                guard brief.text.isEmpty, brief.label.contains(bot.name) else {
+                    throw HarnessFailure("New Task kept a previous brief or opened for the wrong bot")
+                }
+                if index == 0 {
+                    // A prepared native window must discard its form on Cancel (#353). This is
+                    // outside the opening measurement above; it does not prewarm that sample.
+                    try brief.type("Discard this draft")
+                    guard let cancel = try button("Cancel") else { throw HarnessFailure("New Task has no Cancel") }
+                    try cancel.press()
+                    app.settle()
+                    guard try app.window().first(identifier: "task-brief") == nil,
+                          let reopen = try app.window().first(identifier: "conversation-new-task") else {
+                        throw HarnessFailure("Cancel did not dismiss New Task")
+                    }
+                    _ = try press(reopen, until: FrameMarks.newTask)
+                    brief = try waitFor("New Task's fresh brief") { try app.window().first(identifier: "task-brief") }
+                    guard brief.text.isEmpty, brief.label.contains(bot.name) else {
+                        throw HarnessFailure("Reopening New Task restored its cancelled draft or another bot")
+                    }
+                }
                 try brief.set(kAXValueAttribute, to: "Journey task \(index + 1): tidy the README. journey-stream=0" as CFString)
                 // The project New Task chose last time, or the fixture's.
                 func startTask() throws -> AXElement? { try button("Start Task") }
