@@ -50,6 +50,11 @@ enum ChatDensity: String, CaseIterable, Identifiable {
 @MainActor @Observable
 final class TranscriptModel {
     @ObservationIgnored private var transcript = ActivityTranscript()
+    /// In a Project Area, each turn's work folded into one row before its reply (#425).
+    @ObservationIgnored private var folding = WorkFolding()
+    @ObservationIgnored private var foldsWork = false
+    /// The items as last shown: `transcript`'s, folded in an area. `windowStart` counts in them.
+    @ObservationIgnored private var shownItems = ChunkedArray<ActivityItem>()
     @ObservationIgnored private var placement = SubagentCardsCache()
     /// The conversation's `epoch` at the last update: when it changes, the thread was replaced or
     /// edited, not only written into by a turn.
@@ -116,7 +121,7 @@ final class TranscriptModel {
             guard message.role == .assistant else { return 1 + 3 * Double(message.images.count) }
             let shape = MarkdownShape(message.text)
             return 2 + Double(shape.bytes) / 400 + 2.5 * Double(shape.fences) + (shape.mayBeRich ? 15 : 0)
-        case .exploration:
+        case .exploration, .work:
             return 2.5
         case .tool:
             return 1.5
@@ -134,8 +139,9 @@ final class TranscriptModel {
     @ObservationIgnored private(set) var evaluations = 0
 
     /// The conversation's items, updated for `messages`: only what changed since is looked at again.
-    /// `epoch` is the conversation's (`ConversationState.epoch`).
-    func items(for messages: [ChatMessage], root: String?, epoch: Int) -> ChunkedArray<ActivityItem> {
+    /// `epoch` is the conversation's (`ConversationState.epoch`). With `foldsWork` (a Project Area),
+    /// each turn's work before its reply is one item (`WorkFolding`).
+    func items(for messages: [ChatMessage], root: String?, epoch: Int, foldsWork: Bool = false) -> ChunkedArray<ActivityItem> {
         evaluations += 1
         _ = loaded
         if transcript.root != root {
@@ -143,36 +149,57 @@ final class TranscriptModel {
             loading = nil
             holding = false
             transcript = ActivityTranscript(root: root)
+            shownItems = []
+        }
+        if foldsWork != self.foldsWork {
+            self.foldsWork = foldsWork
+            folding = WorkFolding()
+            shownItems = shown(transcript)
         }
         if let last = self.epoch, last != epoch { verifyNext = true }
         self.epoch = epoch
         if loading == nil, transcript.backlog(messages) > Self.coldLimit { load(messages, root: root) }
         if holding { return [] }
-        let previous = verifyNext ? transcript.items : nil
-        let anchor = windowStart.flatMap { transcript.items.indices.contains($0) ? transcript.items[$0].id : nil }
+        let previous = verifyNext ? (raw: transcript.items, shown: shownItems) : nil
+        let anchor = windowStart.flatMap { shownItems.indices.contains($0) ? shownItems[$0].id : nil }
         transcript.update(messages, verify: verifyNext)
+        let items = shown(transcript)
         if let previous {
-            viewport.relocateAnchor(from: previous, to: transcript.items)
+            viewport.relocateAnchor(from: previous.shown, to: items)
             // The same exploration remains open when paging changes its first resident call.
             let groups = transcript.items.compactMap { item -> ExplorationGroup? in
                 if case .exploration(let group) = item { group } else { nil }
             }
             let containing = Dictionary(groups.flatMap { group in group.calls.map { ($0.id, group.id) } }, uniquingKeysWith: { _, last in last })
-            for item in previous {
+            for item in previous.raw {
                 guard case .exploration(let group) = item,
                       !groups.contains(where: { $0.id == group.id }),
                       let next = group.calls.lazy.compactMap({ containing[$0.id] }).first else { continue }
                 if let open = overrides.removeValue(forKey: group.id) { overrides[next] = open }
-                if anchor == group.id { windowStart = transcript.items.firstIndex { $0.id == next } }
+                if anchor == group.id { windowStart = Self.index(of: next, in: items) }
             }
         }
-        if let anchor, let moved = transcript.items.firstIndex(where: { $0.id == anchor }) { windowStart = moved }
+        if let anchor, let moved = Self.index(of: anchor, in: items) { windowStart = moved }
         if revealNext {
             windowStart = max(0, (windowStart ?? 0) - Self.page)
             revealNext = false
         }
         verifyNext = false
-        return transcript.items
+        shownItems = items
+        return items
+    }
+
+    private func shown(_ transcript: ActivityTranscript) -> ChunkedArray<ActivityItem> {
+        foldsWork ? folding.fold(transcript) : transcript.items
+    }
+
+    /// Where the item `id` is among `items`, or the work row holding it.
+    private static func index(of id: UUID, in items: ChunkedArray<ActivityItem>) -> Int? {
+        items.firstIndex { item in
+            if item.id == id { return true }
+            if case .work(let work) = item { return work.items.contains { $0.id == id } }
+            return false
+        }
     }
 
     /// Groups the whole thread off the main thread; meanwhile its newest messages, from where an
@@ -200,9 +227,12 @@ final class TranscriptModel {
 
     private func adopt(_ whole: ActivityTranscript) {
         // The shown part stays on the same items, now further down.
-        if let windowStart, let first = transcript.items.first?.id, let offset = whole.items.firstIndex(where: { $0.id == first }) {
+        folding = WorkFolding()
+        let items = shown(whole)
+        if let windowStart, let first = shownItems.first?.id, let offset = Self.index(of: first, in: items) {
             self.windowStart = windowStart + offset
         }
+        shownItems = items
         transcript = whole
         // The thread may have changed in any way meanwhile.
         verifyNext = true

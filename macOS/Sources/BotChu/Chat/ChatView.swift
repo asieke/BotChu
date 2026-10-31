@@ -43,7 +43,8 @@ private struct ChatContent: View {
             // Its own turn, not only sub-agents it started, keeps its newest group live.
             let turnRunning = model.runStates[target] != nil
             let epoch = model.conversation(target).epoch
-            let items = transcript.items(for: messages, root: task?.folder ?? bot.workspace, epoch: epoch)
+            // An area reads as a chat: each turn's work before its reply is one row (#425).
+            let items = transcript.items(for: messages, root: task?.folder ?? bot.workspace, epoch: epoch, foldsWork: task?.isArea == true)
             let start = transcript.start(of: items)
             let cards = transcript.cards(runs: model.delegation.records[target] ?? [])
             let kind = current.account.kind
@@ -102,9 +103,9 @@ private struct ChatContent: View {
                             let speaker = item.speaker.flatMap(model.bot)
                             TranscriptRow(row: row, item: item, bot: speaker ?? bot, kind: speaker?.account.kind ?? kind,
                                           startsBotTurn: row.index == 0 ? conversation.startsBotTurn : item.startsBotTurn(after: items[row.index - 1]),
-                                          density: density, live: turnRunning && row.index == items.count - 1,
+                                          density: density, live: turnRunning && (row.index == items.count - 1 || Self.isOpenWork(item)),
                                           open: transcript.isOpen(item.id, default: false),
-                                          runs: cards.runs(for: item), after: cards.unplaced(after: item.id))
+                                          runs: cards.runs(for: item), after: Self.unplaced(after: item, in: cards))
                                 .equatable()
                                 .onAppear { if let id = target.taskID { FrameTimings.mark(FrameMarks.chat(id)) } }
                         }
@@ -200,18 +201,41 @@ private struct ChatContent: View {
             }
             for run in cards.unplaced(after: tool.id) { hasher.combine(run.id); hasher.combine(run.phase) }
             return .init(split: .whole, extra: hasher.finalize())
+        case .work(let work):
+            var hasher = Hasher()
+            let open = transcript.isOpen(work.id, default: false)
+            hasher.combine(open)
+            hasher.combine(turnRunning && work.isOpen)
+            // Opened, what it holds can open too.
+            if open { for member in work.items { hasher.combine(transcript.isOpen(member.id, default: false)) } }
+            for run in unplaced(after: item, in: cards) { hasher.combine(run.id); hasher.combine(run.phase) }
+            return .init(split: .whole, extra: hasher.finalize())
         case .message:
             return .init(split: .whole)
         }
     }
 
-    /// The last item already shows the turn at work: a live group or a running call.
+    /// The last item already shows the turn at work: a live group, a running call, or the turn's
+    /// work row.
     static func showsProgress(_ item: ActivityItem) -> Bool {
         switch item {
         case .exploration(let group): group.isOpen
         case .tool(let tool): tool.state == .running
+        case .work(let work): work.isOpen
         case .message: false
         }
+    }
+
+    /// A work row the turn may still add to, though its reply may stream in below it.
+    static func isOpenWork(_ item: ActivityItem) -> Bool {
+        if case .work(let work) = item { return work.isOpen }
+        return false
+    }
+
+    /// The runs no call accounts for that began after the item, or after anything a work row holds.
+    static func unplaced(after item: ActivityItem, in cards: SubagentCards) -> [SubagentRun] {
+        guard case .work(let work) = item else { return cards.unplaced(after: item.id) }
+        return work.items.flatMap { cards.unplaced(after: $0.id) }
     }
 }
 
@@ -451,6 +475,9 @@ struct ActivityRow: View, Equatable {
             BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
                 ExplorationCard(group: group, live: live && group.isOpen, density: density, kind: kind).equatable()
             }
+        case .work(let work):
+            TurnWorkRow(work: work, bot: bot, kind: kind, startsBotTurn: startsBotTurn, density: density, live: live && work.isOpen,
+                    open: open, after: after).equatable()
         case .tool(let tool):
             BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
                 VStack(alignment: .leading, spacing: 8) {

@@ -6,7 +6,7 @@ extension Journeys {
     /// Quits BotChu as the owner would and launches it again, timed until the first bot's chat
     /// shows; then checks that the draft journey 5 typed is back in its message box, and the
     /// message journey 6 sent and the area journey 9 attached are there (any of them this journey
-    /// leaves itself when that journey didn't run).
+    /// leaves itself when that journey didn't run), and that an area's turn is one work row.
     func relaunch() -> [JourneyResult] {
         var samples: [Double] = []
         var problem: String?
@@ -53,10 +53,47 @@ extension Journeys {
             guard try app.window().first(identifier: "conversation-tab-\(area.id.uuidString)") != nil else {
                 throw HarnessFailure("After a relaunch, \(area.bot.name) has no row for the area attached in Attach Project Area")
             }
+            try checkAreaWorkRow()
         } catch {
             problem = "\(error)"
         }
         return [result(13, "relaunch keeps the message and area", .launch, samples, problem: problem)]
+    }
+
+    /// An area reads as a chat (#425): its one turn, nine calls and an interim reply, is one work
+    /// row before the reply, which opens to show the calls.
+    private func checkAreaWorkRow() throws {
+        let bot = fixture.bots[11]
+        let area = fixture.areas(of: bot)[0]
+        try show(bot)
+        guard let tab = try app.window().first(identifier: "conversation-tab-\(area.uuidString)") else {
+            throw HarnessFailure("\(bot.name)'s Project Areas column has no row for its area")
+        }
+        _ = try press(tab, until: FrameMarks.chat(area))
+        app.settle()
+        func workRows() throws -> [AXElement] {
+            var rows: [AXElement] = []
+            _ = try app.window().first { element in
+                if element.role == kAXButtonRole as String, element.label.hasPrefix("Worked ") { rows.append(element) }
+                return false
+            }
+            return rows
+        }
+        let rows = try workRows()
+        guard rows.count == 1, let row = rows.first else {
+            throw HarnessFailure("\(bot.name)'s area shows \(rows.count) work rows for its one turn, not one: \(rows.map(\.label))")
+        }
+        guard let last = fixture.lastItem[area], try app.window().first(identifier: "chat-item-\(last.uuidString)") != nil else {
+            throw HarnessFailure("\(bot.name)'s area doesn't show its turn's reply under the work row")
+        }
+        guard try app.window().first(where: { $0.role == kAXButtonRole as String && $0.label.hasPrefix("Explored") }) == nil else {
+            throw HarnessFailure("\(bot.name)'s area shows its turn's calls outside the work row")
+        }
+        _ = try press(row)
+        app.settle()
+        guard try app.window().first(where: { $0.role == kAXButtonRole as String && $0.label.hasPrefix("Explored") }) != nil else {
+            throw HarnessFailure("Opening \(bot.name)'s work row (\(row.label)) didn't show its calls")
+        }
     }
 
     /// Whether the chat shows a text with these words, paging up through at most `pages` pages for
