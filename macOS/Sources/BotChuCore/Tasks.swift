@@ -274,18 +274,31 @@ public enum TaskNaming {
     /// The newest pull request of the task's repository its conversation links to, as agents print
     /// its URL when they open one; else the one the task has (the one it works on, or found before).
     public static func pullRequest(in messages: [ChatMessage], task: BotTask) -> Int? {
-        let pattern = "https://github\\.com/" + NSRegularExpression.escapedPattern(for: task.repo) + "/pull/([0-9]+)"
-        if task.repo.contains("/"), let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
-            for message in messages.reversed() {
-                let text = [message.text, message.toolOutput ?? ""].joined(separator: "\n")
-                let range = NSRange(text.startIndex..., in: text)
-                if let match = regex.matches(in: text, range: range).last,
-                   let number = Range(match.range(at: 1), in: text).flatMap({ Int(text[$0]) }) {
-                    return number
-                }
+        guard task.repo.contains("/") else { return task.pullRequest }
+        return pullRequest(in: messages, repo: task.repo) ?? task.pullRequest
+    }
+
+    /// The newest pull request of `repo` (`owner/name`; of any repository when nil) the messages
+    /// link to, in their text or a tool's output.
+    public static func pullRequest(in messages: [ChatMessage], repo: String?) -> Int? {
+        for message in messages.reversed() {
+            if let number = pullRequests(in: message.toolOutput ?? "", repo: repo).last ?? pullRequests(in: message.text, repo: repo).last {
+                return number
             }
         }
-        return task.pullRequest
+        return nil
+    }
+
+    /// The numbers of the pull request URLs in `text`, in order: of `repo` (`owner/name`), or of any
+    /// repository when nil.
+    public static func pullRequests(in text: String, repo: String?) -> [Int] {
+        guard text.contains("/pull/") else { return [] }
+        let owner = repo.map(NSRegularExpression.escapedPattern(for:)) ?? "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+        guard let regex = try? NSRegularExpression(pattern: "https://github\\.com/" + owner + "/pull/([0-9]+)", options: [.caseInsensitive])
+        else { return [] }
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+            Range(match.range(at: 1), in: text).flatMap { Int(text[$0]) }
+        }
     }
 }
 

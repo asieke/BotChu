@@ -58,6 +58,13 @@ public struct SubagentRun: Identifiable, Codable, Equatable, Sendable, RunSettin
     /// How far it got when it ended without a handoff (#368); nil for a run that handed off, and in
     /// records saved before.
     public var interruption: SubagentInterruption?
+    /// The worktree, branch and pull request it works on, as its own transcript shows them
+    /// (`RunGitFacts`), refreshed when its phase changes (#401). Nil when it shows none, and in
+    /// records saved before.
+    public var worktree: String?
+    public var branch: String?
+    public var pullRequest: Int?
+    public var pullRequestState: PullRequestState?
 
     /// A stopped run BotChu recorded an interruption for: its row says Interrupted.
     public var isInterrupted: Bool { phase == .stopped && interruption != nil }
