@@ -51,8 +51,8 @@ extension Bot {
 
 /// One bot's turn in an area conversation, waiting or running: whose, at which hop, and what gave
 /// it the turn. Hop 0 answers the owner's message; a turn a reply's `@mention` starts is one hop
-/// past that reply's.
-public struct AreaTurn: Hashable, Sendable {
+/// past that reply's. A cameo turn keeps it on its run (`SubagentRun.cameo`), to route its reply.
+public struct AreaTurn: Codable, Hashable, Sendable {
     public var botID: UUID
     public var hop: Int
     /// The bot whose reply mentioned it; nil when the owner's message did.
@@ -65,6 +65,49 @@ public struct AreaTurn: Hashable, Sendable {
         self.hop = hop
         self.mentionedBy = mentionedBy
         self.messageID = messageID
+    }
+}
+
+/// The cameo turns of one Project Area (#424). Each runs as a run of its own beside the area's
+/// conversation, which the area's own bot goes on answering meanwhile; bots run at once, but each
+/// bot one turn at a time, since it has one session slot in the area (`CameoSession`): a turn for a
+/// bot already running waits for its turn to end. The area's own bot's turns aren't here.
+public struct AreaRoom: Equatable, Sendable {
+    /// Each running bot's run.
+    public private(set) var running: [UUID: UUID] = [:]
+    /// Turns waiting for their bot's running turn to end, oldest first.
+    public private(set) var waiting: [AreaTurn] = []
+
+    public init() {}
+
+    public var isEmpty: Bool { running.isEmpty && waiting.isEmpty }
+
+    /// The bots running or waiting.
+    public var busy: Set<UUID> { Set(running.keys).union(waiting.map(\.botID)) }
+
+    /// `turn` asks to start as `run`: true when it starts now, its bot running nothing here;
+    /// otherwise it waits.
+    public mutating func admit(_ turn: AreaTurn, run: UUID) -> Bool {
+        guard running[turn.botID] == nil else {
+            waiting.append(turn)
+            return false
+        }
+        running[turn.botID] = run
+        return true
+    }
+
+    /// `run`, `bot`'s, ended. When it went on to its end (`continues`) the bot's next waiting turn
+    /// is returned, to `admit` now; otherwise the bot's waiting turns are called off. A run this
+    /// room didn't start (one the owner resumed) changes nothing.
+    public mutating func end(run: UUID, of bot: UUID, continues: Bool) -> AreaTurn? {
+        guard running[bot] == run else { return nil }
+        running[bot] = nil
+        guard continues else {
+            waiting.removeAll { $0.botID == bot }
+            return nil
+        }
+        guard let index = waiting.firstIndex(where: { $0.botID == bot }) else { return nil }
+        return waiting.remove(at: index)
     }
 }
 
@@ -95,6 +138,30 @@ public enum CameoRouting {
         var seen = busy.union([speaker])
         return directory.agentsMentioned(in: reply).filter { seen.insert($0.id).inserted }
             .map { AreaTurn(botID: $0.id, hop: hop + 1, mentionedBy: speaker) }
+    }
+
+    /// The turns `answerers` (`answerers(of:owner:eligible:)`) take of the owner's message
+    /// `messageID` (#424): whether the area's own bot answers it, in the conversation's turn, and the
+    /// cameo turns of the others, which all start at once beside it.
+    public static func turns(answering messageID: UUID, by answerers: [UUID], owner: UUID) -> (owner: Bool, cameos: [AreaTurn]) {
+        (answerers.contains(owner), answerers.filter { $0 != owner }.map { AreaTurn(botID: $0, hop: 0, messageID: messageID) })
+    }
+
+    /// The runs of `runs` (one conversation's) that are cameo turns or beneath one: they go on
+    /// whatever becomes of the area's own bot's turn, whose Stop leaves them be (#424).
+    public static func cameoTrees(in runs: [SubagentRun]) -> Set<UUID> {
+        var trees = Set(runs.filter { $0.cameo != nil }.map(\.id))
+        guard !trees.isEmpty else { return [] }
+        let parents = Dictionary(runs.map { ($0.id, $0.parentSubagentID) }, uniquingKeysWith: { a, _ in a })
+        for run in runs where !trees.contains(run.id) {
+            var parent = run.parentSubagentID, steps = 0
+            while let id = parent, steps < runs.count {
+                if trees.contains(id) { trees.insert(run.id); break }
+                parent = parents[id] ?? nil
+                steps += 1
+            }
+        }
+        return trees
     }
 
     /// What a turn that no new message starts is asked: `by` (a bot's name, or nil for the owner)

@@ -139,11 +139,20 @@ final class SubagentRuntime {
     func run(_ id: UUID) -> SubagentRun? {
         locations[id].flatMap { target in root(target).runs.first { $0.id == id } }
     }
-    func activeCount(_ target: ChatTarget, includeTasks: Bool = false) -> Int {
+    /// The runs under way in a conversation (with `includeTasks`, in its bot's Home and every task);
+    /// without `cameos`, leaving out other bots' cameo turns in an area and what they delegated,
+    /// which don't keep its own bot's turn waiting (#424).
+    func activeCount(_ target: ChatTarget, includeTasks: Bool = false, cameos: Bool = true) -> Int {
         let targets = includeTasks
             ? [ChatTarget.home(target.botID)] + (model?.tasks[target.botID] ?? []).map { .task($0.id, of: target.botID) }
             : [target]
-        return targets.reduce(0) { count, target in count + root(target).runs.filter { $0.phase.isActive }.count }
+        return targets.reduce(0) { count, target in
+            let runs = root(target).runs
+            let active = runs.filter { $0.phase.isActive }
+            guard !cameos, !active.isEmpty else { return count + active.count }
+            let trees = CameoRouting.cameoTrees(in: runs)
+            return count + active.filter { !trees.contains($0.id) }.count
+        }
     }
     func usesBot(_ id: UUID) -> Bool { busyBots.contains(id) }
 
@@ -531,6 +540,41 @@ final class SubagentRuntime {
         }
     }
 
+    // MARK: Cameo turns (#424)
+
+    /// Starts `turn`, a bot's cameo turn in the area `target`, as run `id` of the area's
+    /// conversation, beside whatever else runs there: in `directory` (the area's checkout), on
+    /// `settings` (the bot's own, with the area's session slot for it), asked `brief`. Its card
+    /// shows in the area's chat and Sub-agents tab, Stop there stops it alone, and its reply goes
+    /// into the conversation as its bot's once it ends (`AppModel.cameoEnded`).
+    func startCameo(_ turn: AreaTurn, id: UUID, settings: Bot, title: String, brief: String, in target: ChatTarget,
+                    directory: String, hostID: UUID?) {
+        var record = SubagentRun(id: id, rootBotID: target.botID, rootTaskID: target.taskID, depth: 1, targetBot: settings,
+                                 title: String(title.prefix(100)), brief: brief, workingDirectory: directory, hostID: hostID,
+                                 phase: .preparing)
+        record.sessionID = settings.sessionID
+        record.sessionAccountID = settings.sessionAccountID
+        record.sessionScope = settings.sessionScope
+        record.reportedModel = settings.reportedModel
+        record.cameo = turn
+        let message = ChatMessage(role: .user, text: brief)
+        // Its card shows at once; it launches once its record is saved, unless stopped meanwhile.
+        add(record, to: target)
+        live(id).messages = [message]
+        live(id).state = RunState(preparing: true)
+        preparations[id] = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.archive.save(self.snapshot(record, messages: [message]))
+            } catch {
+                self.finish(id, phase: .failed, error: "Couldn't save the turn: \(error.localizedDescription)")
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await self.launch(id, targetBot: settings)
+        }
+    }
+
     // MARK: Deliveries to the Inbox
 
     /// Takes a `botchu-inbox send` request: the delivery is the caller's conversation's (the top of
@@ -866,14 +910,18 @@ final class SubagentRuntime {
             let snapshot = prepared.context
             guard run(id)?.phase.isActive == true, !Task.isCancelled,
                   let currentBot = model.bot(targetBot.id) else { endCaller(context.id); return }
-            let preamble = BotContext.subagentPreamble(bot: currentBot, run: record,
-                callerDescription: record.parentSubagentID.flatMap { run($0)?.targetBotName } ?? model.bot(target.botID)?.name ?? "Bot",
-                memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, soul: snapshot.soul,
-                instructions: snapshot.instructions, team: snapshot.team, availableBots: roster, skills: snapshot.skills,
-                tools: machine.isRemote ? nil : model.tools.instructions(),
-                areaCheckout: areaCheckout(of: record))
             // A resumed run continues its session with the delta alone, or starts anew with both (#368).
-            let continued = delta != nil && session ? record.resumableSessionID : nil
+            // A cameo turn continues its bot's session in the area whenever it can (#424).
+            let continued = (delta != nil || record.cameo != nil) && session ? record.resumableSessionID : nil
+            let preamble = record.cameo != nil
+                ? model.cameoPrompt(for: record, bot: currentBot, context: snapshot, resuming: continued != nil, remote: machine.isRemote,
+                                    roster: roster)
+                : BotContext.subagentPreamble(bot: currentBot, run: record,
+                    callerDescription: record.parentSubagentID.flatMap { run($0)?.targetBotName } ?? model.bot(target.botID)?.name ?? "Bot",
+                    memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, soul: snapshot.soul,
+                    instructions: snapshot.instructions, team: snapshot.team, availableBots: roster, skills: snapshot.skills,
+                    tools: machine.isRemote ? nil : model.tools.instructions(),
+                    areaCheckout: areaCheckout(of: record))
             let prompt = delta.map { continued != nil ? $0 : preamble + "\n\n" + $0 } ?? preamble
             var invocation = record.invocation(prompt: prompt, model: chosenModel, sessionID: continued, remote: machine.isRemote,
                 openRouterKey: key, sailKey: sailKey, catalog: model.nativeModels(for: record))
@@ -902,6 +950,16 @@ final class SubagentRuntime {
                 for session in batch.sessions { self.modify(id) { $0.sessionID = session; $0.sessionAccountID = account.id; $0.sessionScope = record.executionScope } }
                 if let reported = batch.reportedModel, self.run(id)?.resolvedModel != reported {
                     self.modify(id) { $0.recordReportedModel(reported, requested: $0.model) }
+                }
+                // A cameo turn's session is its bot's slot in the area, for its next turn there.
+                if record.cameo != nil {
+                    for session in batch.sessions {
+                        model.recordSession(session, accountID: account.id, scope: record.executionScope, for: target, cameo: record.targetBotID)
+                    }
+                    if let reported = batch.reportedModel {
+                        model.recordReportedModel(reported, requested: record.model, accountID: account.id, scope: record.executionScope,
+                                                  for: target, cameo: record.targetBotID)
+                    }
                 }
                 guard let record = self.run(id) else { return }
                 let failed: @MainActor (Error) -> Void = { [weak self] error in
@@ -1098,11 +1156,15 @@ final class SubagentRuntime {
         live.messages = messages
         live.state = nil
         preparations[id] = nil
-        let reviewed = !restored.contains(id)
+        // A cameo turn isn't a delegated attempt to review, as its bot's turns in an area weren't.
+        let reviewed = !restored.contains(id) && record.cameo == nil
         // What the run asked to remember goes into the called bot's memory, which its Home hears
         // about; a save that fails waits to be tried again, and doesn't fail the handoff.
         if phase == .completed, let model, let targetBot = model.bot(record.targetBotID) {
             let start = live.historyStart, rootTaskID = record.rootTaskID
+            // A cameo turn's notes are heard on its bot's next turn in that area, not in its Home.
+            let reportTo = record.cameo == nil ? ChatTarget.home(targetBot.id)
+                : AppModel.cameoMemoryKey(targetBot.id, in: ChatTarget(botID: record.rootBotID, taskID: rootTaskID))
             let home = model.bot(record.rootBotID).map { BotHome(workspace: $0.workspace) }
             Task { [weak self, weak model] in
                 guard let self, let model else { return }
@@ -1112,7 +1174,7 @@ final class SubagentRuntime {
                         try home.loadSubagentHistory(id: id, taskID: rootTaskID, before: start, limit: start).messages
                     }) ?? []
                 } else { prefix = [] }
-                model.saveMemory(from: prefix + messages, of: targetBot, reportTo: .home(targetBot.id)) { [weak self] lines in
+                model.saveMemory(from: prefix + messages, of: targetBot, reportTo: reportTo) { [weak self] lines in
                     self?.commit(record, messages: messages + lines, reviewed: reviewed)
                 }
             }
@@ -1142,6 +1204,8 @@ final class SubagentRuntime {
             for (parent, outcome) in self.pendingFinishes where !self.children(of: parent).contains(where: { $0.phase.isActive }) {
                 self.finish(parent, phase: outcome.0, error: outcome.1)
             }
+            // A cameo turn's reply goes into its area's conversation, and starts the turns it mentions.
+            if record.cameo != nil { self.model?.cameoEnded(record, messages: messages) }
             self.model?.sendNextQueued(to: ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID))
         }
         do {

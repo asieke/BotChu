@@ -21,9 +21,11 @@ enum FakeClaude {
         var subagent: Double?
         var tools: Int?
 
+        /// The last of each in `text`: a prompt ends with its message, after a recap of the
+        /// conversation that can hold earlier ones (a cameo's, #424).
         init(_ text: String) {
             func seconds(_ key: String) -> Double? {
-                guard let range = text.range(of: key + "=") else { return nil }
+                guard let range = text.range(of: key + "=", options: .backwards) else { return nil }
                 return Double(text[range.upperBound...].prefix(while: { $0.isNumber || $0 == "." }))
             }
             stream = seconds("journey-stream")
