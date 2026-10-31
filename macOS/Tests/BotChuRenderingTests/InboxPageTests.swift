@@ -108,10 +108,16 @@ extension RenderingTests {
         try BotHome(workspace: bot.workspace).save(bot)
         try store.saveIndex([Store.Entry(id: bot.id, workspace: bot.workspace)])
         let folder = InboxFolder(home: BotHome(workspace: bot.workspace))
-        let first = Delivery(botID: bot.id, title: "First", purpose: .needsInput, sentAt: Delivery.stamp(Date(timeIntervalSinceNow: -60)))
-        let second = Delivery(botID: bot.id, title: "Second", purpose: .needsInput, sentAt: Delivery.stamp(Date(timeIntervalSinceNow: -120)))
+        var first = Delivery(botID: bot.id, title: "First", purpose: .needsInput, sentAt: Delivery.stamp(Date(timeIntervalSinceNow: -60)))
+        var second = Delivery(botID: bot.id, title: "Second", purpose: .needsInput, sentAt: Delivery.stamp(Date(timeIntervalSinceNow: -120)))
         let third = Delivery(botID: bot.id, title: "Third", sentAt: Delivery.stamp(Date(timeIntervalSinceNow: -180)))
-        for delivery in [first, second, third] { try folder.save(delivery, contents: [:]) }
+        first.note = String(repeating: "A long delivery note.\n\n", count: 60)
+        second.note = first.note
+        first.files = [.init(name: "index.html", kind: .page, bytes: 64)]
+        second.files = first.files
+        for delivery in [first, second, third] {
+            try folder.save(delivery, contents: ["index.html": Data("<title>\(delivery.title)</title><p>\(delivery.title)</p>".utf8)])
+        }
         let app = AppModel(store: store, settings: AppSettings(defaults: defaults), openRouterKey: { nil }, projectGitHub: ProjectGitHub { _, _ in
             await ProjectGitHub.command(["/usr/bin/false"], body: nil)
         }, openWorkLookup: { _ in .success(GitHubLookup.OpenWork(items: [])) })
@@ -119,6 +125,8 @@ extension RenderingTests {
         for _ in 0..<100 where app.inbox.all.count < 3 { try await Task.sleep(for: .milliseconds(20)) }
 
         app.destination = .inbox
+        app.inbox.drafts[first.id] = "First draft"
+        app.inbox.drafts[second.id] = "Second draft"
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 760), styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -128,6 +136,27 @@ extension RenderingTests {
         try await Task.sleep(for: .milliseconds(400))
         #expect(app.inbox.selected == first.id && !app.inbox.isUnread(first.id) && app.inbox.isUnread(second.id))
 
+        func editor(in view: NSView) -> ComposerTextView? {
+            (view as? ComposerTextView) ?? view.subviews.lazy.compactMap { editor(in: $0) }.first
+        }
+        func descendants<T: NSView>(_ view: NSView, as type: T.Type) -> [T] {
+            (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants($0, as: type) }
+        }
+        let contents = try #require(window.contentView)
+        let readerScroll = try #require(descendants(contents, as: NSScrollView.self).first {
+            !($0 is ComposerScrollView) && $0.bounds.width > 500 && ($0.documentView?.bounds.height ?? 0) > 1_000
+        })
+        let firstPage = try #require(descendants(contents, as: WKWebView.self).first)
+        let reply = try #require(window.contentView.flatMap { editor(in: $0) })
+        let previousResponder = window.firstResponder
+        window.makeFirstResponder(reply)
+        reply.insertText(" edited", replacementRange: NSRange(location: reply.string.utf16.count, length: 0))
+        #expect(app.inbox.drafts[first.id] == "First draft edited")
+        #expect(reply.undoManager?.canUndo == true)
+        window.makeFirstResponder(previousResponder)
+        readerScroll.contentView.scroll(to: NSPoint(x: 0, y: 500))
+        readerScroll.reflectScrolledClipView(readerScroll.contentView)
+        #expect(readerScroll.contentView.bounds.minY > 400)
         let derivations = app.inbox.statusDerivations
         let e = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
                                               context: nil, characters: "e", charactersIgnoringModifiers: "e", isARepeat: false, keyCode: 14))
@@ -139,6 +168,34 @@ extension RenderingTests {
         // Drawn, nothing more changes: what `onChange` reads again is read already.
         #expect(app.inbox.statusDerivations == derivations + 2)
         #expect(app.inbox.selected == second.id && app.inbox.isReading(second.id) && app.inbox.unfinishedCount == 2)
+        #expect(window.contentView.flatMap { editor(in: $0) } === reply, "Changing delivery retains the native editor")
+        #expect(reply.string == "Second draft" && reply.undoManager?.canUndo == false)
+        #expect(reply.selectedRange() == NSRange(location: 0, length: 0))
+        #expect(abs(readerScroll.contentView.bounds.minY) < 1, "A new delivery starts at the top, including its padding")
+        let secondPage = try #require(descendants(contents, as: WKWebView.self).first)
+        #expect(secondPage !== firstPage, "Page state must not survive a different delivery with the same filename")
+        for _ in 0..<100 where secondPage.title != "Second" { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(secondPage.title == "Second" && secondPage.url == folder.fileURL("index.html", of: second.id))
+        #expect(app.inbox.drafts[first.id] == "First draft edited")
+
+        // Switch away during an input-method composition: both the old text and the new binding
+        // stay with their own delivery, and the new editor has no old marked text or undo actions.
+        window.makeFirstResponder(reply)
+        reply.setMarkedText("二", selectedRange: NSRange(location: 1, length: 0),
+                            replacementRange: NSRange(location: reply.string.utf16.count, length: 0))
+        #expect(reply.hasMarkedText())
+        let composed = reply.string
+        app.inbox.selected = third.id
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(window.contentView.flatMap { editor(in: $0) } === reply)
+        #expect(!reply.hasMarkedText() && reply.string.isEmpty && reply.undoManager?.canUndo == false)
+        #expect(app.inbox.drafts[second.id] == composed)
+        #expect(app.inbox.drafts[first.id] == "First draft edited")
+        #expect(window.firstResponder !== reply)
+        window.makeFirstResponder(reply)
+        reply.insertText("Third draft", replacementRange: NSRange(location: 0, length: 0))
+        #expect(app.inbox.drafts[third.id] == "Third draft" && app.inbox.drafts[second.id] == composed)
+
     }
 }
 

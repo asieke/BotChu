@@ -48,7 +48,6 @@ struct InboxView: View {
             Group {
                 if let id = inbox.selected, let delivery = inbox.delivery(id), visible.contains(id) {
                     InboxReader(delivery: delivery)
-                        .id(id)
                 } else {
                     InboxEmpty(last: inbox.listIndex.latest, done: groups.first { $0.section == .done }?.ids.count ?? 0,
                                searching: searching) { showsDone = true }
@@ -74,7 +73,7 @@ struct InboxView: View {
         .navigationTitle("Inbox")
         .toolbar {
             if let id = inbox.selected, let delivery = inbox.delivery(id), visible.contains(id) {
-                ToolbarItemGroup(placement: .primaryAction) {
+                ToolbarItem(id: "inbox-actions", placement: .primaryAction) {
                     InboxToolbar(delivery: delivery) { setDone(id, $0, in: groups, visible: visible) }
                 }
             }
@@ -635,31 +634,35 @@ private struct InboxToolbar: View {
     let setDone: (Bool) -> Void
 
     var body: some View {
-        let inbox = model.inbox!
-        let origin = InboxOrigin(model: model, delivery: delivery)
-        Button { model.openOrigin(of: delivery) } label: {
-            Label(origin.open, systemImage: "arrow.up.forward.app")
-                .labelStyle(.titleAndIcon)
+        // Host the actions together so a selection change updates one SwiftUI toolbar view.
+        // This reduces the measured Done update cost compared with separate native items (#356).
+        HStack(spacing: 12) {
+            let inbox = model.inbox!
+            let origin = InboxOrigin(model: model, delivery: delivery)
+            Button { model.openOrigin(of: delivery) } label: {
+                Label(origin.open, systemImage: "arrow.up.forward.app")
+                    .labelStyle(.titleAndIcon)
+            }
+            .help("\(origin.open) (⌘O)")
+            .keyboardShortcut("o")
+            .accessibilityIdentifier("inbox-open")
+            let done = inbox.isDone(delivery.id)
+            Button { setDone(!done) } label: {
+                Label(done ? "Move to Inbox" : "Done", systemImage: done ? "tray.and.arrow.up" : "checkmark")
+                    .labelStyle(.titleAndIcon)
+            }
+            .help(done ? "Move to Inbox" : "Done (E or ⌃⌘A)")
+            .keyboardShortcut("a", modifiers: [.command, .control])
+            .accessibilityIdentifier("inbox-done")
+            .onChange(of: done) { _, done in FrameTimings.mark(FrameMarks.inboxDone(delivery.id, done)) }
+            Menu {
+                DeliveryMenu(delivery: delivery)
+            } label: {
+                Label("More", systemImage: "ellipsis")
+            }
+            .menuIndicator(.hidden)
+            .help("More")
         }
-        .help("\(origin.open) (⌘O)")
-        .keyboardShortcut("o")
-        .accessibilityIdentifier("inbox-open")
-        let done = inbox.isDone(delivery.id)
-        Button { setDone(!done) } label: {
-            Label(done ? "Move to Inbox" : "Done", systemImage: done ? "tray.and.arrow.up" : "checkmark")
-                .labelStyle(.titleAndIcon)
-        }
-        .help(done ? "Move to Inbox" : "Done (E or ⌃⌘A)")
-        .keyboardShortcut("a", modifiers: [.command, .control])
-        .accessibilityIdentifier("inbox-done")
-        .onChange(of: done) { _, done in FrameTimings.mark(FrameMarks.inboxDone(delivery.id, done)) }
-        Menu {
-            DeliveryMenu(delivery: delivery)
-        } label: {
-            Label("More", systemImage: "ellipsis")
-        }
-        .menuIndicator(.hidden)
-        .help("More")
     }
 }
 

@@ -3,7 +3,8 @@ import Foundation
 /// Which rows of a chat its view lays out, and where the reader is among them (#110).
 ///
 /// The chat lays out only the rows near the visible part of its scroll view: those within
-/// `overscan(for:)` above and below it, at most `rowLimit` unless the visible part itself needs
+/// the standard `overscan(for:)` above and below it (less for a large group of short, unopened
+/// call rows), at most `rowLimit` unless the visible part itself needs
 /// more, however many earlier items are open to scrolling or arrive meanwhile. The rest of what can
 /// be scrolled to is empty space above and below them, as tall as those rows were last measured at,
 /// or as estimated. A message, a card and a folded or live exploration group are a row each; an
@@ -28,7 +29,7 @@ import Foundation
 public struct TranscriptViewport: Sendable {
     /// The most rows laid out at once, unless the visible part alone holds more.
     public static let rowLimit = 160
-    /// How far beyond the visible part rows are laid out, above and below it.
+    /// The standard margin beyond the visible part, above and below it.
     public static func overscan(for viewport: Double) -> Double { max(400, viewport * 0.75) }
     /// The visible part's height assumed before the scroll view has said.
     public static let defaultViewport = 1_000.0
@@ -181,6 +182,8 @@ public struct TranscriptViewport: Sendable {
     public private(set) var viewport: Double?
     /// The visible part's height the rows laid out were planned for: a shorter one is covered too.
     private var plannedViewport: Double?
+    /// The margin selected for the rows currently laid out.
+    private var plannedOverscan = 0.0
     /// The width the rows are laid out at, as last planned or scrolled.
     private var width = 0
     /// Where the visible part must start to keep the reader's row in place; nil when it does.
@@ -319,7 +322,15 @@ public struct TranscriptViewport: Sendable {
                 top = visibleTop
             }
         }
-        let overscan = Self.overscan(for: height)
+        // An opened group is many short rows whose labels do not wrap. Keeping another three
+        // quarters of a screen of those controls alive adds focus/layout work to its first frame
+        // (#355). Use a smaller scroll margin only while that group fills most of the viewport;
+        // normal message rows retain their margin, including through large width changes.
+        let middle = item(at: top + height * 0.5)
+        let compact = expanded.isEmpty && middle < ids.count && cache[ids[middle]]?.split == .opened
+            && tops[middle] <= top + height * 0.25 && tops[middle + 1] >= top + height
+        let overscan = compact ? max(48, height * 0.1) : Self.overscan(for: height)
+        plannedOverscan = overscan
         plan = select(from: start, items: count, total: total, visible: top..<(top + height),
                       band: (top - overscan)..<(top + height + (pinned ? 0 : overscan)))
         shift = 0
@@ -477,7 +488,7 @@ public struct TranscriptViewport: Sendable {
     /// The reader's row is no longer laid out near the visible part.
     private func uncovered(top: Double, height: Double) -> Bool {
         guard let first = plan.rows.first, let last = plan.rows.last else { return plan.total > 0 }
-        let margin = Self.overscan(for: height) / 3
+        let margin = min(plannedOverscan, Self.overscan(for: height)) / 3
         if plan.above > 0.5, top - margin < first.top { return true }
         if plan.below > 0.5, top + height + margin > last.top + last.height { return true }
         return false

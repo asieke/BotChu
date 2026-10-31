@@ -2,7 +2,7 @@ import AppKit
 import BotChuCore
 
 // The journeys harness (#323; README.md, Test): drives a release build of BotChu from its own process,
-// in the background, through the Accessibility API, on a synthetic fixture with a fake Claude Code CLI.
+// in the foreground, through the Accessibility API, on a synthetic fixture with a fake Claude Code CLI.
 //   botchu-journeys --app <BotChu.app> [--journeys <names or numbers>] [--baseline <file>]
 //                   [--record <file>] [--results <file> [--branch <name>]] [--repeats <n>] [--stall <ms>] [--keep]
 //   botchu-journeys dump --app <BotChu.app> [--bot <n>]   the app's accessibility tree on the fixture
@@ -67,6 +67,7 @@ do { try Permission.requireAccessibility() } catch { fail("\(error)") }
 let source = URL(fileURLWithPath: appPath).standardizedFileURL
 guard FileManager.default.fileExists(atPath: source.appendingPathComponent("Contents/MacOS/BotChu").path) else { fail("\(source.path) isn't a BotChu build") }
 let work = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-journeys.noindex/run-\(getpid())", isDirectory: true)
+let previousFrontmost = NSWorkspace.shared.frontmostApplication
 let started = Date()
 let loadBefore = load()
 print("journeys: start; load \(loadBefore.map { String($0) }.joined(separator: " ")); \(machine()); "
@@ -103,7 +104,9 @@ do {
 }
 
 func finish(_ code: Int32) -> Never {
+    let restoreFocus = app.running?.isActive == true
     app.quit()
+    if restoreFocus { previousFrontmost?.activate(options: []) }
     AppUnderTest.forgetDefaults()
     if !keep { try? FileManager.default.removeItem(at: work) }
     exit(code)

@@ -273,7 +273,7 @@ private struct Layout {
 
     /// A single group of 5,000 calls, in Raw and opened again and again in Detailed: it is laid
     /// out a screenful at a time, as an outer row alone isn't.
-    @Test func aGroupOfFiveThousandCallsIsLaidOutAScreenAtATime() {
+    @Test func aGroupOfFiveThousandCallsIsLaidOutAScreenAtATime() throws {
         let messages = [ChatMessage(role: .user, text: "Trace it")] + (0..<5_000).map { call($0) }
             + [ChatMessage(role: .assistant, text: "Done.")]
         var layout = Layout(items(messages))
@@ -291,12 +291,45 @@ private struct Layout {
             layout.opened = [group.id]
             layout.jump(to: 0)
             #expect(layout.viewport.plan.rows.count <= TranscriptViewport.rowLimit)
-            for _ in 0..<10 { layout.scroll(by: 1_500) }
+            // Once measured, an opened group covers the screen without keeping most of a
+            // second screen of controls alive (#355). Normal message rows keep their margin.
+            layout.settle()
+            let bottom = layout.viewport.plan.rows.last.map { $0.top + $0.height } ?? 0
+            #expect(bottom >= layout.height)
+            #expect(bottom <= layout.height * 1.5)
+            for _ in 0..<10 {
+                layout.scroll(by: 1_500)
+                let rows = layout.viewport.plan.rows
+                let first = try #require(rows.first), last = try #require(rows.last)
+                #expect(first.top <= max(0, layout.top) + 0.5 || layout.viewport.plan.above < 0.5)
+                #expect(last.top + last.height >= min(layout.top + layout.height, layout.viewport.plan.total) - 0.5)
+            }
             layout.opened = []
             layout.settle()
             #expect(layout.viewport.plan.rows.count <= TranscriptViewport.rowLimit)
         }
         #expect(layout.peak <= TranscriptViewport.rowLimit)
+    }
+
+    /// A call's details can wrap and grow. Their group keeps the ordinary scroll margin, even
+    /// when unopened entries alone would use the smaller band (#355).
+    @Test func expandedCallDetailsKeepTheNormalScrollMargin() throws {
+        let entries = items([ChatMessage(role: .user, text: "Trace it")] + (0..<200).map { call($0) })
+        guard case .exploration(let group) = entries[1] else { Issue.record("no group"); return }
+        var viewport = TranscriptViewport()
+        _ = viewport.scrolled(top: 0, height: 800, width: 640)
+        let inputs = TranscriptViewport.Inputs(width: 640, density: 1, dark: false, epoch: 0)
+        func style(_ index: Int, _ item: ActivityItem) -> TranscriptViewport.Style {
+            if case .exploration = item { return .init(split: .opened) }
+            return .init()
+        }
+        let compact = viewport.plan(entries, from: 0, inputs: inputs, pinned: false, style: style)
+        let compactEnd = try #require(compact.rows.last).top + (compact.rows.last?.height ?? 0)
+        #expect(compactEnd >= 800 && compactEnd < 1_000)
+        let detailed = viewport.plan(entries, from: 0, inputs: inputs, pinned: false,
+                                     expanded: [group.entries[0].id], expansions: 1, style: style)
+        let last = try #require(detailed.rows.last)
+        #expect(last.top + last.height >= 800 + TranscriptViewport.overscan(for: 800))
     }
 
     /// A height measured for other content or another layout is never used, and a measurement

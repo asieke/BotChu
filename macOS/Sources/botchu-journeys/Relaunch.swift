@@ -35,7 +35,7 @@ extension Journeys {
             let shown = try app.mark(FrameMarks.chat(fixture.longBot.id), after: start, timeout: 60)
             samples.append(Self.ms(start, shown.nanoseconds))
             app.settle(quiet: 0.5, limit: 10)
-            try app.requireBackground()
+            try app.requireForeground()
 
             // The draft is back in its own message box (#357), and a sent message isn't in its box again.
             try show(draft.bot)

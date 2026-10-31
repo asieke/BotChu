@@ -196,7 +196,7 @@ struct Journeys {
                 if attempt == 0 { print(String(format: "journeys: first launch on the new fixture %.0f ms (not counted)", time)) }
                 else { samples.append(time) }
                 app.settle(quiet: 0.5, limit: 10)
-                try app.requireBackground()
+                try app.requireForeground()
                 try checkShown(fixture.longBot)
             }
             return [result(1, "launch", .launch, samples)]
@@ -257,7 +257,7 @@ struct Journeys {
                 open.append(try toggle(button, mark: mark(true), stall: stall))
                 try check(true)
             }
-            try app.requireBackground()
+            try app.requireForeground()
         } catch {
             problem = "\(error)"
         }
@@ -324,7 +324,7 @@ struct Journeys {
                 others.append(try select(other))
                 long.append(try select(fixture.longBot))
             }
-            try app.requireBackground()
+            try app.requireForeground()
         } catch {
             problem = "\(error)"
         }
