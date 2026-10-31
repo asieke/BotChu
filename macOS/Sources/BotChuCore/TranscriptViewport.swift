@@ -31,6 +31,11 @@ public struct TranscriptViewport: Sendable {
     public static let defaultViewport = 1_000.0
     /// Heights kept for items that can't be scrolled to (now), beyond those that can.
     public static let spareItems = 256
+    /// After the reader opens or closes something (`limitsNewRows`), the most rows a plan adds to
+    /// those the last one laid out, unless the visible part alone needs more: a group opened lays
+    /// out what is on screen in its frame, and the rest of the band in the plans that follow
+    /// (`isPartial`), a frame apart, rather than all of its rows in one frame (#355).
+    public static let newRowLimit = 24
 
     /// How an item is laid out.
     public enum Split: Hashable, Sendable {
@@ -165,6 +170,8 @@ public struct TranscriptViewport: Sendable {
     public private(set) var viewport: Double?
     /// Where the visible part must start to keep the reader's row in place; nil when it does.
     public private(set) var correction: Double?
+    /// The last plan left rows of the band out (`newRowLimit`): plan again once its frame is shown.
+    public private(set) var isPartial = false
     /// Measured to estimated height, by kind of row, as learned.
     private var ratios = [Double](repeating: 1, count: Kind.count)
     private var samples = [Int](repeating: 0, count: Kind.count)
@@ -246,7 +253,7 @@ public struct TranscriptViewport: Sendable {
     /// at the newest content while `pinned`, else around the reader's row. `expansions` changes
     /// whenever a call's details are opened or closed (`expanded` holds those open).
     public mutating func plan(_ items: ChunkedArray<ActivityItem>, from start: Int, inputs: Inputs, pinned: Bool,
-                              expanded: Set<UUID> = [], expansions: Int = 0,
+                              expanded: Set<UUID> = [], expansions: Int = 0, limitsNewRows: Bool = false,
                               style: (Int, ActivityItem) -> Style) -> Plan {
         generation += 1
         rebuiltRows = 0
@@ -295,6 +302,9 @@ public struct TranscriptViewport: Sendable {
         let overscan = Self.overscan(for: height)
         plan = select(from: start, items: count, total: total, visible: top..<(top + height),
                       band: (top - overscan)..<(top + height + (pinned ? 0 : overscan)))
+        isPartial = false
+        // The first plan of a chat lays out its whole band.
+        if limitsNewRows, !planned.isEmpty { limitNewRows(visible: top..<(top + height), total: total) }
         shift = 0
         planned.removeAll(keepingCapacity: true)
         for (index, row) in plan.rows.enumerated() { planned[row.id] = index }
@@ -341,6 +351,34 @@ public struct TranscriptViewport: Sendable {
         plan.above = rows.first?.top ?? 0
         plan.below = rows.last.map { total - $0.top - $0.height } ?? 0
         return plan
+    }
+
+    /// Keeps the rows meeting the visible part and, around them, nearest first, as many of the
+    /// band's as keep the rows the last plan didn't lay out (`planned`) within `newRowLimit`.
+    private mutating func limitNewRows(visible: Range<Double>, total: Double) {
+        let rows = plan.rows
+        guard rows.count(where: { planned[$0.id] == nil }) > Self.newRowLimit,
+              let first = rows.firstIndex(where: { $0.top + $0.height > visible.lowerBound }),
+              let last = rows.lastIndex(where: { $0.top < visible.upperBound }), first <= last else { return }
+        var low = first, high = last + 1
+        var budget = Self.newRowLimit - rows[low..<high].count(where: { planned[$0.id] == nil })
+        func takes(_ row: Row) -> Bool {
+            if planned[row.id] != nil { return true }
+            guard budget > 0 else { return false }
+            budget -= 1
+            return true
+        }
+        var growing = true
+        while growing {
+            growing = false
+            if high < rows.count, takes(rows[high]) { high += 1; growing = true }
+            if low > 0, takes(rows[low - 1]) { low -= 1; growing = true }
+        }
+        guard low > 0 || high < rows.count else { return }
+        isPartial = true
+        plan.rows = Array(rows[low..<high])
+        plan.above = plan.rows.first?.top ?? 0
+        plan.below = plan.rows.last.map { total - $0.top - $0.height } ?? 0
     }
 
     /// The scrollable item, by its place among them, that `y` is in.

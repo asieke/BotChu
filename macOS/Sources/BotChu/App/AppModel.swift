@@ -1519,8 +1519,17 @@ final class AppModel {
         message.heartbeat = heartbeat
         queue.enqueue(message, unsaved: true)
         messageQueues[target] = queue
+        // Sent to an idle conversation with nothing queued before it, it shows in the chat now, as
+        // the turn will add it, rather than once its queue is saved: the frame showing it never
+        // waits for the disk (#355). A turn that starts a new session adds a note before it, so
+        // that message shows once the turn does.
+        if ticket != nil, queue.messages.map(\.id) == [id], conversation(target).isLoaded, !startsNewSession(target) {
+            conversation(target).sending = message
+        }
         saveQueue(for: target) { [weak self] saved in
             guard let self else { return accepted?(false) ?? () }
+            // Taken into the thread below, in this same update, or else back in the queue (or the draft).
+            if self.conversation(target).sending?.id == id { self.conversation(target).sending = nil }
             if let ticket, self.waiting[target] == ticket {
                 self.waiting[target] = nil
                 self.runStates[target] = nil
@@ -1568,6 +1577,7 @@ final class AppModel {
         if later(target, needs: .recovery, { [weak self] in self?.removeQueuedMessage(id, from: target) }) { return }
         guard var queue = messageQueues[target], let index = queue.messages.firstIndex(where: { $0.id == id }) else { return }
         let message = queue.messages[index]
+        if conversation(target).sending?.id == id { conversation(target).sending = nil }
         queue.remove(id)
         guard queue != messageQueues[target] else { return }
         messageQueues[target] = queue
@@ -1680,7 +1690,7 @@ final class AppModel {
         var added: [ChatMessage] = []
         var replacedNote: ChatMessage?
         if let message {
-            if current.resumableSessionID == nil, (history.contains(where: { $0.role == .assistant }) || conversation(target).digest?.lastReply != nil) {
+            if startsNewSession(target) {
                 // Name the account on the note New Session left, or add one (an account switch).
                 if let last = history.last, last.role == .note, last.text.hasPrefix("New session") {
                     replacedNote = last
@@ -1725,6 +1735,12 @@ final class AppModel {
             self.startSavedTurn(text, for: target, history: history, updates: updates, images: message?.images ?? [])
         }
         return true
+    }
+
+    /// Whether a turn starting now begins a new session after earlier replies, which a note says.
+    private func startsNewSession(_ target: ChatTarget) -> Bool {
+        guard runSettings(of: target)?.resumableSessionID == nil else { return false }
+        return thread(target).contains { $0.role == .assistant } || conversation(target).digest?.lastReply != nil
     }
 
     /// Starts a turn whose message the saved transcript holds: in the task's worktree once it is
@@ -1933,6 +1949,7 @@ final class AppModel {
                 let run = machine.isRemote
                     ? AgentRun(command: command, invocation: invocation, on: machine, folder: directory)
                     : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: directory, isDirectory: true))
+                run.deliveryInterval = AgentRun.frameInterval
                 let place = task.map { machineName($0.hostID, fallback: $0.hostName) } ?? "This Mac"
                 let home = BotHome(workspace: bot.persistencePath)
                 let what = task.map { "\($0.title) turn" } ?? "turn"
@@ -1945,7 +1962,7 @@ final class AppModel {
                 let accountID = account.id
 
                 // The CLI's lines are parsed off the main thread; their events arrive here in
-                // batches, a few times a second at most, and go into this conversation alone.
+                // batches, a frame apart at most, and go into this conversation alone.
                 run.deliverEvents(parsedBy: stream.parser()) { [weak self, weak run] events in
                     guard let self, let run, self.runs[target] === run, self.runSettings(of: target) != nil else { return }
                     let conversation = self.conversation(target)
@@ -2217,6 +2234,8 @@ final class AppModel {
 
     func stop(_ target: ChatTarget) {
         guard bot(target.botID)?.isRemoteQueue != true else { return }
+        // A message being sent waits in the queue, paused, rather than at the chat's end.
+        conversation(target).sending = nil
         delegation.stopRoot(target)
         // The owner's Stop calls off an Interrupt & send under way, even once the CLI took everything.
         if messageQueues[target]?.isInterrupting == true { messageQueues[target]?.pause() }

@@ -77,6 +77,8 @@ private struct Layout {
     var top = 0.0
     var seen: Set<TranscriptViewport.RowID> = []
     var peak = 0
+    /// The reader opened or closed something: the plans until the band is complete add a few rows at a time.
+    var limitsNewRows = false
 
     init(_ items: ChunkedArray<ActivityItem>) { self.items = items }
 
@@ -93,16 +95,24 @@ private struct Layout {
         settle()
     }
 
+    /// One plan, as one frame of the chat makes.
+    @discardableResult mutating func planOnce() -> TranscriptViewport.Plan {
+        let opened = opened, raw = raw
+        let plan = viewport.plan(items, from: start, inputs: .init(width: width, density: density, dark: false, epoch: epoch), pinned: pinned,
+                                 limitsNewRows: limitsNewRows) { _, item in
+            guard case .exploration(let group) = item else { return .init() }
+            if raw { return .init(split: .calls) }
+            return .init(split: opened.contains(group.id) ? .opened : .whole)
+        }
+        limitsNewRows = viewport.isPartial
+        return plan
+    }
+
     /// Plans, lays out, measures and scrolls until nothing changes.
     @discardableResult mutating func settle() -> TranscriptViewport.Plan {
         var plan = TranscriptViewport.Plan()
         for _ in 0..<20 {
-            let opened = opened, raw = raw
-            plan = viewport.plan(items, from: start, inputs: .init(width: width, density: density, dark: false, epoch: epoch), pinned: pinned) { _, item in
-                guard case .exploration(let group) = item else { return .init() }
-                if raw { return .init(split: .calls) }
-                return .init(split: opened.contains(group.id) ? .opened : .whole)
-            }
+            plan = planOnce()
             peak = max(peak, plan.rows.count)
             var again = false
             for row in plan.rows {
@@ -114,6 +124,8 @@ private struct Layout {
             if let correction = viewport.correction { top = min(max(correction, -40), max(0, total - height)) }
             again = viewport.scrolled(top: top, height: height) || again
             if viewport.correction != nil { viewport.corrected(to: top) }
+            // As the chat does, a frame later.
+            again = viewport.isPartial || again
             if !again { break }
         }
         return viewport.plan
@@ -273,6 +285,49 @@ private struct Layout {
 
     /// A single group of 5,000 calls, in Raw and opened again and again in Detailed: it is laid
     /// out a screenful at a time, as an outer row alone isn't.
+    /// #355: a group the reader opens lays out what is on screen in its frame, and the rest of the
+    /// band in the plans that follow, each adding at most `newRowLimit` rows (or the visible ones,
+    /// when they alone are more); a chat's first plan, and any plan the reader didn't ask for by
+    /// opening something, lays out its whole band at once.
+    @Test(arguments: [true, false]) func openingAGroupLaysOutTheVisibleRowsFirst(pinned: Bool) throws {
+        let messages = [ChatMessage(role: .user, text: "Trace it")] + (0..<300).map { call($0) }
+            + [ChatMessage(role: .assistant, text: "Done.")]
+        var layout = Layout(items(messages))
+        layout.pinned = pinned
+        layout.planOnce()
+        #expect(!layout.viewport.isPartial)
+        layout.settle()
+        guard case .exploration(let group) = layout.items[1] else { Issue.record("no group"); return }
+        let before = Set(layout.viewport.plan.rows.map(\.id))
+        // Without the reader opening anything, a plan adds its whole band, as before.
+        var other = layout
+        other.opened = [group.id]
+        other.planOnce()
+        #expect(!other.viewport.isPartial)
+        layout.opened = [group.id]
+        layout.limitsNewRows = true
+        let plan = layout.planOnce()
+        #expect(layout.viewport.isPartial)
+        let top = pinned ? max(0, plan.total - layout.height) : layout.top
+        let visible = top..<(top + layout.height)
+        let first = try #require(plan.rows.first), last = try #require(plan.rows.last)
+        #expect(first.top <= max(0, visible.lowerBound) + 0.5 && last.top + last.height >= min(plan.total, visible.upperBound) - 0.5,
+                "The rows meeting the visible part are all laid out")
+        let added = plan.rows.filter { !before.contains($0.id) }
+        let seen = added.filter { $0.top < visible.upperBound && $0.top + $0.height > visible.lowerBound }
+        #expect(added.count <= max(TranscriptViewport.newRowLimit, seen.count))
+        #expect(abs(plan.above + plan.rows.reduce(0) { $0 + $1.height } + plan.below - plan.total) < 0.5)
+        // The plans that follow fill the band.
+        layout.settle()
+        #expect(!layout.viewport.isPartial)
+        let settled = layout.viewport.plan
+        let overscan = TranscriptViewport.overscan(for: layout.height), shown = layout.top
+        #expect(settled.above < 0.5 || settled.rows.first!.top <= shown - overscan + 1)
+        if !pinned { #expect(settled.below < 0.5 || settled.rows.last!.top + settled.rows.last!.height >= shown + layout.height + overscan - 1) }
+        #expect(settled.rows.count > plan.rows.count)
+        #expect(layout.peak <= TranscriptViewport.rowLimit)
+    }
+
     @Test func aGroupOfFiveThousandCallsIsLaidOutAScreenAtATime() {
         let messages = [ChatMessage(role: .user, text: "Trace it")] + (0..<5_000).map { call($0) }
             + [ChatMessage(role: .assistant, text: "Done.")]

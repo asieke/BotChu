@@ -36,6 +36,12 @@ final class ConversationState {
         let latest = Dictionary(tail.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         return browsing.messages.map { latest[$0.id] ?? pending[$0.id]?.message ?? $0 }
     }
+    /// What the chat shows: `displayMessages`, then the message being sent (`sending`).
+    var chatMessages: [ChatMessage] {
+        let shown = displayMessages
+        guard let sending, browsing == nil, shown.last?.id != sending.id else { return shown }
+        return shown + [sending]
+    }
     var displayStart: Int { browsing?.start ?? historyStart }
     var startsBotTurn: Bool {
         let previous = (browsing?.prefix ?? prefixDigest).summary.lastRole
@@ -101,6 +107,10 @@ final class ConversationState {
     var run: RunState?
     var reaction: BotActivity?
     var queue: MessageQueue?
+    /// The message sent to it while idle, shown at the chat's end from the moment it is sent, while
+    /// its queue is saved; the turn then takes it into the thread in the same update
+    /// (`AppModel.send`). Never saved: the thread holds a message only once its turn does.
+    var sending: ChatMessage?
     /// Its turn ended while it wasn't shown.
     var unread = false
     /// What is typed in its message box and not sent yet, the agents and projects chosen in it from

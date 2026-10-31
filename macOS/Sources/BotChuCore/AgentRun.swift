@@ -7,7 +7,7 @@ import Foundation
 /// Complete stdout lines (or, with `deliverEvents`, the events parsed from them off the main
 /// thread) and the exit are delivered on the main queue. Output that arrives within
 /// `deliveryInterval` of the last delivery waits and goes with the next one, so a fast stream
-/// costs the main thread a few updates a second rather than one per read; everything is delivered,
+/// costs the main thread one update an interval rather than one per read; everything is delivered,
 /// in order, before the exit.
 public final class AgentRun: @unchecked Sendable {
     private let process = Process()
@@ -47,8 +47,13 @@ public final class AgentRun: @unchecked Sendable {
     private var backgroundTasks = 0
     private var exitWatch = 0
     private var exitWait: TimeInterval = 0
-    /// The shortest time between two deliveries to the main queue.
-    public var deliveryInterval: TimeInterval = 0.04
+    /// The shortest time between two deliveries to the main queue. Set before `start`.
+    public var deliveryInterval: TimeInterval = AgentRun.batchInterval
+    /// For output nobody reads as it arrives (a sub-agent's, a job's): a few deliveries a second.
+    public static let batchInterval: TimeInterval = 0.04
+    /// For a reply the chat shows as it is written: at most a delivery a frame (60 Hz), so a chunk
+    /// doesn't wait for others to be drawn (#355).
+    public static let frameInterval: TimeInterval = 1.0 / 60
     /// Parses stdout off the main thread, when set (`deliverEvents`); guarded by `parseLock`.
     private var parser: (any StreamParser)?
     /// A parser can end an unanswerable interactive wait without marking the run user-stopped.

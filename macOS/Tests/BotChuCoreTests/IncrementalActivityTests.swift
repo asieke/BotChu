@@ -229,6 +229,37 @@ private struct Seeded: RandomNumberGenerator {
         #expect(shown(transcript.items) == shown(fresh(messages).items))
     }
 
+    /// The chat shows a message being sent at the thread's end before the thread holds it (#355):
+    /// its turn taking it in leaves the items as they are, and one taken away again (its queue
+    /// couldn't be saved, or Stop) leaves the thread's own grouping, all without `verify`.
+    @Test func aMessageShownAtTheEndThenTakenInOrAwayGroupsAsTheThread() {
+        var messages: [ChatMessage] = [ChatMessage(role: .user, text: "Look around")]
+        messages += (0..<6).map { exploring($0) }
+        messages.append(ChatMessage(role: .assistant, text: "Done."))
+        var transcript = fresh(messages)
+        let sending = ChatMessage(role: .user, text: "And now?")
+        transcript.update(messages + [sending])
+        #expect(shown(transcript.items) == shown(fresh(messages + [sending]).items))
+        // Taken in: the same message, now the thread's.
+        let structure = transcript.structure
+        transcript.update(messages + [sending])
+        #expect(transcript.structure == structure)
+        #expect(transcript.lastWork.processed == 0)
+        // Taken away, after a group too.
+        transcript.update(messages)
+        #expect(shown(transcript.items) == shown(fresh(messages).items))
+        messages.removeLast()
+        transcript.update(messages)
+        transcript.update(messages + [sending])
+        transcript.update(messages)
+        #expect(shown(transcript.items) == shown(fresh(messages).items))
+        // Taken in after a note the turn adds before it.
+        let note = ChatMessage(role: .note, text: "New session on Claude")
+        transcript.update(messages + [sending])
+        transcript.update(messages + [note, sending])
+        #expect(shown(transcript.items) == shown(fresh(messages + [note, sending]).items))
+    }
+
     /// Random turns, written as the CLIs' parsers write them: calls starting, their input arriving,
     /// finishing out of order or failing, replies streaming, turns stopping; now and then an edit of
     /// the thread. After every change the transcript shows what grouping the thread afresh shows.

@@ -278,6 +278,7 @@ final class TranscriptModel {
 
     func toggle(_ id: UUID, default open: Bool) {
         overrides[id] = !(overrides[id] ?? open)
+        limitsNewRows = true
     }
 
     func isExpanded(_ id: UUID) -> Bool { expanded.contains(id) }
@@ -285,6 +286,7 @@ final class TranscriptModel {
     func toggleExpanded(_ id: UUID) {
         if expanded.remove(id) == nil { expanded.insert(id) }
         expansions += 1
+        limitsNewRows = true
     }
 
     // MARK: Rows laid out
@@ -297,9 +299,30 @@ final class TranscriptModel {
         var inputs = inputs
         inputs.width = width
         shown = (start, items.count)
-        let plan = viewport.plan(items, from: start, inputs: inputs, pinned: pin.isPinned, expanded: expanded, expansions: expansions, style: style)
+        let plan = viewport.plan(items, from: start, inputs: inputs, pinned: pin.isPinned, expanded: expanded, expansions: expansions,
+                                 limitsNewRows: limitsNewRows, style: style)
         if viewport.correction != nil { probe?.correctAfterLayout() }
+        // Until the band is complete again.
+        limitsNewRows = viewport.isPartial
+        if viewport.isPartial { planAgainNextFrame() }
         return plan
+    }
+
+    /// The reader opened or closed something: the plans until the band is complete again add a
+    /// few rows at a time (`TranscriptViewport.newRowLimit`).
+    @ObservationIgnored private var limitsNewRows = false
+    @ObservationIgnored private var replanning = false
+
+    /// The rest of a partial plan's band, after this frame is shown, in a frame of its own: the run
+    /// loop waits in between, so input and the frame's own work aren't held up (#355).
+    private func planAgainNextFrame() {
+        guard !replanning else { return }
+        replanning = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60) { [weak self] in
+            guard let self else { return }
+            self.replanning = false
+            self.replans += 1
+        }
     }
 
     /// The scroll view's visible part, in the rows' coordinates, and the rows' width.
