@@ -352,6 +352,15 @@ extension RenderingTests {
             window.setContentSize(NSSize(width: 820, height: 760))
             try await settle(window, frames: 40)
         }
+        // Resized quickly, as a drag does, through a frame where the chat is a strip, to another
+        // width: the rows laid out stay and measure themselves again (#354).
+        try await holds("resized quickly") {
+            for size in [NSSize(width: 900, height: 760), NSSize(width: 900, height: 160), NSSize(width: 760, height: 760), NSSize(width: 960, height: 760)] {
+                window.setContentSize(size)
+                window.contentView?.layoutSubtreeIfNeeded()
+            }
+            try await settle(window, frames: 40)
+        }
         try await holds("dark appearance") {
             window.appearance = NSAppearance(named: .darkAqua)
             try await settle(window, frames: 30)

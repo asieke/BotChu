@@ -375,6 +375,55 @@ private struct Layout {
         #expect(taller)
     }
 
+    /// Half as wide, its rows twice as tall: the reader's row stays where it is on the screen, and
+    /// scrolling up through rows that kept the heights they were measured at in the wider window
+    /// measures them again, with the row the reader is at in place and no blank space.
+    @Test func aMuchNarrowerWindowKeepsTheReaderInPlaceThroughRowsMeasuredWider() throws {
+        var layout = Layout(items(conversation(2_000)))
+        layout.start = 0
+        layout.settle()
+        layout.pinned = false
+        // Rows above the reader measured at the wider width, then out of view.
+        layout.jump(to: 27_000)
+        layout.jump(to: 30_000)
+        let row = try #require(layout.topRow)
+        let at = try #require(layout.onScreen(row))
+        // The stand-in's heights hardly depend on the width: twice the scale is what half the width does.
+        layout.width = 320
+        layout.scale *= 2
+        layout.settle()
+        #expect(abs((layout.onScreen(row) ?? .infinity) - at) < 0.5)
+        for _ in 0..<12 {
+            layout.top -= 300
+            _ = layout.viewport.scrolled(top: layout.top, height: layout.height)
+            layout.viewport.readerMoved()
+            let reader = try #require(layout.topRow)
+            let shown = try #require(layout.onScreen(reader))
+            layout.settle()
+            #expect(abs((layout.onScreen(reader) ?? .infinity) - shown) < 0.5)
+            let rows = layout.viewport.plan.rows
+            #expect(rows.allSatisfy { abs($0.height - layout.trueHeight($0)) < 0.01 })
+            let first = try #require(rows.first), last = try #require(rows.last)
+            #expect(first.top <= max(0, layout.top) + 0.5 || layout.viewport.plan.above < 0.5)
+            #expect(last.top + last.height >= min(layout.top + layout.height, layout.viewport.plan.total) - 0.5)
+        }
+    }
+
+    /// A row first measured at another width than it was guessed at teaches the guesses nothing.
+    @Test func guessesForAnotherWidthTeachNothing() {
+        let items = items(conversation(40))
+        let inputs = TranscriptViewport.Inputs(width: 640, density: 1, dark: false, epoch: 0)
+        func estimated(measuredAt width: Int) -> Double {
+            var viewport = TranscriptViewport()
+            let plan = viewport.plan(items, from: 0, inputs: inputs, pinned: true) { _, _ in .init() }
+            _ = viewport.scrolled(top: max(0, plan.total - 800), height: 800, width: width)
+            for row in plan.rows { _ = viewport.measured(row.id, signature: row.signature, height: row.height * 3) }
+            viewport.forgetHeights()
+            return viewport.plan(items, from: 0, inputs: inputs, pinned: true) { _, _ in .init() }.total
+        }
+        #expect(estimated(measuredAt: 640) > estimated(measuredAt: 320) * 2)
+    }
+
     /// The reader's row stays where it is on the screen while rows above it change: measured for
     /// the first time, grown late (a rendered reply), at another width, or forgotten under memory
     /// pressure; but not while pinned to the newest content.

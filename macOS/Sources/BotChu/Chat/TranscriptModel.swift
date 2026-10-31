@@ -307,7 +307,7 @@ final class TranscriptModel {
     func scrolled(top: Double, height: Double, width: Double) {
         let width = Int(width.rounded())
         if width > 0 { self.width = width }
-        if viewport.scrolled(top: top, height: height) { replans += 1 }
+        if viewport.scrolled(top: top, height: height, width: self.width) { replans += 1 }
     }
 
     /// A row's height as laid out.

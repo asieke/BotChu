@@ -135,8 +135,10 @@ public struct TranscriptViewport: Sendable {
     private struct Measure: Sendable {
         var signature: Int
         var height: Double
-        /// The estimate before learning, for learning from the measurement.
+        /// The estimate before learning, for learning from the measurement, and the width it was
+        /// made for.
         var guess: Double
+        var width: Int
         var kind: Int
         var measured: Bool
     }
@@ -177,6 +179,8 @@ public struct TranscriptViewport: Sendable {
     public private(set) var viewport: Double?
     /// The visible part's height the rows laid out were planned for: a shorter one is covered too.
     private var plannedViewport: Double?
+    /// The width the rows are laid out at, as last planned or scrolled.
+    private var width = 0
     /// Where the visible part must start to keep the reader's row in place; nil when it does.
     public private(set) var correction: Double?
     /// Measured to estimated height, by kind of row, as learned.
@@ -265,6 +269,7 @@ public struct TranscriptViewport: Sendable {
         generation += 1
         rebuiltRows = 0
         self.pinned = pinned
+        width = inputs.width
         let start = min(max(0, start), items.count)
         let count = items.count - start
         ids.removeAll(keepingCapacity: true)
@@ -416,13 +421,14 @@ public struct TranscriptViewport: Sendable {
         }
     }
 
-    /// The scroll view's visible part, in the rows' coordinates. True when the rows laid out no
-    /// longer cover enough of what is near it, or it is taller than they were planned for, so the
-    /// chat should plan again. Shorter, the rows planned still cover it: a window resizing goes
-    /// through frames where the chat is briefly a strip, and planning for those dropped rows only
-    /// to lay them out again in the next frame (#354).
-    public mutating func scrolled(top: Double, height: Double) -> Bool {
+    /// The scroll view's visible part, in the rows' coordinates, and the rows' width if it says.
+    /// True when the rows laid out no longer cover enough of what is near it, or it is taller than
+    /// they were planned for, so the chat should plan again. Shorter, the rows planned still cover
+    /// it: a window resizing goes through frames where the chat is briefly a strip, and planning
+    /// for those dropped rows only to lay them out again in the next frame (#354).
+    public mutating func scrolled(top: Double, height: Double, width: Int? = nil) -> Bool {
         let resized = viewport == nil || plannedViewport.map { height > $0 + 0.5 } ?? true
+        if let width { self.width = width }
         viewport = height
         visibleTop = top
         if let correction {
@@ -482,7 +488,8 @@ public struct TranscriptViewport: Sendable {
         var measure = entry.rows[id.part]
         let delta = height - plan.rows[index].height
         if !measure.measured {
-            learn(measure.kind, measured: height, guess: measure.guess)
+            // A guess for another width than the row was laid out at says nothing about guessing.
+            if measure.width == width { learn(measure.kind, measured: height, guess: measure.guess) }
             measure.measured = true
         }
         guard abs(delta) > 0.01 else {
@@ -544,7 +551,7 @@ public struct TranscriptViewport: Sendable {
             let (kind, guess) = Self.estimate(item, part: part, parts: parts, split: style.split, startsTurn: startsTurn,
                                               width: Double(inputs.width), expanded: expanded)
             let height = (guess * ratios[kind]).rounded()
-            rows.append(Measure(signature: rowSignature, height: height, guess: guess, kind: kind, measured: false))
+            rows.append(Measure(signature: rowSignature, height: height, guess: guess, width: inputs.width, kind: kind, measured: false))
             total += height
             rebuiltRows += 1
         }
