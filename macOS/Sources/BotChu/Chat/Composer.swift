@@ -6,6 +6,7 @@ import BotChuCore
 struct Composer<Controls: View>: View {
     @Binding var draft: String
     var focused: Binding<Bool>
+    var draftID: UUID? = nil
     var images: [ImageAttachment] = []
     var imageURL: (ImageAttachment) -> URL? = { _ in nil }
     var onRemoveImage: (UUID) -> Void = { _ in }
@@ -58,7 +59,7 @@ struct Composer<Controls: View>: View {
                     Text(placeholder).foregroundStyle(.tertiary).padding(.top, 4).padding(.leading, 4)
                         .allowsHitTesting(false).accessibilityHidden(true)
                 }
-                ComposerEditor(text: $draft, focused: focused, placeholder: placeholder, send: onSend, pasteImages: onPasteImages,
+                ComposerEditor(text: $draft, focused: focused, draftID: draftID, placeholder: placeholder, send: onSend, pasteImages: onPasteImages,
                                mentions: mentions == nil ? nil : completer, mentionSources: mentions, references: references,
                                unresolvedMentions: Set(unresolved.map(\.reference.statusKey)))
             }

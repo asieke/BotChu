@@ -48,7 +48,6 @@ struct InboxView: View {
             Group {
                 if let id = inbox.selected, let delivery = inbox.delivery(id), visible.contains(id) {
                     InboxReader(delivery: delivery)
-                        .id(id)
                 } else {
                     InboxEmpty(last: inbox.listIndex.latest, done: groups.first { $0.section == .done }?.ids.count ?? 0,
                                searching: searching) { showsDone = true }

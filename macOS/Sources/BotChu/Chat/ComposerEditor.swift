@@ -10,6 +10,8 @@ import BotChuCore
 struct ComposerEditor: NSViewRepresentable {
     @Binding var text: String
     var focused: Binding<Bool>
+    /// A different draft starts a fresh editing session without rebuilding TextKit's views.
+    var draftID: UUID? = nil
     let placeholder: String
     let send: (() -> Void)?
     let pasteImages: (NSPasteboard) -> Bool
@@ -54,6 +56,7 @@ struct ComposerEditor: NSViewRepresentable {
         editor.isAutomaticQuoteSubstitutionEnabled = false
         editor.isAutomaticDashSubstitutionEnabled = false
         editor.allowsUndo = true
+        if draftID != nil { editor.draftUndoManager = UndoManager() }
         editor.delegate = context.coordinator
         editor.setAccessibilityIdentifier(identifier)
         editor.updateDragTypeRegistration()
@@ -63,9 +66,17 @@ struct ComposerEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: ComposerScrollView, context: Context) {
+        guard let editor = scroll.documentView as? ComposerTextView else { return }
+        let changedDraft = context.coordinator.parent.draftID != draftID
+        if changedDraft {
+            // End the old input context while its delegate still owns the old draft binding.
+            // A late IME commit must never be written into the newly selected delivery.
+            editor.inputContext?.discardMarkedText()
+            editor.unmarkText()
+            if editor.window?.firstResponder === editor { editor.window?.makeFirstResponder(nil) }
+        }
         context.coordinator.parent = self
         scroll.sizing = sizing
-        guard let editor = scroll.documentView as? ComposerTextView else { return }
         editor.onSend = send
         editor.onPasteImages = pasteImages
         editor.wantsFocus = focused.wrappedValue
@@ -76,14 +87,18 @@ struct ComposerEditor: NSViewRepresentable {
             mentions.editor = editor
             editor.completer = mentions
         }
-        if editor.string != text, !editor.hasMarkedText() {
-            let selection = editor.selectedRange()
+        if changedDraft || (editor.string != text && !editor.hasMarkedText()) {
+            let selection = changedDraft ? NSRange(location: 0, length: 0) : editor.selectedRange()
             editor.string = text
             editor.setSelectedRange(NSRange(location: min(selection.location, (text as NSString).length), length: 0))
             if mentions != nil { editor.setMentions(references.wrappedValue) }
         } else if mentions != nil, !editor.hasMarkedText(), editor.mentionReferences != MessageReference.standing(references.wrappedValue, in: text) {
             // Unlinked, or taken back from the queue with the same text.
             editor.setMentions(references.wrappedValue)
+        }
+        if changedDraft {
+            editor.undoManager?.removeAllActions()
+            scroll.contentView.scroll(to: .zero)
         }
         if mentions != nil { editor.unresolvedMentions = unresolvedMentions }
         // In this update, not after it: a frame drawn before the composer takes focus would show the
@@ -180,6 +195,9 @@ final class ComposerClipView: NSClipView {
 }
 
 final class ComposerTextView: NSTextView {
+    /// Context-switched drafts own their undo history, so clearing it leaves other fields alone.
+    var draftUndoManager: UndoManager?
+    override var undoManager: UndoManager? { draftUndoManager ?? super.undoManager }
     var onSend: (() -> Void)?
     var onPasteImages: (NSPasteboard) -> Bool = { _ in false }
     var wantsFocus = false

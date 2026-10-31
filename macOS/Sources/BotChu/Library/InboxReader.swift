@@ -8,27 +8,36 @@ import BotChuCore
 struct InboxReader: View {
     @Environment(AppModel.self) private var model
     let delivery: Delivery
-    @State private var composerFocused = false
+    @State private var focusedDelivery: UUID?
+
+    private var composerFocused: Binding<Bool> {
+        Binding(get: { focusedDelivery == delivery.id }, set: { focusedDelivery = $0 ? delivery.id : nil })
+    }
 
     /// The reading column's widest, as the chat's.
     static let column: CGFloat = 800
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                if !delivery.note.isEmpty {
-                    MarkdownText(text: delivery.note)
-                        .padding(.top, 16)
+        ScrollViewReader { scroll in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    header
+                    if !delivery.note.isEmpty {
+                        MarkdownText(text: delivery.note)
+                            .padding(.top, 16)
+                    }
+                    DeliveryCards(delivery: delivery)
+                        .padding(.top, 6)
+                    Color.clear.frame(height: 24)
                 }
-                DeliveryCards(delivery: delivery)
-                    .padding(.top, 6)
-                Color.clear.frame(height: 24)
+                // Cards and their page/document state belong to this delivery only.
+                .id(delivery.id)
+                .frame(maxWidth: Self.column, alignment: .leading)
+                .padding(.horizontal, 32)
+                .padding(.top, 26)
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: Self.column, alignment: .leading)
-            .padding(.horizontal, 32)
-            .padding(.top, 26)
-            .frame(maxWidth: .infinity)
+            .onChange(of: delivery.id) { _, id in scroll.scrollTo(id, anchor: .top) }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { dock }
         .accessibilityIdentifier("inbox-reader")
@@ -105,7 +114,7 @@ struct InboxReader: View {
             let sender = model.bot(delivery.botID)?.name ?? "the bot"
             let origin = InboxOrigin(model: model, delivery: delivery)
             Composer(draft: Binding(get: { model.inbox.drafts[delivery.id] ?? "" }, set: { model.inbox.drafts[delivery.id] = $0 }),
-                     focused: $composerFocused, addsImages: false, placeholder: "Reply to \(sender)", running: false,
+                     focused: composerFocused, draftID: delivery.id, addsImages: false, placeholder: "Reply to \(sender)", running: false,
                      onSend: { model.inbox.reply(model.inbox.drafts[delivery.id] ?? "", to: delivery.id) }, onStop: {}) {
                 Spacer(minLength: 0)
                 Label(origin.name, systemImage: origin.symbol)
