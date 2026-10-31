@@ -39,7 +39,7 @@ struct ChatView: View {
                                                      startsBotTurn: conversation.startsBotTurn)) { index, item in
                 Self.style(of: item, at: index, count: items.count, density: density, turnRunning: turnRunning, transcript: transcript, cards: cards)
             }
-            ChatColumn {
+            VStack(spacing: 0) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         VStack(spacing: 0) {
@@ -580,28 +580,6 @@ extension View {
                 .defaultScrollAnchor(.top, for: .alignment)
         } else {
             self
-        }
-    }
-}
-
-/// The chat over its message box, placed as a `VStack` of the two would place them, except that the
-/// scroll view is only ever offered the height left above the box. A stack asks each child how far
-/// it can grow, and a scroll view asked that measures all of its rows, so each frame laid the
-/// chat's rows out a second time, at a size never shown (#355); so did the window asking its content
-/// for its size. Asked for its own size, it takes what it is offered, as the scroll view would.
-struct ChatColumn: Layout {
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let box = subviews.count > 1 ? subviews[1].sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)) : .zero
-        return CGSize(width: proposal.width ?? box.width, height: max(box.height, proposal.height ?? box.height))
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let box = subviews.count > 1 ? subviews[1].sizeThatFits(ProposedViewSize(width: bounds.width, height: nil)).height : 0
-        let chat = max(0, bounds.height - box)
-        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: chat))
-        if subviews.count > 1 {
-            subviews[1].place(at: CGPoint(x: bounds.minX, y: bounds.minY + chat), anchor: .topLeading,
-                              proposal: ProposedViewSize(width: bounds.width, height: box))
         }
     }
 }
