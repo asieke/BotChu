@@ -43,7 +43,7 @@ public enum FrameMarks {
     /// The chat's visible part moved.
     public static let chatScrolled = "chat.scrolled"
 
-    /// The New Task sheet showed.
+    /// The New Task sheet started to show: the first frame of its opening animation.
     public static let newTask = "new-task"
 
     /// A page of the window (`inbox`, `settings`) showed.

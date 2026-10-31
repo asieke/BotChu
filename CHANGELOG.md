@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- Journey 9's New Task opens is timed to the sheet's first frame: frame marks are also written during AppKit's sheet animation (#353) (#386)
 - Status sidebar toggles in about 10 ms: each setting is read only by the view that shows it, so a UserDefaults write no longer redraws the chat, toolbar, sidebar list and menus (#348) (#384)
 - Inbox Done reads the next delivery in the same change and draws the Inbox once; rows redraw only for their own delivery (#356) (#380)
 - `botchu-subagent resume <id>` and a Resume row relaunch an interrupted run with its brief, session and worktree once no CLI of it still runs; `wait` from a later turn collects a run this conversation started (#368) (#378)
