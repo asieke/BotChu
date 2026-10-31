@@ -924,10 +924,12 @@ final class SubagentRuntime {
 
     /// Stops a run and the runs it delegated to; `cause` is what its outcome says stopped it (#368).
     func stop(_ id: UUID, cause: SubagentInterruption.Cause = .owner) {
-        if stopCauses[id] == nil, run(id)?.phase.isActive == true { stopCauses[id] = cause }
-        // Its CLI has exited; it ends once its workspace is read.
-        guard !exiting.contains(id) else { return }
-        for child in children(of: id) where child.phase.isActive { stop(child.id, cause: .parentStopped) }
+        SubagentStopTree.stop(id, cause: cause, recordCause: { id, cause in
+            if self.stopCauses[id] == nil, self.run(id)?.phase.isActive == true { self.stopCauses[id] = cause }
+        }, exiting: { self.exiting.contains($0) }, children: { self.children(of: $0).filter { $0.phase.isActive }.map(\.id) }, stopRun: stopRun)
+    }
+
+    private func stopRun(_ id: UUID) {
         preparations.removeValue(forKey: id)?.cancel()
         // Revoke admissions immediately, even when the process takes time to honor Stop.
         for context in Array(contexts.values) where context.parent == id { endCaller(context.id) }
@@ -941,7 +943,7 @@ final class SubagentRuntime {
     }
 
     func stopRoot(_ target: ChatTarget) {
-        for record in root(target).runs where record.phase.isActive { stop(record.id, cause: record.parentSubagentID == nil ? .owner : .parentStopped) }
+        SubagentStopTree.stopRoot(root(target).runs) { stop($0, cause: $1) }
         for context in Array(contexts.values) where context.target == target { endCaller(context.id) }
     }
 
@@ -1047,20 +1049,8 @@ final class SubagentRuntime {
         let live = live(id)
         record.handoffOutput = (live.messages.last(where: { $0.role == .assistant })?.text ?? live.lastReply).map(MemoryNotes.handoffText)
         var messages = live.messages
-        ThreadAssembler.closeRunningTools(&messages)
-        let cause = stopCauses.removeValue(forKey: id)
-        // Handed off: what interrupted it before no longer says anything.
-        if phase == .completed { record.interruption = nil }
-        // A run that ended without a handoff says how far it got and what it left, in its transcript
-        // and to its caller, rather than "Stopped" or a CLI's raw diagnostic (#368). A failure before
-        // it started, or to save it, says only what went wrong.
-        if phase == .stopped || phase == .failed && record.startedAt != nil && !(error.map(Self.isSaveFailure) ?? false) {
-            let interruption = SubagentInterruption.of(messages, toolCalls: live.counts.tools, cause: phase == .failed ? .failed : cause ?? .owner,
-                                                       root: record.workingDirectory, workspace: workspace)
-            record.interruption = interruption
-            record.errorMessage = interruption.outcome(for: record, failure: error)
-        }
-        if let error = record.errorMessage { messages.append(ChatMessage(role: phase == .stopped ? .note : .error, text: error)) }
+        SubagentTerminalOutcome.apply(to: &record, messages: &messages, toolCalls: live.counts.tools,
+                                      cause: stopCauses.removeValue(forKey: id), workspace: workspace)
         live.update { ThreadAssembler.closeRunningTools(&$0) }
         live.messages = messages
         live.state = nil
@@ -1146,8 +1136,6 @@ final class SubagentRuntime {
     }
 
     private func result(_ record: SubagentRun) -> SubagentResult { record.result }
-
-    private static func isSaveFailure(_ error: String) -> Bool { error.hasPrefix("Couldn't save the sub-agent transcript") }
 
     private func replace(_ record: SubagentRun) {
         let root = root(ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID))
@@ -1369,61 +1357,53 @@ extension SubagentRuntime {
         } else { machine = .thisMac }
         resuming.insert(id)
         defer { resuming.remove(id) }
-        let place = machine.destination ?? "this Mac"
-        switch await SubagentLiveness.processes(marked: [id] + descendants(of: id).map(\.id), on: machine) {
-        case .failure(let problem): return problem.message + " Resume it again once it can be checked."
-        case .success(let found) where !found.isEmpty:
-            return "A CLI of it still runs on \(place) (pid \(found.prefix(5).map(String.init).joined(separator: ", "))). "
-                + "Stop it, or let it end, then resume it."
-        case .success: break
-        }
-        let workspace = await SubagentWorkspaceState.read(record.workingDirectory, on: machine)
-        guard let owner = model.bot(record.rootBotID) else { return "Its conversation's bot is no longer in BotChu." }
-        // Read in, to go on from, when it isn't in memory.
-        let live = live(id)
-        if !live.isLoaded {
-            let home = BotHome(workspace: owner.workspace), taskID = record.rootTaskID
-            do {
-                let history = try await archive.storage.perform(home.subagentURL(id: id, taskID: taskID).path, label: "resume") {
-                    try home.loadSubagentHistory(id: id, taskID: taskID)
+        return await SubagentResumeTransaction.run(ids: [id] + descendants(of: id).map(\.id), place: machine.destination ?? "this Mac",
+            processes: { await SubagentLiveness.processes(marked: $0, on: machine) },
+            workspace: { await SubagentWorkspaceState.read(record.workingDirectory, on: machine) },
+            load: {
+                guard let owner = model.bot(record.rootBotID) else { throw SubagentResumeTransaction.Problem("Its conversation's bot is no longer in BotChu.") }
+                let live = self.live(id)
+                if !live.isLoaded {
+                    let home = BotHome(workspace: owner.workspace), taskID = record.rootTaskID
+                    let history = try await self.archive.storage.perform(home.subagentURL(id: id, taskID: taskID).path, label: "resume") {
+                        try home.loadSubagentHistory(id: id, taskID: taskID)
+                    }
+                    if !live.isLoaded { live.load(history) }
                 }
-                if !live.isLoaded { live.load(history) }
-            } catch { return "Couldn't read its transcript: \(error.localizedDescription)" }
-        }
-        // Each wait above could have seen it cleared, resumed, or its caller's turn end.
-        guard let current = run(id), current.isResumable, !finalizing.contains(id), runners[id] == nil, preparations[id] == nil else {
-            return "It changed while it was being resumed."
-        }
-        if let caller, contexts[caller.id] == nil { return "The asking turn has ended." }
-        let delta = SubagentResume.delta(for: current, workspace: workspace,
-                                         interruptedChildren: children(of: id).filter(\.isResumable),
-                                         session: current.resumableSessionID != nil)
-        var resumed = current
-        resumed.phase = .preparing
-        resumed.startedAt = nil
-        resumed.finishedAt = nil
-        resumed.errorMessage = nil
-        resumed.handoffOutput = nil
-        if let caller {
-            resumed.callerInvocationID = caller.id
-            resumed.callerHostID = caller.hostID
-        }
-        let by = caller.map { caller in caller.parent.flatMap { run($0)?.targetBotName } ?? model.bot(caller.target.botID)?.name ?? "its caller" } ?? "the owner"
-        let messages = live.messages + [ChatMessage(role: .note, text: "Resumed by \(by)."), ChatMessage(role: .user, text: delta)]
-        do { try await archive.save(snapshot(resumed, messages: messages)) }
-        catch { return "Couldn't save it: \(error.localizedDescription)" }
-        guard run(id)?.isResumable == true, runners[id] == nil, preparations[id] == nil else { return "It changed while it was being resumed." }
-        if let caller, contexts[caller.id] == nil { return "The asking turn has ended." }
-        live.messages = messages
-        replace(resumed)
-        resumeProblems[id] = nil
-        deliveries[id] = caller?.transport
-        if let caller, ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID) != caller.target {
-            attached[caller.id, default: []].insert(id)
-        }
-        live.state = RunState(preparing: true)
-        preparations[id] = Task { [weak self] in await self?.launch(id, targetBot: targetBot, resume: delta) }
-        return nil
+            }, validate: { stage in
+                SubagentResumeTransaction.problem(current: self.run(id), finalizing: stage == .loaded && self.finalizing.contains(id),
+                    running: self.runners[id] != nil, preparing: self.preparations[id] != nil,
+                    callerAlive: caller.map { self.contexts[$0.id] != nil } ?? true)
+            }, prepare: { workspace in
+                // The transaction just validated this record, with no suspension before this snapshot.
+                let current = self.run(id)!
+                let delta = SubagentResume.delta(for: current, workspace: workspace,
+                    interruptedChildren: self.children(of: id).filter(\.isResumable), session: current.resumableSessionID != nil)
+                var resumed = current
+                resumed.phase = .preparing
+                resumed.startedAt = nil
+                resumed.finishedAt = nil
+                resumed.errorMessage = nil
+                resumed.handoffOutput = nil
+                if let caller {
+                    resumed.callerInvocationID = caller.id
+                    resumed.callerHostID = caller.hostID
+                }
+                let by = caller.map { caller in caller.parent.flatMap { self.run($0)?.targetBotName } ?? model.bot(caller.target.botID)?.name ?? "its caller" } ?? "the owner"
+                let messages = self.live(id).messages + [ChatMessage(role: .note, text: "Resumed by \(by)."), ChatMessage(role: .user, text: delta)]
+                return (snapshot: try self.snapshot(resumed, messages: messages), delta: delta)
+            }, save: { try await self.archive.save($0.snapshot) }, replace: { prepared in
+                let live = self.live(id)
+                live.messages = prepared.snapshot.messages
+                self.replace(prepared.snapshot.record)
+                self.resumeProblems[id] = nil
+                self.deliveries[id] = caller?.transport
+                if let caller, ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID) != caller.target {
+                    self.attached[caller.id, default: []].insert(id)
+                }
+                live.state = RunState(preparing: true)
+                self.preparations[id] = Task { [weak self] in await self?.launch(id, targetBot: targetBot, resume: prepared.delta) }
+            })
     }
 
     /// Every run beneath this one.

@@ -71,7 +71,8 @@ extension AppModel {
         SidebarStatusDiagnostics.didDeriveSummary?(bot.id)
         let subtitle = bot.isRemoteQueue ? "\(remoteQueue.presence) · \(remoteQueue.pending) waiting" : runsOn(bot)
         return BotRowSummary(runsOn: subtitle, home: tabState(of: .home(bot.id)),
-                             tasks: openTasks(of: bot.id).map { tabState(of: .task($0.id, of: bot.id)) })
+                             tasks: openTasks(of: bot.id).map { tabState(of: .task($0.id, of: bot.id)) },
+                             workingAsSubagent: bot.isSpecialist && delegation.usesBot(bot.id))
     }
 
     /// What the bot runs on, as its row and the `@` list say it (#324): "Claude Personal · Fable 5.1".

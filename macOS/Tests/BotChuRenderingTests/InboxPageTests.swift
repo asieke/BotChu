@@ -9,14 +9,51 @@ import BotChuCore
 /// A delivery's HTML page runs its scripts with the network off (`OfflinePage`).
 extension RenderingTests {
     @Test func aDeliveredPageRunsItsScriptsButReachesNothingBeyondItsFolder() async throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-offline-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("botchu-offline-\(UUID().uuidString)")
+        let folder = root.appendingPathComponent("delivery")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let listener = try OfflinePageListener()
+        defer { listener.stop() }
+        try "window.sibling = true".write(to: folder.appendingPathComponent("sibling.js"), atomically: true, encoding: .utf8)
+        try "window.outside = true".write(to: root.appendingPathComponent("outside.js"), atomically: true, encoding: .utf8)
         let page = folder.appendingPathComponent("index.html")
         try """
-            <!doctype html><title>Sample</title><script>
-            document.title = 'Ran';
-            fetch('https://example.com/').then(() => { window.remote = 'reached' }).catch(() => { window.remote = 'blocked' });
+            <!doctype html><title>Sample</title>
+            <script src="sibling.js"></script>
+            <script src="../outside.js" onerror="window.outsideBlocked = true"></script>
+            <script>
+            window.attempts = []; window.errors = [];
+            const pending = [];
+            for (const host of ['127.0.0.1', 'localhost']) {
+                const base = 'http://' + host + ':\(listener.port)/';
+                function attempt(api, action) {
+                    attempts.push(host + ':' + api);
+                    pending.push(new Promise(resolve => {
+                        try { action(resolve); } catch (error) { errors.push(api + ": " + error); resolve(); }
+                    }));
+                }
+                attempt('fetch', done => fetch(base + 'fetch', {mode: 'no-cors'}).then(done, done));
+                for (const [tag, api] of [['img', 'image'], ['script', 'script'], ['link', 'stylesheet'], ['iframe', 'frame']]) {
+                    attempt(api, done => {
+                        const element = document.createElement(tag);
+                        element.onload = element.onerror = done;
+                        if (tag === 'link') { element.rel = 'stylesheet'; element.href = base + api; }
+                        else element.src = base + api;
+                        document.head.appendChild(element);
+                        // WebKit emits neither load nor error for a blocked subframe.
+                        if (tag === 'iframe') done();
+                    });
+                }
+                attempt('beacon', done => { navigator.sendBeacon(base + 'beacon', 'probe'); done(); });
+                attempt('websocket', done => {
+                    const socket = new WebSocket('ws://' + host + ':\(listener.port)/socket');
+                    socket.onopen = () => { socket.close(); done(); };
+                    socket.onerror = socket.onclose = done;
+                });
+            }
+            // Resource completion also gives fire-and-forget beacons a turn through WebKit's loader.
+            Promise.all(pending).then(() => setTimeout(() => { window.finished = true; }, 20));
             </script>
             """.write(to: page, atomically: true, encoding: .utf8)
         let compiled = try await WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "BotChuInboxOfflineTest",
@@ -26,15 +63,35 @@ extension RenderingTests {
         configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController.add(rules)
         let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 400, height: 300), configuration: configuration)
-        view.loadFileURL(page, allowingReadAccessTo: folder)
-        var remote: String?
-        for _ in 0..<200 {
-            try await Task.sleep(for: .milliseconds(50))
-            remote = try? await view.evaluateJavaScript("window.remote") as? String
-            if remote != nil { break }
+        defer { view.stopLoading() }
+        func finished(control: Bool = false) async throws {
+            let ready = control ? "window.outside === true && window.attempts.length === 14 && window.errors.length === 0"
+                                : "window.finished === true"
+            for _ in 0..<100 {
+                if (try? await view.evaluateJavaScript(ready)) as? Bool == true,
+                   !control || listener.connections > 0 { return }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            Issue.record("The local page's resource probes did not finish")
         }
-        #expect(view.title == "Ran")
-        #expect(remote == "blocked")
+        view.loadFileURL(page, allowingReadAccessTo: folder)
+        try await finished()
+        #expect(try await view.evaluateJavaScript("window.sibling === true") as? Bool == true)
+        #expect(try await view.evaluateJavaScript("window.outsideBlocked === true && window.outside !== true") as? Bool == true)
+        #expect(try await view.evaluateJavaScript("window.attempts.length") as? Int == 14)
+        #expect(try await view.evaluateJavaScript("JSON.stringify(window.errors)") as? String == "[]")
+        #expect(listener.connections == 0, "No network connection may escape the delivered page")
+
+        // The identical page, without the rule list: the listener must observe real connections.
+        // Broadening only this control's file access proves the outside script itself is valid.
+        configuration.userContentController.removeAllContentRuleLists()
+        _ = try await view.evaluateJavaScript("window.finished = false")
+        view.loadFileURL(page, allowingReadAccessTo: root)
+        // A real accepted connection proves this control; waiting for all its HTTP responses
+        // would test the server, not the blocker, and needlessly lengthen this security check.
+        try await finished(control: true)
+        #expect(listener.connections > 0, "The negative control must reach the loopback listener, even offline")
+        #expect(try await view.evaluateJavaScript("window.outside === true") as? Bool == true)
     }
 
     /// Done from the Inbox reads the next delivery in the same change (#356), before the Inbox is
@@ -83,4 +140,55 @@ extension RenderingTests {
         #expect(app.inbox.statusDerivations == derivations + 2)
         #expect(app.inbox.selected == second.id && app.inbox.isReading(second.id) && app.inbox.unfinishedCount == 2)
     }
+}
+
+/// Counts accepted TCP connections, before HTTP or CORS can hide a request from the page.
+/// Bound only to loopback; every accepted connection gets a small response and closes promptly.
+private final class OfflinePageListener: @unchecked Sendable {
+    let port: UInt16
+    private let source: DispatchSourceRead
+    private let lock = NSLock()
+    private var accepted = 0
+    var connections: Int { lock.lock(); defer { lock.unlock() }; return accepted }
+
+    init() throws {
+        let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard socket >= 0 else { throw CocoaError(.fileReadUnknown) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0, Darwin.listen(socket, 64) == 0 else {
+            Darwin.close(socket); throw CocoaError(.fileReadUnknown)
+        }
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(socket, $0, &length) }
+        }
+        guard named == 0 else { Darwin.close(socket); throw CocoaError(.fileReadUnknown) }
+        port = UInt16(bigEndian: address.sin_port)
+        _ = fcntl(socket, F_SETFL, O_NONBLOCK)
+        source = DispatchSource.makeReadSource(fileDescriptor: socket, queue: DispatchQueue(label: "BotChu.offline-page-probe"))
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            while true {
+                let client = Darwin.accept(socket, nil, nil)
+                guard client >= 0 else { break }
+                self.lock.lock(); self.accepted += 1; self.lock.unlock()
+                var noSignal: Int32 = 1
+                setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
+                let response = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                response.withCString { _ = Darwin.send(client, $0, strlen($0), 0) }
+                Darwin.close(client)
+            }
+        }
+        source.setCancelHandler { Darwin.close(socket) }
+        source.resume()
+    }
+
+    func stop() { source.cancel() }
+    deinit { source.cancel() }
 }

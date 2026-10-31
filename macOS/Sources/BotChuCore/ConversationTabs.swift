@@ -297,8 +297,12 @@ public struct BotRowSummary: Equatable, Sendable {
     /// What the dots say, for VoiceOver and the tooltip: "1 needs input, 2 working, 3 idle".
     public var spokenDots: String
 
-    public init(runsOn: String, home: TabState, tasks: [TabState]) {
-        let shown = ([home.kind].filter { $0 != .idle } + tasks.map(\.kind)).enumerated()
+    /// Delegated work is an aggregate dot, independent of Home and tasks: a specialist can be
+    /// called without running either conversation. It stays while any call is active (#389).
+    public init(runsOn: String, home: TabState, tasks: [TabState], workingAsSubagent: Bool = false) {
+        var kinds = [home.kind].filter { $0 != .idle } + tasks.map(\.kind)
+        if workingAsSubagent { kinds.append(.working) }
+        let shown = kinds.enumerated()
             .sorted { ($0.element.urgency, -$0.offset) > ($1.element.urgency, -$1.offset) }
             .map(\.element)
         dots = Array(shown.prefix(Self.dotLimit))

@@ -259,6 +259,30 @@ import Testing
         #expect(mixed.dots == [.working, .idle] && mixed.spokenDots == "Mike: 1 idle; David: 1 working")
     }
 
+    /// #389: a specialist's delegated sessions do not run in its Home or task conversations.
+    /// Their aggregate working dot exists only while at least one call remains active.
+    @Test func delegatedWorkHasItsOwnDotWithoutChangingConversationDots() {
+        let idle = TabState.idle(since: now)
+        func summary(_ active: Bool) -> BotRowSummary {
+            BotRowSummary(runsOn: "Worker", home: idle, tasks: [], workingAsSubagent: active)
+        }
+        #expect(summary(false).dots.isEmpty)
+        #expect(summary(true).dots == [.working])
+        #expect(summary(true).spokenDots == "1 working")
+        #expect(summary(true).subtitle == "Worker")
+        // The caller keeps this flag true while another call survives a completed/stopped one.
+        #expect(BotRowSummary(merging: [("Specialist", summary(true))]).dots == [.working])
+        #expect(BotRowSummary(merging: [("Specialist", summary(false))]).dots.isEmpty)
+        // An independent Home turn and task still retain their own dots and overflow count.
+        let busy = TabState.working(.coding, since: now)
+        let mixed = BotRowSummary(runsOn: "Worker", home: busy, tasks: [.needsInput(requests: 1, at: now)], workingAsSubagent: true)
+        #expect(mixed.dots == [.needsInput, .working, .working])
+        let full = BotRowSummary(runsOn: "Worker", home: idle, tasks: Array(repeating: busy, count: 8), workingAsSubagent: true)
+        #expect(full.dots == Array(repeating: .working, count: 8) && full.more == 1)
+        // Existing callers omit the flag and keep exactly their conversation-derived summary.
+        #expect(BotRowSummary(runsOn: "Worker", home: idle, tasks: []).dots.isEmpty)
+    }
+
     /// #237: a bot row's dots are its tabs' own states, never others. For every Home with every
     /// pair of tasks, and for rows with more than eight busy tabs, the dots and +N count exactly the
     /// open tasks and Home while it isn't idle (#324), kind for kind, the most urgent first, and the
