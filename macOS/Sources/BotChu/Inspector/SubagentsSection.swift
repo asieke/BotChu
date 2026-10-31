@@ -10,11 +10,13 @@ struct SubagentsInspectorContent: View {
     var includeBotTasksOverview = false
     /// Where the tab is, for tests to drive; else its own.
     var state: SubagentTabState?
+    /// Shown under the list, not a run's details: an area's Worktrees (#405).
+    var footer: AnyView?
 
     var body: some View {
         // One per conversation: Home's inspector stays as the bot changes, and where one bot's tab
         // was shouldn't carry over to the next.
-        SubagentsTab(target: target, includesTasks: includeBotTasksOverview, state: state).id(target)
+        SubagentsTab(target: target, includesTasks: includeBotTasksOverview, state: state, footer: footer).id(target)
     }
 }
 
@@ -173,13 +175,15 @@ private struct SubagentsTab: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let target: ChatTarget
     let includesTasks: Bool
+    let footer: AnyView?
     @State private var tab: SubagentTabState
     @State private var owner = UUID()
     @FocusState private var focus: SubagentAnchor?
 
-    init(target: ChatTarget, includesTasks: Bool, state: SubagentTabState?) {
+    init(target: ChatTarget, includesTasks: Bool, state: SubagentTabState?, footer: AnyView? = nil) {
         self.target = target
         self.includesTasks = includesTasks
+        self.footer = footer
         _tab = State(initialValue: state ?? SubagentTabState(target: target))
     }
 
@@ -188,6 +192,7 @@ private struct SubagentsTab: View {
             switch tab.navigation.top {
             case nil:
                 SubagentList(scope: target, includesTasks: includesTasks, tab: tab, focus: $focus)
+                footer
             case .task(let id):
                 SubagentList(scope: .task(id, of: target.botID), includesTasks: false, tab: tab, focus: $focus)
             case .run(let id):
