@@ -49,6 +49,54 @@ extension RenderingTests {
         #expect(control.onMain.isEmpty)
     }
 
+    /// #355: a message sent to an idle conversation shows at the chat's end at once, not once its
+    /// queue is saved; the thread holds it only once its turn does, and one that doesn't start a
+    /// turn (Stop, a queue that can't be saved) leaves the chat for where it waits.
+    @Test func aMessageSentShowsAtOnceAndTheThreadTakesItOnlyWithItsTurn() async throws {
+        let fixture = try PersistenceFixture(control: StorageControl(delay: 0.25))
+        defer { fixture.cleanUp() }
+        let app = fixture.app, target = fixture.task
+        let conversation = app.conversation(target)
+        #expect(app.send("hello", to: target))
+        try await fixture.wait { fixture.calls(target) == 1 && !app.isRunning(target) }
+
+        #expect(app.send("second", to: target))
+        #expect(conversation.chatMessages.last?.text == "second")
+        #expect(!app.thread(target).contains { $0.text == "second" })
+        // The model's queue is as before: it holds the message until a saved transcript does.
+        #expect(app.messageQueues[target]?.pending.map(\.text) == ["second"])
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(fixture.calls(target) == 1, "No CLI before the queue holding the message is saved")
+        #expect(conversation.chatMessages.last?.text == "second")
+        try await fixture.wait { fixture.calls(target) == 2 && !app.isRunning(target) }
+        #expect(conversation.sending == nil)
+        #expect(app.thread(target).filter { $0.text == "second" }.count == 1)
+        #expect(fixture.home.loadThread(task: fixture.taskID).filter { $0.text == "second" }.count == 1)
+
+        // Stopped while its queue is saved: it waits in the paused queue, and the thread never held it.
+        #expect(app.send("third", to: target))
+        #expect(conversation.chatMessages.last?.text == "third")
+        app.stop(target)
+        #expect(!conversation.chatMessages.contains { $0.text == "third" })
+        await app.storage.settle()
+        #expect(app.messageQueues[target]?.messages.map(\.text) == ["third"])
+        #expect(app.messageQueues[target]?.isPaused == true)
+        #expect(!fixture.home.loadThread(task: fixture.taskID).contains { $0.text == "third" })
+        #expect(fixture.calls(target) == 2)
+        app.removeQueuedMessage(app.messageQueues[target]!.messages[0].id, from: target)
+        await app.storage.settle()
+
+        // A queue that can't be saved: it leaves the chat again, and starts nothing.
+        try? FileManager.default.removeItem(at: fixture.home.queueURL(task: fixture.taskID))
+        try FileManager.default.createDirectory(at: fixture.home.queueURL(task: fixture.taskID), withIntermediateDirectories: true)
+        #expect(app.send("fourth", to: target))
+        #expect(conversation.chatMessages.last?.text == "fourth")
+        await app.storage.settle()
+        #expect(!conversation.chatMessages.contains { $0.text == "fourth" })
+        #expect(conversation.sending == nil)
+        #expect(fixture.calls(target) == 2)
+    }
+
     @Test func aMessageWhoseTranscriptCantBeSavedStaysQueuedAndStartsNoCLI() async throws {
         let fixture = try PersistenceFixture(control: StorageControl())
         defer { fixture.cleanUp() }

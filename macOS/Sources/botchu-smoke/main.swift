@@ -167,7 +167,8 @@ func showConnectors(_ connectors: [Connector], kind: AgentKind? = nil) {
         var ledger = invocation.input == nil ? nil : InputLedger()
         var pending = followUp
         let run = AgentRun(command: command(for: bot.account), invocation: invocation, directory: URL(fileURLWithPath: bot.workspace))
-        // As the app does: parsed off the main thread, delivered in batches.
+        run.deliveryInterval = AgentRun.frameInterval
+        // As the app does: parsed off the main thread, delivered in batches, a frame apart at most.
         run.deliverEvents(parsedBy: stream.parser()) { events in
             var toolStarted = false
             for event in events {

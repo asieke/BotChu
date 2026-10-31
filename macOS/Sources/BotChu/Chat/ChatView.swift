@@ -42,7 +42,7 @@ private struct ChatContent: View {
         if let bot = model.bot(target.botID), let current = model.runSettings(of: target) {
             let task = model.task(target)
             let conversation = model.conversation(target)
-            let messages = conversation.displayMessages
+            let messages = conversation.chatMessages
             let running = model.isRunning(target)
             // Its own turn, not only sub-agents it started, keeps its newest group live.
             let turnRunning = model.runStates[target] != nil
@@ -227,7 +227,8 @@ struct ChatComposer: View {
                 if let unsaved = model.unsavedMemory[target.botID], unsaved > 0 {
                     UnsavedMemory(count: unsaved) { model.retryMemory(for: target) }
                 }
-                if let queue = model.messageQueues[target], !queue.pending.isEmpty {
+                // Not for the message being sent alone, which the chat shows.
+                if let queue = model.messageQueues[target], queue.pending.contains(where: { $0.id != model.conversation(target).sending?.id }) {
                     QueuedMessages(queue: queue, running: running, preparing: model.runStates[target]?.preparing == true,
                         midTurn: model.takesFollowUpsMidTurn(target), canInterrupt: model.canInterrupt(target),
                         resume: { model.resumeQueuedMessages(to: target) },
