@@ -300,7 +300,8 @@ private struct Layout {
     }
 
     /// A height measured for other content or another layout is never used, and a measurement
-    /// from a row no longer laid out, or laid out since with other content, is dropped.
+    /// from a row no longer laid out, or laid out since with other content, is dropped. (Another
+    /// width keeps the heights: `aResizeKeepsTheRowsLaidOutAndMeasuresThemAgain`.)
     @Test func heightsAreKeptOnlyForTheSameContentAndLayout() {
         var thread = Thread(conversation(400) + [ChatMessage(role: .assistant, text: "Writing")])
         var layout = Layout(thread.items)
@@ -327,19 +328,122 @@ private struct Layout {
         let gone = layout.viewport.measured(away.id, signature: away.signature, height: 5)
         #expect(!gone)
         #expect(layout.viewport.droppedMeasurements == dropped + 2)
-        // Each layout input, and the conversation's epoch, measures again.
-        for change in 0..<4 {
+        // Each layout input but the width, and the conversation's epoch, measures again.
+        for change in 0..<3 {
             switch change {
-            case 0: layout.width -= 100
-            case 1: layout.density = 0
-            case 2: layout.scale = 1.1
+            case 0: layout.density = 0
+            case 1: layout.scale = 1.1
             default: layout.epoch += 1
             }
             let before = layout.viewport.plan.rows.map(\.signature)
             layout.settle()
             // No height is reused: they're reused only for the same signature.
-            if change != 2 { #expect(Set(layout.viewport.plan.rows.map(\.signature)).isDisjoint(with: before)) }
+            if change != 1 { #expect(Set(layout.viewport.plan.rows.map(\.signature)).isDisjoint(with: before)) }
         }
+    }
+
+    /// A resize leaves the rows laid out as they are (#354): the frames a window goes through on the
+    /// way to its new size, where the chat is briefly a strip and at other widths, plan nothing
+    /// again; a new width keeps every row and its signature, and the rows laid out measure
+    /// themselves again at it, as do those out of view once they're laid out.
+    @Test func aResizeKeepsTheRowsLaidOutAndMeasuresThemAgain() throws {
+        var layout = Layout(items(conversation(2_000)))
+        layout.start = 0
+        layout.settle()
+        let inputs = { (width: Int) in TranscriptViewport.Inputs(width: width, density: 1, dark: false, epoch: 0) }
+        // A strip, then the height it was planned for: the rows planned cover both.
+        for height in [52.0, layout.height] {
+            let replan = layout.viewport.scrolled(top: max(0, layout.viewport.plan.total - height), height: height)
+            #expect(!replan)
+        }
+        for width in [492, 392, 567] {
+            let before = layout.viewport.plan(layout.items, from: 0, inputs: inputs(layout.width), pinned: true) { _, _ in .init() }
+            layout.width = width
+            let plan = layout.viewport.plan(layout.items, from: 0, inputs: inputs(width), pinned: true) { _, _ in .init() }
+            // The same rows, as measured: only those not measured yet are guessed again.
+            #expect(plan.rows.map(\.id) == before.rows.map(\.id))
+            #expect(plan.rows.map(\.signature) == before.rows.map(\.signature))
+            #expect(plan.rows.map(\.height) == before.rows.map(\.height))
+            layout.settle()
+            for row in layout.viewport.plan.rows { #expect(abs(row.height - layout.trueHeight(row)) < 0.01) }
+        }
+        // Rows out of view kept their heights; laid out again, they're measured at the new width.
+        layout.pinned = false
+        layout.jump(to: 0)
+        let first = try #require(layout.viewport.plan.rows.first)
+        #expect(abs(first.height - layout.trueHeight(first)) < 0.01)
+        // Taller than the rows were planned for, the chat plans again.
+        let taller = layout.viewport.scrolled(top: 0, height: layout.height + 200)
+        #expect(taller)
+    }
+
+    /// Half as wide, its rows twice as tall: the reader's row stays on the screen, and scrolling up
+    /// through rows that kept the heights they were measured at in the wider window measures them
+    /// again, with the row the reader is at in place and no blank space.
+    @Test func aMuchNarrowerWindowKeepsTheReaderInPlaceThroughRowsMeasuredWider() throws {
+        var layout = Layout(items(conversation(2_000)))
+        layout.start = 0
+        layout.settle()
+        layout.pinned = false
+        // Rows above the reader measured at the wider width, then out of view.
+        layout.jump(to: 27_000)
+        layout.jump(to: 30_000)
+        let row = try #require(layout.topRow)
+        let at = try #require(layout.onScreen(row))
+        // The stand-in's heights hardly depend on the width: twice the scale is what half the width does.
+        layout.width = 320
+        layout.scale *= 2
+        layout.settle()
+        // Twice as tall itself, the reader's row is still where they are reading.
+        let now = try #require(layout.viewport.plan.rows.first { $0.id == row })
+        #expect(now.top - layout.top < layout.height && now.top + now.height - layout.top > 0, "moved from \(at) to \(now.top - layout.top)")
+        for _ in 0..<12 {
+            layout.top -= 300
+            _ = layout.viewport.scrolled(top: layout.top, height: layout.height)
+            layout.viewport.readerMoved()
+            let reader = try #require(layout.topRow)
+            let shown = try #require(layout.onScreen(reader))
+            layout.settle()
+            #expect(abs((layout.onScreen(reader) ?? .infinity) - shown) < 0.5)
+            let rows = layout.viewport.plan.rows
+            #expect(rows.allSatisfy { abs($0.height - layout.trueHeight($0)) < 0.01 })
+            let first = try #require(rows.first), last = try #require(rows.last)
+            #expect(first.top <= max(0, layout.top) + 0.5 || layout.viewport.plan.above < 0.5)
+            #expect(last.top + last.height >= min(layout.top + layout.height, layout.viewport.plan.total) - 0.5)
+        }
+    }
+
+    /// Rows guessed before the chat knew its width (its first plan) are guessed again once it does,
+    /// unless they were measured meanwhile.
+    @Test func rowsGuessedBeforeTheWidthIsKnownAreGuessedAgain() throws {
+        let items = items(conversation(400))
+        let inputs = { (width: Int) in TranscriptViewport.Inputs(width: width, density: 1, dark: false, epoch: 0) }
+        var fresh = TranscriptViewport()
+        let expected = fresh.plan(items, from: 0, inputs: inputs(640), pinned: true) { _, _ in .init() }.total
+        var viewport = TranscriptViewport()
+        let first = viewport.plan(items, from: 0, inputs: inputs(0), pinned: true) { _, _ in .init() }
+        #expect(first.total > expected * 1.5)
+        let last = try #require(first.rows.last)
+        _ = viewport.scrolled(top: max(0, first.total - 800), height: 800, width: 640)
+        _ = viewport.measured(last.id, signature: last.signature, height: 77)
+        let known = viewport.plan(items, from: 0, inputs: inputs(640), pinned: true) { _, _ in .init() }
+        #expect(known.rows.last?.height == 77)
+        #expect(abs(known.total - (expected - fresh.plan.rows.last!.height + 77)) < 0.5)
+    }
+
+    /// A row first measured at another width than it was guessed at teaches the guesses nothing.
+    @Test func guessesForAnotherWidthTeachNothing() {
+        let items = items(conversation(40))
+        let inputs = TranscriptViewport.Inputs(width: 640, density: 1, dark: false, epoch: 0)
+        func estimated(measuredAt width: Int) -> Double {
+            var viewport = TranscriptViewport()
+            let plan = viewport.plan(items, from: 0, inputs: inputs, pinned: true) { _, _ in .init() }
+            _ = viewport.scrolled(top: max(0, plan.total - 800), height: 800, width: width)
+            for row in plan.rows { _ = viewport.measured(row.id, signature: row.signature, height: row.height * 3) }
+            viewport.forgetHeights()
+            return viewport.plan(items, from: 0, inputs: inputs, pinned: true) { _, _ in .init() }.total
+        }
+        #expect(estimated(measuredAt: 640) > estimated(measuredAt: 320) * 2)
     }
 
     /// The reader's row stays where it is on the screen while rows above it change: measured for

@@ -59,46 +59,70 @@ enum InspectorTab: String, CaseIterable, Identifiable {
 /// Home and tasks share the same navigation. Only the selected area's contents scroll;
 /// the character, tabs and conversation actions stay in place.
 struct InspectorPanel<Header: View, Content: View, Actions: View>: View {
-    @AppStorage(InspectorTab.storageKey) private var selection: InspectorTab = .activity
     var badgeCounts: [InspectorTab: Int] = [:]
     @ViewBuilder let header: Header
     @ViewBuilder var content: (InspectorTab) -> Content
     @ViewBuilder let actions: Actions
-    @State private var area = InspectorScrollArea()
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 16) {
-                header
-                InspectorTabBar(selection: $selection, badgeCounts: badgeCounts)
-            }
-            .padding(EdgeInsets(top: 8, leading: 16, bottom: 16, trailing: 16))
-            if let bar = area.bar {
-                bar.padding(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
-            }
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        content(selection)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(EdgeInsets(top: 4, leading: 16, bottom: 24, trailing: 16))
-                }
-                .coordinateSpace(.named(InspectorScrollArea.space))
-                .onGeometryChange(for: CGSize.self) { $0.size } action: { area.viewport = $0 }
-                // Start each area at the top without recreating the character or moving keyboard focus.
-                .id(selection)
-                .environment(\.inspectorScroll, proxy)
-                .environment(\.inspectorArea, area)
-            }
+            InspectorAreas(badgeCounts: badgeCounts, header: header, content: content)
             actions
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Explicit, so the sidebar's vibrancy doesn't recolor text on the opaque cards.
         .foregroundStyle(Palette.text)
         .background(Palette.sidebar)
+    }
+}
+
+/// The tabs and the selected area. Only this reads which tab is selected, not the panel around it:
+/// a view whose body reads an `@AppStorage` value is evaluated again at every UserDefaults write,
+/// whatever its key, and the panel's conversation actions needn't be (#348).
+private struct InspectorAreas<Header: View, Content: View>: View {
+    @AppStorage(InspectorTab.storageKey) private var selection: InspectorTab = .activity
+    let badgeCounts: [InspectorTab: Int]
+    let header: Header
+    let content: (InspectorTab) -> Content
+    @State private var area = InspectorScrollArea()
+
+    var body: some View {
+        VStack(spacing: 16) {
+            header
+            InspectorTabBar(selection: $selection, badgeCounts: badgeCounts)
+        }
+        .padding(EdgeInsets(top: 8, leading: 16, bottom: 16, trailing: 16))
+        if let bar = area.bar {
+            bar.padding(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
+        }
+        ScrollViewReader { proxy in
+            ScrollView {
+                InspectorArea(tab: selection, content: content)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(EdgeInsets(top: 4, leading: 16, bottom: 24, trailing: 16))
+            }
+            .coordinateSpace(.named(InspectorScrollArea.space))
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { area.viewport = $0 }
+            // Start each area at the top without recreating the character or moving keyboard focus.
+            .id(selection)
+            .environment(\.inspectorScroll, proxy)
+            .environment(\.inspectorArea, area)
+        }
         .onAppear {
             if let tab = DevHooks.inspectorTab { selection = tab }
+        }
+    }
+}
+
+/// The selected tab's sections, built only when the tab or what they show changes: given the same
+/// tab, the areas around it are evaluated again at a UserDefaults write without building them anew.
+private struct InspectorArea<Content: View>: View {
+    let tab: InspectorTab
+    let content: (InspectorTab) -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            content(tab)
         }
     }
 }

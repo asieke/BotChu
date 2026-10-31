@@ -643,6 +643,24 @@ private final class InboxFixture {
         }
     }
 
+    @Test func doneFromTheToolbarReadsTheNextShownInTheSameChange() {
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID()
+        let shown = [a, b, c]
+        // Done closed: the one read leaves, and the next shown is read, else the one before, else none.
+        #expect(InboxList.done(b, from: b, in: shown, showsDone: false) == InboxList.Move(done: b, selected: c))
+        #expect(InboxList.done(c, from: c, in: shown, showsDone: false) == InboxList.Move(done: c, selected: b))
+        #expect(InboxList.done(a, from: a, in: [a], showsDone: false) == InboxList.Move(done: a, selected: nil))
+        // As the list would choose once it had gone.
+        #expect(InboxList.done(b, from: b, in: shown, showsDone: false).selected
+                == InboxList.selection(after: b, was: shown, now: [a, c]))
+        // Done open (or a search): it stays, and is still read.
+        #expect(InboxList.done(b, from: b, in: shown + [d], showsDone: true) == InboxList.Move(done: b, selected: b))
+        // Another one than the one read, or one not shown, leaves the selection alone.
+        #expect(InboxList.done(c, from: a, in: shown, showsDone: false) == InboxList.Move(done: c, selected: a))
+        #expect(InboxList.done(d, from: d, in: shown, showsDone: false) == InboxList.Move(done: d, selected: d))
+        #expect(InboxList.done(a, from: nil, in: shown, showsDone: false) == InboxList.Move(done: a, selected: nil))
+    }
+
     @Test func aReplyNamesItsDelivery() {
         let delivery = Delivery(botID: UUID(), title: "Should sub-agent work block Telegram?")
         #expect(InboxReply.prompt("Answer first.", delivery: delivery)

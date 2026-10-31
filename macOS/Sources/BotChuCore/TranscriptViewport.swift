@@ -12,11 +12,14 @@ import Foundation
 ///
 /// A row's height is kept with a signature of what it showed: its content's revision (a reply's
 /// text by its length, which only grows as it streams; a group's `revision`; a call's state and
-/// output), whether it is opened, the layout inputs (width, density, appearance) and the
+/// output), whether it is opened, the layout inputs but the width (density, appearance) and the
 /// conversation's `epoch`. A height measured for anything else is never used, and a measurement
 /// that comes from a row no longer laid out, or laid out since with other content, is dropped.
-/// Heights are kept only for the items that can be scrolled to, and a few more (`spareItems`), and
-/// `forgetHeights()` lets them all go.
+/// The width only guesses at rows not measured yet (those guessed before the chat knew its width
+/// are guessed again once it does): a row laid out measures itself again at a new width, and one
+/// out of view keeps its last height until it is laid out again, as an estimate is kept. So a resize, and the frames AppKit and SwiftUI go through on the way to its size, leave
+/// the rows laid out as they are (#354). Heights are kept only for the items that can be scrolled
+/// to, and a few more (`spareItems`), and `forgetHeights()` lets them all go.
 ///
 /// A reader who isn't pinned to the newest content keeps their place by a row and their offset
 /// into it. When what is above them changes height (a row measured for the first time, a reply's
@@ -54,7 +57,8 @@ public struct TranscriptViewport: Sendable {
         }
     }
 
-    /// What every row's height depends on besides its content.
+    /// What every row's height depends on besides its content. The width only goes into estimates,
+    /// not into signatures (`combineSignature`).
     public struct Inputs: Hashable, Sendable {
         public var width: Int
         public var density: Int
@@ -69,6 +73,14 @@ public struct TranscriptViewport: Sendable {
             self.dark = dark
             self.epoch = epoch
             self.startsBotTurn = startsBotTurn
+        }
+
+        /// What a row's signature takes from the inputs: all but the width.
+        func combineSignature(into hasher: inout Hasher) {
+            hasher.combine(density)
+            hasher.combine(dark)
+            hasher.combine(epoch)
+            hasher.combine(startsBotTurn)
         }
     }
 
@@ -123,8 +135,10 @@ public struct TranscriptViewport: Sendable {
     private struct Measure: Sendable {
         var signature: Int
         var height: Double
-        /// The estimate before learning, for learning from the measurement.
+        /// The estimate before learning, for learning from the measurement, and the width it was
+        /// made for.
         var guess: Double
+        var width: Int
         var kind: Int
         var measured: Bool
     }
@@ -135,6 +149,8 @@ public struct TranscriptViewport: Sendable {
         var rows: [Measure]
         var total: Double
         var generation: Int
+        /// The width its rows were guessed for: 0 before the chat knew it.
+        var width: Int
     }
 
     private struct Anchor: Equatable, Sendable {
@@ -163,6 +179,10 @@ public struct TranscriptViewport: Sendable {
     /// The visible part, in the rows' coordinates: 0 at the first scrollable row's top.
     public private(set) var visibleTop: Double?
     public private(set) var viewport: Double?
+    /// The visible part's height the rows laid out were planned for: a shorter one is covered too.
+    private var plannedViewport: Double?
+    /// The width the rows are laid out at, as last planned or scrolled.
+    private var width = 0
     /// Where the visible part must start to keep the reader's row in place; nil when it does.
     public private(set) var correction: Double?
     /// Measured to estimated height, by kind of row, as learned.
@@ -251,6 +271,7 @@ public struct TranscriptViewport: Sendable {
         generation += 1
         rebuiltRows = 0
         self.pinned = pinned
+        width = inputs.width
         let start = min(max(0, start), items.count)
         let count = items.count - start
         ids.removeAll(keepingCapacity: true)
@@ -268,6 +289,11 @@ public struct TranscriptViewport: Sendable {
             if cache[id]?.signature != signature {
                 cache[id] = rows(of: item, style: style, startsTurn: turn, inputs: inputs, expanded: expanded,
                                  signature: signature, previous: cache[id])
+            } else if cache[id]?.width == 0, inputs.width > 0 {
+                // Guessed before the chat knew its width (its first plan): the rows not measured yet
+                // are guessed again at it; those measured keep their heights.
+                cache[id] = rows(of: item, style: style, startsTurn: turn, inputs: inputs, expanded: expanded,
+                                 signature: signature, previous: cache[id])
             }
             cache[id]?.generation = generation
             if id == anchor?.row.item { anchorAt = index - start }
@@ -280,6 +306,7 @@ public struct TranscriptViewport: Sendable {
         if cache.count > count + Self.spareItems { cache = cache.filter { $0.value.generation == generation } }
 
         let height = viewport ?? Self.defaultViewport
+        plannedViewport = height
         var top = max(0, total - height)
         correction = nil
         if !pinned {
@@ -401,10 +428,14 @@ public struct TranscriptViewport: Sendable {
         }
     }
 
-    /// The scroll view's visible part, in the rows' coordinates. True when the rows laid out no
-    /// longer cover enough of what is near it, or its height changed, so the chat should plan again.
-    public mutating func scrolled(top: Double, height: Double) -> Bool {
-        let resized = viewport.map { abs($0 - height) > 0.5 } ?? true
+    /// The scroll view's visible part, in the rows' coordinates, and the rows' width if it says.
+    /// True when the rows laid out no longer cover enough of what is near it, or it is taller than
+    /// they were planned for, so the chat should plan again. Shorter, the rows planned still cover
+    /// it: a window resizing goes through frames where the chat is briefly a strip, and planning
+    /// for those dropped rows only to lay them out again in the next frame (#354).
+    public mutating func scrolled(top: Double, height: Double, width: Int? = nil) -> Bool {
+        let resized = viewport == nil || plannedViewport.map { height > $0 + 0.5 } ?? true
+        if let width { self.width = width }
         viewport = height
         visibleTop = top
         if let correction {
@@ -464,7 +495,8 @@ public struct TranscriptViewport: Sendable {
         var measure = entry.rows[id.part]
         let delta = height - plan.rows[index].height
         if !measure.measured {
-            learn(measure.kind, measured: height, guess: measure.guess)
+            // A guess for another width than the row was laid out at says nothing about guessing.
+            if measure.width == width { learn(measure.kind, measured: height, guess: measure.guess) }
             measure.measured = true
         }
         guard abs(delta) > 0.01 else {
@@ -518,7 +550,8 @@ public struct TranscriptViewport: Sendable {
             let rowSignature = style.split == .whole
                 ? signature
                 : Self.signature(item, part: part, style: style, startsTurn: startsTurn, inputs: inputs, expanded: expanded)
-            if let old = reusable?.rows, part < old.count, old[part].signature == rowSignature {
+            if let old = reusable?.rows, part < old.count, old[part].signature == rowSignature,
+               old[part].measured || old[part].width > 0 || inputs.width == 0 {
                 rows.append(old[part])
                 total += old[part].height
                 continue
@@ -526,11 +559,11 @@ public struct TranscriptViewport: Sendable {
             let (kind, guess) = Self.estimate(item, part: part, parts: parts, split: style.split, startsTurn: startsTurn,
                                               width: Double(inputs.width), expanded: expanded)
             let height = (guess * ratios[kind]).rounded()
-            rows.append(Measure(signature: rowSignature, height: height, guess: guess, kind: kind, measured: false))
+            rows.append(Measure(signature: rowSignature, height: height, guess: guess, width: inputs.width, kind: kind, measured: false))
             total += height
             rebuiltRows += 1
         }
-        return ItemRows(signature: signature, split: style.split, rows: rows, total: total, generation: generation)
+        return ItemRows(signature: signature, split: style.split, rows: rows, total: total, generation: generation, width: inputs.width)
     }
 
     static func parts(of item: ActivityItem, split: Split) -> Int {
@@ -549,7 +582,7 @@ public struct TranscriptViewport: Sendable {
     static func signature(_ item: ActivityItem, style: Style, startsTurn: Bool, inputs: Inputs, expanded: Set<UUID>,
                           expansions: Int) -> Int {
         var hasher = Hasher()
-        hasher.combine(inputs)
+        inputs.combineSignature(into: &hasher)
         hasher.combine(style)
         hasher.combine(startsTurn)
         item.combineRevision(into: &hasher)
@@ -565,7 +598,7 @@ public struct TranscriptViewport: Sendable {
     /// A row of a split item's signature: what it shows of the item.
     static func signature(_ item: ActivityItem, part: Int, style: Style, startsTurn: Bool, inputs: Inputs, expanded: Set<UUID>) -> Int {
         var hasher = Hasher()
-        hasher.combine(inputs)
+        inputs.combineSignature(into: &hasher)
         hasher.combine(style.split)
         hasher.combine(part)
         guard case .exploration(let group) = item else {

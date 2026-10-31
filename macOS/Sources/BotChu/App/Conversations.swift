@@ -36,6 +36,12 @@ final class ConversationState {
         let latest = Dictionary(tail.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         return browsing.messages.map { latest[$0.id] ?? pending[$0.id]?.message ?? $0 }
     }
+    /// What the chat shows: `displayMessages`, then the message being sent (`sending`).
+    var chatMessages: [ChatMessage] {
+        let shown = displayMessages
+        guard let sending, browsing == nil, shown.last?.id != sending.id else { return shown }
+        return shown + [sending]
+    }
     var displayStart: Int { browsing?.start ?? historyStart }
     var startsBotTurn: Bool {
         let previous = (browsing?.prefix ?? prefixDigest).summary.lastRole
@@ -101,11 +107,17 @@ final class ConversationState {
     var run: RunState?
     var reaction: BotActivity?
     var queue: MessageQueue?
+    /// The message sent to it while idle, shown at the chat's end from the moment it is sent, while
+    /// its queue is saved; the turn then takes it into the thread in the same update
+    /// (`AppModel.send`). Never saved: the thread holds a message only once its turn does.
+    var sending: ChatMessage?
     /// Its turn ended while it wasn't shown.
     var unread = false
     /// What is typed in its message box and not sent yet, the agents and projects chosen in it from
     /// `@` and `#` completion (`Mentions.swift`), its images, a remote queue bot's documents
-    /// (`addFiles`), and why the last attachment wasn't added.
+    /// (`addFiles`), and why the last attachment wasn't added. The text and references are kept
+    /// between launches (`DraftStore`), written as they change through `AppModel.drafts` and
+    /// `draftReferences`; the attachments only in memory.
     var draft: String?
     var draftReferences: [MessageReference]?
     var draftImages: [ImageAttachment]?
@@ -312,10 +324,15 @@ final class ConversationState {
 @MainActor struct ConversationField<Value> {
     let model: AppModel
     let field: ReferenceWritableKeyPath<ConversationState, Value?>
+    /// Hears each conversation whose value is set, after it is (a draft, to save it).
+    var changed: (@MainActor (ChatTarget) -> Void)?
 
     subscript(target: ChatTarget) -> Value? {
         get { model.conversation(target)[keyPath: field] }
-        nonmutating set { model.conversation(target)[keyPath: field] = newValue }
+        nonmutating set {
+            model.conversation(target)[keyPath: field] = newValue
+            changed?(target)
+        }
     }
 
     /// The conversations that have one. For the model's own work, not for views: it can't see a

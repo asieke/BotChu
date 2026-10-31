@@ -4,9 +4,9 @@ import BotChuCore
 /// Journey 13: what the owner left is all still there after quitting and launching again.
 extension Journeys {
     /// Quits BotChu as the owner would and launches it again, timed until the first bot's chat
-    /// shows; then checks the message journey 6 sent and the task journey 9 started, and says
-    /// whether the draft journey 5 typed is kept (any of them this journey leaves itself when that
-    /// journey didn't run).
+    /// shows; then checks that the draft journey 5 typed is back in its message box, and the
+    /// message journey 6 sent and the task journey 9 started are there (any of them this journey
+    /// leaves itself when that journey didn't run).
     func relaunch() -> [JourneyResult] {
         var samples: [Double] = []
         var problem: String?
@@ -37,13 +37,18 @@ extension Journeys {
             app.settle(quiet: 0.5, limit: 10)
             try app.requireBackground()
 
-            // BotChu keeps drafts in memory only, so this says what the box holds without failing.
+            // The draft is back in its own message box (#357), and a sent message isn't in its box again.
             try show(draft.bot)
             let box = try composer().text
-            print("journeys: 13: after a relaunch, \(draft.bot.name)'s draft " + (box == draft.text ? "is kept"
-                : "isn't: its message box says \"\(box.prefix(40))\" (BotChu keeps drafts in memory only)"))
+            guard box == draft.text else {
+                throw HarnessFailure("After a relaunch, \(draft.bot.name)'s message box says \"\(box.prefix(40))\", not the draft left in it: \"\(draft.text.prefix(40))\"")
+            }
             try show(sent.bot)
             guard try chatShows(sent.text) else { throw HarnessFailure("After a relaunch, \(sent.bot.name)'s chat doesn't show the message sent: \"\(sent.text)\"") }
+            let sentBox = try composer().text
+            guard sentBox.isEmpty else {
+                throw HarnessFailure("After a relaunch, \(sent.bot.name)'s message box says \"\(sentBox.prefix(40))\", though its message was sent")
+            }
             try show(task.bot)
             guard try app.window().first(identifier: "conversation-tab-\(task.id.uuidString)") != nil else {
                 throw HarnessFailure("After a relaunch, \(task.bot.name) has no tab for the task started in New Task")

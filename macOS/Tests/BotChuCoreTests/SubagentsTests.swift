@@ -32,7 +32,9 @@ private final class SubagentFixture {
         process.environment = ["PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
                                "BOTCHU_IPC_DIR": ipc.root.path, "BOTCHU_INVOCATION_ID": invocationID.uuidString,
                                "BOTCHU_CALLER_BOT_ID": botID.uuidString, "BOTCHU_CALLER_DEPTH": "0",
-                               "BOTCHU_WAIT_TIMEOUT_SECONDS": "2"].merging(environment) { _, new in new }
+                               "BOTCHU_WAIT_TIMEOUT_SECONDS": "2",
+                               // This Mac's own load would stretch the heartbeat limit (#368); tests set it.
+                               "BOTCHU_LOAD_AVERAGE": "0"].merging(environment) { _, new in new }
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
@@ -426,6 +428,62 @@ private final class SubagentFixture {
         let unregistered = try fixture.run(["spawn", "--agent", "QA", "--brief", "Check"], environment: ["BOTCHU_INVOCATION_ID": ""])
         #expect(unregistered.code == 1 && unregistered.error.contains("Missing BOTCHU_INVOCATION_ID"))
         #expect(fixture.ipc.pendingRequests().isEmpty)
+    }
+
+    /// #368: a loaded Mac writes its heartbeat late. With the load above 100, a helper waiting on a
+    /// run still going keeps waiting, then says BotChu is busy, never that it stopped responding.
+    @Test func aLoadedMacsLateHeartbeatDoesNotFailAWaitWhileTheRunGoes() throws {
+        let fixture = try SubagentFixture()
+        let id = UUID()
+        try fixture.ipc.writeStatus(SubagentStatus(id: id, phase: .running, activity: "Testing"))
+        // 60 s late, written by BotChu on a Mac at load 120 on 14 CPUs: the limit is 30 s × 8.6.
+        func beat(age: TimeInterval, load: Double, cpus: Int = 14) throws {
+            let stamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-age))
+            try Data(#"{"updatedAt":"\#(stamp)","closed":false,"load":\#(load),"cpus":\#(cpus)}"#.utf8).write(to: fixture.ipc.heartbeatURL)
+        }
+        try beat(age: 60, load: 120)
+        let loaded = try fixture.run(["wait", id.uuidString])
+        #expect(!loaded.error.contains("no longer responding"))
+        #expect(loaded.error.contains("Timed out waiting"))
+        // The helper's own load counts too, for a mailbox whose heartbeat says nothing of it.
+        try fixture.ipc.writeHeartbeat(now: Date().addingTimeInterval(-60))
+        let cpus = ProcessInfo.processInfo.activeProcessorCount
+        let here = try fixture.run(["wait", id.uuidString], environment: ["BOTCHU_LOAD_AVERAGE": String(10 * cpus)])
+        #expect(!here.error.contains("no longer responding") && here.error.contains("Timed out waiting"))
+        // Later than even that: BotChu is busy and the run goes on; a distinct exit says to wait again.
+        try beat(age: 100, load: 0)
+        let busy = try fixture.run(["wait", id.uuidString], environment: ["BOTCHU_HEARTBEAT_TIMEOUT_SECONDS": "1", "BOTCHU_WAIT_TIMEOUT_SECONDS": "20"])
+        #expect(busy.code == 75)
+        #expect(busy.error.contains("BotChu is busy") && busy.error.contains("\(id.uuidString.lowercased()) still going"))
+        #expect(busy.error.contains("botchu-subagent wait \(id.uuidString.lowercased()) again"))
+        // A run BotChu last said nothing about, or a heartbeat half an hour old, is BotChu gone.
+        let unknown = try fixture.run(["wait", UUID().uuidString], environment: ["BOTCHU_HEARTBEAT_TIMEOUT_SECONDS": "1"])
+        #expect(unknown.code == 1 && unknown.error.contains("no longer responding"))
+        try beat(age: 1_900, load: 400)
+        let gone = try fixture.run(["wait", id.uuidString])
+        #expect(gone.code == 1 && gone.error.contains("no longer responding"))
+    }
+
+    @Test func aClosedMailboxSaysItsTurnEnded() throws {
+        let fixture = try SubagentFixture()
+        try Data(#"{"updatedAt":"1970-01-01T00:00:00Z","closed":true}"#.utf8).write(to: fixture.ipc.heartbeatURL)
+        let waited = try fixture.run(["wait", UUID().uuidString])
+        #expect(waited.code == 1 && waited.error.contains("mailbox is closed: its turn has ended"))
+        let spawned = try fixture.run(["spawn", "--agent", "QA", "--brief", "Check"])
+        #expect(spawned.code == 1 && fixture.ipc.pendingRequests().isEmpty)
+    }
+
+    @Test func anInterruptedResultSaysSo() throws {
+        let fixture = try SubagentFixture()
+        let id = UUID()
+        try fixture.ipc.writeResult(SubagentResult(id: id, targetBotName: "QA Bot", phase: .stopped, handoffOutput: "Halfway there",
+            errorMessage: "The owner stopped it after 3 tool calls in 40s. Workspace: /tmp/x.", interrupted: true))
+        let waited = try fixture.run(["wait", id.uuidString])
+        #expect(waited.code == 1)
+        #expect(waited.output.contains("Halfway there"))
+        #expect(waited.output.contains("Interrupted: The owner stopped it after 3 tool calls in 40s."))
+        #expect(waited.output.contains("Status: interrupted"))
+        #expect(!waited.output.contains("Error:"))
     }
 
     @Test func malformedRequestsAreBoundedAndTerminalResultsRequired() throws {

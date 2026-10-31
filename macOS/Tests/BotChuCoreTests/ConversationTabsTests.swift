@@ -201,14 +201,18 @@ import Testing
         // Only Home working: its dot, never its activity.
         let home = BotRowSummary(runsOn: runsOn, home: working, tasks: [idle])
         #expect(home.dots == [.working, .idle] && home.subtitle == runsOn && home.spokenDots == "1 working, 1 idle")
-        // Many: at most four dots, the most urgent first (#218), in tab order among equals, then +N.
+        // Many: at most eight dots (#359), the most urgent first (#218), in tab order among equals, then +N.
         let busy = BotRowSummary(runsOn: runsOn, home: .failed(at: now), tasks: [
             working, .preparing, idle, .news(pullRequest: 1, at: now), working, .starting(since: now),
+            idle, working, .news(pullRequest: 2, at: now),
         ])
-        #expect(busy.dots == [.failed, .working, .preparing, .working])
-        #expect(busy.more == 3)
+        #expect(busy.dots == [.failed, .working, .preparing, .working, .starting, .working, .news, .news])
+        #expect(busy.more == 2)
         #expect(busy.subtitle == runsOn)
-        #expect(busy.spokenDots == "1 failed, 1 preparing, 1 starting, 2 working, 1 finished, 1 idle")
+        #expect(busy.spokenDots == "1 failed, 1 preparing, 1 starting, 3 working, 2 finished, 2 idle")
+        // Eight fill the row exactly: no +N.
+        let eight = BotRowSummary(runsOn: runsOn, home: idle, tasks: Array(repeating: working, count: 8))
+        #expect(eight.dots == Array(repeating: .working, count: 8) && eight.more == 0 && eight.spokenDots == "8 working")
     }
 
     /// #218: a full row keeps its urgent dots, however late their tabs come, and counts the rest.
@@ -217,11 +221,11 @@ import Testing
         let asking = TabState.needsInput(requests: 1, at: now)
         let runsOn = "Claude Dev · default"
         let row = BotRowSummary(runsOn: runsOn, home: .news(pullRequest: nil, at: now), tasks: [
-            working, working, working, .idle(since: now), working, .stopped(at: now), asking,
+            working, working, working, .idle(since: now), working, .idle(since: now), working, .stopped(at: now), asking,
         ])
-        #expect(row.dots == [.needsInput, .stopped, .working, .working])
-        #expect(row.more == 4)
-        #expect(row.spokenDots == "1 needs input, 1 stopped, 4 working, 1 finished, 1 idle")
+        #expect(row.dots == [.needsInput, .stopped, .working, .working, .working, .working, .working, .news])
+        #expect(row.more == 2)
+        #expect(row.spokenDots == "1 needs input, 1 stopped, 5 working, 1 finished, 2 idle")
         // What waits on the owner leads the dots, never the subtitle (#324).
         #expect(row.subtitle == runsOn)
         let two = BotRowSummary(runsOn: runsOn, home: asking, tasks: [.needsInput(requests: 2, at: now)])
@@ -232,7 +236,7 @@ import Testing
     }
 
     /// #250: a collapsed heading, such as the sidebar's Specialists, shows its bots' dots together:
-    /// the most urgent first, at most four, then +N counting the rest and each row's own +N.
+    /// the most urgent first, at most eight (#359), then +N counting the rest and each row's own +N.
     @Test func aCollapsedHeadingShowsItsBotsDotsTogether() {
         let working = TabState.working(.coding, since: now)
         let idle = BotRowSummary(runsOn: "Claude Dev · default", home: .idle(since: now), tasks: [])
@@ -244,10 +248,10 @@ import Testing
         #expect(two.dots == [.needsInput, .working, .working])
         #expect(two.more == 0)
         #expect(two.spokenDots == "David: 1 working; Ann: 1 needs input, 1 working")
-        let full = BotRowSummary(runsOn: "Claude Dev · default", home: working, tasks: Array(repeating: working, count: 5))
-        #expect(full.dots.count == 4 && full.more == 2)
+        let full = BotRowSummary(runsOn: "Claude Dev · default", home: working, tasks: Array(repeating: working, count: 9))
+        #expect(full.dots.count == 8 && full.more == 2)
         let many = BotRowSummary(merging: [("David", thinking), ("Ann", full), ("Bea", asking)])
-        #expect(many.dots == [.needsInput, .working, .working, .working])
+        #expect(many.dots == [.needsInput] + Array(repeating: .working, count: 7))
         #expect(many.more == 3 + 2)
         // A bot's idle tasks are rings there too, after the others' busy dots (#324).
         let resting = BotRowSummary(runsOn: "Claude Dev · default", home: .idle(since: now), tasks: [.idle(since: now)])
@@ -256,7 +260,7 @@ import Testing
     }
 
     /// #237: a bot row's dots are its tabs' own states, never others. For every Home with every
-    /// pair of tasks, and for rows with more than four busy tabs, the dots and +N count exactly the
+    /// pair of tasks, and for rows with more than eight busy tabs, the dots and +N count exactly the
     /// open tasks and Home while it isn't idle (#324), kind for kind, the most urgent first, and the
     /// tooltip names them all; answering a request, then reading the finished turn, changes the
     /// row's dot as the tab's.
@@ -281,7 +285,7 @@ import Testing
             #expect(row.spokenDots.isEmpty == shown.isEmpty, "\(label)")
             for kind in kinds {
                 let count = shown.filter { $0 == kind }.count
-                // None made up or recoloured, and the tooltip counts those past the fourth too.
+                // None made up or recoloured, and the tooltip counts those past the eighth too.
                 #expect(row.dots.filter { $0 == kind }.count <= count, "\(label): \(row.dots)")
                 if count > 0 { #expect(row.spokenDots.contains("\(count) \(kind.name(count: count))"), "\(label): \(row.spokenDots)") }
             }

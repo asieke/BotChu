@@ -145,9 +145,9 @@ final class AppModel {
     var openTask: [UUID: UUID] = [:]
     /// Conversations whose turn ended while they weren't shown.
     var unread: ConversationFlag { ConversationFlag(model: self, flag: \.unread) }
-    /// Each conversation's draft (see `ConversationState`).
-    var drafts: ConversationField<String> { ConversationField(model: self, field: \.draft) }
-    var draftReferences: ConversationField<[MessageReference]> { ConversationField(model: self, field: \.draftReferences) }
+    /// Each conversation's draft (see `ConversationState`), saved as it changes (`Drafts.swift`).
+    var drafts: ConversationField<String> { ConversationField(model: self, field: \.draft, changed: saveDraft) }
+    var draftReferences: ConversationField<[MessageReference]> { ConversationField(model: self, field: \.draftReferences, changed: saveDraft) }
     var draftImages: ConversationField<[ImageAttachment]> { ConversationField(model: self, field: \.draftImages) }
     var draftFiles: ConversationField<[FileAttachment]> { ConversationField(model: self, field: \.draftFiles) }
     var attachmentErrors: ConversationField<String> { ConversationField(model: self, field: \.attachmentError) }
@@ -402,6 +402,7 @@ final class AppModel {
                 }
             }
         }
+        restoreDrafts()
         // Reviews spend the accounts' allowance: only the real app runs them by itself.
         evaluator = makeEvaluator(runner: store == nil && DevHooks.dataDir == nil ? evaluationRunner ?? liveEvaluationRunner() : evaluationRunner)
         // Usage checks run the profiles' CLIs: only the real app, or a review copy with sample usage, checks by itself.
@@ -804,6 +805,7 @@ final class AppModel {
             BotHome(workspace: bot.persistencePath).trash()
             storage.reopen(bot.persistencePath)
         }
+        savedDrafts.removeBot(id, storage: storage, timeout: Self.saveTimeout)
         bots.removeAll { $0.id == id }
         remoteQueue?.reloadBot()
         sections[id] = nil
@@ -935,6 +937,7 @@ final class AppModel {
                 for waiting in waited { waiting.cancel?() }
             }
             TranscriptCache.forget(target)
+            savedDrafts.save(nil, for: DraftStore.Key(bot: botID, task: id), storage: storage)
             // After the writes asked for in its conversation's lane and then its settings' lane.
             let folder = home.taskURL(id), taskLane = home.taskLane(id), storage = storage
             storage.submit(home.conversationLane(task: id), label: "remove", work: {
@@ -1516,8 +1519,17 @@ final class AppModel {
         message.heartbeat = heartbeat
         queue.enqueue(message, unsaved: true)
         messageQueues[target] = queue
+        // Sent to an idle conversation with nothing queued before it, it shows in the chat now, as
+        // the turn will add it, rather than once its queue is saved: the frame showing it never
+        // waits for the disk (#355). A turn that starts a new session adds a note before it, so
+        // that message shows once the turn does.
+        if ticket != nil, queue.messages.map(\.id) == [id], conversation(target).isLoaded, !startsNewSession(target) {
+            conversation(target).sending = message
+        }
         saveQueue(for: target) { [weak self] saved in
             guard let self else { return accepted?(false) ?? () }
+            // Taken into the thread below, in this same update, or else back in the queue (or the draft).
+            if self.conversation(target).sending?.id == id { self.conversation(target).sending = nil }
             if let ticket, self.waiting[target] == ticket {
                 self.waiting[target] = nil
                 self.runStates[target] = nil
@@ -1565,6 +1577,7 @@ final class AppModel {
         if later(target, needs: .recovery, { [weak self] in self?.removeQueuedMessage(id, from: target) }) { return }
         guard var queue = messageQueues[target], let index = queue.messages.firstIndex(where: { $0.id == id }) else { return }
         let message = queue.messages[index]
+        if conversation(target).sending?.id == id { conversation(target).sending = nil }
         queue.remove(id)
         guard queue != messageQueues[target] else { return }
         messageQueues[target] = queue
@@ -1677,7 +1690,7 @@ final class AppModel {
         var added: [ChatMessage] = []
         var replacedNote: ChatMessage?
         if let message {
-            if current.resumableSessionID == nil, (history.contains(where: { $0.role == .assistant }) || conversation(target).digest?.lastReply != nil) {
+            if startsNewSession(target) {
                 // Name the account on the note New Session left, or add one (an account switch).
                 if let last = history.last, last.role == .note, last.text.hasPrefix("New session") {
                     replacedNote = last
@@ -1722,6 +1735,12 @@ final class AppModel {
             self.startSavedTurn(text, for: target, history: history, updates: updates, images: message?.images ?? [])
         }
         return true
+    }
+
+    /// Whether a turn starting now begins a new session after earlier replies, which a note says.
+    private func startsNewSession(_ target: ChatTarget) -> Bool {
+        guard runSettings(of: target)?.resumableSessionID == nil else { return false }
+        return thread(target).contains { $0.role == .assistant } || conversation(target).digest?.lastReply != nil
     }
 
     /// Starts a turn whose message the saved transcript holds: in the task's worktree once it is
@@ -1930,6 +1949,7 @@ final class AppModel {
                 let run = machine.isRemote
                     ? AgentRun(command: command, invocation: invocation, on: machine, folder: directory)
                     : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: directory, isDirectory: true))
+                run.deliveryInterval = AgentRun.frameInterval
                 let place = task.map { machineName($0.hostID, fallback: $0.hostName) } ?? "This Mac"
                 let home = BotHome(workspace: bot.persistencePath)
                 let what = task.map { "\($0.title) turn" } ?? "turn"
@@ -1942,7 +1962,7 @@ final class AppModel {
                 let accountID = account.id
 
                 // The CLI's lines are parsed off the main thread; their events arrive here in
-                // batches, a few times a second at most, and go into this conversation alone.
+                // batches, a frame apart at most, and go into this conversation alone.
                 run.deliverEvents(parsedBy: stream.parser()) { [weak self, weak run] events in
                     guard let self, let run, self.runs[target] === run, self.runSettings(of: target) != nil else { return }
                     let conversation = self.conversation(target)
@@ -2214,6 +2234,8 @@ final class AppModel {
 
     func stop(_ target: ChatTarget) {
         guard bot(target.botID)?.isRemoteQueue != true else { return }
+        // A message being sent waits in the queue, paused, rather than at the chat's end.
+        conversation(target).sending = nil
         delegation.stopRoot(target)
         // The owner's Stop calls off an Interrupt & send under way, even once the CLI took everything.
         if messageQueues[target]?.isInterrupting == true { messageQueues[target]?.pause() }

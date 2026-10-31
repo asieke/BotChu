@@ -169,7 +169,7 @@ extension Journeys {
     // MARK: 11. Inbox and Settings
 
     /// Opens the Inbox and Settings from a bot's chat, `repeats` times each, timed until they show;
-    /// then marks deliveries Done in the Inbox, timed until the Done button says it is done.
+    /// then marks deliveries Done in the Inbox, timed until the Inbox shows each Done.
     func inboxAndSettings() -> [JourneyResult] {
         let bot = fixture.bots[8]
         var inbox: [Double] = [], settings: [Double] = [], done: [Double] = []

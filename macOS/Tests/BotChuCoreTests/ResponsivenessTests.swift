@@ -31,13 +31,18 @@ import Testing
     print(json.dumps({"type":"turn.completed"}), flush=True)
     """#
 
-    @Test func linesAreParsedOffTheMainThreadAndDeliveredInFewBatchesBeforeTheExit() async throws {
+    /// A run delivers a few times a second unless told otherwise; a conversation's own turn, whose
+    /// reply the chat shows as it is written, a frame apart (#355). Either way, a burst is batched.
+    @Test(arguments: [AgentRun.batchInterval, AgentRun.frameInterval])
+    func linesAreParsedOffTheMainThreadAndDeliveredInFewBatchesBeforeTheExit(interval: TimeInterval) async throws {
         let parser = RecordingParser()
         let start = Date()
         let (batches, events, exitedAfterAll) = await withCheckedContinuation { (done: CheckedContinuation<(Int, [AgentEvent], Bool), Never>) in
             DispatchQueue.main.async {
                 let run = AgentRun(command: "/usr/bin/python3", invocation: Invocation(arguments: ["-c", Self.burst]),
                                    directory: FileManager.default.temporaryDirectory)
+                #expect(run.deliveryInterval == AgentRun.batchInterval)
+                run.deliveryInterval = interval
                 var batches = 0
                 var events: [AgentEvent] = []
                 var mainThreadDeliveries = true
@@ -59,7 +64,7 @@ import Testing
         #expect(parser.calls == 601)
         #expect(parser.onMain == 0)
         // At most one delivery per interval (after the first), however the reads fell.
-        #expect(batches <= Int(elapsed / 0.04) + 2)
+        #expect(batches <= Int(elapsed / interval) + 2)
         #expect(batches < 601)
     }
 

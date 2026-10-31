@@ -147,7 +147,7 @@ public enum TelegramReply {
         // A CLI reports errors it recovers from (a reconnect) before its reply: only the last word counts.
         if turn.last(where: { $0.role == .assistant || $0.role == .error })?.role == .error {
             parts.append("⚠️ \(botName) couldn't finish this turn. What went wrong is in BotChu.")
-        } else if turn.contains(where: { $0.role == .note && $0.text == "Stopped" }) {
+        } else if turn.contains(where: \.isStopNote) {
             parts.append("⏹ Stopped in BotChu.")
         } else if parts.isEmpty {
             parts.append("\(botName) finished without a written reply. What it did is in BotChu.")

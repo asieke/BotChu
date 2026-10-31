@@ -43,13 +43,14 @@ public enum FrameMarks {
     /// The chat's visible part moved.
     public static let chatScrolled = "chat.scrolled"
 
-    /// The New Task sheet showed.
+    /// The New Task sheet started to show: the first frame of its opening animation.
     public static let newTask = "new-task"
 
     /// A page of the window (`inbox`, `settings`) showed.
     public static func page(_ name: String) -> String { "page \(name)" }
 
-    /// The Done button of the delivery being read says it is done, or not.
+    /// The delivery being read shows it is Done, or not: its Done button says so, or Done (while
+    /// Done is closed) takes it out of the list.
     public static func inboxDone(_ id: UUID, _ done: Bool) -> String { "inbox.done \(id.uuidString) \(done)" }
 
     /// A frame of the working ring round the bot's face in the status sidebar.
