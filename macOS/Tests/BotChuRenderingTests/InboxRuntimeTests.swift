@@ -42,8 +42,15 @@ extension RenderingTests {
         #expect(ownChanged.value && !otherChanged.value, "Only the receiving conversation observes a changed question")
         expectInboxStatusMatchesSource(inbox)
 
+        // A row observes its own delivery's entry (#356): another delivery's Done leaves it alone.
+        let neighbour = try #require(inbox.all.first { $0.id != delivery.id && !inbox.isDone($0.id) })
+        let rowChanged = Flag(), neighbourChanged = Flag()
+        withObservationTracking { _ = inbox.isUnread(delivery.id); _ = inbox.entry(delivery.id) } onChange: { rowChanged.set() }
+        withObservationTracking { _ = inbox.isUnread(neighbour.id); _ = inbox.isDone(neighbour.id) } onChange: { neighbourChanged.set() }
         before = inbox.statusDerivations
         inbox.setDone(delivery.id, true)
+        #expect(rowChanged.value && !neighbourChanged.value, "Only the Done delivery's row observes its Done")
+        #expect(inbox.isDone(delivery.id) && !inbox.isUnread(delivery.id) && inbox.entry(delivery.id) == inbox.state[delivery.id])
         #expect(inbox.statusDerivations == before + 1)
         inbox.setDone(delivery.id, true)
         #expect(inbox.statusDerivations == before + 1, "No mutation for an unchanged Done value")

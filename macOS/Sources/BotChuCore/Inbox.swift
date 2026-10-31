@@ -468,6 +468,15 @@ public struct InboxState: Codable, Equatable, Sendable {
             self.repliedAt = repliedAt
             self.doneAt = doneAt
         }
+
+        /// Neither read nor Done (`InboxState.isUnread`).
+        public var isUnread: Bool { !read && !done }
+
+        /// Replied to from the Inbox since `delivery` was sent (`InboxState.isAnswered`).
+        public func isAnswered(_ delivery: Delivery) -> Bool { repliedAt.map { $0 >= delivery.updatedAt } ?? false }
+
+        /// An unresolved Needs input delivery (`InboxState.needsInput`).
+        public func needsInput(_ delivery: Delivery) -> Bool { delivery.purpose == .needsInput && !done && !isAnswered(delivery) }
     }
 
     public var entries: [UUID: Entry]
@@ -495,7 +504,7 @@ public struct InboxState: Codable, Equatable, Sendable {
         set { entries[id] = newValue == Entry() ? nil : newValue }
     }
 
-    public func isUnread(_ delivery: Delivery) -> Bool { !self[delivery.id].read && !self[delivery.id].done }
+    public func isUnread(_ delivery: Delivery) -> Bool { self[delivery.id].isUnread }
 
     /// It asks something the owner hasn't answered since it was sent.
     public func needsAnswer(_ delivery: Delivery) -> Bool {
@@ -504,9 +513,7 @@ public struct InboxState: Codable, Equatable, Sendable {
 
     /// An unresolved Needs input delivery: not Done, nor answered since it was sent. It comes
     /// first in the list, and its conversation waits on the owner (`awaitingInput`).
-    public func needsInput(_ delivery: Delivery) -> Bool {
-        delivery.purpose == .needsInput && !self[delivery.id].done && !isAnswered(delivery)
-    }
+    public func needsInput(_ delivery: Delivery) -> Bool { self[delivery.id].needsInput(delivery) }
 
     /// Each conversation waiting on the owner, with its unresolved Needs input deliveries, newest
     /// first. A conversation with none isn't listed.
@@ -526,9 +533,7 @@ public struct InboxState: Codable, Equatable, Sendable {
     }
 
     /// The owner replied to it from the Inbox since it was sent.
-    public func isAnswered(_ delivery: Delivery) -> Bool {
-        self[delivery.id].repliedAt.map { $0 >= delivery.updatedAt } ?? false
-    }
+    public func isAnswered(_ delivery: Delivery) -> Bool { self[delivery.id].isAnswered(delivery) }
 
     /// The owner's answer is saved in the queue of the conversation that sent the delivery: it is
     /// answered, read and Done. What the bot does with it shows in that conversation.
@@ -735,6 +740,15 @@ public enum InboxList {
             self.done = done
             self.selected = selected
         }
+    }
+
+    /// Done on `id` from the reader's toolbar: while Done is closed (`showsDone` false) it leaves
+    /// the list shown, so when it was the one read, the next one shown is read, else the one before,
+    /// else none, as `selection(after:was:now:)` would choose once it had gone. With Done open it
+    /// stays, and is still read.
+    public static func done(_ id: UUID, from selected: UUID?, in shown: [UUID], showsDone: Bool) -> Move {
+        guard !showsDone, selected == id, shown.contains(id) else { return Move(done: id, selected: selected) }
+        return Move(done: id, selected: selection(after: id, was: shown, now: shown.filter { $0 != id }))
     }
 
     /// A key on the list as shown; nil when it does nothing: none is selected, or E on one that is
