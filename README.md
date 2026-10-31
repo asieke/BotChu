@@ -12,25 +12,23 @@ A minimal, open-source, native macOS app for persistent AI bots, in the spirit o
   ```
 
 ## Test
-- Suites touched while editing (rendering suites need the shared `/tmp/botchu-coord/gate.sh` gate):
-  ```sh
-  swift test --package-path macOS --filter <Suite>
-  ```
-- Fast pre-push check (shell syntax, renderer checksums, debug test build, and all `BotChuCoreTests`, without the gate):
+Run policy and where a new test goes: [docs/testing.md](docs/testing.md).
+- Each pull request: the fast tier (shell syntax, renderer checksums, debug test build and all `BotChuCoreTests`, without the gate), plus the journeys a change to views, `AppModel`, streaming or persistence reaches (queues its own gate run; ends with the latency report for `## Testing`):
   ```sh
   scripts/test.sh --fast
+  scripts/test.sh --journeys [names or numbers]
   ```
-- Pull request check (fast tier plus reachable `BotChuRenderingTests` and Release tests via `scripts/test-select.py --explain`; queues its own gate run):
-  ```sh
-  scripts/test.sh --changed
-  ```
-- Full test suite (shell syntax, `macOS/test.sh` unit and rendering tests, and `macOS/build.sh` into a temporary folder):
+- After the last pull request of a batch, and on deploy: the full suite (fast tier, Release Core subset, the kept `BotChuRenderingTests`, an app build into a temporary folder and every journey with its latency report):
   ```sh
   scripts/test.sh
   ```
-- Black-box UI journeys against `macOS/Journeys/baseline.json` (`BOTCHU_JOURNEYS_RECORD=1` records a new baseline), each run's results kept in `~/Library/Caches/botchu-journeys/runs/` (`BOTCHU_JOURNEYS_RUNS`), and the latency report of the newest run against the baseline and the last 3 on `main`:
+- One suite while editing (`BotChuRenderingTests` only inside the shared `/tmp/botchu-coord/gate.sh` gate):
   ```sh
-  scripts/test.sh --journeys [names or numbers]
+  swift test --package-path macOS --filter <Suite>
+  ```
+- Rebaseline the journeys in `macOS/Journeys/baseline.json` (in a pull request that says why), and print the latency report of a run kept in `~/Library/Caches/botchu-journeys/runs/` (`BOTCHU_JOURNEYS_RUNS`) against the baseline and the last 3 on `main`:
+  ```sh
+  BOTCHU_JOURNEYS_RECORD=1 scripts/test.sh --journeys [names or numbers]
   scripts/journeys-report.py [--results <file>] [--write <file>]
   ```
 - Isolated UI review on throwaway data:
@@ -46,7 +44,7 @@ A minimal, open-source, native macOS app for persistent AI bots, in the spirit o
 
 ## Deploy
 - Live checkout: `~/Desktop/WORKSPACE/BotChu` on `Alexs-MacBook-Pro-92440` (stays on `main`), installed to `~/Applications/BotChu.app`.
-- Fast-forward `~/Desktop/WORKSPACE/BotChu` to `origin/main`, reuse a recorded full-suite pass for that tree (or run `scripts/test.sh`), send the commit's latency report to the Inbox with `scripts/deploy-report.sh` (running the journeys when it has no results), and install and smoke-test with `macOS/install.sh`:
+- Fast-forward `~/Desktop/WORKSPACE/BotChu` to `origin/main`, reuse a recorded full-suite pass for that tree (or run `scripts/test.sh`), send the commit's latency report to the Inbox with `scripts/deploy-report.sh` (running the journeys when that commit has no results, as after `--skip-tests`), and install and smoke-test with `macOS/install.sh`:
   ```sh
   scripts/deploy.sh
   ```

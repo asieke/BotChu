@@ -179,8 +179,9 @@ heartbeats. Timing measurements are opt-in and do not impose load-dependent test
 
 ## Verification
 
-`scripts/test.sh` runs core and rendering tests and builds the app. Delegation tests exercise
-helper round trips, validation, scoped persistence, nested fan-out, stop (also of a child that
-ignores SIGINT and SIGTERM), a child that never exits after its handoff, restart, transport failure
-and local/SSH environment handling. The standard `botchu-smoke` two-turn checks verify real CLI
-execution and resumption separately, using each account's own login and allowance.
+`scripts/test.sh` runs the Core tests, the kept window tests and the journeys, and builds the app.
+Core tests exercise helper round trips, validation, scoped persistence, fan-out briefs, stopping a
+CLI that ignores SIGINT and SIGTERM, transport failure and local/SSH environment handling; a window
+test hands off from a child that never exits after its handoff, and journey 12 streams a sub-agent
+in the status sidebar while its parent is typed in. The standard `botchu-smoke` two-turn checks
+verify real CLI execution and resumption separately, using each account's own login and allowance.

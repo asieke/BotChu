@@ -34,7 +34,9 @@ public final class AgentRun: @unchecked Sendable {
     /// was ended 30 s after its reply, test run and all).
     public var backgroundLimit: TimeInterval = 2 * 60 * 60
     /// How long after SIGTERM a CLI still running is killed, with its process group.
-    public var killDelay: TimeInterval = 5
+    public var killDelay: TimeInterval = AgentRun.defaultKillDelay
+    /// `killDelay` for the runs made from now on; tests shorten it.
+    nonisolated(unsafe) public static var defaultKillDelay: TimeInterval = 5
     /// Whether BotChu ended the CLI because it was still running `lingerLimit` after its turn
     /// ended. It wasn't stopped: its turn ended as it said, though its exit status is a signal's.
     public private(set) var lingered = false

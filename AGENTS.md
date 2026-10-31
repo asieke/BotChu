@@ -12,9 +12,9 @@ How to run, test and deploy BotChu is in README.md; what it is, in PROJECT.md.
 
 ## Test loop
 
-- While editing, run `swift test --package-path macOS --filter <Suite>` for the suites the change touches. Rendering suites need the shared window-test gate.
-- Run `scripts/test.sh --fast` before a push: shell syntax, renderer checksums, a debug build with tests, and all Core tests, without the gate.
-- Run `scripts/test.sh --changed` directly once per final PR head: the fast tier plus only the window tests the diff can reach (`scripts/test-select.py --explain` says which and why), and the Release tests when a changed declaration uses a task group. It queues those window tests in the shared gate itself; never wrap it in a gate request. Changes to the test scripts, the package or the renderer's assets run every window test.
-- Perf PRs paste the latency report that `scripts/test.sh --journeys` ends with (or `scripts/journeys-report.py`) into `## Testing`.
-- The full `scripts/test.sh` (every window test, Release, an app build) is for deploy, which runs it unless that tree already passed; a PR doesn't need it unless the owner asks.
+- While editing, run `swift test --package-path macOS --filter <Suite>` for the suites the change touches; `BotChuRenderingTests` only inside the shared gate.
+- Each pull request runs `scripts/test.sh --fast` before a push. When it changes views, `AppModel`, streaming or persistence, it also runs the journeys that change reaches, `scripts/test.sh --journeys <names or numbers>` (it queues itself in the shared gate; never wrap it in a gate request), and pastes the latency report it ends with into `## Testing`. A docs-only pull request runs nothing else.
+- After the last pull request of a batch merges, run the full `scripts/test.sh` once on `origin/main`: the fast tier, the Release Core subset (Swift 6.4's task-group optimizer bug), the kept window tests and every journey. Fix a regression in a follow-up pull request and run it again until it passes; the batch summary gives each journey's time before and after. Deploy runs the same suite unless that tree already passed.
+- A journey fails when its median is over budget or more than 25% (and 3 ms) slower than `macOS/Journeys/baseline.json`. Change the baseline only with `BOTCHU_JOURNEYS_RECORD=1 scripts/test.sh --journeys <names>`, in a pull request that says why.
+- New behaviour gets a Core test of its logic or a check in an existing journey, not a window test; `BotChuRenderingTests` keeps only tests of bugs that came back and security checks nothing else observes (docs/testing.md).
 - If a test outside the change's scope fails, rerun only the failed test with the printed command a few times. If it passes, name the test and the load average in the PR; do not rerun the whole suite. Changed tests still need a demonstrated fix. A full clean-tree pass is shared across worktrees and reused by deploy; `scripts/deploy.sh --tests` explicitly forces testing.

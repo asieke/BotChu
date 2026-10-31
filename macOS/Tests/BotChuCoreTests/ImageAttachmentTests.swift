@@ -105,4 +105,19 @@ import Testing
         #expect(throws: (any Error).self) { try ImageDelivery.attaching([missing], to: plain, kind: .claude, prompt: "Look") }
         #expect(throws: (any Error).self) { try ImageDelivery.attaching(Array(repeating: missing, count: 9), to: plain, kind: .codex, prompt: "Look") }
     }
+
+    /// #64: a paste gives the picture a screenshot or a browser's Copy Image offers, alone or ahead
+    /// of any text; copied text that comes with a picture of itself (a spreadsheet's cells) pastes
+    /// as text.
+    @Test func aPictureOfCopiedTextPastesAsText() {
+        let images: Set<String> = ["public.png", "public.tiff"]
+        func image(_ types: [String]) -> String? { PasteboardOrder.image(in: types, isImage: images.contains) }
+        let text = PasteboardOrder.plainText
+        #expect(image(["public.png"]) == "public.png")
+        #expect(image(["public.html", "public.png"]) == "public.png")
+        #expect(image(["public.tiff", text]) == "public.tiff")
+        #expect(image([text, "public.rtf", "public.tiff"]) == nil)
+        #expect(image(["public.html"]) == nil)
+        #expect(image([]) == nil)
+    }
 }

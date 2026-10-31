@@ -233,7 +233,7 @@ import BotChuCore
             let existing = Set(history.map(\.id)).union(model.thread(target).map(\.id))
             // Journal order is append-only. Revalidate its cursor after every suspension so
             // messages another call applied are skipped even if they have left the live tail.
-            added = snapshot.messages.dropFirst(max(0, appliedRevision)).filter { !existing.contains($0.id) }
+            added = snapshot.unapplied(after: appliedRevision, known: existing) ?? []
             for message in added { model.append(message, to: target) }
             appliedRevision = snapshot.messages.count
             if !added.isEmpty { model.saveThread(target) }

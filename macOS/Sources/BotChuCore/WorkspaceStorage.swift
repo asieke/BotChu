@@ -227,6 +227,28 @@ public struct StorageMove: Identifiable, Codable, Equatable, Sendable {
     public func replacing(_ path: String) -> String {
         Self.contains(path, under: source) ? destination + path.dropFirst(source.count) : path
     }
+    /// Checks a whole plan before anything moves (#317): no two folders go to one destination, none
+    /// holds BotChu's own application data at `applicationData`, each move is valid on its own, and
+    /// no folder or destination is inside another folder of the plan.
+    public static func checkPlan(_ plan: [StorageMove], applicationData: URL) throws {
+        guard Set(plan.map(\.destination)).count == plan.count else {
+            throw Problem("Two folders have the same destination. Choose separate destinations first.")
+        }
+        let data = applicationData.resolvingSymlinksInPath().path
+        for move in plan {
+            let source = URL(fileURLWithPath: move.source).resolvingSymlinksInPath().path
+            guard !contains(data, under: source) else {
+                throw Problem("This folder contains BotChu’s application data. Choose its bot or repository folders separately.")
+            }
+            try move.validate()
+        }
+        for a in plan {
+            guard !plan.contains(where: { $0 != a && (contains(a.source, under: $0.source) || contains(a.destination, under: $0.source)) }) else {
+                throw Problem("The selected folders overlap. Move them separately.")
+            }
+        }
+    }
+
     public func validate() throws {
         guard source.hasPrefix("/"), destination.hasPrefix("/"), source != "/",
               !Self.contains(destination, under: source), !Self.contains(source, under: destination),

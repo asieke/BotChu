@@ -91,6 +91,15 @@ import Testing
         #expect(SubagentResume.problem(resuming: run(.running))?.contains("under way") == true)
     }
 
+    @Test func aContinuedSessionThatFailsBeforeAnyToolCallStartsANewOneOnce() {
+        #expect(SubagentResume.startsANewSession(continuedSession: true, failed: true, toolCallsSinceLaunch: 0))
+        // The new launch continues no session, so it doesn't start another.
+        #expect(!SubagentResume.startsANewSession(continuedSession: false, failed: true, toolCallsSinceLaunch: 0))
+        // It got going in its session, or it didn't fail: its outcome stands.
+        #expect(!SubagentResume.startsANewSession(continuedSession: true, failed: true, toolCallsSinceLaunch: 1))
+        #expect(!SubagentResume.startsANewSession(continuedSession: true, failed: false, toolCallsSinceLaunch: 0))
+    }
+
     @Test func theDeltaCarriesHowItEndedTheWorkspaceNowAndItsInterruptedRuns() {
         var record = run(task: taskID)
         record.interruption = SubagentInterruption(cause: .parentEnded, at: record.startedAt!.addingTimeInterval(90), toolCalls: 7,

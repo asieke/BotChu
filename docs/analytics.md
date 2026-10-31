@@ -302,9 +302,7 @@ writes a page of two months of sample data to look at in a browser.
 
 `swift test --package-path macOS --filter AnalyticsExplorerTests` checks each card against independently
 specified dollar amounts and its resulting selection, filter intersections, sorting, price tiers,
-and missing usage. The gated `theAnalyticsPageShowsItsTotalsFiltersByDateAndLoadsNothing` test
-exercises the controls and CSP in WebKit. Set `BOTCHU_ANALYTICS_PREVIEW` to the generated sample's
-absolute path to additionally write `.light.png` and `.dark.png` snapshots beside it.
+and missing usage.
 
 ### End-to-end acceptance evidence (#295)
 
