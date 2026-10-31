@@ -402,6 +402,8 @@ final class AppModel {
                 }
             }
         }
+        // Open tasks' repositories that have no Project Area yet get one (#399).
+        migrateAreas()
         restoreDrafts()
         // Reviews spend the accounts' allowance: only the real app runs them by itself.
         evaluator = makeEvaluator(runner: store == nil && DevHooks.dataDir == nil ? evaluationRunner ?? liveEvaluationRunner() : evaluationRunner)
@@ -927,12 +929,7 @@ final class AppModel {
             let target = ChatTarget.task(id, of: botID)
             guard let task = task(id, of: botID), task.jobRun != nil, task.isArchived, !isRunning(target) else { continue }
             tasks[botID]?.removeAll { $0.id == id }
-            if let conversation = conversations.removeValue(forKey: target) {
-                historyBudget.remove(target)
-                stopContext(target)
-                conversation.actions.cancel()
-            }
-            TranscriptCache.forget(target)
+            dropConversation(target)
             savedDrafts.save(nil, for: DraftStore.Key(bot: botID, task: id), storage: storage)
             // After the writes asked for in its conversation's lane and then its settings' lane.
             let folder = home.taskURL(id), taskLane = home.taskLane(id), storage = storage
@@ -942,6 +939,17 @@ final class AppModel {
                 }
             })
         }
+    }
+
+    /// Forgets a conversation's live state, as its task leaves its bot: what waited for its history
+    /// hears that it went, and its cached transcript goes.
+    func dropConversation(_ target: ChatTarget) {
+        if let conversation = conversations.removeValue(forKey: target) {
+            historyBudget.remove(target)
+            stopContext(target)
+            conversation.actions.cancel()
+        }
+        TranscriptCache.forget(target)
     }
 
     /// Closes a task's tab. Its record, conversation and worktree stay, and it can be opened again;
@@ -1292,6 +1300,12 @@ final class AppModel {
             append(ChatMessage(role: .error, text: "\(bot(target.botID)?.name ?? "The agent")'s workspace is missing."), to: target)
             saveThread(target)
             return TaskWorktree.Failure(step: "The agent's workspace is missing", output: "")
+        }
+        // An area works in its checkout or folder, which it never makes (#399).
+        if task.isArea {
+            append(ChatMessage(role: .error, text: "\(task.checkout) is missing."), to: target)
+            saveThread(target)
+            return TaskWorktree.Failure(step: "The area's folder is missing", output: "")
         }
         let making = Task { await makeWorktree(for: task, of: target.botID) }
         makings[target] = making
@@ -2479,7 +2493,7 @@ final class AppModel {
     /// main thread, on its lane: messages the CLI took that the transcript lacks go back into it,
     /// and what waits in the queue goes out once that's done, as nothing else in the conversation
     /// changes before. The transcript is read only when recovery needs it, or `load` asks for it.
-    private func recover(_ target: ChatTarget, load: Bool) {
+    func recover(_ target: ChatTarget, load: Bool) {
         guard let files = files(target) else { return }
         let conversation = conversation(target)
         let given = conversation.isLoaded ? conversation.messages : nil
@@ -2563,7 +2577,7 @@ final class AppModel {
 
     /// Reads the digest of a conversation not in memory from its index, off the main thread, or
     /// makes its index again when it doesn't match its transcript (`reindex`).
-    private func readDigest(_ target: ChatTarget) {
+    func readDigest(_ target: ChatTarget) {
         guard let files = files(target) else { return }
         let home = files.home, task = target.taskID
         storage.submit(files.lane, label: "digest", work: { home.readDigest(task: task) }) { [weak self] result in

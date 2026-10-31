@@ -89,6 +89,18 @@ public struct BotHome: Sendable {
         try Store.encoder.encode(task).write(to: taskURL(task.id).appendingPathComponent("task.json"), options: .atomic)
     }
 
+    /// Moves a task's whole folder (`tasks/<id>/`: its record, conversation, queue and sub-agent
+    /// runs) from one bot's `.botchu/` to another's, as a Project Area moves to its new bot. Refuses
+    /// when the destination already has a folder for that task.
+    public static func moveTask(_ id: UUID, from source: BotHome, to destination: BotHome) throws {
+        let from = source.taskURL(id), to = destination.taskURL(id)
+        guard from.standardizedFileURL != to.standardizedFileURL else { return }
+        guard !FileManager.default.fileExists(atPath: to.path) else { throw CocoaError(.fileWriteFileExists) }
+        try destination.prepare()
+        try FileManager.default.createDirectory(at: destination.tasksURL, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: from, to: to)
+    }
+
     public func loadThread(task id: UUID) -> [ChatMessage] {
         Self.readThread(taskThreadURL(id))
     }

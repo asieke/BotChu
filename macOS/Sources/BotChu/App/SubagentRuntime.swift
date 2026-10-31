@@ -152,6 +152,33 @@ final class SubagentRuntime {
         root(target).children(of: parent)
     }
 
+    /// Waits for what is being written of the conversation's runs, before its folder moves.
+    func settleRuns(of target: ChatTarget) {
+        guard let owner = model?.bot(target.botID) else { return }
+        let home = BotHome(workspace: owner.workspace)
+        for run in root(target).runs { archive.storage.sync(home.subagentURL(id: run.id, taskID: run.rootTaskID).path, label: "move") {} }
+    }
+
+    /// The conversation's runs, as its area moved to another bot (`AppModel.moveArea`): they are
+    /// that bot's conversation's now.
+    func moveRuns(from old: ChatTarget, to new: ChatTarget) {
+        let runs = root(old).runs.map { run -> SubagentRun in
+            var run = run
+            run.rootBotID = new.botID
+            return run
+        }
+        setRuns([], for: old)
+        roots[old] = nil
+        setRuns(runs, for: new)
+    }
+
+    /// The main checkout a run starts in when it is a shared child of a repository's Project Area.
+    private func areaCheckout(of record: SubagentRun) -> String? {
+        guard record.workspaceMode == .sharedCallerWorkspace, let area = model?.task(ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID)),
+              area.area?.kind == .repo, record.workingDirectory == area.checkout else { return nil }
+        return area.checkout
+    }
+
     fileprivate func root(_ target: ChatTarget) -> SubagentRoot {
         if let existing = roots[target] { return existing }
         let made = SubagentRoot()
@@ -829,7 +856,8 @@ final class SubagentRuntime {
                 callerDescription: record.parentSubagentID.flatMap { run($0)?.targetBotName } ?? model.bot(target.botID)?.name ?? "Bot",
                 memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, soul: snapshot.soul,
                 instructions: snapshot.instructions, team: snapshot.team, availableBots: roster, skills: snapshot.skills,
-                tools: machine.isRemote ? nil : model.tools.instructions())
+                tools: machine.isRemote ? nil : model.tools.instructions(),
+                areaCheckout: areaCheckout(of: record))
             // A resumed run continues its session with the delta alone, or starts anew with both (#368).
             let continued = delta != nil && session ? record.resumableSessionID : nil
             let prompt = delta.map { continued != nil ? $0 : preamble + "\n\n" + $0 } ?? preamble
