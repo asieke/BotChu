@@ -278,8 +278,9 @@ Then choosing, with inline mode on (setup step 5), in each Telegram app you use:
     turn starts. Send "hello": that bot's Home answers, as `Name:`, in this chat. Send
     `@yourbot @Name #bo`, choose a repository, then send a message: it reaches that bot with the
     repository as a `#` mention.
-12. Send `/task #owner/repo Add a test`: the chat says the task started, and BotChu's sidebar
-    shows it under the chosen bot, with its own conversation, not under the chat's own bot.
+12. Send `/task #owner/repo Add a test`: the chat says where it went, and BotChu shows it as a
+    message in that repository's Project Area, under the chosen bot (or the bot that has the
+    repository, where the chosen bot answers), not under the chat's own bot.
 13. Choose a bot, ask it something slow, choose another bot and ask again: each answer comes back
     from the bot that was asked. Delete a chosen bot in BotChu: the next message is refused, not
     sent to another bot.
