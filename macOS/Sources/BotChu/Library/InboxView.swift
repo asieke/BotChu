@@ -634,8 +634,8 @@ private struct InboxToolbar: View {
     let setDone: (Bool) -> Void
 
     var body: some View {
-        // Keep one native toolbar item as the selection advances. A ToolbarItemGroup flattened
-        // these children and rebuilt its AppKit items on each Done press (#356).
+        // Host the actions together so a selection change updates one SwiftUI toolbar view.
+        // This reduces the measured Done update cost compared with separate native items (#356).
         HStack(spacing: 12) {
             let inbox = model.inbox!
             let origin = InboxOrigin(model: model, delivery: delivery)
