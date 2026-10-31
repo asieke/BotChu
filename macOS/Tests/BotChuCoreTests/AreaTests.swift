@@ -76,6 +76,62 @@ private func tempDir() -> URL {
         #expect(Areas.owner(of: "", among: bots) == nil)
     }
 
+    /// #402: Col 2 lists the open areas in attach order, each with its repository's open tasks
+    /// indented under it, then the other open tasks and job runs flat; hidden areas apart.
+    @Test func theColumnNestsTasksUnderTheirAreaAndListsHiddenAreasApart() {
+        let botchu = BotTask(repoArea: "asieke/BotChu", checkout: "/w/BotChu", for: fox, at: date)
+        let notes = BotTask(folderArea: "Kalshi 15m Crypto", folder: "/b/areas/kalshi-15m-crypto", for: fox, at: date.addingTimeInterval(60))
+        var hidden = BotTask(repoArea: "asieke/laser-city", checkout: "/w/laser-city", for: fox, at: date.addingTimeInterval(30))
+        hidden.archivedAt = date
+        let inBotChu = openTask("asieke/botchu", of: fox, at: -60)
+        let elsewhere = openTask("asieke/GitChu", of: fox, at: -30)
+        var closed = openTask("asieke/BotChu", of: fox, at: 10)
+        closed.archivedAt = date
+        let daily = Job(botID: fox.id, title: "Daily", prompt: "Triage.",
+                        schedule: JobSchedule(kind: .daily, hour: 6, minute: 6, timeZone: JobScheduleTests.newYork))
+        let job = JobTasks.task(for: fox, job: daily, run: JobRun(trigger: .manual, scheduledFor: nil, timeZone: JobScheduleTests.newYork, reservedAt: date),
+                                startedAt: date.addingTimeInterval(20))
+        let layout = ProjectAreasLayout(tasks: [inBotChu, elsewhere, notes, closed, job, hidden, botchu])
+        typealias Row = ProjectAreasLayout.Row
+        #expect(layout.rows == [Row(id: botchu.id, isArea: true, nested: false), Row(id: inBotChu.id, isArea: false, nested: true),
+                                Row(id: notes.id, isArea: true, nested: false),
+                                Row(id: elsewhere.id, isArea: false, nested: false), Row(id: job.id, isArea: false, nested: false)])
+        #expect(layout.hidden == [hidden.id])
+        // A bot with no tasks has only Home.
+        #expect(ProjectAreasLayout(tasks: []).rows.isEmpty && ProjectAreasLayout(tasks: []).hidden.isEmpty)
+        // A hidden area's tasks list flat.
+        #expect(ProjectAreasLayout(tasks: [hidden, openTask("asieke/laser-city", of: fox)]).rows.map(\.nested) == [false])
+    }
+
+    /// #402: a row dragged onto a bot carries its bot and area, and nothing else reads as one.
+    @Test func aDraggedAreaCarriesItsBotAndItself() {
+        let bot = UUID(), area = UUID()
+        let dragged = Areas.draggedArea(Areas.dragPayload(botID: bot, areaID: area))
+        #expect(dragged?.botID == bot && dragged?.areaID == area)
+        #expect(Areas.draggedArea(BotSections.dragPayload(bot)) == nil)
+        #expect(Areas.draggedArea(Data("not/an area".utf8)) == nil && Areas.draggedArea(nil) == nil)
+    }
+
+    /// #402: an area's row names it, and says its repository or its `~` folder.
+    @Test func anAreasTabNamesItAndItsPlace() {
+        let repo = ConversationTab(task: BotTask(repoArea: "asieke/BotChu", checkout: "/w/BotChu", for: fox, at: date), machine: nil, state: .idle(since: nil))
+        #expect(repo.area == .repo && repo.name == "BotChu" && repo.title == "BotChu" && repo.subject == "asieke/BotChu")
+        #expect(repo.help(shortcut: "⌘2") == "asieke/BotChu\nasieke/BotChu · This Mac · ⌘2")
+        let folder = ConversationTab(task: BotTask(folderArea: "Kalshi 15m Crypto", folder: NSHomeDirectory() + "/BOTS/t/areas/kalshi-15m-crypto",
+                                                   for: fox, at: date), machine: nil, state: .idle(since: nil))
+        #expect(folder.area == .folder && folder.title == "Kalshi 15m Crypto" && folder.subject == "~/BOTS/t/areas/kalshi-15m-crypto")
+        #expect(ConversationTab.abbreviated("/Users/ab", home: "/Users/a") == "/Users/ab")
+        #expect(ConversationTab(task: openTask("a/b", of: fox), machine: nil, state: .idle(since: nil)).area == nil)
+    }
+
+    /// #402: open areas stay, so the bot's row shows a dot for one only while it isn't idle, as for Home.
+    @Test func aBotsRowShowsAnAreaOnlyWhileItIsNotIdle() {
+        let idle = TabState.idle(since: date), working = TabState.working(.coding, since: date)
+        let row = BotRowSummary(runsOn: "x", home: idle, areas: [idle, working, idle], tasks: [idle])
+        #expect(row.dots == [.working, .idle] && row.spokenDots == "1 working, 1 idle")
+        #expect(BotRowSummary(runsOn: "x", home: idle, areas: [idle, idle], tasks: []).dots.isEmpty)
+    }
+
     @Test func folderAreasGetASlugFolderInTheWorkspace() {
         #expect(Areas.slug("Taxes 2027: the Ranch!") == "taxes-2027-the-ranch")
         #expect(Areas.slug("Café ☕️") == "cafe")

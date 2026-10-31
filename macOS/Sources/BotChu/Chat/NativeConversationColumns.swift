@@ -9,12 +9,11 @@ struct NativeConversationColumns: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("showsStatus") private var showsStatus = true
     @State private var inspectorWidth = ConversationDetailLayout.inspectorWidth
-    @AppStorage(ConversationColumnSettings.collapsedKey) private var collapsedTasks = false
     @AppStorage(ConversationColumnSettings.widthKey) private var taskWidth = ConversationColumnLayout.width
 
     var body: some View {
-        let hasTasks = model.visibleBotID.map { !model.openTasks(of: $0).isEmpty } ?? false
-        let minimum = ConversationDetailLayout.conversationMinimum(hasTasks: hasTasks, collapsed: collapsedTasks, taskWidth: taskWidth)
+        // The Project Areas column is always beside the chat (#402).
+        let minimum = ConversationDetailLayout.conversationMinimum(hasTasks: true, collapsed: false, taskWidth: taskWidth)
         ConversationNativeSplit(model: model, conversationMinimum: minimum, showsInspector: showsStatus,
                                 inspectorWidth: ConversationDetailLayout.clampedInspector(inspectorWidth), reduceMotion: reduceMotion,
                                 resized: { inspectorWidth = $0 }, collapsed: { showsStatus = !$0 })

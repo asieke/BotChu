@@ -165,6 +165,9 @@ public struct ConversationTab: Equatable, Sendable {
     public var isReview: Bool
     /// A run of one of the bot's scheduled jobs (#146).
     public var isJob: Bool = false
+    /// A Project Area's kind (#399): a repository's or a folder's lasting conversation; nil for
+    /// Home and a task.
+    public var area: AreaInfo.Kind?
     /// The host the task works on; nil on this Mac, and for Home.
     public var machine: String?
     /// What the task is about: its issue's or pull request's title, else its brief. Home's account.
@@ -194,6 +197,13 @@ public struct ConversationTab: Equatable, Sendable {
         self.state = state
         if let origin = task.jobRun {
             self.about = ["Job “\(origin.jobTitle)”", machine ?? "This Mac"]
+            return
+        }
+        if let info = task.area {
+            area = info.kind
+            name = info.name
+            subject = info.kind == .repo ? task.repo : Self.abbreviated(task.checkout)
+            self.about = [subject, machine ?? "This Mac"]
             return
         }
         var about = [task.repo]
@@ -232,6 +242,12 @@ public struct ConversationTab: Equatable, Sendable {
         }
         let prefix = task.repoName + " · "
         return task.title.hasPrefix(prefix) ? String(task.title.dropFirst(prefix.count)) : task.title
+    }
+
+    /// A folder as the owner reads it: `~/…` inside their home folder.
+    static func abbreviated(_ path: String, home: String = NSHomeDirectory()) -> String {
+        guard !home.isEmpty, path == home || path.hasPrefix(home + "/") else { return path }
+        return "~" + path.dropFirst(home.count)
     }
 
     /// "#113", after the repository's name on the first line.
@@ -299,8 +315,10 @@ public struct BotRowSummary: Equatable, Sendable {
 
     /// Delegated work is an aggregate dot, independent of Home and tasks: a specialist can be
     /// called without running either conversation. It stays while any call is active (#389).
-    public init(runsOn: String, home: TabState, tasks: [TabState], workingAsSubagent: Bool = false) {
-        var kinds = [home.kind].filter { $0 != .idle } + tasks.map(\.kind)
+    /// The open Project Areas (#399), which stay, have a dot as Home has, while they aren't idle;
+    /// `tasks` are the other open tasks, each with a dot.
+    public init(runsOn: String, home: TabState, areas: [TabState] = [], tasks: [TabState], workingAsSubagent: Bool = false) {
+        var kinds = ([home] + areas).map(\.kind).filter { $0 != .idle } + tasks.map(\.kind)
         if workingAsSubagent { kinds.append(.working) }
         let shown = kinds.enumerated()
             .sorted { ($0.element.urgency, -$0.offset) > ($1.element.urgency, -$1.offset) }
@@ -364,6 +382,39 @@ extension BotRowSummary {
         let name = title.components(separatedBy: " · ")[0]
         let family = (kind.displayName.split(separator: " ").first.map(String.init) ?? "") + " "
         return name.hasPrefix(family) && name.count > family.count ? String(name.dropFirst(family.count)) : name
+    }
+}
+
+/// The Project Areas column's rows (#399), after Home: the bot's open areas in the order it took
+/// them on, each followed, indented, by its open tasks in that repository (from before areas),
+/// then its other open tasks and job runs as they were opened; its hidden areas are listed apart.
+public struct ProjectAreasLayout: Equatable, Sendable {
+    public struct Row: Equatable, Hashable, Sendable {
+        public var id: UUID
+        public var isArea: Bool
+        /// A task under its repository's area.
+        public var nested: Bool
+    }
+
+    public var rows: [Row]
+    /// The hidden areas, in the order they were taken on.
+    public var hidden: [UUID]
+
+    /// `tasks` are all the bot's, open, closed and areas.
+    public init(tasks: [BotTask]) {
+        let areas = Areas.areas(in: tasks)
+        var others = tasks.filter { !$0.isArea && !$0.isArchived }
+        var rows: [Row] = []
+        for area in areas where !area.isArchived {
+            rows.append(Row(id: area.id, isArea: true, nested: false))
+            guard area.area?.kind == .repo, !area.repo.isEmpty else { continue }
+            let mine = others.filter { $0.jobRun == nil && $0.repo.caseInsensitiveCompare(area.repo) == .orderedSame }
+            rows += mine.map { Row(id: $0.id, isArea: false, nested: true) }
+            others.removeAll { task in mine.contains { $0.id == task.id } }
+        }
+        rows += others.map { Row(id: $0.id, isArea: false, nested: false) }
+        self.rows = rows
+        hidden = areas.filter(\.isArchived).map(\.id)
     }
 }
 

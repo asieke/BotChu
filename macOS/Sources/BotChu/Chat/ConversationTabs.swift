@@ -18,21 +18,9 @@ extension Palette {
     static let chat = Color(nsColor: .windowBackgroundColor)
 }
 
-/// Where the column's choices are kept: collapsed to the rail, and its width.
+/// Where the column's width is kept.
 enum ConversationColumnSettings {
-    static let collapsedKey = "conversationColumn.collapsed"
     static let widthKey = "conversationColumn.width"
-}
-
-/// The View menu's command uses the same saved choice as the column and its buttons.
-struct ConversationColumnToggle: View {
-    let model: AppModel
-    @AppStorage(ConversationColumnSettings.collapsedKey) private var collapsed = false
-
-    var body: some View {
-        Button(collapsed ? "Expand Tasks" : "Collapse Tasks") { collapsed.toggle() }
-            .disabled(model.visibleBotID.map { model.openTasks(of: $0).isEmpty } ?? true)
-    }
 }
 
 extension EnvironmentValues {
@@ -90,30 +78,27 @@ struct StatusDot: View {
     }
 }
 
-/// The bot's conversations as tabs beside its chat (#128): Home, then its open tasks, in a column,
-/// or a rail of tiles when the owner collapsed it. Nothing while the bot has no open task,
-/// so its chat is as it was. A view of its own beside the chat, kept as conversations change;
-/// only the chat is made anew for each.
+/// The bot's conversations beside its chat: the Project Areas column (#399, #402), always shown.
+/// A view of its own beside the chat, kept as conversations change; only the chat is made anew
+/// for each.
 struct ConversationSplit<Chat: View>: View {
     @Environment(AppModel.self) private var model
-    /// The tab with keyboard focus, if one has it.
+    /// The row with keyboard focus, if one has it.
     @FocusState private var focus: ChatTarget?
     let botID: UUID
     @ViewBuilder let chat: Chat
 
     var body: some View {
         HStack(spacing: 0) {
-            if !model.openTasks(of: botID).isEmpty {
-                ConversationTabsColumn(botID: botID, focus: $focus)
-                    .onKeyPress(keys: [.upArrow, .downArrow]) { press in move(press.key == .upArrow ? -1 : 1) }
-            }
+            ProjectAreasColumnHost(botID: botID, focus: $focus)
+                .onKeyPress(keys: [.upArrow, .downArrow]) { press in move(press.key == .upArrow ? -1 : 1) }
             chat
                 .environment(\.composerTakesFocus, focus == nil)
         }
         .modifier(TaskTitlePrompts(botID: botID))
     }
 
-    /// ↑ and ↓ move between the tabs while one has focus, without wrapping around.
+    /// ↑ and ↓ move between the rows while one has focus, without wrapping around.
     private func move(_ offset: Int) -> KeyPress.Result {
         let tabs = model.tabs(of: botID)
         guard focus != nil, let index = tabs.firstIndex(of: model.tab(of: botID)), tabs.indices.contains(index + offset) else { return .ignored }
@@ -123,117 +108,70 @@ struct ConversationSplit<Chat: View>: View {
     }
 }
 
-/// The column or the rail, as the owner left it. It reads their choice itself, not the split around
-/// the chat: a view whose body reads an `@AppStorage` value is evaluated again at every UserDefaults
-/// write, whatever its key (#348).
-private struct ConversationTabsColumn: View {
-    @AppStorage(ConversationColumnSettings.collapsedKey) private var collapsed = false
+/// Reads the owner's column width itself, not the split around the chat: a view whose body reads
+/// an `@AppStorage` value is evaluated again at every UserDefaults write, whatever its key (#348).
+private struct ProjectAreasColumnHost: View {
     @AppStorage(ConversationColumnSettings.widthKey) private var width = ConversationColumnLayout.width
     let botID: UUID
     let focus: FocusState<ChatTarget?>.Binding
 
     var body: some View {
-        // Compared by what they show, not by their actions, which are made anew each time and always
-        // set the same two settings: evaluated again at a write, this leaves their rows alone (#348).
-        if collapsed {
-            ConversationRail(botID: botID, focus: focus) { collapsed = false }
-                .equatable()
-        } else {
-            ConversationColumn(botID: botID, width: ConversationColumnLayout.clamped(width), focus: focus,
-                               resize: { width = ConversationColumnLayout.clamped($0) }) {
-                collapsed = true
-            }
+        // Compared by what it shows, not by its action, which is made anew each time and always sets
+        // the same setting: evaluated again at a write, this leaves its rows alone (#348).
+        ProjectAreasColumn(botID: botID, width: ConversationColumnLayout.clamped(width), focus: focus,
+                           resize: { width = ConversationColumnLayout.clamped($0) })
             .equatable()
-        }
     }
 }
 
-extension ConversationColumn: Equatable {
+extension ProjectAreasColumn: Equatable {
     static func == (a: Self, b: Self) -> Bool { a.botID == b.botID && a.width == b.width }
 }
 
-extension ConversationRail: Equatable {
-    static func == (a: Self, b: Self) -> Bool { a.botID == b.botID }
-}
-
-/// The column: Home pinned at the top, then a heading with the tasks' count, New Task and
-/// collapse, then the open tasks, which scroll. The rows are inset `rowInset` from both of its
-/// edges, as the selected one's card shows (#144). Its trailing edge resizes it.
-struct ConversationColumn: View {
+/// The column (#402): its heading with `+` to attach an area, Home pinned, then the bot's open
+/// areas in the order it took them on, each with its tasks indented under it, then its other open
+/// tasks and job runs, which scroll; at its foot, while it has hidden areas, a row that lists them.
+/// The rows are inset `rowInset` from both of its edges, as the selected one's card shows (#144).
+/// Its trailing edge resizes it.
+struct ProjectAreasColumn: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let botID: UUID
     let width: CGFloat
     let focus: FocusState<ChatTarget?>.Binding
     let resize: (CGFloat) -> Void
-    let collapse: () -> Void
     @State private var hovered: ChatTarget?
     @State private var dragStart: CGFloat?
+    @State private var showsHidden = false
+    @State private var attaching = false
 
     /// How far a row is from the column's edges, on both sides.
     static let rowInset: CGFloat = 8
 
     var body: some View {
-        let tasks = model.openTasks(of: botID).map { ChatTarget.task($0.id, of: botID) }
+        let layout = model.areaLayout(of: botID)
         let shown = model.tab(of: botID)
         VStack(alignment: .leading, spacing: 0) {
-            ConversationRow(target: .home(botID), index: 0, selected: shown == .home(botID), hovered: hovered == .home(botID),
-                            focus: focus) { hovered = $0 ? .home(botID) : (hovered == .home(botID) ? nil : hovered) }
-                .padding(.top, 8)
+            heading
+            row(.home(botID), index: 0, shown: shown)
                 .padding(.horizontal, Self.rowInset)
-            HStack(spacing: 6) {
-                Text("Tasks")
-                    .font(.system(size: 11, weight: .semibold))
-                    .kerning(0.66)
-                    .textCase(.uppercase)
-                Text("\(tasks.count)")
-                    .font(.system(size: 11))
-                    .monospacedDigit()
-                Spacer(minLength: 0)
-                // A specialist's tasks from before it was one finish here; it starts none (#250).
-                if model.bot(botID)?.canOwnTasks == true {
-                    ColumnButton(symbol: "plus", help: "New Task (⌘T)") { model.newTask(for: botID) }
-                        .accessibilityIdentifier("conversation-new-task")
-                }
-                ColumnButton(symbol: "chevron.left.2", help: "Collapse Tasks", action: collapse)
-                    .accessibilityIdentifier("conversation-collapse")
-            }
-            .foregroundStyle(Palette.secondaryText)
-            .padding(.leading, 18)
-            .padding(.trailing, 10)
-            .padding(.top, 10)
-            .frame(height: 36)
-            .accessibilityElement(children: .contain)
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
-                    ForEach(Array(tasks.enumerated()), id: \.element) { index, target in
-                        ConversationRow(target: target, index: index + 1, selected: shown == target, hovered: hovered == target,
-                                        focus: focus) { hovered = $0 ? target : (hovered == target ? nil : hovered) }
-                            .overlay(alignment: .top) {
-                                // Between rows, inset to the text, hidden beside the selected and hovered ones.
-                                let above = index > 0 ? tasks[index - 1] : nil
-                                if let above, ![above, target].contains(shown), ![above, target].contains(where: { $0 == hovered }) {
-                                    Rectangle().fill(Palette.rowDivider)
-                                        .frame(height: 1)
-                                        .padding(.leading, 32)
-                                        .padding(.trailing, ConversationRow.padding.trailing)
-                                        .offset(y: -1)
-                                        .allowsHitTesting(false)
-                                        .accessibilityHidden(true)
-                                }
-                            }
+                    ForEach(Array(layout.rows.enumerated()), id: \.element.id) { index, item in
+                        row(.task(item.id, of: botID), index: index + 1, nested: item.nested, shown: shown)
                             .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                     }
                 }
-                .padding(.top, 4)
+                .padding(.top, 1)
                 .padding(.bottom, 8)
                 .padding(.horizontal, Self.rowInset)
-                .animation(reduceMotion ? .easeInOut(duration: 0.16) : .easeOut(duration: 0.2), value: tasks)
+                .animation(reduceMotion ? .easeInOut(duration: 0.16) : .easeOut(duration: 0.2), value: layout.rows)
             }
             .scrollIndicators(.never)
+            if !layout.hidden.isEmpty { hiddenAreas(layout.hidden) }
         }
         // Keep the owner's width and the labels readable. The window's minimum includes the
-        // expanded column, as it includes the chat and the other sidebars (#312).
+        // column, as it includes the chat and the other sidebars (#312).
         .frame(width: width)
         .frame(maxHeight: .infinity, alignment: .top)
         .background {
@@ -243,8 +181,75 @@ struct ConversationColumn: View {
         }
         .overlay(alignment: .trailing) { resizeHandle }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Conversations of \(model.bot(botID)?.name ?? "the bot")")
+        .accessibilityLabel("Project Areas of \(model.bot(botID)?.name ?? "the bot")")
         .accessibilityIdentifier("conversation-column")
+        .sheet(isPresented: $attaching) {
+            AttachAreaSheet(botID: botID).environment(model)
+        }
+    }
+
+    private var heading: some View {
+        HStack(spacing: 6) {
+            Text("Project Areas")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Palette.text)
+            Spacer(minLength: 0)
+            // A specialist, or the remote queue, has no areas: only its Home.
+            if model.bot(botID)?.canOwnTasks == true {
+                ColumnButton(symbol: "plus", help: "Attach Project Area") { attaching = true }
+                    .accessibilityIdentifier("conversation-new-task")
+            }
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 10)
+        .padding(.top, 8)
+        .frame(height: 40)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func row(_ target: ChatTarget, index: Int?, nested: Bool = false, hidden: Bool = false, shown: ChatTarget) -> some View {
+        AreaColumnRow(target: target, index: index, nested: nested, hidden: hidden, selected: shown == target,
+                      hovered: hovered == target, focus: focus) { hovered = $0 ? target : (hovered == target ? nil : hovered) }
+    }
+
+    /// "2 hidden", which opens the hidden areas' rows under it; pressing one shows it again.
+    private func hiddenAreas(_ ids: [UUID]) -> some View {
+        let shown = model.tab(of: botID)
+        return VStack(alignment: .leading, spacing: 1) {
+            Rectangle().fill(Palette.hairline).frame(height: 1).padding(.bottom, 4).accessibilityHidden(true)
+            Button { showsHidden.toggle() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .rotationEffect(.degrees(showsHidden ? 90 : 0))
+                        .frame(width: 16)
+                    Text("\(ids.count) hidden")
+                        .font(.system(size: 12))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(Palette.secondaryText)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, Self.rowInset)
+            .accessibilityLabel("\(ids.count) hidden")
+            .accessibilityValue(showsHidden ? "shown" : "")
+            .accessibilityIdentifier("conversation-hidden")
+            if showsHidden {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(ids, id: \.self) { id in row(.task(id, of: botID), index: nil, hidden: true, shown: shown) }
+                    }
+                    .padding(.horizontal, Self.rowInset)
+                }
+                .scrollIndicators(.never)
+                .frame(maxHeight: CGFloat(min(ids.count, 6)) * 31)
+            }
+        }
+        .padding(.bottom, 8)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: showsHidden)
     }
 
     /// The column's trailing edge: dragging it sets the column's width, from 200 to 320 points.
@@ -267,85 +272,121 @@ struct ConversationColumn: View {
     }
 }
 
-/// One tab of the column: a status dot (a close button in its place on hover, while no turn runs),
-/// the repository and issue number, then for a task what it is about (its summary, #192), then what
-/// it is doing and a time; Home's account, or what it is doing.
-struct ConversationRow: View {
+/// One row of the column, on one line: a mark for what it is (Home's house, a repository's
+/// diamond, a folder, a job's clock, a review's eye; none for a task under its area), its name,
+/// and its state's dot while it isn't idle. On hover an area shows its menu's button, and a task
+/// that runs nothing its close button. An area's row drags onto a bot in the sidebar to move it.
+struct AreaColumnRow: View {
     @Environment(AppModel.self) private var model
     let target: ChatTarget
-    /// Its place among Home and the open tasks, for its shortcut.
-    let index: Int
+    /// Its place among Home and the rows, for its shortcut; nil for a hidden area.
+    let index: Int?
+    let nested: Bool
+    /// A hidden area's, under "n hidden": pressing it shows the area again.
+    let hidden: Bool
     let selected: Bool
     let hovered: Bool
-    /// Which tab has keyboard focus, which it shows with a violet edge.
+    /// Which row has keyboard focus, which it shows with a violet edge.
     let focus: FocusState<ChatTarget?>.Binding
     let hover: (Bool) -> Void
 
-    private static let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
-    /// Between the row's edges and its dot and texts: the time ends as far from the column's
-    /// trailing edge as the dot starts from its leading one.
-    static let padding = EdgeInsets(top: 9, leading: 8, bottom: 10, trailing: 8)
+    private static let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
 
     var body: some View {
         if let tab = model.conversationTab(of: target) {
-            let closable = target.taskID != nil && !model.isRunning(target)
-            Button { model.show(target) } label: {
-                HStack(alignment: .top, spacing: 8) {
-                    StatusDot(kind: tab.state.kind)
-                        .frame(width: 16, height: 16)
-                        .opacity(closable && hovered ? 0 : 1)
-                    VStack(alignment: .leading, spacing: 3) {
-                        ConversationTitle(tab: tab, selected: selected)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        if !tab.isHome {
-                            Text(tab.label)
-                                .font(.system(size: 12))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                        ConversationDetail(tab: tab)
+            let isArea = tab.area != nil
+            let accessory = hovered && !hidden && (isArea || (!tab.isHome && !model.isRunning(target)))
+            Button { if hidden { model.unhideArea(target) } else { model.show(target) } } label: {
+                HStack(spacing: 8) {
+                    if !nested {
+                        mark(tab)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Palette.secondaryText)
+                            .frame(width: 16)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    title(tab)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if tab.state.kind != .idle {
+                        StatusDot(kind: tab.state.kind)
+                            .opacity(accessory ? 0 : 1)
+                    }
                 }
-                .padding(Self.padding)
-                .foregroundStyle(selected ? Palette.text : Palette.pathText)
+                .padding(.vertical, 6)
+                .padding(.leading, nested ? 32 : 8)
+                .padding(.trailing, 8)
+                .frame(minHeight: 30)
+                .foregroundStyle(selected ? Palette.text : hidden ? Palette.secondaryText : Palette.pathText)
                 .background { background }
                 .contentShape(Self.shape)
             }
             .buttonStyle(.plain)
-            .focusable()
+            .focusable(!hidden)
             .focused(focus, equals: target)
             .focusEffectDisabled()
-            .overlay(alignment: .topLeading) {
-                if closable && hovered {
-                    CloseTabButton(target: target, title: tab.title)
-                        .padding(.top, Self.padding.top)
-                        .padding(.leading, Self.padding.leading)
+            .overlay(alignment: .trailing) {
+                if accessory {
+                    Group {
+                        if isArea { AreaMenuButton(target: target, title: tab.title) }
+                        else { CloseTabButton(target: target, title: tab.title) }
+                    }
+                    .padding(.trailing, 6)
                 }
             }
             .onHover(perform: hover)
-            .help(tab.help(shortcut: ConversationTab.shortcut(forTab: index)))
+            .help(tab.help(shortcut: index.flatMap(ConversationTab.shortcut(forTab:))))
             .contextMenu {
-                if let task = model.task(target) {
+                if hidden {
+                    Button("Show") { model.unhideArea(target) }
+                } else if isArea {
+                    AreaMenu(target: target)
+                } else if let task = model.task(target) {
                     TaskMenu(target: target, task: task)
                 } else {
                     Button("New Session") { model.newSession(target) }
                         .disabled(model.isRunning(target))
                 }
             }
-            .accessibilityLabel(tab.spoken(at: .now))
+            .modifier(AreaDragSource(target: isArea && !hidden ? target : nil))
+            .accessibilityLabel((hidden ? "Hidden, " : "") + tab.spoken(at: .now))
             .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityIdentifier(target.taskID.map { "conversation-tab-\($0)" } ?? "conversation-tab-home")
             .onAppear { if let id = target.taskID { FrameTimings.mark(FrameMarks.tab(id)) } }
         }
     }
 
+    @ViewBuilder private func mark(_ tab: ConversationTab) -> some View {
+        switch tab.area {
+        case .repo: Image(systemName: "diamond")
+        case .folder: Image(systemName: "folder")
+        case nil:
+            if tab.isHome { Image(systemName: "house") }
+            else if tab.isJob { Image(systemName: "clock.arrow.circlepath") }
+            else if tab.isReview { Image(systemName: "eye") }
+            else { Image(systemName: "checklist") }
+        }
+    }
+
+    /// An area's or Home's name; a task's repository and number, then its branch (else what it is
+    /// about), quieter, and smaller under its area.
+    private func title(_ tab: ConversationTab) -> Text {
+        let weight: Font.Weight = selected ? .semibold : .regular
+        guard tab.area == nil, !tab.isHome else { return Text(tab.name).font(.system(size: 13, weight: weight)) }
+        let branch = model.task(target)?.branch ?? ""
+        let detail = branch.isEmpty || tab.isJob ? tab.label : branch
+        var text = Text(tab.name)
+        if let number = tab.numberText { text = text + Text(" " + number).monospacedDigit() }
+        if let machine = tab.machine { text = text + Text(" · " + machine) }
+        text = text + Text(" · " + detail).foregroundStyle(Palette.secondaryText)
+        return text.font(.system(size: nested ? 11.5 : 12.5, weight: weight))
+    }
+
     @ViewBuilder private var background: some View {
         let focused = focus.wrappedValue == target
         if selected {
-            // A card with its edge all round, as the rail's selected tile is: the chat's real
-            // background isn't the window's in dark mode, so a tab left open to it showed a seam (#144).
+            // A card with its edge all round: the chat's real background isn't the window's in dark
+            // mode, so a row left open to it showed a seam (#144).
             Self.shape.fill(Palette.chat)
                 .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
                 .overlay { Self.shape.strokeBorder(focused ? Palette.violet : Color.primary.opacity(0.08), lineWidth: focused ? 2 : 0.5) }
@@ -356,70 +397,58 @@ struct ConversationRow: View {
     }
 }
 
-/// A tab's first, prominent line: a review's eye or a job's clock, the repository it works in (a
-/// job's run: its job), then its issue's number (and its host) in the secondary colour.
-struct ConversationTitle: View {
-    let tab: ConversationTab
-    let selected: Bool
+/// An area's row gives a drag that a bot's row in the sidebar takes, to move the area there.
+private struct AreaDragSource: ViewModifier {
+    let target: ChatTarget?
 
-    var body: some View {
-        text.font(.system(size: 13, weight: selected ? .semibold : .medium))
-    }
-
-    private var text: Text {
-        var text = Text("")
-        if tab.isReview || tab.isJob {
-            text = text + Text(Image(systemName: tab.isJob ? "clock.arrow.circlepath" : "eye")).foregroundStyle(Palette.secondaryText) + Text(" ")
+    func body(content: Content) -> some View {
+        if let target, let id = target.taskID {
+            content.onDrag { AreaDrag.provider(botID: target.botID, areaID: id) }
+        } else {
+            content
         }
-        text = text + Text(tab.name)
-        if let number = tab.numberText {
-            text = text + Text(" " + number).foregroundStyle(Palette.secondaryText).fontWeight(.medium).monospacedDigit()
-        }
-        if let machine = tab.machine {
-            text = text + Text(" · " + machine).foregroundStyle(Palette.secondaryText).fontWeight(.regular)
-        }
-        return text
     }
 }
 
-/// A tab's last line: what it is doing (while idle, Home's account or "Idle") on the left, which
-/// shortens first, and its time on the right, in tabular digits, never cut off. A running turn's
-/// time ticks each second.
-struct ConversationDetail: View {
-    let tab: ConversationTab
+/// An area's menu (#402), in its row's context menu and its hover button: Move to another bot,
+/// Hide, its folder in Finder and Terminal, and New Session.
+struct AreaMenu: View {
+    @Environment(AppModel.self) private var model
+    let target: ChatTarget
 
     var body: some View {
-        if tab.state.kind == .starting || tab.state.kind == .working {
-            TimelineView(.periodic(from: .now, by: 1)) { context in line(now: context.date) }
-        } else {
-            TimelineView(.everyMinute) { context in line(now: context.date) }
-        }
-    }
-
-    private func line(now: Date) -> some View {
-        HStack(spacing: 6) {
-            what
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if let time = tab.state.time(at: now) {
-                Text(time)
-                    .monospacedDigit()
-                    .fixedSize()
+        Menu("Move to") {
+            ForEach(model.areaMoveTargets(of: target)) { bot in
+                Button(bot.name) { model.moveArea(target, to: bot.id) }
+                    .disabled(model.areaMoveProblem(target, to: bot.id) != nil)
             }
         }
-        .font(.system(size: 11))
-        .foregroundStyle(Palette.secondaryText)
+        Button("Hide") { model.hideArea(target) }
+            .disabled(model.isRunning(target))
+        Divider()
+        Button("Reveal in Finder") { model.revealWorktree(target) }
+        Button("Open in Terminal") { model.openWorktreeInTerminal(target) }
+        Divider()
+        Button("New Session") { model.newSession(target) }
+            .disabled(model.isRunning(target))
     }
+}
 
-    private var what: Text {
-        switch tab.state {
-        case .failed, .stopped: Text(tab.status).foregroundStyle(StatusLook.error.dot)
-        case .needsInput: Text(tab.status).foregroundStyle(Palette.warning)
-        case .news(let pullRequest?, _):
-            Text("Finished · ") + Text("PR #\(pullRequest)").foregroundStyle(Palette.pathText).fontWeight(.medium)
-        default: Text(tab.status)
+/// In an area's dot's place on hover: its menu.
+private struct AreaMenuButton: View {
+    let target: ChatTarget
+    let title: String
+
+    var body: some View {
+        Menu { AreaMenu(target: target) } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 11, weight: .semibold))
         }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .foregroundStyle(Palette.secondaryText)
+        .accessibilityLabel("Actions for \(title)")
     }
 }
 
@@ -468,127 +497,6 @@ private struct ColumnButton: View {
         .help(help)
         .accessibilityLabel(help)
     }
-}
-
-/// The column collapsed: a 56-point rail of tiles, a house for Home, then each task's number (a
-/// checklist for a brief), then New Task, with expand at the foot. A tile that isn't idle shows its
-/// dot in its corner; hovering one shows its tab's two lines.
-struct ConversationRail: View {
-    @Environment(AppModel.self) private var model
-    let botID: UUID
-    let focus: FocusState<ChatTarget?>.Binding
-    let expand: () -> Void
-
-    var body: some View {
-        let tasks = model.openTasks(of: botID).map { ChatTarget.task($0.id, of: botID) }
-        let shown = model.tab(of: botID)
-        VStack(spacing: 4) {
-            RailTile(target: .home(botID), index: 0, selected: shown == .home(botID), focus: focus)
-            Rectangle().fill(Palette.hairline)
-                .frame(width: 24, height: 1)
-                .padding(.vertical, 2)
-                .accessibilityHidden(true)
-            ScrollView {
-                VStack(spacing: 4) {
-                    ForEach(Array(tasks.enumerated()), id: \.element) { index, target in
-                        RailTile(target: target, index: index + 1, selected: shown == target, focus: focus)
-                    }
-                    if model.bot(botID)?.canOwnTasks == true {
-                        Button { model.newTask(for: botID) } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 13, weight: .medium))
-                                .frame(width: 40, height: 32)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Palette.secondaryText)
-                        .help("New Task (⌘T)")
-                        .accessibilityLabel("New Task")
-                        .accessibilityIdentifier("conversation-new-task")
-                    }
-                }
-            }
-            .scrollIndicators(.never)
-            ColumnButton(symbol: "chevron.right.2", help: "Expand Tasks", action: expand)
-                .accessibilityIdentifier("conversation-expand")
-        }
-        .padding(.top, 8)
-        .padding(.bottom, 10)
-        .frame(width: ConversationColumnLayout.railWidth)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background {
-            Palette.conversationColumn
-                .overlay(alignment: .trailing) { Rectangle().fill(Palette.hairline).frame(width: 1) }
-                .ignoresSafeArea(edges: .bottom)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Conversations of \(model.bot(botID)?.name ?? "the bot")")
-        .accessibilityIdentifier("conversation-rail")
-    }
-}
-
-/// A 40-point tile of the rail.
-private struct RailTile: View {
-    @Environment(AppModel.self) private var model
-    let target: ChatTarget
-    let index: Int
-    let selected: Bool
-    let focus: FocusState<ChatTarget?>.Binding
-    @State private var hovering = false
-
-    private static let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
-
-    var body: some View {
-        if let tab = model.conversationTab(of: target) {
-            Button { model.show(target) } label: {
-                Group {
-                    if tab.isHome {
-                        Image(systemName: "house").font(.system(size: 14))
-                    } else if tab.isJob {
-                        Image(systemName: "clock.arrow.circlepath").font(.system(size: 14))
-                    } else if let number = tab.numberText {
-                        Text(number).font(.system(size: 11.5, weight: .semibold)).monospacedDigit()
-                            .lineLimit(1).minimumScaleFactor(0.7)
-                    } else {
-                        Image(systemName: "checklist").font(.system(size: 14))
-                    }
-                }
-                .frame(width: 40, height: 40)
-                .foregroundStyle(selected ? Palette.text : Palette.pathText)
-                .background {
-                    if selected {
-                        Self.shape.fill(Palette.chat)
-                            .shadow(color: .black.opacity(0.08), radius: 1.5, y: 1)
-                            .overlay { Self.shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5) }
-                    } else if hovering {
-                        Self.shape.fill(Color.primary.opacity(0.045))
-                    }
-                }
-                .overlay {
-                    if focus.wrappedValue == target { Self.shape.strokeBorder(Palette.violet, lineWidth: 2) }
-                }
-                .overlay(alignment: .topTrailing) {
-                    if tab.state.kind != .idle {
-                        StatusDot(kind: tab.state.kind, cutout: Palette.conversationColumn).padding(2)
-                    }
-                }
-                .contentShape(Self.shape)
-            }
-            .buttonStyle(.plain)
-            .focusable()
-            .focused(focus, equals: target)
-            .focusEffectDisabled()
-            .onHover { hovering = $0 }
-            .help(tab.railHelp(at: .now, shortcut: ConversationTab.shortcut(forTab: index)))
-            .contextMenu {
-                if let task = model.task(target) { TaskMenu(target: target, task: task) }
-            }
-            .accessibilityLabel(tab.spoken(at: .now))
-            .accessibilityAddTraits(selected ? .isSelected : [])
-            .accessibilityIdentifier(target.taskID.map { "conversation-tile-\($0)" } ?? "conversation-tile-home")
-        }
-    }
-
 }
 
 /// A task's menu, in its tab and its tile: its issue or pull request (a job's run: the run in its

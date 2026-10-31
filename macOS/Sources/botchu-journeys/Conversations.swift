@@ -5,7 +5,7 @@ import BotChuCore
 extension Journeys {
     // MARK: 4. Switching task tabs
 
-    /// Selects the first bot's tasks in the tabs beside its chat, each followed by its Home (the
+    /// Selects the first bot's areas and tasks in the Project Areas column, each followed by its Home (the
     /// 5,000-message conversation), `repeats` times each, timed until the chat shows the tab's rows.
     /// A first round isn't counted: going back to Home the first time after a launch shows it, but
     /// SwiftUI doesn't tell its rows they appeared, so no mark comes.
@@ -39,7 +39,7 @@ extension Journeys {
     /// message shows.
     private func selectTab(_ task: UUID?, of bot: Bot) throws -> Double {
         let identifier = task.map { "conversation-tab-\($0.uuidString)" } ?? "conversation-tab-home"
-        guard let tab = try app.window().first(identifier: identifier) else { throw HarnessFailure("The column beside the chat has no \(identifier)") }
+        guard let tab = try app.window().first(identifier: identifier) else { throw HarnessFailure("The Project Areas column has no \(identifier)") }
         let (start, shown) = try press(tab, until: FrameMarks.chat(task ?? bot.id))
         app.settle()
         guard let last = fixture.lastItem[task ?? bot.id], try app.window().first(identifier: "chat-item-\(last.uuidString)") != nil else {

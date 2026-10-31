@@ -13,6 +13,29 @@ extension AppModel {
         Areas.owner(of: repo, among: bots.map { ($0.id, tasks[$0.id, default: []]) })
     }
 
+    /// Each repository's area, hidden or not, by its `owner/name` lowercased: whose it is.
+    func areaOwners() -> [String: UUID] {
+        var owners: [String: UUID] = [:]
+        for bot in bots {
+            for area in areas(of: bot.id) where area.area?.kind == .repo && owners[area.repo.lowercased()] == nil {
+                owners[area.repo.lowercased()] = bot.id
+            }
+        }
+        return owners
+    }
+
+    /// The bots an area's menu and a drag can move it to: those who can own one, but its own.
+    func areaMoveTargets(of target: ChatTarget) -> [Bot] { bots.filter { $0.canOwnTasks && $0.id != target.botID } }
+
+    /// Moves the area a row dragged onto a bot in the sidebar carries to that bot; false when it
+    /// can't move there now.
+    @discardableResult
+    func dropArea(_ dragged: (botID: UUID, areaID: UUID), on botID: UUID) -> Bool {
+        let target = ChatTarget.task(dragged.areaID, of: dragged.botID)
+        guard task(target)?.isArea == true, areaMoveProblem(target, to: botID) == nil else { return false }
+        return moveArea(target, to: botID) != nil
+    }
+
     /// Gives the bot the repository's area: its own (shown again when hidden, and opened when
     /// `revealing`), the one another bot has (moved to it), or a new one in the repository's main
     /// checkout on this Mac (`checkout`, else where it is located). Nil when the bot can't own it,

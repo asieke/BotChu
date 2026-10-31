@@ -353,7 +353,7 @@ struct InboxRow: View {
             .contentShape(Self.shape)
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, ConversationColumn.rowInset)
+        .padding(.horizontal, ProjectAreasColumn.rowInset)
         .onHover { hovering = $0 }
         .contextMenu { DeliveryMenu(delivery: delivery) }
         .accessibilityLabel("\(model.bot(delivery.botID)?.name ?? "Bot"): \(PurposeLook(delivery.purpose).title): \(delivery.title)\(unread ? ", unread" : "")")

@@ -14,7 +14,7 @@ struct Journeys {
         (6, ["send", "stream", "chat"]),
         (7, ["scroll", "history"]),
         (8, ["expand", "group"]),
-        (9, ["new-task"]),
+        (9, ["new-task", "attach-area"]),
         (10, ["resize"]),
         (11, ["inbox", "settings"]),
         (12, ["subagent", "sub-agent"]),
