@@ -123,6 +123,7 @@ private struct ChatContent: View {
                 // Opening a conversation, or switching to it, shows its newest message.
                 .onAppear {
                     conversation.showLatest()
+                    transcript.prepareToOpenCard = { [weak conversation] in conversation?.pinDisplay() }
                     transcript.hasLaterPage = false
                     transcript.loadLater = {
                         model.pageLater(target) { transcript.hasLaterPage = conversation.hasLaterPage }
@@ -132,6 +133,7 @@ private struct ChatContent: View {
                 .onDisappear {
                     conversation.showLatest()
                     transcript.loadLater = nil
+                    transcript.prepareToOpenCard = nil
                 }
                 .onChange(of: conversation.hasLaterPage) { _, later in transcript.hasLaterPage = later }
                 .onChange(of: transcript.isPinned) { _, pinned in

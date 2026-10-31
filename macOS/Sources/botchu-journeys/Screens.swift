@@ -17,8 +17,17 @@ extension Journeys {
         do {
             try show(bot)
             print("journeys: 8 expands \"\(try groupHead().label)\"")
+            var expectedGroup: String?
+            var expectedLabel: String?
             for _ in 0..<repeats {
                 let (head, group) = try groupHeadAndID()
+                let label = head.label
+                guard let before = head.frame else { throw HarnessFailure("The group header has no frame") }
+                if let expectedGroup, let expectedLabel {
+                    guard group == expectedGroup, label == expectedLabel else {
+                        throw HarnessFailure("Closing and reopening changed the displayed group")
+                    }
+                } else { expectedGroup = group; expectedLabel = label }
                 let (start, shown) = try press(head, until: FrameMarks.chat(bot.id))
                 opened.append(Self.ms(start, shown.nanoseconds))
                 let after = shown.nanoseconds + 1_000_000_000
@@ -27,7 +36,12 @@ extension Journeys {
                 frames.append(app.longestBusy(from: shown.nanoseconds + 1, to: after))
                 let rows = try app.window().all(identifier: group).count
                 guard rows > 1 else { throw HarnessFailure("Pressed, the group of calls still shows as one row") }
-                _ = try press(try groupHeadAndID().head, until: FrameMarks.chat(bot.id))
+                let expanded = try groupHeadAndID()
+                guard expanded.group == group, expanded.head.label == label, let afterFrame = expanded.head.frame,
+                      abs(afterFrame.minY - before.minY) <= 1 else {
+                    throw HarnessFailure("Opening the group changed its content or moved its header")
+                }
+                _ = try press(expanded.head, until: FrameMarks.chat(bot.id))
                 app.settle(quiet: 0.3, limit: 3)
             }
             try app.requireForeground()
