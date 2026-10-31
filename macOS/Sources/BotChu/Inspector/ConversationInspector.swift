@@ -75,6 +75,9 @@ private struct ConversationInspectorAreas: View {
                 ConversationBotPanel(target: target)
             }
         }
+        .onAppear {
+            if let tab = DevHooks.conversationTab { selection = tab }
+        }
     }
 }
 
@@ -150,9 +153,10 @@ private struct AreaRepoTab: View {
                     }
                 } else if let repo = model.repositories?.first(where: { $0.id.caseInsensitiveCompare(task.repo) == .orderedSame }) {
                     repository(repo, task: task)
-                } else if model.repositories == nil {
+                } else if model.repositories == nil, model.repositoriesError == nil {
                     ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.top, 24)
                 } else {
+                    // Not one gh lists (or gh couldn't be read): its checkout.
                     ScrollView {
                         FolderSection(title: "Checkout", name: task.repo, path: task.checkout, remote: task.isRemote)
                             .frame(maxWidth: .infinity, alignment: .leading)
