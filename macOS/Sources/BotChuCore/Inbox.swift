@@ -652,14 +652,31 @@ public enum InboxList {
     public static func groups(_ deliveries: some Sequence<Delivery>, state: InboxState, now: Date, calendar: Calendar = .current,
                               pinned: [UUID: Section] = [:], matching query: String = "", retaining selected: UUID? = nil) -> [Group] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        var grouped: [Section: [Delivery]] = [:]
+        // Day boundaries are shared by every candidate. Calendar intervals preserve local-day
+        // boundaries through daylight-saving transitions; their end belongs to the following day.
+        let today = calendar.dateInterval(of: .day, for: now)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: now)
+            .flatMap { calendar.dateInterval(of: .day, for: $0) }
+        func section(_ delivery: Delivery) -> Section {
+            guard let today, let yesterday else {
+                return Self.section(of: delivery, state: state, now: now, calendar: calendar)
+            }
+            if state[delivery.id].done { return .done }
+            if state.needsInput(delivery) { return .needsInput }
+            let date = delivery.updatedAt
+            if date >= today.start && date < today.end { return .today }
+            if date >= yesterday.start && date < yesterday.end { return .yesterday }
+            return .day(calendar.startOfDay(for: date))
+        }
+        // Sorting needs only identity and time, not each delivery's note, files and credits.
+        var grouped: [Section: [(id: UUID, date: Date)]] = [:]
         for delivery in deliveries {
             if query.isEmpty {
                 if delivery.id != selected, isArchived(delivery, state: state, now: now) { continue }
             } else if !matches(delivery, query: query) { continue }
-            var section = section(of: delivery, state: state, now: now, calendar: calendar)
+            var section = section(delivery)
             if section != .done, let pin = pinned[delivery.id], pin != .done { section = pin }
-            grouped[section, default: []].append(delivery)
+            grouped[section, default: []].append((delivery.id, delivery.updatedAt))
         }
         func rank(_ section: Section) -> (Int, TimeInterval) {
             switch section {
@@ -671,7 +688,10 @@ public enum InboxList {
             }
         }
         return grouped.keys.sorted { rank($0) < rank($1) }.map { section in
-            Group(section: section, ids: grouped[section]!.sorted { ($0.updatedAt, $0.id.uuidString) > ($1.updatedAt, $1.id.uuidString) }.map(\.id))
+            Group(section: section, ids: grouped[section]!.sorted {
+                if $0.date != $1.date { return $0.date > $1.date }
+                return $0.id.uuidString > $1.id.uuidString
+            }.map(\.id))
         }
     }
 
