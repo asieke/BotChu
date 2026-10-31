@@ -70,7 +70,6 @@ struct ContentView: View {
 /// conversations redraws only this column.
 private struct DetailColumn: View {
     @Environment(AppModel.self) private var model
-    @AppStorage("showsStatus") private var showsStatus = true
 
     var body: some View {
         content
@@ -83,7 +82,6 @@ private struct DetailColumn: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) { ReportIssueButton() }
             }
-            .onChange(of: showsStatus) { _, shown in FrameTimings.mark(FrameMarks.inspector(shown: shown)) }
     }
 
     @ViewBuilder private var content: some View {
@@ -107,7 +105,7 @@ private struct DetailColumn: View {
                     .onAppear { model.hydrate(tab) }
             }
             .modifier(ChatToolbar())
-            .inspector(isPresented: $showsStatus) {
+            .modifier(StatusSidebar {
                 Group {
                     if tab.taskID != nil {
                         // A view of its own per task, so nothing it read about one task shows on another.
@@ -119,7 +117,7 @@ private struct DetailColumn: View {
                 }
                 // Opens at its widest, and narrows from there.
                 .inspectorColumnWidth(min: 280, ideal: 380, max: 380)
-            }
+            })
         } else {
             ContentUnavailableView {
                 Label("No Bot Selected", systemImage: "bubble.left.and.text.bubble.right")
@@ -130,5 +128,20 @@ private struct DetailColumn: View {
                     .buttonStyle(.borderedProminent)
             }
         }
+    }
+}
+
+/// The status sidebar beside the conversation, shown or hidden as the owner chose. Only this reads
+/// whether it shows: a view whose body reads an `@AppStorage` value is evaluated again at every
+/// UserDefaults write, whatever its key (the toggle itself, a split view saving its widths), so the
+/// column around it, which rebuilt the whole conversation each time, reads none (#348).
+private struct StatusSidebar<Inspector: View>: ViewModifier {
+    @AppStorage("showsStatus") private var showsStatus = true
+    @ViewBuilder let inspector: Inspector
+
+    func body(content: Content) -> some View {
+        content
+            .inspector(isPresented: $showsStatus) { inspector }
+            .onChange(of: showsStatus) { _, shown in FrameTimings.mark(FrameMarks.inspector(shown: shown)) }
     }
 }

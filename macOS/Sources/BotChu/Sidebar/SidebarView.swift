@@ -2,14 +2,38 @@ import SwiftUI
 import UniformTypeIdentifiers
 import BotChuCore
 
+/// The sidebar, with its sections open or collapsed as the owner left them. Only this reads those
+/// settings, and hands their values to the list: a view whose body reads an `@AppStorage` value is
+/// evaluated again at every UserDefaults write, whatever its key (the status sidebar's toggle, a
+/// split view saving its widths), and the list, which updates every row it shows, needn't be (#348).
 struct SidebarView: View {
-    @Environment(AppModel.self) private var model
-    @State private var pendingDelete: Bot?
-    @State private var naming = SectionNaming()
     @AppStorage(CollapsedSections.storageKey) private var collapsed = CollapsedSections()
     @AppStorage("sidebar.specialistsExpanded") private var specialistsExpanded = false
 
     var body: some View {
+        SidebarList(collapsed: collapsed, specialistsExpanded: specialistsExpanded,
+                    collapse: { change in change(&collapsed) }, expandSpecialists: { specialistsExpanded = $0 })
+            .equatable()
+    }
+}
+
+/// Compared by the settings it shows, not by its actions, which are made anew each time and always
+/// set the same two settings.
+private struct SidebarList: View, Equatable {
+    @Environment(AppModel.self) private var model
+    @State private var pendingDelete: Bot?
+    @State private var naming = SectionNaming()
+    let collapsed: CollapsedSections
+    let specialistsExpanded: Bool
+    let collapse: ((inout CollapsedSections) -> Void) -> Void
+    let expandSpecialists: (Bool) -> Void
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.collapsed == b.collapsed && a.specialistsExpanded == b.specialistsExpanded
+    }
+
+    var body: some View {
+        let _ = SidebarStatusDiagnostics.didEvaluateList?()
         List(selection: Binding<SidebarDestination?>(
             get: { model.sidebarSelection },
             set: { value in
@@ -61,7 +85,7 @@ struct SidebarView: View {
             // The specialists, last and collapsed until opened (#250): only called as sub-agents, so
             // they start no tasks, aren't moved into sections, and take no drops.
             if !specialists.isEmpty {
-                Section(isExpanded: $specialistsExpanded) {
+                Section(isExpanded: Binding(get: { specialistsExpanded }, set: expandSpecialists)) {
                     ForEach(specialists) { bot in
                         row(bot)
                             .contextMenu {
@@ -90,7 +114,7 @@ struct SidebarView: View {
         // What is selected from elsewhere (Agents, a new bot or task, ⌃Tab) shows, in its section.
         .onChange(of: model.sidebarSelection) { _, selection in
             guard let id = selection?.botID else { return }
-            if model.bot(id)?.isSpecialist == true { specialistsExpanded = true }
+            if model.bot(id)?.isSpecialist == true { expandSpecialists(true) }
             else { reveal(model.sections[id] ?? BotSections.unsectioned) }
         }
         // Above New Bot, while the sidebar's changes aren't saved.
@@ -116,7 +140,9 @@ struct SidebarView: View {
     }
 
     private func row(_ bot: Bot) -> some View {
-        SidebarBotRow(bot: bot)
+        // Whether it is selected is said here, once for every row: a row that read the selection
+        // itself was drawn again, with its status and summary, whenever any bot was selected (#348).
+        SidebarBotRow(bot: bot, selected: model.visibleBotID == bot.id)
             .tag(SidebarDestination.bot(bot.id))
             .accessibilityIdentifier("sidebar-bot-\(bot.id)")
             .onAppear { FrameTimings.mark(FrameMarks.sidebarRow) }
@@ -124,12 +150,12 @@ struct SidebarView: View {
 
     private func isExpanded(_ group: BotSections.Group) -> Binding<Bool> {
         Binding(get: { !collapsed.titles.contains(group.title) }, set: { expanded in
-            if expanded { collapsed.titles.remove(group.title) } else { collapsed.titles.insert(group.title) }
+            collapse { if expanded { $0.titles.remove(group.title) } else { $0.titles.insert(group.title) } }
         })
     }
 
     private func reveal(_ title: String) {
-        if collapsed.titles.contains(title) { collapsed.titles.remove(title) }
+        if collapsed.titles.contains(title) { collapse { $0.titles.remove(title) } }
     }
 
     /// Puts a bot dropped at `index` among a section's bots, as the sidebar shows them, before the
@@ -146,11 +172,11 @@ struct SidebarView: View {
 private struct SidebarBotRow: View {
     @Environment(AppModel.self) private var model
     let bot: Bot
+    let selected: Bool
 
     var body: some View {
         let _ = SidebarStatusDiagnostics.didEvaluateRow?(bot.id)
-        BotRow(bot: bot, status: model.status(of: bot), summary: model.botRowSummary(of: bot),
-               selected: model.visibleBotID == bot.id)
+        BotRow(bot: bot, status: model.status(of: bot), summary: model.botRowSummary(of: bot), selected: selected)
     }
 }
 
