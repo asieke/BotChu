@@ -96,8 +96,6 @@ struct StatusDot: View {
 /// only the chat is made anew for each.
 struct ConversationSplit<Chat: View>: View {
     @Environment(AppModel.self) private var model
-    @AppStorage(ConversationColumnSettings.collapsedKey) private var collapsed = false
-    @AppStorage(ConversationColumnSettings.widthKey) private var width = ConversationColumnLayout.width
     /// The tab with keyboard focus, if one has it.
     @FocusState private var focus: ChatTarget?
     let botID: UUID
@@ -106,17 +104,8 @@ struct ConversationSplit<Chat: View>: View {
     var body: some View {
         HStack(spacing: 0) {
             if !model.openTasks(of: botID).isEmpty {
-                let column = ConversationColumnLayout.clamped(width)
-                Group {
-                    if collapsed {
-                        ConversationRail(botID: botID, focus: $focus) { collapsed = false }
-                    } else {
-                        ConversationColumn(botID: botID, width: column, focus: $focus, resize: { width = ConversationColumnLayout.clamped($0) }) {
-                            collapsed = true
-                        }
-                    }
-                }
-                .onKeyPress(keys: [.upArrow, .downArrow]) { press in move(press.key == .upArrow ? -1 : 1) }
+                ConversationTabsColumn(botID: botID, focus: $focus)
+                    .onKeyPress(keys: [.upArrow, .downArrow]) { press in move(press.key == .upArrow ? -1 : 1) }
             }
             chat
                 .environment(\.composerTakesFocus, focus == nil)
@@ -132,6 +121,39 @@ struct ConversationSplit<Chat: View>: View {
         focus = tabs[index + offset]
         return .handled
     }
+}
+
+/// The column or the rail, as the owner left it. It reads their choice itself, not the split around
+/// the chat: a view whose body reads an `@AppStorage` value is evaluated again at every UserDefaults
+/// write, whatever its key (#348).
+private struct ConversationTabsColumn: View {
+    @AppStorage(ConversationColumnSettings.collapsedKey) private var collapsed = false
+    @AppStorage(ConversationColumnSettings.widthKey) private var width = ConversationColumnLayout.width
+    let botID: UUID
+    let focus: FocusState<ChatTarget?>.Binding
+
+    var body: some View {
+        // Compared by what they show, not by their actions, which are made anew each time and always
+        // set the same two settings: evaluated again at a write, this leaves their rows alone (#348).
+        if collapsed {
+            ConversationRail(botID: botID, focus: focus) { collapsed = false }
+                .equatable()
+        } else {
+            ConversationColumn(botID: botID, width: ConversationColumnLayout.clamped(width), focus: focus,
+                               resize: { width = ConversationColumnLayout.clamped($0) }) {
+                collapsed = true
+            }
+            .equatable()
+        }
+    }
+}
+
+extension ConversationColumn: Equatable {
+    static func == (a: Self, b: Self) -> Bool { a.botID == b.botID && a.width == b.width }
+}
+
+extension ConversationRail: Equatable {
+    static func == (a: Self, b: Self) -> Bool { a.botID == b.botID }
 }
 
 /// The column: Home pinned at the top, then a heading with the tasks' count, New Task and

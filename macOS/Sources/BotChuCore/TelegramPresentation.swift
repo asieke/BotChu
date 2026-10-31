@@ -18,7 +18,7 @@ enum TelegramPresentation {
         let assistant = turn.lastIndex { $0.role == .assistant && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         let finalEvent = turn.last { $0.role == .assistant || $0.role == .error }
         let failed = finalEvent?.role == .error
-        let stopped = turn.contains { $0.role == .note && $0.text == "Stopped" }
+        let stopped = turn.contains { $0.isStopNote }
         let toolsAfterAnswer = assistant.map { index in turn[(index + 1)...].contains { $0.role == .tool } } ?? false
         let source = assistant.map { turn[$0].text } ?? ""
         var units = readableUnits(source)

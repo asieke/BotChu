@@ -12,6 +12,9 @@ public struct TurnStream {
     private let adapter: any RuntimeAdapter
     private let invocation: Invocation
     private let usage: UsageLedger.Capture?
+    /// The tool calls the turn made, by ID, and its last, for the note a stopped turn ends with (#368).
+    private var toolCalls: Set<String> = []
+    private var lastTool: ChatMessage?
 
     /// `usage` records the turn's tokens, model and session, and the follow-ups it took.
     public init(account: Account, invocation: Invocation, usage: UsageLedger.Capture? = nil) {
@@ -59,6 +62,7 @@ public struct TurnStream {
                 // After Stop, a CLI's last word is about the interruption (Antigravity repeats its
                 // whole reply as a failure); the "Stopped" note says it.
                 if stopped, case .failed = event { continue }
+                tally(event)
                 outcome.record(event)
                 usage?.record(event)
                 switch event {
@@ -100,6 +104,23 @@ public struct TurnStream {
         return batch
     }
 
+    private mutating func tally(_ event: AgentEvent) {
+        switch event {
+        case let .toolStarted(id, name, input, arguments):
+            toolCalls.insert(id)
+            if lastTool?.toolID == id {
+                lastTool?.toolName = name
+                if !input.isEmpty { lastTool?.toolInput = input }
+                if let arguments { lastTool?.toolArguments = arguments }
+            } else {
+                lastTool = ChatMessage(role: .tool, toolID: id, toolName: name, toolInput: input, toolArguments: arguments)
+            }
+        case let .toolFinished(id, name, _, _, _):
+            if toolCalls.insert(id).inserted { lastTool = ChatMessage(role: .tool, toolID: id, toolName: name, toolInput: "") }
+        default: break
+        }
+    }
+
     /// `apply` for a CLI that takes no input mid-turn.
     @MainActor public mutating func apply(_ events: [AgentEvent], state: inout RunState?,
                                           in write: ((inout [ChatMessage]) -> Void) -> Void) -> Batch? {
@@ -113,13 +134,16 @@ public struct TurnStream {
         ThreadAssembler.closeRunningTools(&messages)
     }
 
-    /// What a turn ends with once its CLI has exited: the "Stopped" note (`byOwner` when the owner
-    /// stopped it), why BotChu ended a CLI that stayed on after its turn (`lingered`), or, when the
+    /// What a turn ends with once its CLI has exited: the "Stopped" note, saying how many tool calls
+    /// it made and its last (`byOwner` when the owner stopped it), why BotChu ended a CLI that
+    /// stayed on after its turn (`lingered`), or, when the
     /// stream never said the turn finished or failed, what went wrong: the host it ran on over SSH
     /// (`host`) didn't answer, or what the CLI printed as it exited. Nil when nothing needs saying.
     public func endNote(status: Int32, stderr: String, stopped: Bool, byOwner: Bool, lingered: Bool,
                         host: String? = nil) -> ChatMessage? {
-        if stopped { return .stopNote(byOwner: byOwner) }
+        if stopped {
+            return .stopNote(byOwner: byOwner, toolCalls: toolCalls.count, lastAction: lastTool.map { SubagentInterruption.action($0) })
+        }
         if lingered { return lingerNote }
         guard !outcome.ended else { return nil }
         let detail = Self.lastLines(stderr)

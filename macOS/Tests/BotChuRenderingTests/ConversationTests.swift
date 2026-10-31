@@ -448,7 +448,8 @@ extension RenderingTests {
         #expect(app.messageQueues[target]?.isPaused == true)
         #expect(app.messageQueues[target]?.inFlight.isEmpty == true)
         #expect(!app.thread(target).contains { $0.text == "steer me" })
-        #expect(app.thread(target).last?.text == "Stopped")
+        // #368: the note says how far the turn got.
+        #expect(app.thread(target).last?.text == "Stopped after 1 tool call. Last action: `sleep 1`.")
         #expect(app.thread(target).last?.stopped == true)
         app.resumeQueuedMessages(to: target)
         try await fixture.wait { !app.isRunning(target) && app.thread(target).last?.text == "reply:steer me" }
@@ -478,7 +479,8 @@ extension RenderingTests {
         let thread = app.thread(target)
         #expect(thread.filter { $0.role == .user }.map(\.text) == ["WAIT", "steer me", "and then this"])
         // Stopped as part of the interruption, not by the owner: the queue isn't paused.
-        let stop = try #require(thread.firstIndex { $0.role == .note && $0.text == "Stopped" })
+        let stop = try #require(thread.firstIndex { $0.isStopNote })
+        #expect(thread[stop].text == "Stopped after 1 tool call. Last action: `sleep 1`.")
         #expect(stop < thread.firstIndex { $0.text == "steer me" }!)
         #expect(thread[stop].stopped != true)
         #expect(app.messageQueues[target]?.messages.isEmpty == true)

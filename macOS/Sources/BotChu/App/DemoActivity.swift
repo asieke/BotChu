@@ -168,7 +168,9 @@ extension DemoActivity {
         docs.handoffOutput = "Claude Code's Task returns at once in the background; Codex has no sub-agent tool."
         let silent = run("Task tab overflow menu", by: duck, .completed, turn: yesterday, ago: 86_300, took: 122)
         var restarted = run("Pet posture sheet", by: racoon, .stopped, turn: yesterday, ago: 86_200, took: 291)
-        restarted.errorMessage = "BotChu restarted before this sub-agent finished."
+        restarted.interruption = SubagentInterruption(cause: .restart, toolCalls: 23, lastAction: "`swift test --filter PetTests`",
+            workspace: SubagentWorkspaceState(branch: "feat/pet-posture", head: "3f9c2e1 Sketch the posture sheet", uncommitted: ["macOS/Sources/BotChu/Pets.swift"]))
+        restarted.errorMessage = restarted.interruption?.outcome(for: restarted)
         var legacy = run("Research OpenRouter video models", by: owl, .completed, turn: nil, ago: 3 * 86_400, took: 760)
         legacy.handoffOutput = "Two models loop cleanly at 5 s; both need a still to start from."
         return [profile, sampler, preparing, docs, silent, restarted, legacy]

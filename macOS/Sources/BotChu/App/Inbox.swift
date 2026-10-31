@@ -21,6 +21,9 @@ final class InboxModel {
     private(set) var unfinishedCount = 0
     @ObservationIgnored private var status = InboxStatus()
     @ObservationIgnored private var conversationStatuses: [ChatTarget: InboxConversationStatus] = [:]
+    @ObservationIgnored private var entryStatuses: [UUID: InboxEntryStatus] = [:]
+    /// `state` as of the last complete mutation, read without observing it to start an entry's.
+    @ObservationIgnored private var settledState = InboxState()
     /// Counts whole-Inbox derivations, for the controlled status benchmark (#271).
     @ObservationIgnored private(set) var statusDerivations = 0
     /// Whether the deliveries have been read from the bots' folders.
@@ -50,6 +53,7 @@ final class InboxModel {
         self.root = root
         self.storage = storage
         state = InboxState.load(from: root)
+        settledState = state
     }
 
     var stateLane: String { InboxState.url(in: root).path }
@@ -58,8 +62,18 @@ final class InboxModel {
     var all: [Delivery] { deliveries.values.sorted { ($0.updatedAt, $0.id.uuidString) > ($1.updatedAt, $1.id.uuidString) } }
     func delivery(_ id: UUID) -> Delivery? { deliveries[id] }
     func target(of delivery: Delivery) -> ChatTarget { ChatTarget(botID: delivery.botID, taskID: delivery.taskID) }
-    func isUnread(_ id: UUID) -> Bool { deliveries[id].map(state.isUnread) ?? false }
-    func isDone(_ id: UUID) -> Bool { state[id].done }
+    func isUnread(_ id: UUID) -> Bool { deliveries[id] != nil && entry(id).isUnread }
+    func isDone(_ id: UUID) -> Bool { entry(id).done }
+
+    /// What the owner did with one delivery, observed apart from every other's: a row, its labels
+    /// and the toolbar draw again when their own delivery changes, not when another is read or Done.
+    func entry(_ id: UUID) -> InboxState.Entry {
+        if let existing = entryStatuses[id] { return existing.entry }
+        let made = InboxEntryStatus(entry: settledState[id])
+        entryStatuses[id] = made
+        return made.entry
+    }
+
     /// The conversation's unresolved Needs input deliveries, newest first: it waits on the owner.
     func awaitingInput(_ target: ChatTarget) -> [UUID] {
         conversationStatus(target).pending.map(\.id)
@@ -89,6 +103,8 @@ final class InboxModel {
             let pending = status.awaitingInput[Delivery.Origin(botID: target.botID, taskID: target.taskID)] ?? []
             if conversation.pending != pending { conversation.pending = pending }
         }
+        settledState = state
+        for (id, observed) in entryStatuses where observed.entry != state[id] { observed.entry = state[id] }
     }
 
     /// Reads every bot's deliveries off the main thread.
@@ -302,4 +318,12 @@ final class InboxModel {
 @MainActor @Observable
 private final class InboxConversationStatus {
     var pending: [InboxStatus.Pending] = []
+}
+
+/// Stable observation boundary for one delivery's entry (`InboxModel.entry`). Kept even while the
+/// entry is the default, so a view already observing it sees the next change.
+@MainActor @Observable
+private final class InboxEntryStatus {
+    var entry: InboxState.Entry
+    init(entry: InboxState.Entry) { self.entry = entry }
 }

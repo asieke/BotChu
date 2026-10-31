@@ -93,4 +93,5 @@ extension AppModel {
 @MainActor enum SidebarStatusDiagnostics {
     static var didDeriveSummary: ((UUID) -> Void)?
     static var didEvaluateRow: ((UUID) -> Void)?
+    static var didEvaluateList: (() -> Void)?
 }

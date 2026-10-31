@@ -9,14 +9,32 @@ import BotChuCore
 /// open (`TranscriptViewport`). A reader pinned at the end follows new content; one reading earlier
 /// content keeps their place, by the row they're reading, while it arrives (`ChatPin`).
 struct ChatView: View {
+    /// Read here, not by the chat it shows: a view whose body reads an `@AppStorage` value is
+    /// evaluated again at every UserDefaults write, whatever its key (the status sidebar's toggle,
+    /// a split view saving its widths), and the chat is only when the density changes (#348).
+    @AppStorage(ChatDensity.storageKey) private var density: ChatDensity = .detailed
+    let target: ChatTarget
+
+    var body: some View { ChatContent(target: target, density: density) }
+
+    /// "Message 10x Engineer Bot about #113": a task's issue or pull request, else its repository
+    /// (a job's run: its job).
+    static func placeholder(bot: Bot, task: BotTask?) -> String {
+        guard let task else { return "Message \(bot.name)" }
+        return "Message \(bot.name) about " + (task.work.map { "#\($0.number)" } ?? task.jobRun?.jobTitle ?? task.repoName)
+    }
+}
+
+private struct ChatContent: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage(ChatDensity.storageKey) private var density: ChatDensity = .detailed
+    let density: ChatDensity
     let target: ChatTarget
     @State private var transcript: TranscriptModel
 
-    init(target: ChatTarget) {
+    init(target: ChatTarget, density: ChatDensity) {
         self.target = target
+        self.density = density
         _transcript = State(initialValue: TranscriptCache.model(for: target))
     }
 
@@ -159,13 +177,6 @@ struct ChatView: View {
         }
     }
 
-    /// "Message 10x Engineer Bot about #113": a task's issue or pull request, else its repository
-    /// (a job's run: its job).
-    static func placeholder(bot: Bot, task: BotTask?) -> String {
-        guard let task else { return "Message \(bot.name)" }
-        return "Message \(bot.name) about " + (task.work.map { "#\($0.number)" } ?? task.jobRun?.jobTitle ?? task.repoName)
-    }
-
     /// How an item is laid out, and what else its height depends on: an exploration group as one
     /// card (folded, or live), opened as a row per entry, or in Raw a card per call.
     static func style(of item: ActivityItem, at index: Int, count: Int, density: ChatDensity, turnRunning: Bool,
@@ -296,24 +307,16 @@ struct ChatComposer: View {
 /// The chat's toolbar buttons. They go on the chat column, which stays as conversations change,
 /// not on `ChatView`, which is made anew for each: toolbar items made anew on every switch had
 /// AppKit rebuild and lay out the toolbar each time, a third of the switch. Nothing in them
-/// depends on the conversation shown, so a switch leaves the toolbar as it is.
+/// depends on the conversation shown, so a switch leaves the toolbar as it is. The settings they
+/// show are read by their own buttons: the toolbar's were made again at every UserDefaults write,
+/// whatever its key, while it read them itself (#348).
 struct ChatToolbar: ViewModifier {
     @Environment(AppModel.self) private var model
-    @AppStorage("showsStatus") private var showsStatus = true
-    @AppStorage(ChatDensity.storageKey) private var density: ChatDensity = .detailed
 
     func body(content: Content) -> some View {
         content.toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Menu {
-                    Picker("Chat Density", selection: $density) {
-                        ForEach(ChatDensity.allCases) { Label($0.title, systemImage: $0.symbol).tag($0) }
-                    }
-                    .pickerStyle(.inline)
-                } label: {
-                    Label("Chat Density", systemImage: density.symbol)
-                }
-                .help("How much tool work the chat shows: Compact (headers), Detailed (files and errors) or Raw (every call)")
+                ChatDensityMenu()
                 // Once the bot has a task, New Task is the + in the tasks' column (#128).
                 if let id = model.visibleBotID, model.bot(id)?.canOwnTasks == true, model.openTasks(of: id).isEmpty {
                     Button { model.newTask(for: id) } label: {
@@ -321,13 +324,37 @@ struct ChatToolbar: ViewModifier {
                     }
                     .help("Start a task for this bot in a repository (⌘T)")
                 }
-                Button { showsStatus.toggle() } label: {
-                    Label(showsStatus ? "Hide Status" : "Show Status", systemImage: "sidebar.right")
-                }
-                .help("Show or hide the status sidebar (⌥⌘I)")
-                .accessibilityIdentifier("toolbar-status")
+                StatusToolbarButton()
             }
         }
+    }
+}
+
+private struct ChatDensityMenu: View {
+    @AppStorage(ChatDensity.storageKey) private var density: ChatDensity = .detailed
+
+    var body: some View {
+        Menu {
+            Picker("Chat Density", selection: $density) {
+                ForEach(ChatDensity.allCases) { Label($0.title, systemImage: $0.symbol).tag($0) }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label("Chat Density", systemImage: density.symbol)
+        }
+        .help("How much tool work the chat shows: Compact (headers), Detailed (files and errors) or Raw (every call)")
+    }
+}
+
+private struct StatusToolbarButton: View {
+    @AppStorage("showsStatus") private var showsStatus = true
+
+    var body: some View {
+        Button { showsStatus.toggle() } label: {
+            Label(showsStatus ? "Hide Status" : "Show Status", systemImage: "sidebar.right")
+        }
+        .help("Show or hide the status sidebar (⌥⌘I)")
+        .accessibilityIdentifier("toolbar-status")
     }
 }
 

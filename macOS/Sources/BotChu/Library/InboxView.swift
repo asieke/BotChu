@@ -64,7 +64,7 @@ struct InboxView: View {
             guard press.phase == .down || key.repeats else { return .handled }
             if let move = InboxList.move(key, from: inbox.selected, in: groups, showsDone: showsDone || searching) {
                 if let done = move.done { inbox.setDone(done, true) }
-                inbox.selected = move.selected
+                select(move.selected, in: groups)
             }
             return .handled
         }
@@ -74,7 +74,9 @@ struct InboxView: View {
         .navigationTitle("Inbox")
         .toolbar {
             if let id = inbox.selected, let delivery = inbox.delivery(id), visible.contains(id) {
-                ToolbarItemGroup(placement: .primaryAction) { InboxToolbar(delivery: delivery) }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    InboxToolbar(delivery: delivery) { setDone(id, $0, in: groups, visible: visible) }
+                }
             }
         }
         .onAppear {
@@ -107,6 +109,8 @@ struct InboxView: View {
         }
         // Done while Done is closed: the selection moves on rather than staying hidden.
         .onChange(of: visible) { was, now in
+            // Done takes it out of the list: this frame shows it Done (as the toolbar does when it stays).
+            for id in was where inbox.state[id].done && !now.contains(id) { FrameTimings.mark(FrameMarks.inboxDone(id, true)) }
             if let selected = inbox.selected, was.contains(selected), !now.contains(selected) {
                 inbox.selected = InboxList.selection(after: selected, was: was, now: now) ?? (searching ? now.first : nil)
             } else if inbox.selected == nil {
@@ -135,11 +139,30 @@ struct InboxView: View {
         model.inbox.expireDone(at: .now)
     }
 
+    /// Done, or back to the Inbox, from the toolbar. Done reads the one that follows (`InboxList.done`)
+    /// in the same change, rather than `onChange(of: visible)` a pass later: each step made from an
+    /// `onChange` draws the whole Inbox again before the frame that shows Done (#356).
+    private func setDone(_ id: UUID, _ done: Bool, in groups: [InboxList.Group], visible: [UUID]) {
+        let inbox = model.inbox!
+        let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        inbox.setDone(id, done)
+        guard done else { return }
+        let move = InboxList.done(id, from: inbox.selected, in: visible, showsDone: showsDone || searching)
+        if move.selected != inbox.selected { select(move.selected, in: groups) }
+    }
+
+    /// Chooses the delivery to read and reads it at once, as `onChange(of: inbox.selected)` would.
+    private func select(_ id: UUID?, in groups: [InboxList.Group]) {
+        model.inbox.selected = id
+        read(id, in: groups)
+    }
+
     /// Reading a delivery: it is read, and keeps its place while it is.
     private func read(_ id: UUID?, in groups: [InboxList.Group]) {
-        guard let id else { pinned = [:]; return }
-        pinned = groups.first { $0.ids.contains(id) }.map { [id: $0.section] } ?? [:]
-        model.inbox.markRead(id)
+        let pin = id.flatMap { id in groups.first { $0.ids.contains(id) }.map { [id: $0.section] } } ?? [:]
+        // Read again by `onChange(of: inbox.selected)` after `select`: nothing changes.
+        if pinned != pin { pinned = pin }
+        if let id { model.inbox.markRead(id) }
     }
 }
 
@@ -358,7 +381,7 @@ struct DeliveryChips: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            if model.isRunning(model.inbox.target(of: delivery)), model.inbox.state.isAnswered(delivery) {
+            if model.isRunning(model.inbox.target(of: delivery)), model.inbox.entry(delivery.id).isAnswered(delivery) {
                 Label("Working", systemImage: "circle.dotted")
                     .labelStyle(TightLabel())
                     .font(.system(size: 11, weight: .semibold))
@@ -396,8 +419,8 @@ struct PurposeLabel: View {
 
     var body: some View {
         let look = PurposeLook(delivery.purpose)
-        let state = model.inbox.state
-        let waiting = delivery.purpose == .needsInput ? state.needsInput(delivery) : !state[delivery.id].done
+        let entry = model.inbox.entry(delivery.id)
+        let waiting = delivery.purpose == .needsInput ? entry.needsInput(delivery) : !entry.done
         Label(look.title, systemImage: look.symbol)
             .labelStyle(TightLabel())
             .font(.system(size: 11, weight: .semibold))
@@ -608,6 +631,8 @@ struct DeliveryMenu: View {
 private struct InboxToolbar: View {
     @Environment(AppModel.self) private var model
     let delivery: Delivery
+    /// Done (true) or back to the Inbox (false), as the Inbox moves on from it (`InboxView.setDone`).
+    let setDone: (Bool) -> Void
 
     var body: some View {
         let inbox = model.inbox!
@@ -620,7 +645,7 @@ private struct InboxToolbar: View {
         .keyboardShortcut("o")
         .accessibilityIdentifier("inbox-open")
         let done = inbox.isDone(delivery.id)
-        Button { inbox.setDone(delivery.id, !done) } label: {
+        Button { setDone(!done) } label: {
             Label(done ? "Move to Inbox" : "Done", systemImage: done ? "tray.and.arrow.up" : "checkmark")
                 .labelStyle(.titleAndIcon)
         }
