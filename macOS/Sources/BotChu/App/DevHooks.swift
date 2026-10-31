@@ -760,6 +760,11 @@ enum DevHooks {
 /// other observer of the run loop pass that made the change, Core Animation's commit included.
 /// Without the variable nothing is recorded or observed.
 @MainActor enum FrameTimings {
+    /// The run loop modes it observes: the common ones, and the one AppKit runs the main thread in
+    /// while it animates a window's move, a sheet sliding in or out, committing each of its frames
+    /// there and returning only when the move ends. Without that one, the mark of a sheet that
+    /// showed would be written as its opening animation ended, not at its first frame (#353).
+    private static let modes = [CFRunLoopMode.commonModes, CFRunLoopMode("_NSMoveTimerRunLoopMode" as CFString)]
     private static let file: FileHandle? = {
         guard let path = ProcessInfo.processInfo.environment[FrameMarks.environmentKey], !path.isEmpty else { return nil }
         let descriptor = open(path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
@@ -781,7 +786,7 @@ enum DevHooks {
                                                       true, CFIndex.max) { _, _ in
             MainActor.assumeIsolated { flush() }
         }
-        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        for mode in modes { CFRunLoopAddObserver(CFRunLoopGetMain(), observer, mode) }
     }
 
     private static func flush() {
@@ -811,7 +816,7 @@ enum DevHooks {
             }
         }
         busyObservers = [wake, wait].compactMap { $0 }
-        for observer in busyObservers { CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        for observer in busyObservers { for mode in modes { CFRunLoopAddObserver(CFRunLoopGetMain(), observer, mode) } }
     }
 
     /// Marks the sidebar starting to hide or show, once the main window's split view is there: the
