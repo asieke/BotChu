@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-31
+- One-line live sub-agent cards (pill, branch, elapsed; Needs you from the run's deliveries) and the area inspector: Repo, Sub-agents with a live Worktrees list and safe auto-clean, Bot; `TaskInspector` removed (#405) (#416)
 - Project Areas column beside the chat (Home, areas with their tasks, `n hidden`), Attach Project Area sheet, area Move to/Hide menu and drag onto a bot; specialists leave the sidebar (#402) (#413)
 - `botchu-task create`, dispatch files, Telegram `/task` and Projects actions post a turn into the repository's Project Area instead of opening a tab; AGENTS.md lists the bot's areas (#404) (#412)
 - Area conversations: lead-bot pill atop the chat, `Message <area>` placeholder, the area's name as window title, and shared children told to make their own worktree (#403) (#411)
