@@ -37,8 +37,9 @@ public struct RunGitFacts: Equatable, Sendable {
     public static func parse(_ messages: [ChatMessage], checkout: String, home: String? = nil,
                              known: RunGitFacts = RunGitFacts()) -> RunGitFacts {
         var facts = known
+        var released = false
         for message in messages where message.role == .tool && ToolActivity.isShell(toolName: message.toolName ?? "") {
-            facts.read(message, checkout: checkout, home: home)
+            facts.read(message, checkout: checkout, home: home, released: &released)
         }
         if facts.pullRequest == nil {
             facts.pullRequest = TaskNaming.pullRequest(in: messages.filter { $0.role == .tool || $0.role == .assistant }, repo: nil)
@@ -48,13 +49,14 @@ public struct RunGitFacts: Equatable, Sendable {
 
     // MARK: Reading one call
 
-    private mutating func read(_ message: ChatMessage, checkout: String, home: String?) {
+    /// `released`: the run removed the worktree recorded, so the next one it makes is its own.
+    private mutating func read(_ message: ChatMessage, checkout: String, home: String?, released: inout Bool) {
         let input = message.toolInput ?? ""
         let args = ToolArguments.parse(message.toolArguments) ?? (input.hasPrefix("{") ? ToolArguments.parse(input) : nil) ?? [:]
         // `toolArguments` shortens long strings, so the one-line input is the whole command when it isn't JSON.
         let line = input.hasPrefix("{") || input.isEmpty
             ? ToolActivity.string(args, ["command", "CommandLine", "cmd", "commandLine", "script"]) ?? input : input
-        guard line.contains("git") || line.contains("gh ") else { return }
+        guard line.holds(any: ["worktree", "gh pr", "gh issue"]) else { return }
         let start = ToolActivity.string(args, ["Cwd", "cwd", "workdir", "directory", "working_directory"]).map { Self.join(checkout, $0) } ?? checkout
         let output = message.toolOutput ?? ""
         let succeeded = (message.toolState ?? .done) == .done && (message.toolExitCode ?? 0) == 0
@@ -66,25 +68,34 @@ public struct RunGitFacts: Equatable, Sendable {
             guard let program = words.first.map({ ($0 as NSString).lastPathComponent }) else { continue }
             let directory = Self.join(start, simple.directory ?? ".")
             if program == "git" {
+                if let removed = Self.worktreeRemove(Array(words.dropFirst()), in: directory) {
+                    if succeeded, let worktree, Self.expand(removed, home: home) == worktree { released = true }
+                    continue
+                }
                 guard var add = Self.worktreeAdd(Array(words.dropFirst()), in: directory) else { continue }
                 // git says which branch it checked out; a failed call counts only for the worktrees it made.
                 if adds < prepared.count { add.branch = prepared[adds] } else if !succeeded { continue }
                 adds += 1
-                record(worktree: add.path.map { Self.expand($0, home: home) }, branch: add.branch)
+                // A name the shell would work out (`-b "$branch"`) isn't one.
+                if let branch = add.branch, !TaskNaming.isValidBranch(branch) { add.branch = nil }
+                record(worktree: add.path.map { Self.expand($0, home: home) }, branch: add.branch, released: &released)
             } else if program == "gh" {
                 readGitHub(Array(words.dropFirst()), output: output, succeeded: succeeded)
             }
         }
     }
 
-    private mutating func record(worktree path: String?, branch: String?) {
-        if worktree != nil, branch == nil { return } // a detached look at another commit, such as a test merge
+    /// The run's first worktree on a branch is its own until it removes it: one it adds after that
+    /// is a fixture, a test merge or a review. A detached one counts only while it has no other.
+    private mutating func record(worktree path: String?, branch: String?, released: inout Bool) {
         guard let path else {
             if worktree == nil, branch != nil { self.branch = branch }
             return
         }
+        guard worktree == nil || (branch != nil && (released || self.branch == nil)) else { return }
         worktree = path
         self.branch = branch
+        released = false
     }
 
     private mutating func readGitHub(_ words: [String], output: String, succeeded: Bool) {
@@ -92,7 +103,7 @@ public struct RunGitFacts: Equatable, Sendable {
         let rest = Array(words.dropFirst(2))
         switch (words[0], words[1]) {
         case ("issue", "develop"):
-            guard let name = Self.value(of: ["--name", "-n"], in: rest) else { return }
+            guard let name = Self.value(of: ["--name", "-n"], in: rest), TaskNaming.isValidBranch(name) else { return }
             // A failed call made the branch when GitHub printed its URL.
             guard succeeded || output.contains("/tree/" + name) else { return }
             if worktree == nil { branch = name }
@@ -125,22 +136,7 @@ public struct RunGitFacts: Equatable, Sendable {
 
     /// The worktree `git [-C dir] worktree add …` makes (its arguments after `git`), seen from `directory`.
     static func worktreeAdd(_ words: [String], in directory: String) -> WorktreeAdd? {
-        var directory = directory
-        var index = 0
-        while index < words.count, words[index].hasPrefix("-") {
-            switch words[index] {
-            case "-C":
-                guard index + 1 < words.count else { return nil }
-                directory = join(directory, words[index + 1])
-                index += 2
-            case "-c", "--git-dir", "--work-tree", "--namespace":
-                index += 2
-            default:
-                index += 1
-            }
-        }
-        guard index + 1 < words.count, words[index] == "worktree", words[index + 1] == "add" else { return nil }
-        let rest = Array(words[(index + 2)...])
+        guard let (rest, directory) = worktreeArguments("add", words, in: directory) else { return nil }
         let detached = rest.contains("--detach") || rest.contains("-d")
         let created = value(of: ["-b", "-B"], in: rest)
         let positional = positionals(rest, withValues: ["-b", "-B", "--reason"])
@@ -160,6 +156,33 @@ public struct RunGitFacts: Equatable, Sendable {
         return WorktreeAdd(path: path, branch: branch)
     }
 
+    /// The worktree `git [-C dir] worktree remove …` removes, seen from `directory`.
+    static func worktreeRemove(_ words: [String], in directory: String) -> String? {
+        guard let (rest, directory) = worktreeArguments("remove", words, in: directory),
+              let given = positionals(rest, withValues: []).first, !given.contains("$") else { return nil }
+        return join(directory, given)
+    }
+
+    /// The arguments of `git [global options] worktree <subcommand> …`, and the folder `-C` moves to.
+    private static func worktreeArguments(_ subcommand: String, _ words: [String], in directory: String) -> ([String], String)? {
+        var directory = directory
+        var index = 0
+        while index < words.count, words[index].hasPrefix("-") {
+            switch words[index] {
+            case "-C":
+                guard index + 1 < words.count else { return nil }
+                directory = join(directory, words[index + 1])
+                index += 2
+            case "-c", "--git-dir", "--work-tree", "--namespace":
+                index += 2
+            default:
+                index += 1
+            }
+        }
+        guard index + 1 < words.count, words[index] == "worktree", words[index + 1] == subcommand else { return nil }
+        return (Array(words[(index + 2)...]), directory)
+    }
+
     /// The branch a commit-ish names, or nil for a commit, a remote branch or `HEAD`, which git
     /// checks out detached.
     static func branchName(_ commit: String) -> String? {
@@ -172,7 +195,7 @@ public struct RunGitFacts: Equatable, Sendable {
 
     /// `Preparing worktree (new branch 'x')` lines, in order: the branch, or nil for a detached one.
     static func preparedBranches(in output: String) -> [String?] {
-        guard output.contains("Preparing worktree") else { return [] }
+        guard output.holds(any: ["Preparing worktree"]) else { return [] }
         return output.split(whereSeparator: \.isNewline).compactMap { line -> String?? in
             guard let range = line.range(of: "Preparing worktree (") else { return nil }
             let detail = line[range.upperBound...]
@@ -244,6 +267,21 @@ public struct RunGitFacts: Equatable, Sendable {
     static func expand(_ path: String, home: String?) -> String {
         guard let home, path == "~" || path.hasPrefix("~/") else { return path }
         return normalized(home + path.dropFirst())
+    }
+}
+
+extension String {
+    /// Whether it holds any of the parts, compared byte by byte: quick on long tool output, where
+    /// `contains` is slow.
+    func holds(any parts: [String]) -> Bool {
+        var text = self
+        return text.withUTF8 { haystack in
+            parts.contains { part in
+                part.utf8.withContiguousStorageIfAvailable { needle in
+                    memmem(haystack.baseAddress, haystack.count, needle.baseAddress, needle.count) != nil
+                } ?? false
+            }
+        }
     }
 }
 

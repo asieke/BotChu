@@ -292,7 +292,7 @@ public enum TaskNaming {
     /// The numbers of the pull request URLs in `text`, in order: of `repo` (`owner/name`), or of any
     /// repository when nil.
     public static func pullRequests(in text: String, repo: String?) -> [Int] {
-        guard text.contains("/pull/") else { return [] }
+        guard text.holds(any: ["/pull/"]) else { return [] }
         let owner = repo.map(NSRegularExpression.escapedPattern(for:)) ?? "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
         guard let regex = try? NSRegularExpression(pattern: "https://github\\.com/" + owner + "/pull/([0-9]+)", options: [.caseInsensitive])
         else { return [] }

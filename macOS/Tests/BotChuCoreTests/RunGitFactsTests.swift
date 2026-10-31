@@ -110,8 +110,16 @@ import Testing
             shell("git worktree add --detach /tmp/review-5 FETCH_HEAD"),
         ]
         #expect(parse(messages) == RunGitFacts(worktree: "/w/repo/.claude/worktrees/feat-401-x", branch: "feat/401-x"))
-        // A review run's only worktree is detached.
+        // A fixture made later isn't its own either; once it removed its own, the next one is.
+        let fixture = messages + [shell("cd /tmp/porc/repo && git worktree add -q .claude/worktrees/chore-gone -b chore/gone")]
+        #expect(parse(fixture).branch == "feat/401-x")
+        let followUp = fixture + [shell("git worktree remove .claude/worktrees/feat-401-x && git branch -D feat/401-x"),
+                                  shell("git worktree add .claude/worktrees/fix-412-y -b fix/412-y origin/main")]
+        #expect(parse(followUp) == RunGitFacts(worktree: "/w/repo/.claude/worktrees/fix-412-y", branch: "fix/412-y"))
+        // A review run's only worktree is detached, until it makes one on a branch.
         #expect(parse([shell("git worktree add --detach /tmp/review-5 FETCH_HEAD")]) == RunGitFacts(worktree: "/tmp/review-5"))
+        #expect(parse([shell("git worktree add --detach /tmp/review-5 FETCH_HEAD"), shell("git worktree add wt -b fix/5-a")])
+            == RunGitFacts(worktree: "/w/repo/wt", branch: "fix/5-a"))
     }
 
     @Test func pathsAndBranchesAsGitReadsThem() {
@@ -128,6 +136,10 @@ import Testing
         #expect(parse([shell("cd sub && git worktree add ../wt -b b")]).worktree == "/w/repo/wt")
         let codex = ChatMessage(role: .tool, toolName: "exec_command", toolInput: #"{"cmd":"git worktree add wt -b b","workdir":"/w/other"}"#, toolState: .done)
         #expect(parse([codex]).worktree == "/w/other/wt")
+        // A name the shell works out isn't a branch.
+        #expect(parse([shell("gh issue develop \"$1\" --name \"$2\"")]).isEmpty)
+        #expect(parse([shell("git worktree add \"$dir\" -b \"$branch\"")]).isEmpty)
+        #expect(parse([shell("git worktree add wt -b \"$branch\"")]) == RunGitFacts(worktree: "/w/repo/wt"))
         // Environment and quoting.
         #expect(parse([shell("GIT_TRACE=0 git worktree add 'my wt' -b b")]).worktree == "/w/repo/my wt")
         #expect(RunGitFacts.normalized("/a/./b/../c/") == "/a/c")
