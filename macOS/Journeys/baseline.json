@@ -13,7 +13,7 @@
   "machine" : "Mac16,5, 14 cores, macOS Version 27.0 (Build 26A428)",
   "medians" : {
     "1 launch" : 653.4,
-    "10 resize step (p95 of 12)" : 112.3,
+    "10 resize step (p95 of 12)" : 61.8,
     "11 Done" : 30.6,
     "11 Inbox opens" : 47.6,
     "11 Settings opens" : 35.5,

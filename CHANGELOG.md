@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- Resizing the window keeps the chat's rows laid out: no replan for the brief strip AppKit lays the chat out as, and a new width re-measures rows in place instead of rebuilding them; a resize step takes about 62 ms instead of 110 (#354) (#387)
 - A message sent to an idle conversation shows in the chat at once, and a turn's reply streams a frame apart instead of every 40 ms (#355) (#385)
 - Journey 9's New Task opens is timed to the sheet's first frame: frame marks are also written during AppKit's sheet animation (#353) (#386)
 - Status sidebar toggles in about 10 ms: each setting is read only by the view that shows it, so a UserDefaults write no longer redraws the chat, toolbar, sidebar list and menus (#348) (#384)
