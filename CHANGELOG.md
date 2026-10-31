@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-31
+- Area Repo tab: the Overview/Issues/PRs picker sits under the tab bar and its content fills the rest, instead of splitting the height in thirds (#423) (#426)
 - Inbox toolbar actions are separate items again, so Done reads as Done to accessibility and journey 11 passes (#420) (#421)
 - Tasks column retired: no New Task sheet, ⌘T, toolbar or menu item; minimum width the same with or without areas; journeys 4, 9, 10, 13 describe areas (#407) (#418)
 - README, PROJECT.md, `docs/subagents.md`, `docs/telegram.md` and `docs/testing.md` describe Project Areas instead of task tabs (#408) (#417)
