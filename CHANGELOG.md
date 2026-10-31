@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-31
+- Area conversations: lead-bot pill atop the chat, `Message <area>` placeholder, the area's name as window title, and shared children told to make their own worktree (#403) (#411)
 - Sub-agent runs record the worktree, branch and pull request their own transcript shows, and Core parses `git worktree list --porcelain` (#401) (#409)
 - Project Areas as data: `BotTask.area`, one owner per repository, attach/move/hide, and a launch migration of open tasks into areas (#410)
 - Window tests sorted into journeys, Core and 25 kept; `--changed` and `test-select.py` retired; each PR runs `--fast` plus its journeys, the full suite runs after a batch and on deploy (#330) (#379)
