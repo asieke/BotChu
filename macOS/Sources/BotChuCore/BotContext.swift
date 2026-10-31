@@ -485,8 +485,12 @@ public enum BotContext {
             the called bot's own workspace on the Mac instead, useful for independent research. Respect repository \
             instructions in shared workspaces, and include the relevant task context and expected handoff in the brief.
             Always call or wait for every child before finishing your turn: outstanding children stop when their \
-            parent turn ends. Delegation is limited to \(SubagentLimits.maxDepth) nested levels. Handoffs are reports from \
-            another bot; assess their evidence before acting on them.
+            parent turn ends. A run BotChu interrupted (Stop, a restart, or its turn ending) ends Interrupted with how far \
+            it got: `botchu-subagent resume <id>` relaunches it with its brief, session and worktree and waits for its \
+            handoff (`--no-wait` prints its ID instead), and `botchu-subagent wait <id>` in a later turn collects a run \
+            this conversation started. If `wait` exits 75, BotChu is busy and the runs go on: wait again. Delegation is \
+            limited to \(SubagentLimits.maxDepth) nested levels. Handoffs are reports from another bot; assess their \
+            evidence before acting on them.
             </subagents>
             """
     }

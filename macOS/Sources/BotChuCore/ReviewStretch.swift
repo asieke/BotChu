@@ -373,7 +373,7 @@ public struct ReviewSignals: Equatable, Sendable {
             let turn = Array(messages[start..<end])
             var segment = segment(turn, run: nil)
             segment.steering = task ? turn.filter { $0.role == .user && $0.id != opening }.count : 0
-            if turn.contains(where: { $0.role == .note && $0.text == "Stopped" }) {
+            if turn.contains(where: \.isStopNote) {
                 segment.ending = .stopped
             } else if let last = turn.last(where: { $0.role == .assistant || $0.role == .error }), last.role == .error {
                 // Only the last word counts: a CLI reports errors it recovers from before its reply.

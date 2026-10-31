@@ -4,6 +4,10 @@ What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
 - Inbox Done reads the next delivery in the same change and draws the Inbox once; rows redraw only for their own delivery (#356) (#380)
+- `botchu-subagent resume <id>` and a Resume row relaunch an interrupted run with its brief, session and worktree once no CLI of it still runs; `wait` from a later turn collects a run this conversation started (#368) (#378)
+- Sub-agent runs BotChu interrupts end Interrupted with how far they got (tool calls, last action, worktree, branch, uncommitted files), stopped turns say how far they got, and a loaded Mac's late heartbeat no longer fails `botchu-subagent wait` (#368) (#376)
+- Keep composer drafts between launches, owner-only and outside the bot's folder (#357) (#373)
+- Sidebar bot rows: up to 8 task dots in a 2×4 grid (#359) (#369)
 - Sub-agent Transcript follows its last 12 items and skips Sail progress rows (#361) (#377)
 - Latency report after each journeys run; every deploy sends it to the Inbox (#362) (#370)
 - Antigravity tool and run errors carry agy's message, and non-zero shell exits are recorded as failed (#367) (#374)
