@@ -30,7 +30,7 @@ extension Journeys {
                 _ = try press(try groupHeadAndID().head, until: FrameMarks.chat(bot.id))
                 app.settle(quiet: 0.3, limit: 3)
             }
-            try app.requireBackground()
+            try app.requireForeground()
         } catch {
             problem = "\(error)"
         }
@@ -96,7 +96,7 @@ extension Journeys {
             }
             try awaitIdle()
             _ = try selectTabHome(of: bot)
-            try app.requireBackground()
+            try app.requireForeground()
         } catch {
             problem = "\(error)"
             // A sheet left open would hold up the journeys after.
@@ -156,7 +156,7 @@ extension Journeys {
             }
             app.settle()
             try checkShown(fixture.longBot)
-            try app.requireBackground()
+            try app.requireForeground()
         } catch {
             problem = "\(error)"
         }
@@ -204,7 +204,7 @@ extension Journeys {
                 app.settle()
             }
             _ = try select(bot)
-            try app.requireBackground()
+            try app.requireForeground()
         } catch {
             problem = "\(error)"
         }
@@ -251,7 +251,7 @@ extension Journeys {
                 app.settle()
                 try checkShown(bot)
             }
-            try app.requireBackground()
+            try app.requireForeground()
         } catch {
             problem = "\(error)"
         }

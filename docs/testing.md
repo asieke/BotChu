@@ -45,6 +45,11 @@ from another commit of the same tree).
 
 ## Journeys and their baseline
 
+The journeys bring their isolated copy of BotChu to the foreground, where the owner performs these
+interactions, then restore the previously active app. Leave that copy in front while they run. A
+journey fails if it loses focus: a background copy can be demoted by macOS even with App Nap
+disabled, making the long streaming measurements bimodal (#388).
+
 A journey fails when its median is over its budget, or more than 25% (and more than 3 ms) slower
 than `macOS/Journeys/baseline.json`; a failed measurement is retried once and the load average is
 recorded. When a baseline misses its budget, the step is held to baseline + 10% (the ratchet) and a

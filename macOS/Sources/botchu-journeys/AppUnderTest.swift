@@ -3,7 +3,7 @@ import BotChuCore
 
 /// The release build under test: a copy with its own bundle identifier, so what it keeps in its
 /// defaults (the status sidebar's visibility, the window's frame) never reaches the installed app's,
-/// and without App Nap, launched in the background on the fixture, and read through its frame marks
+/// and without App Nap, launched in front on the fixture, and read through its frame marks
 /// and accessibility.
 final class AppUnderTest {
     static let bundleIdentifier = "local.BotChu.journeys"
@@ -34,8 +34,8 @@ final class AppUnderTest {
         }
         plist["CFBundleIdentifier"] = bundleIdentifier
         plist["CFBundleName"] = "BotChu Journeys"
-        // The owner uses BotChu in front, where App Nap never slows it; the copy runs behind their
-        // windows, where macOS would nap it whenever they cover it, and its times would follow.
+        // Prevent App Nap as well as launching in front. Disabling App Nap alone does not keep
+        // a background copy on the scheduling path of the owner's foreground interaction (#388).
         plist["LSAppNapIsDisabled"] = true
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: plistURL)
         // As macOS/build.sh signs: with the development identity when there is one, else ad hoc.
@@ -71,7 +71,7 @@ final class AppUnderTest {
     var pid: pid_t { running?.processIdentifier ?? 0 }
     var ax: AXElement { AXElement.application(pid) }
 
-    /// Launches it without making it active, and returns when the launch began. LaunchServices can
+    /// Launches it in front, as the owner uses it, and returns when the launch began. LaunchServices can
     /// refuse a launch just after the last copy quit (`procNotFound`) and still have started the copy,
     /// so that copy is stopped and the launch tried again once.
     func launch() throws -> UInt64 {
@@ -91,7 +91,7 @@ final class AppUnderTest {
         }
         Self.stopCopies(where: Self.isLeftBehind)
         let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false
+        configuration.activates = true
         configuration.addsToRecentItems = false
         configuration.createsNewApplicationInstance = true
         configuration.promptsUserIfNeeded = false
@@ -241,9 +241,11 @@ final class AppUnderTest {
         throw HarnessFailure("BotChu showed no window within \(Int(timeout)) s")
     }
 
-    /// Fails when it has keyboard focus: the journeys run beside the owner's work, never in front of it.
-    func requireBackground() throws {
-        guard let focused = AXElement.systemWide.element(kAXFocusedApplicationAttribute) else { return }
-        if focused.pid == pid { throw HarnessFailure("BotChu took keyboard focus; the journeys must leave it with the app in front") }
+    /// A covered, inactive app can be demoted even with App Nap disabled (#388). Measure the
+    /// foreground interaction the journey describes; a focus change invalidates the measurement.
+    func requireForeground() throws {
+        guard let focused = AXElement.systemWide.element(kAXFocusedApplicationAttribute), focused.pid == pid else {
+            throw HarnessFailure("BotChu lost keyboard focus; foreground journeys cannot measure a background app")
+        }
     }
 }

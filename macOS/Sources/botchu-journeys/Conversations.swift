@@ -27,7 +27,7 @@ extension Journeys {
                 tasks.append(try selectTab(ids[index % ids.count], of: bot))
                 home.append(try selectTab(nil, of: bot))
             }
-            try app.requireBackground()
+            try app.requireForeground()
         } catch {
             problem = "\(error)"
         }
@@ -81,7 +81,7 @@ extension Journeys {
                 throw HarnessFailure("\(ended.count) of the \(streamers.count) streams ended before the typing did "
                                      + String(format: "(%.1f s after it started)", Self.ms(typing, typed) / 1_000))
             }
-            try app.requireBackground()
+            try app.requireForeground()
             // The streams end before the next journey.
             _ = try? FakeLog.waitFor(app, "the streams' ends", after: began, timeout: Double(Self.typingStream) + 15) {
                 FakeLog.ended($0).isSuperset(of: started)
@@ -145,7 +145,7 @@ extension Journeys {
                 throw HarnessFailure("The working ring stopped turning while the reply streamed (frames per part: \(ring.map(String.init).joined(separator: ", ")))")
             }
             print("journeys: 6 stream: \(deltas.count) chunks over \(String(format: "%.1f", Self.ms(first.time, last.time) / 1_000)) s; ring frames per part \(ring.map(String.init).joined(separator: ", "))")
-            try app.requireBackground()
+            try app.requireForeground()
         } catch {
             problem = "\(error)"
         }
@@ -220,7 +220,7 @@ extension Journeys {
             try composer().set(kAXValueAttribute, to: "" as CFString)
             if let back = try button("Back to Sub-agents") { try back.press() }
             if let activity = try app.window().first(identifier: "inspector-tab-activity") { try activity.press() }
-            try app.requireBackground()
+            try app.requireForeground()
         } catch {
             listProblem = listProblem ?? "\(error)"
             transcriptProblem = transcriptProblem ?? "\(error)"
