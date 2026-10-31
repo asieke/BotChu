@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- A message sent to an idle conversation shows in the chat at once, and a turn's reply streams a frame apart instead of every 40 ms (#355) (#385)
 - Keep composer drafts between launches, owner-only and outside the bot's folder (#357) (#373)
 - Sidebar bot rows: up to 8 task dots in a 2×4 grid (#359) (#369)
 - Sub-agent Transcript follows its last 12 items and skips Sail progress rows (#361) (#377)
