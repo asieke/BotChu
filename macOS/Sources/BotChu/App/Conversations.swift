@@ -133,10 +133,8 @@ final class ConversationState {
     /// Where its history is (`HistoryState`), and what waits for it: changes asked for while it
     /// isn't in memory or is being read or recovered, run in order once it is (`AppModel.later`).
     @ObservationIgnored var history = HistoryState()
-    @ObservationIgnored var waiting: [Waiting] = []
-    /// What waits is running (`AppModel.drain`): what it asks for in turn goes before the rest.
-    @ObservationIgnored var draining = false
-    @ObservationIgnored var insertion = 0
+    @ObservationIgnored let actions = ConversationActions()
+    var waiting: [ConversationActions.Waiting] { actions.waiting }
     /// What a task report reads of a thread that isn't in memory: its digest, from its index.
     @ObservationIgnored private(set) var digest: ThreadDigest?
     /// Which state of the thread this is, so a save of a state already written is skipped
@@ -148,15 +146,6 @@ final class ConversationState {
     var version: AnyHashable { AnyHashable([id.uuidString, String(revision)]) }
     /// Whether what is in memory is what was last read or saved.
     var isSaved: Bool { savedRevision == revision }
-
-    struct Waiting {
-        /// Its queue recovered; no read or recovery under way; its history in memory too.
-        enum Need { case recovery, idle, history }
-        var need: Need
-        var run: () -> Void
-        /// Runs instead when the conversation goes (its bot or task deleted).
-        var cancel: (() -> Void)?
-    }
 
     /// The thread as read from disk (or new, with nothing on disk yet).
     func load(_ messages: [ChatMessage], summary: ThreadSummary? = nil) {

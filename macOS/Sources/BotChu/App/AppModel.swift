@@ -815,9 +815,7 @@ final class AppModel {
         for (target, conversation) in conversations where target.botID == id {
             historyBudget.remove(target)
             stopContext(target)
-            let waited = conversation.waiting
-            conversation.waiting = []
-            for waiting in waited { waiting.cancel?() }
+            conversation.actions.cancel()
         }
         conversations = conversations.filter { $0.key.botID != id }
         TranscriptCache.forget(bot: id)
@@ -932,9 +930,7 @@ final class AppModel {
             if let conversation = conversations.removeValue(forKey: target) {
                 historyBudget.remove(target)
                 stopContext(target)
-                let waited = conversation.waiting
-                conversation.waiting = []
-                for waiting in waited { waiting.cancel?() }
+                conversation.actions.cancel()
             }
             TranscriptCache.forget(target)
             savedDrafts.save(nil, for: DraftStore.Key(bot: botID, task: id), storage: storage)
@@ -1529,7 +1525,7 @@ final class AppModel {
         saveQueue(for: target) { [weak self] saved in
             guard let self else { return accepted?(false) ?? () }
             // Taken into the thread below, in this same update, or else back in the queue (or the draft).
-            if self.conversation(target).sending?.id == id { self.conversation(target).sending = nil }
+            SendingPreview.clear(self.conversation(target).sending, matching: id) { self.conversation(target).sending = nil }
             if let ticket, self.waiting[target] == ticket {
                 self.waiting[target] = nil
                 self.runStates[target] = nil
@@ -1577,7 +1573,7 @@ final class AppModel {
         if later(target, needs: .recovery, { [weak self] in self?.removeQueuedMessage(id, from: target) }) { return }
         guard var queue = messageQueues[target], let index = queue.messages.firstIndex(where: { $0.id == id }) else { return }
         let message = queue.messages[index]
-        if conversation(target).sending?.id == id { conversation(target).sending = nil }
+        SendingPreview.clear(conversation(target).sending, matching: id) { conversation(target).sending = nil }
         queue.remove(id)
         guard queue != messageQueues[target] else { return }
         messageQueues[target] = queue
@@ -2235,7 +2231,7 @@ final class AppModel {
     func stop(_ target: ChatTarget) {
         guard bot(target.botID)?.isRemoteQueue != true else { return }
         // A message being sent waits in the queue, paused, rather than at the chat's end.
-        conversation(target).sending = nil
+        SendingPreview.clear(conversation(target).sending) { conversation(target).sending = nil }
         delegation.stopRoot(target)
         // The owner's Stop calls off an Interrupt & send under way, even once the CLI took everything.
         if messageQueues[target]?.isInterrupting == true { messageQueues[target]?.pause() }
@@ -2350,53 +2346,24 @@ final class AppModel {
     /// it runs goes first. A queue being read doesn't hold up changes to its queue. A conversation
     /// whose bot or task is gone runs it now.
     @discardableResult
-    func later(_ target: ChatTarget, needs: ConversationState.Waiting.Need, _ action: @escaping () -> Void,
+    func later(_ target: ChatTarget, needs: ConversationActions.Waiting.Need, _ action: @escaping () -> Void,
                cancel: (() -> Void)? = nil) -> Bool {
         guard files(target) != nil else { return false }
         let conversation = conversation(target)
-        if meets(conversation, needs), conversation.draining || !conversation.waiting.contains(where: { $0.need == needs }) { return false }
-        let waiting = ConversationState.Waiting(need: needs, run: action, cancel: cancel)
-        if conversation.draining {
-            conversation.waiting.insert(waiting, at: min(conversation.insertion, conversation.waiting.count))
-            conversation.insertion += 1
-        } else {
-            conversation.waiting.append(waiting)
-        }
-        startWaitingRead(target)
-        return true
+        let waits = conversation.actions.later(needs: needs, history: conversation.history, loaded: conversation.isLoaded, action, cancel: cancel)
+        if waits { startWaitingRead(target) }
+        return waits
     }
 
-    private func meets(_ conversation: ConversationState, _ need: ConversationState.Waiting.Need) -> Bool {
-        switch need {
-        case .recovery: conversation.history.recovery != .recovering
-        case .idle: !conversation.history.isBusy
-        case .history: !conversation.history.isBusy && conversation.isLoaded
-        }
-    }
-
-    /// Runs what waits for the conversation, each kind in the order asked, as far as it can; reads
-    /// its history when something waits for it.
+    /// Runs the ready changes in order, then starts a read if history changes still wait.
     private func drain(_ target: ChatTarget) {
-        guard let conversation = conversations[target], !conversation.draining else { return }
-        conversation.draining = true
-        var index = 0
-        while index < conversation.waiting.count {
-            let next = conversation.waiting[index]
-            guard meets(conversation, next.need) else {
-                index += 1
-                continue
-            }
-            conversation.waiting.remove(at: index)
-            conversation.insertion = index
-            next.run()
-        }
-        conversation.draining = false
+        guard let conversation = conversations[target] else { return }
+        guard conversation.actions.drain(state: { (conversation.history, conversation.isLoaded) }) else { return }
         startWaitingRead(target)
     }
 
     private func startWaitingRead(_ target: ChatTarget) {
-        guard let conversation = conversations[target], !conversation.history.isBusy, !conversation.isLoaded,
-              conversation.waiting.contains(where: { $0.need == .history }) else { return }
+        guard let conversation = conversations[target], conversation.actions.needsRead(history: conversation.history, loaded: conversation.isLoaded) else { return }
         startRead(target)
     }
 
