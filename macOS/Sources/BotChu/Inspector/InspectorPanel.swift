@@ -60,13 +60,15 @@ enum InspectorTab: String, CaseIterable, Identifiable {
 /// the character, tabs and conversation actions stay in place.
 struct InspectorPanel<Header: View, Content: View, Actions: View>: View {
     var badgeCounts: [InspectorTab: Int] = [:]
+    /// The areas it has: an area's Bot tab (#405) shows its Sub-agents beside it instead.
+    var tabs: [InspectorTab] = InspectorTab.allCases
     @ViewBuilder let header: Header
     @ViewBuilder var content: (InspectorTab) -> Content
     @ViewBuilder let actions: Actions
 
     var body: some View {
         VStack(spacing: 0) {
-            InspectorAreas(badgeCounts: badgeCounts, header: header, content: content)
+            InspectorAreas(badgeCounts: badgeCounts, tabs: tabs, header: header, content: content)
             actions
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -82,34 +84,49 @@ struct InspectorPanel<Header: View, Content: View, Actions: View>: View {
 private struct InspectorAreas<Header: View, Content: View>: View {
     @AppStorage(InspectorTab.storageKey) private var selection: InspectorTab = .activity
     let badgeCounts: [InspectorTab: Int]
+    let tabs: [InspectorTab]
     let header: Header
     let content: (InspectorTab) -> Content
+
+    var body: some View {
+        let shown = tabs.contains(selection) ? selection : tabs.first ?? .activity
+        VStack(spacing: 16) {
+            header
+            InspectorTabBar(selection: Binding(get: { shown }, set: { selection = $0 }), badgeCounts: badgeCounts, tabs: tabs)
+        }
+        .padding(EdgeInsets(top: 8, leading: 16, bottom: 16, trailing: 16))
+        // Start each area at the top without recreating the character or moving keyboard focus.
+        InspectorScroller(id: shown) {
+            InspectorArea(tab: shown, content: content)
+        }
+        .onAppear {
+            if let tab = DevHooks.inspectorTab { selection = tab }
+        }
+    }
+}
+
+/// An inspector area's scrolling, with the bar its contents can pin above it (a sub-agent's Back
+/// and Stop) and their scroll proxy. It starts at the top again when `id` changes.
+struct InspectorScroller<ID: Hashable, Content: View>: View {
+    let id: ID
+    @ViewBuilder let content: Content
     @State private var area = InspectorScrollArea()
 
     var body: some View {
-        VStack(spacing: 16) {
-            header
-            InspectorTabBar(selection: $selection, badgeCounts: badgeCounts)
-        }
-        .padding(EdgeInsets(top: 8, leading: 16, bottom: 16, trailing: 16))
         if let bar = area.bar {
             bar.padding(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
         }
         ScrollViewReader { proxy in
             ScrollView {
-                InspectorArea(tab: selection, content: content)
+                content
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(EdgeInsets(top: 4, leading: 16, bottom: 24, trailing: 16))
             }
             .coordinateSpace(.named(InspectorScrollArea.space))
             .onGeometryChange(for: CGSize.self) { $0.size } action: { area.viewport = $0 }
-            // Start each area at the top without recreating the character or moving keyboard focus.
-            .id(selection)
+            .id(id)
             .environment(\.inspectorScroll, proxy)
             .environment(\.inspectorArea, area)
-        }
-        .onAppear {
-            if let tab = DevHooks.inspectorTab { selection = tab }
         }
     }
 }
@@ -130,6 +147,7 @@ private struct InspectorArea<Content: View>: View {
 struct InspectorTabBar: View {
     @Binding var selection: InspectorTab
     var badgeCounts: [InspectorTab: Int] = [:]
+    var tabs: [InspectorTab] = InspectorTab.allCases
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focused: InspectorTab?
     @State private var hovered: InspectorTab?
@@ -137,7 +155,7 @@ struct InspectorTabBar: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(InspectorTab.allCases) { tab in
+            ForEach(tabs) { tab in
                 Button {
                     selection = tab
                     focused = tab
@@ -194,8 +212,7 @@ struct InspectorTabBar: View {
         .accessibilityLabel("Status sections")
         .onKeyPress(keys: [.leftArrow, .rightArrow]) { press in
             guard press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty, let focused,
-                  let index = InspectorTab.allCases.firstIndex(of: focused) else { return .ignored }
-            let tabs = InspectorTab.allCases
+                  let index = tabs.firstIndex(of: focused) else { return .ignored }
             let offset = press.key == .rightArrow ? 1 : -1
             let next = tabs[(index + offset + tabs.count) % tabs.count]
             selection = next
@@ -205,7 +222,6 @@ struct InspectorTabBar: View {
     }
 
     private func nextTab(after tab: InspectorTab) -> InspectorTab? {
-        let tabs = InspectorTab.allCases
         guard let index = tabs.firstIndex(of: tab), index + 1 < tabs.count else { return nil }
         return tabs[index + 1]
     }

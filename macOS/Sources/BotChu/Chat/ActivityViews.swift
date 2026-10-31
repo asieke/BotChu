@@ -516,12 +516,11 @@ struct EditCard: View, Equatable {
     }
 }
 
-/// A sub-agent BotChu ran for this conversation (`botchu-subagent`): who, on what, how it's going,
-/// and Open, into its thread in the status sidebar's Sub-agents tab.
+/// A sub-agent BotChu ran for this conversation (`botchu-subagent`), on one line (#405): what it
+/// works on, whose it is, where it stands, its branch and how long it has run. Clicking it shows its
+/// thread in the inspector's Sub-agents.
 struct SubagentChatCard: View {
     @Environment(AppModel.self) private var model
-    @AppStorage("showsStatus") private var showsStatus = true
-    @AppStorage(InspectorTab.storageKey) private var inspectorTab: InspectorTab = .activity
     let run: SubagentRun
 
     private var avatarBot: Bot {
@@ -530,59 +529,79 @@ struct SubagentChatCard: View {
     }
 
     var body: some View {
-        let activity = model.delegation.states[run.id]?.activity ?? (run.phase == .failed ? .failed : .idle)
-        HStack(alignment: .center, spacing: 12) {
-            BotAvatar(bot: avatarBot, size: 34, activity: activity, animates: false)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(run.targetBotName).font(.system(size: 13.5, weight: .semibold)).lineLimit(1)
-                    SubagentBadge()
+        let conversation = ChatTarget(botID: run.rootBotID, taskID: run.rootTaskID)
+        let pill = RunPill.of(run, needsInput: needsInput(in: conversation))
+        let detail = RunCard.detail(run, pill: pill)
+        Button {
+            SubagentFocus.shared.focus(run.id)
+            ConversationInspectorTab.showSubagents(of: conversation)
+        } label: {
+            HStack(spacing: 8) {
+                Text(run.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+                Spacer(minLength: 8)
+                HStack(spacing: 4) {
+                    BotAvatar(bot: avatarBot, size: 16)
+                    Text(RunCard.shortName(run.targetBotName)).lineLimit(1)
                 }
-                Text(run.title).font(.system(size: 13)).lineLimit(2)
-                statusLine(activity: activity)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize()
+                DotPill(text: pill.label, tint: Self.tint(pill))
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Group {
+                    if run.phase.isActive {
+                        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                            Text(RunCard.elapsed(run, now: max(timeline.date, Date())))
+                        }
+                    } else {
+                        Text(RunCard.elapsed(run))
+                    }
+                }
+                .font(.system(size: 12))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .fixedSize()
             }
-            Spacer(minLength: 8)
-            Button("Open") {
-                SubagentFocus.shared.focus(run.id)
-                inspectorTab = .subagents
-                showsStatus = true
-            }
-            .buttonStyle(CardButtonStyle())
-            .help("Show \(run.targetBotName)'s thread in the Sub-agents tab")
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .activityCard(tint: run.phase == .failed ? ActivityStyle.failure : Palette.violet)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(run.targetBotName), sub-agent: \(run.title), \(run.phase.displayName)")
+        .buttonStyle(.plain)
+        .activityCard(tint: pill == .failed ? ActivityStyle.failure : pill == .needsYou ? Palette.warning : Palette.violet)
+        .help(run.phase == .failed ? run.errorMessage ?? "" : run.handoffOutput.flatMap { $0.split(separator: "\n").first.map(String.init) } ?? "")
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("\(run.targetBotName), sub-agent: \(run.title), \(pill.label)\(detail.isEmpty ? "" : ", \(detail)")")
+        .accessibilityAction { SubagentFocus.shared.focus(run.id); ConversationInspectorTab.showSubagents(of: conversation) }
     }
 
-    @ViewBuilder private func statusLine(activity: BotActivity) -> some View {
-        let counts = model.delegation.threads.counts(run.id)
-        if run.phase.isActive {
-            TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                HStack(spacing: 5) {
-                    ActivitySpinner()
-                    Text(([activity.doing, BotStatus.formatElapsed(from: run.startedAt ?? run.createdAt, to: timeline.date)] + counts.parts)
-                        .joined(separator: " · "))
-                }
-            }
-            .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
-        } else {
-            HStack(spacing: 5) {
-                Image(systemName: run.phase == .completed ? "checkmark.circle" : run.phase == .failed ? "xmark.circle" : "stop.circle")
-                Text(([run.phase.displayName, BotStatus.formatElapsed(from: run.startedAt ?? run.createdAt, to: run.finishedAt ?? run.createdAt)]
-                      + counts.parts).joined(separator: " · "))
-            }
-            .font(.system(size: 12))
-            .foregroundStyle(run.phase == .failed ? AnyShapeStyle(ActivityStyle.failure) : AnyShapeStyle(.secondary))
-            .lineLimit(1)
-            if let error = run.errorMessage, run.phase == .failed {
-                Text(error).font(.system(size: 12)).foregroundStyle(ActivityStyle.failure).lineLimit(2).textSelection(.enabled)
-            } else if let handoff = run.handoffOutput, !handoff.isEmpty {
-                Text(handoff.split(separator: "\n").first.map(String.init) ?? "").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
-                    .help(handoff)
-            }
+    /// Whether it, or a run it started, asked the owner something still unanswered.
+    private func needsInput(in conversation: ChatTarget) -> Bool {
+        guard let inbox = model.inbox else { return false }
+        let pending = inbox.awaitingInput(conversation)
+        guard !pending.isEmpty else { return false }
+        let waiting = Set(pending.compactMap { inbox.delivery($0)?.runID })
+        return RunCard.needsInput(run, among: model.delegation.records[conversation] ?? [], waiting: waiting)
+    }
+
+    static func tint(_ pill: RunPill) -> Color {
+        switch pill {
+        case .queued, .done: Palette.secondaryText
+        case .running: Color.blue
+        case .needsYou: Palette.warning
+        case .pullRequest: Palette.violet
+        case .merged: GitHubColors.open
+        case .failed: ActivityStyle.failure
         }
     }
 }

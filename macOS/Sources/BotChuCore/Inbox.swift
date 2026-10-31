@@ -138,14 +138,16 @@ public struct Delivery: Identifiable, Codable, Hashable, Sendable {
     public var question: Question?
     public var purpose: Purpose
     public var credits: [Credit]
+    /// The sub-agent run whose turn sent it, when one did (#405): its card in the chat says it needs you.
+    public var runID: UUID?
     public var sentAt: Date
     /// When it was last sent again changed (with the same title in the turn, or `--update`); `sentAt`
     /// until then.
     public var updatedAt: Date
 
     public init(id: UUID = UUID(), botID: UUID, taskID: UUID? = nil, title: String, note: String = "", files: [File] = [],
-                links: [Link] = [], question: Question? = nil, purpose: Purpose? = nil, credits: [Credit] = [], sentAt: Date = Date(),
-                updatedAt: Date? = nil) {
+                links: [Link] = [], question: Question? = nil, purpose: Purpose? = nil, credits: [Credit] = [], runID: UUID? = nil,
+                sentAt: Date = Date(), updatedAt: Date? = nil) {
         self.id = id
         self.botID = botID
         self.taskID = taskID
@@ -156,6 +158,7 @@ public struct Delivery: Identifiable, Codable, Hashable, Sendable {
         self.question = question
         self.purpose = purpose ?? .fallback(asking: question != nil)
         self.credits = credits
+        self.runID = runID
         // As its record keeps them, so an answer stamped in the same second still counts.
         self.sentAt = Self.stamp(sentAt)
         self.updatedAt = Self.stamp(updatedAt ?? sentAt)
@@ -174,6 +177,7 @@ public struct Delivery: Identifiable, Codable, Hashable, Sendable {
         question = try container.decodeIfPresent(Question.self, forKey: .question)
         purpose = (try? container.decodeIfPresent(Purpose.self, forKey: .purpose)) ?? .fallback(asking: question != nil)
         credits = try container.decode([Credit].self, forKey: .credits)
+        runID = try container.decodeIfPresent(UUID.self, forKey: .runID)
         sentAt = try container.decode(Date.self, forKey: .sentAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }

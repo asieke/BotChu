@@ -109,6 +109,10 @@ private struct ProjectSidebarHeader: View {
 struct ProjectOverviewTab: View {
     @Environment(AppModel.self) private var model
     let repo: GitHubLookup.Repo
+    /// Start Task with; an area's Repo tab (#405) has none, being the place work starts already.
+    var startsWork = true
+    /// Shows the open issues or pull requests; Projects' sidebar when nil.
+    var show: ((ProjectSelection.Tab) -> Void)?
     @State private var editor: ProjectEditRequest?
     private var location: RepoLocation { model.location(of: repo.nameWithOwner) }
     private var record: ProjectRecord? { model.projectRecords[repo.id] }
@@ -172,7 +176,9 @@ struct ProjectOverviewTab: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 // With no agent to start a task, the action makes one (#232).
-                if !model.taskOwners.isEmpty {
+                if !startsWork {
+                    EmptyView()
+                } else if !model.taskOwners.isEmpty {
                     BotMenu(title: "Start Task with", systemImage: "plus") { model.startInArea(repo: repo.id, with: $0) }
                         .buttonStyle(InspectorButtonStyle(prominent: true, fill: true))
                         .help("Open this repository's area")
@@ -197,7 +203,7 @@ struct ProjectOverviewTab: View {
 
     /// How many issues or pull requests are open; shows them.
     private func openTile(_ count: Int, _ noun: String, tab: ProjectSelection.Tab) -> some View {
-        Button { model.selectProject(repo.id, tab: tab) } label: {
+        Button { if let show { show(tab) } else { model.selectProject(repo.id, tab: tab) } } label: {
             StatTile(value: "\(count)", label: "open \(noun)\(count == 1 ? "" : "s")")
         }
         .buttonStyle(.plain)
@@ -249,7 +255,7 @@ struct ProjectWorkList: View {
                 ScrollView {
                     InspectorCard {
                         ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                            WorkRow(item: item, tasks: model.tasks(on: item, among: open), last: index == items.count - 1)
+                            ProjectWorkRow(item: item, tasks: model.tasks(on: item, among: open), last: index == items.count - 1)
                         }
                     }
                     .padding(EdgeInsets(top: 0, leading: 16, bottom: 16, trailing: 16))
@@ -289,14 +295,20 @@ struct ProjectWorkList: View {
 
 /// An open issue or pull request in the sidebar's list: what it is, who opened it, when it last
 /// changed, its checks and labels, and the bots on it. Its menu is the Projects tables'.
-private struct WorkRow: View {
+struct ProjectWorkRow: View {
     @Environment(AppModel.self) private var model
     let item: GitHubLookup.OpenItem
     let tasks: [(bot: Bot, task: BotTask)]
     let last: Bool
+    /// Opens it; in Projects' sidebar when nil.
+    var open: (() -> Void)?
+    /// The conversation an area's Repo tab (#405) belongs to: the menu inserts it in its message.
+    var conversation: ChatTarget?
 
     var body: some View {
-        Button { model.selectProject(item.repo, tab: item.isPullRequest ? .pulls : .issues, item: item.number) } label: {
+        Button {
+            if let open { open() } else { model.selectProject(item.repo, tab: item.isPullRequest ? .pulls : .issues, item: item.number) }
+        } label: {
             HStack(alignment: .top, spacing: 10) {
                 WorkIcon(isPullRequest: item.isPullRequest, isDraft: item.isDraft)
                     .padding(.top, 2)
@@ -348,7 +360,9 @@ private struct WorkRow: View {
         .overlay(alignment: .bottom) {
             if !last { Rectangle().fill(Palette.rowDivider).frame(height: 1) }
         }
-        .contextMenu { WorkMenu(item: item, tasks: tasks) }
+        .contextMenu {
+            if let conversation { AreaWorkMenu(item: item, conversation: conversation) } else { WorkMenu(item: item, tasks: tasks) }
+        }
         .accessibilityLabel("\(item.isPullRequest ? "Pull request" : "Issue") \(item.number): \(item.title)")
         .accessibilityHint("Shows it")
     }
@@ -362,6 +376,10 @@ struct WorkDetailView: View {
     let repo: GitHubLookup.Repo
     let number: Int
     let pulls: Bool
+    /// Back to the list; Projects' sidebar's when nil.
+    var back: (() -> Void)?
+    /// Fix, Review and Continue; an area's Repo tab (#405) has none.
+    var startsWork = true
     @State private var detail: GitHubLookup.WorkDetail?
     @State private var failure: String?
     @State private var loading = false
@@ -376,7 +394,7 @@ struct WorkDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Button { model.selectProject(repo.id, tab: pulls ? .pulls : .issues) } label: {
+                Button { if let back { back() } else { model.selectProject(repo.id, tab: pulls ? .pulls : .issues) } } label: {
                     Label(pulls ? "Pull Requests" : "Issues", systemImage: "chevron.left")
                 }
                 .help("Back to the list")
@@ -412,7 +430,7 @@ struct WorkDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     heading
-                    actions
+                    if startsWork { actions }
                     if let failure {
                         VStack(alignment: .leading, spacing: 8) {
                             Label(failure, systemImage: "exclamationmark.triangle")

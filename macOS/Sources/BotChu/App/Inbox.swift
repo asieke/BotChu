@@ -139,7 +139,7 @@ final class InboxModel {
     /// bot): copies its staged files out of the mailbox, saves it in the sender's folder, then shows it.
     /// It updates the delivery it names (`--update`), else the one with its title sent in the turn.
     func receive(_ request: InboxRequest, in target: ChatTarget, credits: [Delivery.Credit], subagent: Delivery.Credit?,
-                 transport: SubagentTransport) async throws -> (delivery: Delivery, updated: Bool) {
+                 runID: UUID? = nil, transport: SubagentTransport) async throws -> (delivery: Delivery, updated: Bool) {
         guard let model, let bot = model.bot(target.botID) else { throw InboxRequest.Problem("its bot is gone") }
         var existing = titles[target]?[request.title].flatMap { deliveries[$0] }
         if let id = request.updates {
@@ -157,7 +157,8 @@ final class InboxModel {
         }
         let (delivery, renewed) = Delivery.resent(
             Delivery(id: existing?.id ?? UUID(), botID: target.botID, taskID: target.taskID, title: request.title, note: request.note,
-                     files: files, links: request.links, question: request.question, purpose: request.purpose, credits: credits),
+                     files: files, links: request.links, question: request.question, purpose: request.purpose, credits: credits,
+                     runID: runID),
             replacing: existing)
         let folder = InboxFolder(home: BotHome(workspace: bot.persistencePath))
         let saved = delivery, data = contents

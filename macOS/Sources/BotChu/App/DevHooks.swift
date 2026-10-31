@@ -90,6 +90,12 @@ enum DevHooks {
     /// Whether scheduled jobs run: not in a throwaway run with sample jobs, which are only to look at.
     static var runsJobs: Bool { !(dataDir != nil && env["BOTCHU_JOBS"] == "sample") }
 
+    /// `BOTCHU_INSPECTOR=repo|subagents|bot`: an area's or task's inspector tab (#405), on throwaway data.
+    static var conversationTab: ConversationInspectorTab? {
+        guard dataDir != nil else { return nil }
+        return env["BOTCHU_INSPECTOR"].flatMap(ConversationInspectorTab.init(rawValue:))
+    }
+
     static var inspectorTab: InspectorTab? {
         guard dataDir != nil else { return nil }
         if ["inspector-model", "inspector-effort"].contains(env["BOTCHU_OPEN"] ?? "") { return .model }

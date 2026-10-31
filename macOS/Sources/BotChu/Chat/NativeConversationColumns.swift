@@ -48,7 +48,8 @@ private struct LiveInspectorPane: View {
     var body: some View {
         if let id = model.visibleBotID, model.bot(id) != nil {
             let target = model.tab(of: id)
-            if target.taskID != nil { TaskInspector(target: target).id(target) }
+            // An area, a task or a job run (#405); Home keeps the bot's.
+            if target.taskID != nil { ConversationInspector(target: target).id(target) }
             else { BotInspector(botID: id) }
         }
     }
