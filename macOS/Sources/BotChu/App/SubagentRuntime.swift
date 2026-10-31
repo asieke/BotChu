@@ -558,7 +558,7 @@ final class SubagentRuntime {
             credits = credits.filter { seen.insert($0.botID).inserted }
             let received = try await inbox.receive(request, in: caller.target, credits: credits,
                                                    subagent: subagent.flatMap { $0.botID == caller.target.botID ? nil : $0 },
-                                                   transport: caller.transport)
+                                                   runID: caller.parent, transport: caller.transport)
             result = InboxResult(id: id, deliveryID: received.delivery.id, updated: received.updated)
         } catch {
             result = InboxResult(id: id, errorMessage: (error as? InboxRequest.Problem)?.message ?? error.localizedDescription)
