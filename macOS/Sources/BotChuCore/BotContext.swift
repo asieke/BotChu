@@ -219,6 +219,36 @@ public enum BotContext {
         + "finding with its severity (high, medium or low), file:line, what is wrong and how to fix it, most severe first, then a verdict: "
         + "ready to merge, or what must change first. A review changes no code."
 
+    /// Where a Project Area's turn runs and what it may do there (#399 decision 5): a repository's
+    /// area runs in its main checkout, which it reads, scopes and coordinates from but never changes;
+    /// code changes happen in `botchu-subagent` children, each in a worktree it makes for itself.
+    static func areaPlace(_ area: AreaInfo, task: BotTask, on: String) -> String {
+        switch area.kind {
+        case .repo:
+            return """
+                You are \(on)in the main checkout of \(task.repo) at \(task.checkout), the repository's Project Area, \
+                which is yours: read, scope and coordinate its work here. Read PROJECT.md, README.md and AGENTS.md \
+                (those it has) first. The main checkout stays on its default branch: never switch a branch, edit or \
+                commit in it. Code changes happen only in `botchu-subagent` children, each in a worktree of its own \
+                that it makes under \(task.checkout)/.claude/worktrees/<type>-<slug>, as your team's rules say.
+                """
+        case .folder:
+            return """
+                You are \(on)in \(task.checkout), the folder of your Project Area “\(area.name)”, which is yours: \
+                work here. When the work needs a repository's code changed, never change its main checkout: hand it \
+                to a `botchu-subagent` child that makes a worktree of its own under that checkout's \
+                .claude/worktrees/<type>-<slug>.
+                """
+        }
+    }
+
+    /// What a `--workspace shared` child of a repository's area hears, as it starts in the area's
+    /// main checkout: the same rule.
+    public static func areaChildRule(_ checkout: String) -> String {
+        "You start in the main checkout at \(checkout), which stays on its default branch: never switch a branch, edit or "
+            + "commit in it. Make any code change in a worktree of your own under \(checkout)/.claude/worktrees/<type>-<slug>."
+    }
+
     /// Context put before the first message of a new task session. A task runs in a worktree of a
     /// repository, whose own `AGENTS.md`, `CLAUDE.md` and README the CLI reads, so BotChu writes
     /// nothing there: this carries the bot's identity, instructions and memories, where the task runs
@@ -278,6 +308,8 @@ public enum BotContext {
                 owner continues it here. Don't change a repository's files from here; when the work needs one, ask for a task \
                 as your AGENTS.md explains.
                 """)
+        } else if let area = task.area {
+            parts.append(areaPlace(area, task: task, on: on))
         } else if let folder = task.folder, task.review != nil {
             let head = task.head ?? "the pull request's head"
             parts.append("""
@@ -296,7 +328,9 @@ public enum BotContext {
                 """)
         }
         var brief: String
-        if let work = task.work, let review = task.review {
+        if let area = task.area {
+            brief = "This is your Project Area “\(area.name)”, your own lasting conversation with your owner about it; the message below is theirs."
+        } else if let work = task.work, let review = task.review {
             brief = review == .comment
                 ? "Your task is to review and comment on \(work.reference) (\(work.url.absoluteString)) in \(task.repo). \(Self.reviewSteps) Then post your review there, as one review, without asking again: `gh api repos/\(task.repo)/pulls/\(work.number)/reviews --method POST` with the commit you reviewed, `\"event\": \"COMMENT\"`, the verdict and findings in its body, and each finding as an inline comment on its line where GitHub takes one; give the review's URL."
                 : "Your task is to review \(work.reference) (\(work.url.absoluteString)) in \(task.repo). \(Self.reviewSteps) Give your review here, in your reply. Post nothing to GitHub."
@@ -500,7 +534,8 @@ public enum BotContext {
     public static func subagentPreamble(bot: Bot, run: SubagentRun, callerDescription: String,
                                         memory: String, sharedMemory: String, soul: String = "",
                                         instructions: String = "", team: String = "",
-                                        availableBots: [BotRosterEntry] = [], skills: [Skill] = [], tools: String? = nil) -> String {
+                                        availableBots: [BotRosterEntry] = [], skills: [Skill] = [], tools: String? = nil,
+                                        areaCheckout: String? = nil) -> String {
         var parts = ["""
             You are \(bot.name)\(bot.title.isEmpty ? "" : " — \(bot.title)"), called as a BotChu sub-agent by \
             \(callerDescription), at depth \(run.depth). Your identity, private instructions, personality and memory \
@@ -508,6 +543,8 @@ public enum BotContext {
             persona, use your identity below; still follow that repository's working rules and the delegated brief.
             Your own home is \(bot.workspace) on the owner's Mac. Work in \(run.workingDirectory)\(run.hostID == nil ? " on that Mac" : " on the caller's SSH host").
             """]
+        // A shared child of a repository's Project Area starts in its main checkout (#399 decision 5).
+        if let areaCheckout { parts[0] += "\n" + areaChildRule(areaCheckout) }
         parts += identity(bot: bot, memory: memory, sharedMemory: sharedMemory, soul: soul,
                           instructions: instructions, team: team, saving: """
             To keep a lesson or preference in your own memory, put it in your reply between <\(rememberTag)> and \
