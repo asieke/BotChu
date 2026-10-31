@@ -227,11 +227,25 @@ final class InboxModel {
         saveState()
     }
 
-    func setDone(_ id: UUID, _ done: Bool) {
-        guard let delivery = deliveries[id], state[id].done != done else { return }
-        state.setDone(id, done, at: .now)
-        listIndex.update(delivery, state: state, now: .now)
+    /// Filing one delivery can read its successor in the same mutation. Derive and persist the
+    /// complete status once; selecting that successor afterward finds it already read (#356).
+    func setDone(_ id: UUID, _ done: Bool, reading next: UUID? = nil) {
+        var changed = false
+        var readTarget: ChatTarget?
+        if let delivery = deliveries[id], state[id].done != done {
+            let now = Date.now
+            state.setDone(id, done, at: now)
+            listIndex.update(delivery, state: state, now: now)
+            changed = true
+        }
+        if let next, let delivery = deliveries[next], !state[next].read {
+            state[next].read = true
+            readTarget = target(of: delivery)
+            changed = true
+        }
+        guard changed else { return }
         refreshStatus()
+        if let readTarget { model?.unread.remove(readTarget) }
         saveState()
     }
 

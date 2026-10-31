@@ -62,7 +62,7 @@ struct InboxView: View {
             guard let key = InboxList.Key(press.key.character, modified: modified), keys.reachInbox else { return .ignored }
             guard press.phase == .down || key.repeats else { return .handled }
             if let move = InboxList.move(key, from: inbox.selected, in: groups, showsDone: showsDone || searching) {
-                if let done = move.done { inbox.setDone(done, true) }
+                if let done = move.done { inbox.setDone(done, true, reading: move.selected) }
                 select(move.selected, in: groups)
             }
             return .handled
@@ -144,9 +144,9 @@ struct InboxView: View {
     private func setDone(_ id: UUID, _ done: Bool, in groups: [InboxList.Group], visible: [UUID]) {
         let inbox = model.inbox!
         let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        inbox.setDone(id, done)
-        guard done else { return }
+        guard done else { inbox.setDone(id, false); return }
         let move = InboxList.done(id, from: inbox.selected, in: visible, showsDone: showsDone || searching)
+        inbox.setDone(id, true, reading: move.selected)
         if move.selected != inbox.selected { select(move.selected, in: groups) }
     }
 
