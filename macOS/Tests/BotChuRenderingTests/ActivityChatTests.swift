@@ -31,15 +31,20 @@ extension RenderingTests {
         window.makeKeyAndOrderFront(nil)
         try await Task.sleep(for: .milliseconds(400))
         app.show(fixture.task)
-        // The web view loads, renders and reports its height, well beyond the window's.
+        // The web view loads, renders and reports its height, well beyond the window's; read until
+        // that height has held for half a second.
         var below: CGFloat = .infinity
         var height: CGFloat = 0
+        var held = 0
         for _ in 0..<30 {
             try await Task.sleep(for: .milliseconds(100))
             guard let scroll = Self.chatScrollView(in: window.contentView!, minimum: 0) else { continue }
             scroll.layoutSubtreeIfNeeded()
-            height = scroll.documentView?.frame.height ?? 0
+            let now = scroll.documentView?.frame.height ?? 0
+            held = now == height ? held + 1 : 0
+            height = now
             below = height - scroll.contentView.bounds.maxY
+            if height > 1_000, held >= 5 { break }
         }
         #expect(height > 1_000)
         #expect(below < 40)

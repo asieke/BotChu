@@ -3,7 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-31
-- Window tests sorted into journeys, Core and 22 kept; `--changed` and `test-select.py` retired; each PR runs `--fast` plus its journeys, the full suite runs after a batch and on deploy (#330) (#379)
+- Window tests sorted into journeys, Core and 25 kept; `--changed` and `test-select.py` retired; each PR runs `--fast` plus its journeys, the full suite runs after a batch and on deploy (#330) (#379)
 
 ## 2026-10-30
 - Resizing the window keeps the chat's rows laid out: no replan for the brief strip AppKit lays the chat out as, and a new width re-measures rows in place instead of rebuilding them; a resize step takes about 62 ms instead of 110 (#354) (#387)

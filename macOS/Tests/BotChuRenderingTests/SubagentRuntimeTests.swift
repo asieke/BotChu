@@ -31,9 +31,11 @@ extension RenderingTests {
     /// (and ignored Stop), so the run stayed running until BotChu restarted. Its handoff now goes
     /// back a short while after the turn ended, completed, with a note saying why it took so long.
     @Test func aWorkerThatNeverExitsAfterItsReplyStillHandsOff() async throws {
-        let limit = AgentRun.defaultLingerLimit
+        let limit = AgentRun.defaultLingerLimit, killDelay = AgentRun.defaultKillDelay
         AgentRun.defaultLingerLimit = 1
-        defer { AgentRun.defaultLingerLimit = limit }
+        // It ignores SIGTERM too: killed soon after, not 5 s later.
+        AgentRun.defaultKillDelay = 0.2
+        defer { AgentRun.defaultLingerLimit = limit; AgentRun.defaultKillDelay = killDelay }
         let fixture = try SubagentFixture()
         defer { fixture.cleanUp() }
         let caller = try await fixture.app.delegation.prepareCaller(target: fixture.target, directory: fixture.folder.path, machine: .thisMac, hostID: nil)
