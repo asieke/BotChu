@@ -1,6 +1,6 @@
 # BotChu
 
-A minimal, open-source, native macOS app for persistent AI bots, in the spirit of Grok Bot and [rakazo](https://github.com/elie222/rakazo). Bots are listed down the left; the selected bot's chat fills the window, and each bot can also work on parallel tasks in your GitHub repositories in their own git worktrees on this Mac or over SSH. Every bot is driven by a coding-agent CLI already installed and signed in on the Mac (Claude Code, Codex, Antigravity, Muse, or Pi), or by BotChu's own headless agent on Sail Research (`botchu-sail`).
+A minimal, open-source, native macOS app for persistent AI bots, in the spirit of Grok Bot and [rakazo](https://github.com/elie222/rakazo). Bots are listed down the left, the selected bot's Home and Project Areas beside them, and its chat fills the window. A Project Area is a GitHub repository or a folder the bot owns, with one persistent conversation that runs in it; the bot's sub-agent runs make code changes in their own git worktrees. Every bot is driven by a coding-agent CLI already installed and signed in on the Mac (Claude Code, Codex, Antigravity, Muse, or Pi), or by BotChu's own headless agent on Sail Research (`botchu-sail`).
 
 ## Run locally
 - Prerequisites: macOS 14 or later with full Xcode 16 or later (`xcode-select -p` must point into `Xcode.app`), and whichever agent CLIs you want to use, installed and signed in.
