@@ -36,21 +36,22 @@ extension AppModel {
         return moveArea(target, to: botID) != nil
     }
 
-    /// Gives the bot the repository's area: its own (shown again when hidden), the one another bot
-    /// has (moved to it), or a new one in the repository's main checkout on this Mac. Nil when the
-    /// bot can't own it, the repository is located on a host, or the area can't move now.
+    /// Gives the bot the repository's area: its own (shown again when hidden, and opened when
+    /// `revealing`), the one another bot has (moved to it), or a new one in the repository's main
+    /// checkout on this Mac (`checkout`, else where it is located). Nil when the bot can't own it,
+    /// the repository is located on a host, or the area can't move now.
     @discardableResult
-    func attachArea(repo: String, to botID: UUID) -> ChatTarget? {
+    func attachArea(repo: String, to botID: UUID, checkout: String? = nil, revealing: Bool = true) -> ChatTarget? {
         guard let bot = bot(botID), bot.canOwnTasks, !repo.isEmpty else { return nil }
         if let owner = areaOwner(repo: repo) {
             let found = ChatTarget.task(owner.area.id, of: owner.botID)
             guard let target = owner.botID == botID ? found : moveArea(found, to: botID) else { return nil }
-            if task(target)?.isArchived == true { unhideArea(target) }
+            if task(target)?.isArchived == true { unhideArea(target, revealing: revealing) }
             return target
         }
         let location = location(of: repo)
         guard location.hostID == nil else { return nil }
-        return addArea(BotTask(repoArea: repo, checkout: location.path, for: bot), to: botID)
+        return addArea(BotTask(repoArea: repo, checkout: checkout ?? location.path, for: bot), to: botID)
     }
 
     /// Gives the bot a new folder area called `name`, in `<workspace>/areas/<slug>`, made now.
@@ -143,10 +144,10 @@ extension AppModel {
         closeTask(target)
     }
 
-    /// Shows a hidden area again and opens it.
-    func unhideArea(_ target: ChatTarget) {
+    /// Shows a hidden area again, and opens it when `revealing`.
+    func unhideArea(_ target: ChatTarget, revealing: Bool = true) {
         guard let area = task(target), area.isArea, area.isArchived else { return }
-        reopenTask(target)
+        reopenTask(target, show: revealing)
     }
 
     /// Gives each open task's repository on this Mac that has no area yet one, under the first bot

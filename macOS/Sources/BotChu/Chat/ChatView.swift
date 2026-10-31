@@ -17,12 +17,8 @@ struct ChatView: View {
 
     var body: some View { ChatContent(target: target, density: density) }
 
-    /// "Message 10x Engineer Bot about #113": a task's issue or pull request, else its repository
-    /// (a job's run: its job).
-    static func placeholder(bot: Bot, task: BotTask?) -> String {
-        guard let task else { return "Message \(bot.name)" }
-        return "Message \(bot.name) about " + (task.work.map { "#\($0.number)" } ?? task.jobRun?.jobTitle ?? task.repoName)
-    }
+    /// "Message GitChu" in an area; "Message 10x Engineer Bot about #113" in a task.
+    static func placeholder(bot: Bot, task: BotTask?) -> String { ConversationTab.placeholder(bot: bot, task: task) }
 }
 
 private struct ChatContent: View {
@@ -58,6 +54,10 @@ private struct ChatContent: View {
                 Self.style(of: item, at: index, count: items.count, density: density, turnRunning: turnRunning, transcript: transcript, cards: cards)
             }
             VStack(spacing: 0) {
+                // An area's lead-bot pill stays put above its transcript (#403).
+                if let heading = AreaHeading(bot: bot, task: task) {
+                    AreaHeader(target: target, bot: bot, heading: heading, folder: task?.checkout ?? "")
+                }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         VStack(spacing: 0) {
@@ -83,6 +83,9 @@ private struct ChatContent: View {
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 8)
                                     .accessibilityLabel("Loading earlier messages")
+                            } else if task?.isArea == true {
+                                // The pill above says whose area this is.
+                                EmptyView()
                             } else if let task {
                                 TaskIntro(bot: bot, task: task, machine: task.isRemote ? model.machineName(task.hostID, fallback: task.hostName) : nil)
                             } else {
@@ -509,6 +512,48 @@ struct BotIntro: View {
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
         .padding(.bottom, 12)
+    }
+}
+
+/// Atop an area's conversation (#403): a compact pill with the owner's face (its pet, moving with
+/// what the area's turn is doing), its name, the area's name and the folder its turns run in.
+struct AreaHeader: View {
+    @Environment(AppModel.self) private var model
+    let target: ChatTarget
+    let bot: Bot
+    let heading: AreaHeading
+    let folder: String
+
+    var body: some View {
+        let activity = model.status(of: target)?.activity ?? .idle
+        HStack(spacing: 8) {
+            BotAvatar(bot: bot, size: 26, activity: activity, animates: true)
+            Text(heading.botName).fontWeight(.semibold)
+            Separator()
+            Text(heading.areaName).fontWeight(.semibold)
+            Separator()
+            Text(heading.path)
+                .foregroundStyle(.secondary)
+                .truncationMode(.middle)
+                .layoutPriority(-1)
+                .help(folder)
+        }
+        .font(.system(size: 12))
+        .lineLimit(1)
+        .padding(.leading, 4)
+        .padding(.trailing, 12)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(Theme.replyBackground))
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("area-header")
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private struct Separator: View {
+        var body: some View { Text("/").foregroundStyle(.tertiary) }
     }
 }
 

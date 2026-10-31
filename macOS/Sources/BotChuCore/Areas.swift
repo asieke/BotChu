@@ -179,3 +179,40 @@ public enum Areas {
         return made
     }
 }
+
+/// What the lead-bot pill atop an area's conversation names (#403): its owner, the area and the
+/// folder its turns run in, `~`-abbreviated.
+public struct AreaHeading: Hashable, Sendable {
+    public var botName: String
+    public var areaName: String
+    public var path: String
+
+    /// Nil for Home, a task or a job's run, which keep their intros.
+    public init?(bot: Bot, task: BotTask?, home: String = NSHomeDirectory()) {
+        guard let task, let area = task.area else { return nil }
+        botName = bot.name
+        areaName = area.name
+        path = Self.abbreviated(task.checkout, home: home)
+    }
+
+    /// `path` with the home folder written `~`.
+    public static func abbreviated(_ path: String, home: String) -> String {
+        let home = home.hasSuffix("/") ? String(home.dropLast()) : home
+        guard !home.isEmpty else { return path }
+        if path == home { return "~" }
+        return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+    }
+}
+
+extension ConversationTab {
+    /// The composer's placeholder: "Message GitChu" in an area; "Message 10x Engineer Bot about
+    /// #113" in a task (its issue or pull request, else its repository; a job's run: its job).
+    public static func placeholder(bot: Bot, task: BotTask?) -> String {
+        guard let task else { return "Message \(bot.name)" }
+        if let area = task.area { return "Message \(area.name)" }
+        return "Message \(bot.name) about " + (task.work.map { "#\($0.number)" } ?? task.jobRun?.jobTitle ?? task.repoName)
+    }
+
+    /// The window's title: the area's name while an area is shown, else the bot's.
+    public static func windowTitle(bot: Bot, task: BotTask?) -> String { task?.area?.name ?? bot.name }
+}

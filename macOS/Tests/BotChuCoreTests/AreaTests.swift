@@ -240,7 +240,34 @@ private func tempDir() -> URL {
         let child = BotContext.subagentPreamble(bot: tenX, run: run, callerDescription: "Product Fox", memory: "", sharedMemory: "",
                                                 areaCheckout: "/w/GitChu")
         #expect(child.contains("You start in the main checkout at /w/GitChu"))
+        #expect(child.contains("Work in /w/GitChu on that Mac"))
+        #expect(preamble.contains("A `--workspace shared` child starts here too, in the main checkout, and makes its own worktree"))
+        #expect(!folderPreamble.contains("A `--workspace shared` child starts here too"))
         #expect(!BotContext.subagentPreamble(bot: tenX, run: run, callerDescription: "Product Fox", memory: "", sharedMemory: "")
             .contains("You start in the main checkout"))
+    }
+
+    /// The lead-bot pill, the composer's placeholder and the window's title of an area (#403).
+    @Test func anAreaIsHeadedByItsOwnerItsNameAndItsFolder() {
+        let area = BotTask(repoArea: "asieke/protagonist-v2", checkout: "/Users/a/Desktop/WORKSPACE/protagonist-v2", for: fox, at: date)
+        let heading = AreaHeading(bot: fox, task: area, home: "/Users/a")
+        #expect(heading == AreaHeading(bot: fox, task: area, home: "/Users/a/"))
+        #expect(heading?.botName == "Product Fox" && heading?.areaName == "protagonist-v2")
+        #expect(heading?.path == "~/Desktop/WORKSPACE/protagonist-v2")
+        #expect(AreaHeading(bot: fox, task: area, home: "/Users/b")?.path == "/Users/a/Desktop/WORKSPACE/protagonist-v2")
+        #expect(AreaHeading.abbreviated("/Users/a", home: "/Users/a") == "~")
+        #expect(AreaHeading.abbreviated("/Users/ab/x", home: "/Users/a") == "/Users/ab/x")
+        let folder = BotTask(folderArea: "Kalshi 15m Crypto", folder: "/Users/a/BOTS/turtle/areas/kalshi-15m-crypto", for: fox, at: date)
+        #expect(AreaHeading(bot: fox, task: folder, home: "/Users/a")?.path == "~/BOTS/turtle/areas/kalshi-15m-crypto")
+        #expect(AreaHeading(bot: fox, task: nil) == nil)
+        #expect(AreaHeading(bot: fox, task: openTask("asieke/GitChu", of: fox)) == nil)
+
+        #expect(ConversationTab.placeholder(bot: fox, task: area) == "Message protagonist-v2")
+        #expect(ConversationTab.placeholder(bot: fox, task: folder) == "Message Kalshi 15m Crypto")
+        #expect(ConversationTab.placeholder(bot: fox, task: nil) == "Message Product Fox")
+        #expect(ConversationTab.placeholder(bot: fox, task: openTask("asieke/GitChu", of: fox)) == "Message Product Fox about GitChu")
+        #expect(ConversationTab.windowTitle(bot: fox, task: area) == "protagonist-v2")
+        #expect(ConversationTab.windowTitle(bot: fox, task: openTask("asieke/GitChu", of: fox)) == "Product Fox")
+        #expect(ConversationTab.windowTitle(bot: fox, task: nil) == "Product Fox")
     }
 }

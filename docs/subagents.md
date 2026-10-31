@@ -5,7 +5,7 @@ mention only names the bot; what is asked for decides which:
 
 | The owner asks for | What BotChu makes | Where it shows | Lifetime |
 | --- | --- | --- | --- |
-| "New task @bot", "hand this off to @bot as a new task" | a **Task**, with `botchu-task create` | under the bot in the left sidebar | the bot's own; goes on after the asking turn ends or stops |
+| "New task @bot", "hand this off to @bot as a new task" | a **turn in the repository's Project Area**, with `botchu-task create` | that area, under the bot that has it in the left sidebar | the area's; goes on after the asking turn ends or stops |
 | "New subagent @bot", "delegate this to @bot as a sub-agent" | a **sub-agent run**, with `botchu-subagent call` or `spawn` | the asking conversation's Sub-agents inspector | a child of the asking turn; its handoff comes back, and Stop cascades |
 
 A remote queue bot, which runs on its own computer, is neither: a turn messages it with
@@ -27,23 +27,25 @@ botchu-task list --mine [--json]
 ```
 
 `create` takes `--brief`, `--issue`, `--pr` (to continue a pull request) or `--review` (with
-`--comment` to post it), and `--title`, `--branch` and `--machine`, the fields of a dispatch file
-(README, **Home coordinates**). The Task is made as the named bot's own: in its repository's usual
-place, with the usual issue, pull request and worktree checks, on the bot's account, model and
-effort, recording which conversation asked (`requestedBy` in its `task.json`). Its first message
-tells the bot who handed it over. The asking conversation gets a receipt that opens the Task, and
-the command prints the bot and Task IDs and one status: `pending`, `created` (its first turn still
-starting when `--wait`, 120 seconds by default, ran out), `started`, `start failed` (the Task is
-there, with why) or `failed` (nothing was made: run the same command again once the reason is
-fixed). It exits nonzero for the last two. A pull request to continue is read from GitHub before
-anything is made, and when another open task already works on its head branch (a task that
-opened it there, say), the request fails with that task as `Working Task:`, its bot and ID, to
-message instead; no Task or tab is made. A dispatch file asking the same gets the same answer in
-Home. Running the same command again from the same
-conversation, in the same turn, a later one or after a relaunch, returns the same Task: BotChu
-recognizes it by the conversation, the bot and what it asks for. A request seen again in the same
-turn gets the same answer. The Task doesn't count against sub-agent limits and never waits for
-the asking turn; it counts as one of the turn's sixty-four delegations.
+`--comment` to post it), and `--branch`, `--title` and `--machine`, the fields of a dispatch file
+(README, **Home coordinates**). It posts the request as a turn in the repository's Project Area
+(#399 decision 9): "Work on issue #n “title” <url>" (or "Continue", "Review", "Review and comment
+on pull request #n …") then the brief, as a message from the asking bot (`fromAgent`), which
+its bot reads with who asks and from where. The area is the named bot's when it has the
+repository or no bot does (attached to it first, the repository cloned when it isn't checked out);
+when another bot has it, the request goes into that bot's area, and the receipt says so (until
+#406's cameo turns let the named bot answer there). A hidden area is shown again. The asking
+conversation gets a receipt that opens the area, and the command prints the area, its bot and ID
+and one status: `pending`, `posted` (its turn not started yet when `--wait`, 120 seconds by
+default, ran out), `started` (the turn that takes the message started), `start failed` or
+`failed` (nothing was posted: run the same command again once the reason is fixed). It exits
+nonzero for the last two. Running the same command again from the same conversation, in the same
+turn, a later one or after a relaunch, posts nothing more: the message's ID comes from the
+conversation, the bot and what it asks for. Areas are on this Mac: with `--machine`, or for a
+repository the owner keeps on another computer, `create` makes a Task of its own there instead,
+as before, with the usual issue, pull request and worktree checks (`Task:` and `Working Task:`
+in its output). It doesn't count against sub-agent limits and never waits for the asking turn;
+it counts as one of the turn's sixty-four delegations.
 
 `list --mine` (#262) prints the asking bot's open Tasks as its Tasks column in BotChu shows them,
 in its order, with the column's count: each row's title, summary and state (`Idle`, `Thinking…`,
@@ -54,11 +56,11 @@ and nothing is read from `task.json`, process tables or transcripts. "Mine" is t
 asks: its Home, one of its Tasks, or a sub-agent run, whose own bot it is rather than its caller's.
 Without `--mine`, `list` lists the bots that can own Tasks, as before.
 
-A batch goes to one bot as one Task, whose own turn runs a sub-agent run per item: the asking
-turn can end while they work, and stopping the Task stops its runs.
+A batch goes to one bot's area as one request, whose turn runs a sub-agent run per item: the
+asking turn can end while they work, and stopping the area's turn stops its runs.
 
-A dispatch file with `"agent"` does the same from a bot's folder on this Mac, with a receipt in
-its Home. BotChu looks at every bot's dispatch folder while any turn runs, so a request written
+A dispatch file does the same from a bot's folder on this Mac, from that bot's Home (for itself,
+or for the bot named in `"agent"`), with a receipt in its Home. BotChu looks at every bot's dispatch folder while any turn runs, so a request written
 into another bot's folder no longer waits for that bot's Home.
 
 ## Sub-agent runs

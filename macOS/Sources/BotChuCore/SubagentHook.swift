@@ -303,7 +303,7 @@ def wait_for(ids, attaching=True):
 
 def roster(tasks=False):
     for bot in read_json(ROOT / "roster.json"):
-        # A specialist is only called as a sub-agent, so it can't get a Task.
+        # A specialist is only called as a sub-agent, so it has no areas or Tasks.
         if bot.get("remote") or (tasks and bot.get("specialist")):
             continue
         role = " [specialist: sub-agent only]" if bot.get("specialist") else ""
@@ -315,14 +315,14 @@ TASK_PHASES = ("pending", "created", "started", "startFailed", "failed")
 def task_submit(args):
     live()
     if not args.agent.strip() or len(args.agent) > 256:
-        fail("Provide the bot that gets the Task: its name, slug or UUID (up to 256 characters).")
+        fail("Provide the bot to ask: its name, slug or UUID (up to 256 characters).")
     if not args.repo.strip() or len(args.repo) > 512:
-        fail("Provide the Task's repository, as owner/name (--repo).")
+        fail("Provide the repository, as owner/name (--repo).")
     brief = args.brief or ""
     if len(brief) > 100000:
-        fail("The Task's brief must be at most 100000 characters.")
+        fail("The brief must be at most 100000 characters.")
     if not brief.strip() and args.issue is None and args.pr is None and args.review is None:
-        fail("Give the Task a brief (--brief), or an --issue, --pr or --review to work on.")
+        fail("Give a brief (--brief), or an --issue, --pr or --review to work on.")
     if args.comment and args.review is None:
         fail("--comment posts a review: use it with --review.")
     task = {"agent": args.agent, "repo": args.repo}
@@ -360,14 +360,27 @@ def task_report(request_id, result):
     phase = result["phase"] if result else "pending"
     agent = str(result.get("targetBotName") or "the bot") if result else "the bot"
     working = bool(result and result.get("alreadyWorking"))
+    area = bool(result and result.get("area"))
     if result and result.get("taskID"):
-        print(("Working Task: " if working else "Task: ") + str(result.get("taskTitle", "")) + " (" + result["taskID"] + ")")
+        label = "Area: " if area else "Working Task: " if working else "Task: "
+        print(label + str(result.get("taskTitle", "")) + " (" + result["taskID"] + ")")
     if result and result.get("targetBotID"):
         print("Agent: " + agent + " (" + result["targetBotID"] + ")")
     reason = str(result.get("errorMessage") or "") if result else ""
+    if area:
+        earlier = " The same request posted it before; nothing more was posted." if result.get("existing") else ""
+        print("Status: " + {
+            "pending": "pending — BotChu has the request and hasn't acted on it yet. Check again with botchu-task status " + request_id + ".",
+            "created": "posted — the request is in " + agent + "'s area, and its turn hasn't started yet." + earlier,
+            "started": "started — " + agent + "'s turn on it is running in the area; it goes on independently of this turn." + earlier,
+            "startFailed": "start failed — the request is in " + agent + "'s area, but its turn couldn't start: " + reason + earlier,
+            "failed": "failed — " + reason,
+        }[phase])
+        print("Request: " + request_id, flush=True)
+        return 1 if phase in ("startFailed", "failed") else 0
     earlier = " The same request created it before; no second Task was made." if result and result.get("existing") else ""
     print("Status: " + {
-        "pending": "pending — BotChu has the request and hasn't created the Task yet. Check again with botchu-task status " + request_id + ".",
+        "pending": "pending — BotChu has the request and hasn't acted on it yet. Check again with botchu-task status " + request_id + ".",
         "created": "created — the Task is recorded under " + agent + " and its first turn is still starting." + earlier,
         "started": "started — the Task's first turn is running under " + agent + "; it goes on independently of this turn." + earlier,
         "startFailed": "start failed — the Task is recorded under " + agent + ", but its first turn couldn't start: " + reason + earlier,
@@ -432,36 +445,38 @@ def task_list(as_json):
     return 0
 
 def task_main():
-    parser = argparse.ArgumentParser(prog="botchu-task", description="Create Tasks for BotChu bots: independent, parent-level "
-        "conversations under the bot in BotChu's sidebar, which go on after this turn ends. For child work that "
-        "returns a handoff to this turn, use botchu-subagent instead.")
+    parser = argparse.ArgumentParser(prog="botchu-task", description="Ask a BotChu bot for work in a repository: posted as a "
+        "turn in the repository's Project Area, the lasting conversation about it under the bot that has it in BotChu's "
+        "sidebar (attached to the bot asked when none has it), which goes on after this turn ends. A repository on "
+        "another computer gets a Task of its own there instead. For child work that returns a handoff to this turn, "
+        "use botchu-subagent instead.")
     commands = parser.add_subparsers(dest="command", required=True)
-    lister = commands.add_parser("list", help="List the bots that can own Tasks, with UUIDs for ambiguous names; "
-        "with --mine, your own open Tasks")
-    lister.add_argument("--mine", action="store_true", help="List your bot's open Tasks as BotChu's sidebar shows them, in its "
-        "order: title, summary, state (Idle, Thinking…, Running a tool…), elapsed time or time since last activity, issue or "
-        "pull request, branch and Task ID")
+    lister = commands.add_parser("list", help="List the bots that can own areas, with UUIDs for ambiguous names; "
+        "with --mine, your own areas and open Tasks")
+    lister.add_argument("--mine", action="store_true", help="List your bot's areas and open Tasks as BotChu's sidebar shows "
+        "them, in its order: title, summary, state (Idle, Thinking…, Running a tool…), elapsed time or time since last "
+        "activity, issue or pull request, branch and ID")
     lister.add_argument("--json", action="store_true", help="With --mine, print the same fields as JSON")
-    create = commands.add_parser("create", help="Create and start a Task under a bot")
-    create.add_argument("--agent", required=True, help="The bot that gets the Task: its name, slug or UUID")
+    create = commands.add_parser("create", help="Post a request as a turn in the repository's area")
+    create.add_argument("--agent", required=True, help="The bot to ask: its name, slug or UUID")
     create.add_argument("--repo", required=True, help="The repository, owner/name")
     create.add_argument("--brief", help="What to do; required without --issue, --pr or --review")
     create.add_argument("--issue", help="An issue to work on")
     create.add_argument("--pr", help="A pull request to continue")
     create.add_argument("--review", help="A pull request to review")
     create.add_argument("--comment", action="store_true", help="With --review, post the review on GitHub")
-    create.add_argument("--title")
+    create.add_argument("--title", help="A Task's title, on another computer")
     create.add_argument("--branch")
-    create.add_argument("--machine", help="The computer to work on, by its machine name")
-    create.add_argument("--wait", type=float, default=120, help="Seconds to wait for the Task's first turn to start (default 120)")
-    status = commands.add_parser("status", help="How a Task request made in this turn is going")
+    create.add_argument("--machine", help="Another computer to work on, by its machine name: a Task of its own there")
+    create.add_argument("--wait", type=float, default=120, help="Seconds to wait for the request's turn to start (default 120)")
+    status = commands.add_parser("status", help="How a request made in this turn is going")
     status.add_argument("id")
     args = parser.parse_args()
     if args.command == "list":
         if args.mine:
             return task_list(args.json)
         if args.json:
-            fail("--json prints your own Tasks: use it with --mine.")
+            fail("--json prints your own areas and Tasks: use it with --mine.")
         return roster(tasks=True)
     if args.command == "status":
         request_id = canonical(args.id)
@@ -823,8 +838,8 @@ def main():
     if os.path.basename(sys.argv[0]) == "botchu-inbox":
         return inbox_main()
     parser = argparse.ArgumentParser(description="Start sub-agent runs: child work of this turn, shown in BotChu's Sub-agents "
-        "inspector, whose handoffs come back here; call/wait before finishing your turn. To create an independent Task "
-        "for a bot, use botchu-task create instead.")
+        "inspector, whose handoffs come back here; call/wait before finishing your turn. To ask a bot for work that goes "
+        "on independently, in a repository's Project Area, use botchu-task create instead.")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("list", help="List available bots, with UUIDs for ambiguous names")
     for command in ("call", "spawn"):

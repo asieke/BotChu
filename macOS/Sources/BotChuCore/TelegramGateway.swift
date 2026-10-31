@@ -223,7 +223,7 @@ public enum TelegramReply {
     }
 
     /// How a chat chooses (#114).
-    static let choosing = "To talk to another bot, start a message with @ and its name: it stays chosen until you choose another. Start with #owner/repo to name a repository for that message, and with /task to make it a task of its own there. With inline mode on, type the bot's @username, then @ or #, to choose from a list."
+    static let choosing = "To talk to another bot, start a message with @ and its name: it stays chosen until you choose another. Start with #owner/repo to name a repository for that message, and with /task to post it in that repository's area. With inline mode on, type the bot's @username, then @ or #, to choose from a list."
 
     public static let unrouted = "This chat isn't connected to a bot yet. Start a message with @ and a bot's name, or choose one in BotChu ▸ Settings ▸ Telegram."
     public static let unavailable = "The bot this chat was connected to isn't in BotChu any more. Choose another in BotChu ▸ Settings ▸ Telegram."
@@ -298,9 +298,13 @@ public enum TelegramProgress: Equatable, Sendable {
 
 /// How BotChu took a task asked for from Telegram with `/task` (#114).
 public enum TelegramTaskStart: Equatable, Sendable {
-    /// Recorded under its bot and starting; `unsaved` says why its record couldn't be saved.
+    /// Posted as a turn in the repository's Project Area called `area` (#399): the chosen bot's,
+    /// or that of `owner`, the bot that has it, when another bot does.
+    case posted(area: String, owner: String?)
+    /// For a repository on another computer: recorded under its bot and starting; `unsaved` says
+    /// why its record couldn't be saved.
     case started(title: String, unsaved: String?)
-    /// Telegram sent the request again: the task it made before.
+    /// Telegram sent the request again: the area it posted to, or the task it made, before.
     case duplicate(title: String)
     case unavailable
     case discarded
@@ -321,7 +325,8 @@ public protocol TelegramApp: Sendable {
     /// repository it names (`references`). `mapped` is the chat's bot in Settings.
     func deliver(_ text: String, references: [MessageReference], id: UUID, to botID: UUID, from chat: Int64,
                  mapped: UUID?) async -> TelegramDelivery
-    /// Makes a task of its own for `botID` in `repo`, under the ID `id`, and starts it.
+    /// Posts the brief into `repo`'s area for `botID`, under the message ID `id` (or, for a repository
+    /// on another computer, makes a task of its own there under that ID and starts it).
     func startTask(_ brief: String, in repo: String, id: UUID, for botID: UUID, from chat: Int64, mapped: UUID?) async -> TelegramTaskStart
     func progress(of id: UUID, for botID: UUID) async -> TelegramProgress
     /// Full assistant text from this accepted message's turn only, never tool output or raw errors.
@@ -733,6 +738,9 @@ public actor TelegramGateway {
             guard !address.body.isEmpty else { return (TelegramReply.taskNeedsBrief, nil) }
             try Task.checkCancellation()
             switch await app.startTask(address.body, in: repo, id: id, for: botID, from: chat, mapped: mapped) {
+            case .posted(let area, let owner):
+                let name = await app.name(of: botID) ?? choice.botName ?? "its bot"
+                return (TelegramReply.taskPosted(in: area, bot: name, owner: owner, repo: repo), choice)
             case .started(let title, let unsaved):
                 let name = await app.name(of: botID) ?? choice.botName ?? "its bot"
                 return ([TelegramReply.taskStarted(title, bot: name, repo: repo), unsaved].compactMap { $0 }.joined(separator: " "), choice)
