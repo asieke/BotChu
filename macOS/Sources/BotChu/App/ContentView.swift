@@ -98,7 +98,7 @@ private struct DetailColumn: View {
             }
         } else if let id = model.selection, model.bot(id) != nil {
             NativeConversationColumns()
-                .navigationTitle(model.bot(id)?.name ?? "")
+                .navigationTitle(model.bot(id).map { ConversationTab.windowTitle(bot: $0, task: model.task(model.tab(of: id))) } ?? "")
                 .modifier(ChatToolbar())
         } else {
             ContentUnavailableView {
