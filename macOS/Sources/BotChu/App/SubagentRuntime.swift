@@ -48,6 +48,17 @@ final class SubagentRuntime {
     @ObservationIgnored private var finalizing: Set<UUID> = []
     /// Runs found unfinished after a relaunch, which are closed and aren't reviewed.
     @ObservationIgnored private var restored: Set<UUID> = []
+    /// What stopped each run being stopped, until it ends (#368); the first cause stands.
+    @ObservationIgnored private var stopCauses: [UUID: SubagentInterruption.Cause] = [:]
+    /// Runs whose CLI has exited and whose workspace is being read before they end: Stop waits.
+    @ObservationIgnored private var exiting: Set<UUID> = []
+    /// Interrupted runs being checked before they're relaunched (#368): a second Resume is refused.
+    private(set) var resuming: Set<UUID> = []
+    /// Why the owner's last Resume of a run didn't relaunch it, shown beside its Resume.
+    private(set) var resumeProblems: [UUID: String] = [:]
+    /// The runs of other conversations each caller resumed or collects (Home a task's run), so their
+    /// statuses reach its mailbox and its end stops them as it stops its own.
+    @ObservationIgnored private var attached: [UUID: Set<UUID>] = [:]
     /// Finished runs' transcripts are read when shown (#109), and at most this many bytes of those
     /// not in the conversation shown stay in memory, the least recently read going first.
     nonisolated static let finishedThreadBytes = 16 << 20
@@ -258,7 +269,9 @@ final class SubagentRuntime {
                 }
             }
         }
-        let heartbeat = Task.detached(priority: .utility) { [weak self] in
+        // Ahead of other background work: a loaded Mac starves this first, and a late heartbeat
+        // makes a caller's helper give up on runs still going (#368).
+        let heartbeat = Task.detached(priority: .userInitiated) { [weak self] in
             while !Task.isCancelled {
                 do {
                     try await transport.heartbeat()
@@ -345,7 +358,8 @@ final class SubagentRuntime {
 
     private func statuses(for id: UUID) -> [SubagentStatus]? {
         guard let caller = contexts[id] else { return nil }
-        return root(caller.target).runs.filter { $0.callerInvocationID == id && $0.phase.isActive }.map { record in
+        let elsewhere = (attached[id] ?? []).compactMap { run($0) }
+        return (root(caller.target).runs + elsewhere).filter { $0.callerInvocationID == id && $0.phase.isActive }.map { record in
             SubagentStatus(id: record.id, phase: record.phase, activity: live(record.id).state?.activity.doing ?? "Preparing…")
         }
     }
@@ -399,6 +413,15 @@ final class SubagentRuntime {
         // Model lists checked now, as Refresh models does (#326).
         if ModelRefreshRequest.isRequest(data) {
             await receiveModelRefresh(data, id: fileID, filename: filename, from: caller)
+            return
+        }
+        // An interrupted run relaunched, or runs of an earlier turn collected (#368).
+        if SubagentResumeRequest.isRequest(data) {
+            await receiveResume(data, id: fileID, filename: filename, from: caller)
+            return
+        }
+        if SubagentAttachRequest.isRequest(data) {
+            await receiveAttach(data, id: fileID, filename: filename, from: caller)
             return
         }
         if let rejected = rejections[caller.id]?[fileID] {
@@ -461,7 +484,7 @@ final class SubagentRuntime {
             live(record.id).state = RunState(preparing: true)
             deliveries[record.id] = caller.transport
             guard contexts[caller.id] != nil else { stop(record.id); return }
-            preparations[record.id] = Task { [weak self] in await self?.launch(record.id, targetBot: targetBot, caller: caller) }
+            preparations[record.id] = Task { [weak self] in await self?.launch(record.id, targetBot: targetBot) }
             // Admission is durable. A failed acknowledgement must not strand a preparing run;
             // the next poll recognizes its ID and retries the acknowledgement.
             do { try await caller.transport.acknowledge(filename: filename) }
@@ -753,7 +776,9 @@ final class SubagentRuntime {
         (error as? TaskRequest.Problem)?.message ?? error.localizedDescription
     }
 
-    private func launch(_ id: UUID, targetBot: Bot, caller: Caller) async {
+    /// Starts a run's CLI. A resumed run (`resume`, the delta it starts with) continues its session
+    /// where its account can (`session`), or starts a new one with its brief and the delta.
+    private func launch(_ id: UUID, targetBot: Bot, resume delta: String? = nil, session: Bool = true) async {
         guard var record = run(id), record.phase.isActive, let model else { return }
         let chosenModel = record.effectiveModel(openRouterDefault: model.settings.openRouterModel, sailDefault: model.settings.sailModel)
         if let owner = model.bot(record.rootBotID) {
@@ -800,12 +825,15 @@ final class SubagentRuntime {
             let snapshot = prepared.context
             guard run(id)?.phase.isActive == true, !Task.isCancelled,
                   let currentBot = model.bot(targetBot.id) else { endCaller(context.id); return }
-            let prompt = BotContext.subagentPreamble(bot: currentBot, run: record,
-                callerDescription: caller.parent.flatMap { run($0)?.targetBotName } ?? model.bot(target.botID)?.name ?? "Bot",
+            let preamble = BotContext.subagentPreamble(bot: currentBot, run: record,
+                callerDescription: record.parentSubagentID.flatMap { run($0)?.targetBotName } ?? model.bot(target.botID)?.name ?? "Bot",
                 memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, soul: snapshot.soul,
                 instructions: snapshot.instructions, team: snapshot.team, availableBots: roster, skills: snapshot.skills,
                 tools: machine.isRemote ? nil : model.tools.instructions())
-            var invocation = record.invocation(prompt: prompt, model: chosenModel, sessionID: nil, remote: machine.isRemote,
+            // A resumed run continues its session with the delta alone, or starts anew with both (#368).
+            let continued = delta != nil && session ? record.resumableSessionID : nil
+            let prompt = delta.map { continued != nil ? $0 : preamble + "\n\n" + $0 } ?? preamble
+            var invocation = record.invocation(prompt: prompt, model: chosenModel, sessionID: continued, remote: machine.isRemote,
                 openRouterKey: key, sailKey: sailKey, catalog: model.nativeModels(for: record))
             invocation.environment.merge(context.environment) { _, new in new }
             invocation.toolProfile = prepared.toolProfile
@@ -814,12 +842,15 @@ final class SubagentRuntime {
                 : AgentRun(command: command, invocation: invocation, directory: URL(fileURLWithPath: record.workingDirectory))
             var stream = TurnStream(account: account, invocation: invocation, usage: usageCaptures[id]?.capture)
             var persistenceFailure: String?
+            let toolsAtLaunch = live(id).counts.tools
             // Parsed off the main thread, in batches; the transcript is checkpointed off it too.
             runner.deliverEvents(parsedBy: stream.parser()) { [weak self, weak runner] events in
                 guard let self, let runner, self.runners[id] === runner, self.run(id)?.phase.isActive == true else { return }
                 let live = self.live(id)
                 var state = live.state
-                let batch = stream.apply(events, state: &state, in: live.update)
+                // After Stop, the CLI's last word is about the interruption, which the run's outcome says.
+                var input: InputLedger?
+                let batch = stream.apply(events, state: &state, stopped: runner.stopped, ledger: &input, followUp: { nil }, in: live.update)
                 if state != live.state { live.state = state }
                 guard let batch else { return }
                 batch.settle { [weak self, weak runner] in
@@ -858,7 +889,25 @@ final class SubagentRuntime {
                 // A CLI that BotChu ended for staying on after its turn (#145) exits by a signal; its handoff stands.
                 let reason = persistenceFailure ?? stream.outcome.failure ?? ((status != 0 && !runner.lingered || !stream.outcome.ended || reply.isEmpty)
                     ? "\(account.name) ended without a successful handoff (exit \(status)). \(TurnStream.lastLines(stderr))" : nil)
-                self.finish(id, phase: persistenceFailure != nil ? .failed : runner.stopped ? .stopped : reason == nil ? .completed : .failed, error: reason)
+                let phase: SubagentPhase = persistenceFailure != nil ? .failed : runner.stopped ? .stopped : reason == nil ? .completed : .failed
+                guard phase != .completed, persistenceFailure == nil else { self.finish(id, phase: phase, error: reason); return }
+                // A session killed mid-tool can't always be continued (a call without its result): the
+                // resumed run starts a new one with its brief, once (#368).
+                if continued != nil, let delta, phase == .failed, live.counts.tools == toolsAtLaunch {
+                    if let pending = self.usageCaptures.removeValue(forKey: id) { pending.capture.finish(.failed, in: pending.home, queue: self.archive.storage) }
+                    live.messages.append(ChatMessage(role: .note, text: "Its session couldn't be continued, so it starts a new one with its brief."))
+                    self.preparations[id] = Task { [weak self] in await self?.launch(id, targetBot: targetBot, resume: delta, session: false) }
+                    return
+                }
+                // Ended without a handoff: what it left in its workspace goes into its outcome (#368).
+                self.exiting.insert(id)
+                let directory = record.workingDirectory
+                Task { [weak self] in
+                    let workspace = await SubagentWorkspaceState.read(directory, on: machine)
+                    guard let self else { return }
+                    self.exiting.remove(id)
+                    self.finish(id, phase: phase, error: reason, workspace: workspace)
+                }
             }
             replace(record)
             runners[id] = runner
@@ -872,8 +921,12 @@ final class SubagentRuntime {
         }
     }
 
-    func stop(_ id: UUID) {
-        for child in children(of: id) where child.phase.isActive { stop(child.id) }
+    /// Stops a run and the runs it delegated to; `cause` is what its outcome says stopped it (#368).
+    func stop(_ id: UUID, cause: SubagentInterruption.Cause = .owner) {
+        if stopCauses[id] == nil, run(id)?.phase.isActive == true { stopCauses[id] = cause }
+        // Its CLI has exited; it ends once its workspace is read.
+        guard !exiting.contains(id) else { return }
+        for child in children(of: id) where child.phase.isActive { stop(child.id, cause: .parentStopped) }
         preparations.removeValue(forKey: id)?.cancel()
         // Revoke admissions immediately, even when the process takes time to honor Stop.
         for context in Array(contexts.values) where context.parent == id { endCaller(context.id) }
@@ -887,7 +940,7 @@ final class SubagentRuntime {
     }
 
     func stopRoot(_ target: ChatTarget) {
-        for record in root(target).runs where record.phase.isActive { stop(record.id) }
+        for record in root(target).runs where record.phase.isActive { stop(record.id, cause: record.parentSubagentID == nil ? .owner : .parentStopped) }
         for context in Array(contexts.values) where context.target == target { endCaller(context.id) }
     }
 
@@ -936,7 +989,10 @@ final class SubagentRuntime {
         watcher?.cancel()
         rejections[id] = nil
         receiving[id] = nil
-        for record in root(caller.target).runs where record.callerInvocationID == id && record.phase.isActive { stop(record.id) }
+        for record in root(caller.target).runs where record.callerInvocationID == id && record.phase.isActive { stop(record.id, cause: .parentEnded) }
+        for runID in attached.removeValue(forKey: id) ?? [] where run(runID)?.callerInvocationID == id && run(runID)?.phase.isActive == true {
+            stop(runID, cause: .parentEnded)
+        }
         Task {
             // An in-flight local heartbeat must finish before writing the terminal heartbeat.
             await watcher?.settleWrites()
@@ -952,7 +1008,7 @@ final class SubagentRuntime {
         for pending in usageCaptures.values { pending.capture.finish(.stopped, in: pending.home, queue: archive.storage) }
         // Keep finished capture identities until each terminal callback consumes them; a run
         // cancelled before launch needs a fallback, but a flushed run must never get it twice.
-        for record in all where record.phase.isActive { stop(record.id) }
+        for record in all where record.phase.isActive { stop(record.id, cause: .restart) }
         for id in Array(contexts.keys) { endCaller(id) }
         archive.flush(timeout: archive.storage === model?.storage ? 0 : model?.quitTimeout ?? AppModel.saveTimeout)
     }
@@ -960,12 +1016,12 @@ final class SubagentRuntime {
     /// Ends a run once its worker and every descendant have exited. Its end is saved off the main
     /// thread, and the run stays active until it is: the handoff goes back only once its record is
     /// durable, and one that can't be saved goes back as a failure.
-    private func finish(_ id: UUID, phase: SubagentPhase, error: String?) {
+    private func finish(_ id: UUID, phase: SubagentPhase, error: String?, workspace: SubagentWorkspaceState? = nil) {
         guard var record = run(id), record.phase.isActive, !finalizing.contains(id) else { return }
         let working = children(of: id).filter { $0.phase.isActive }
         if !working.isEmpty {
             pendingFinishes[id] = (phase, error)
-            for child in working { stop(child.id) }
+            for child in working { stop(child.id, cause: phase == .stopped ? .parentStopped : .parentEnded) }
             return
         }
         pendingFinishes[id] = nil
@@ -991,7 +1047,19 @@ final class SubagentRuntime {
         record.handoffOutput = (live.messages.last(where: { $0.role == .assistant })?.text ?? live.lastReply).map(MemoryNotes.handoffText)
         var messages = live.messages
         ThreadAssembler.closeRunningTools(&messages)
-        if let error { messages.append(ChatMessage(role: phase == .stopped ? .note : .error, text: error)) }
+        let cause = stopCauses.removeValue(forKey: id)
+        // Handed off: what interrupted it before no longer says anything.
+        if phase == .completed { record.interruption = nil }
+        // A run that ended without a handoff says how far it got and what it left, in its transcript
+        // and to its caller, rather than "Stopped" or a CLI's raw diagnostic (#368). A failure before
+        // it started, or to save it, says only what went wrong.
+        if phase == .stopped || phase == .failed && record.startedAt != nil && !(error.map(Self.isSaveFailure) ?? false) {
+            let interruption = SubagentInterruption.of(messages, toolCalls: live.counts.tools, cause: phase == .failed ? .failed : cause ?? .owner,
+                                                       root: record.workingDirectory, workspace: workspace)
+            record.interruption = interruption
+            record.errorMessage = interruption.outcome(for: record, failure: error)
+        }
+        if let error = record.errorMessage { messages.append(ChatMessage(role: phase == .stopped ? .note : .error, text: error)) }
         live.update { ThreadAssembler.closeRunningTools(&$0) }
         live.messages = messages
         live.state = nil
@@ -1076,11 +1144,9 @@ final class SubagentRuntime {
         }
     }
 
-    private func result(_ record: SubagentRun) -> SubagentResult {
-        SubagentResult(id: record.id, targetBotID: record.targetBotID, targetBotName: record.targetBotName,
-                       phase: record.phase, handoffOutput: record.handoffOutput ?? "", errorMessage: record.errorMessage,
-                       startedAt: record.startedAt, finishedAt: record.finishedAt ?? Date())
-    }
+    private func result(_ record: SubagentRun) -> SubagentResult { record.result }
+
+    private static func isSaveFailure(_ error: String) -> Bool { error.hasPrefix("Couldn't save the sub-agent transcript") }
 
     private func replace(_ record: SubagentRun) {
         let root = root(ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID))
@@ -1170,6 +1236,7 @@ final class SubagentRuntime {
             restored.insert(record.id)
             let messages = found.threads[record.id] ?? []
             live(record.id).load(HistoryLoad(messages: messages, digest: ThreadDigest(messages), bytes: 0, reindexed: false))
+            stopCauses[record.id] = .restart
             finish(record.id, phase: .stopped, error: "BotChu restarted before this sub-agent finished.")
         }
     }
@@ -1247,7 +1314,7 @@ final class SubagentRuntime {
     /// Removes a finished run and its descendants, each folder after any write of it, so nothing
     /// written later makes it again; the run leaves the inspector once its folder is gone.
     func clear(_ id: UUID) {
-        guard let record = run(id), !record.phase.isActive, !finalizing.contains(id) else { return }
+        guard let record = run(id), !record.phase.isActive, !finalizing.contains(id), !resuming.contains(id) else { return }
         let descendants = children(of: id)
         guard !descendants.contains(where: { $0.phase.isActive }) else { return }
         for child in descendants { clear(child.id) }
@@ -1263,6 +1330,192 @@ final class SubagentRuntime {
             self.lives[id] = nil
             self.budget.remove(id)
         }
+    }
+}
+
+// MARK: Resuming interrupted runs (#368)
+
+extension SubagentRuntime {
+    /// The owner's Resume: relaunches the run with no caller waiting; its handoff stays with it until a
+    /// turn collects it (`botchu-subagent wait <id>`). Why it didn't relaunch shows beside Resume.
+    func resumeByOwner(_ id: UUID) {
+        Task { [weak self] in
+            guard let self else { return }
+            let problem = await self.resume(id)
+            if self.resumeProblems[id] != problem { self.resumeProblems[id] = problem }
+        }
+    }
+
+    func isResuming(_ id: UUID) -> Bool { resuming.contains(id) }
+
+    /// Relaunches an interrupted run with its brief, its session where its account can continue it,
+    /// and its workspace, once no CLI of it or of the runs it started still runs; `caller` is the turn
+    /// that asked, which then gets its handoff (nil for the owner's Resume). The one way a run that
+    /// ended becomes active again. Returns why not.
+    @discardableResult fileprivate func resume(_ id: UUID, by caller: Caller? = nil) async -> String? {
+        guard let model, let record = run(id) else { return "That sub-agent run is gone." }
+        if let problem = SubagentResume.problem(resuming: record) { return problem }
+        guard !resuming.contains(id), !finalizing.contains(id), !exiting.contains(id), runners[id] == nil, preparations[id] == nil else {
+            return "It is being resumed already."
+        }
+        // Its last result is still being handed back, which would clear where the next one goes.
+        guard deliveryTasks[id] == nil else { return "It is still handing back its last result; resume it in a moment." }
+        guard let targetBot = model.bot(record.targetBotID) else { return "\(record.targetBotName) is no longer in BotChu." }
+        let machine: Machine
+        if let hostID = record.hostID {
+            guard let host = model.settings.host(hostID) else { return "Its host is no longer configured." }
+            machine = Machine(destination: host.destination)
+        } else { machine = .thisMac }
+        resuming.insert(id)
+        defer { resuming.remove(id) }
+        let place = machine.destination ?? "this Mac"
+        switch await SubagentLiveness.processes(marked: [id] + descendants(of: id).map(\.id), on: machine) {
+        case .failure(let problem): return problem.message + " Resume it again once it can be checked."
+        case .success(let found) where !found.isEmpty:
+            return "A CLI of it still runs on \(place) (pid \(found.prefix(5).map(String.init).joined(separator: ", "))). "
+                + "Stop it, or let it end, then resume it."
+        case .success: break
+        }
+        let workspace = await SubagentWorkspaceState.read(record.workingDirectory, on: machine)
+        guard let owner = model.bot(record.rootBotID) else { return "Its conversation's bot is no longer in BotChu." }
+        // Read in, to go on from, when it isn't in memory.
+        let live = live(id)
+        if !live.isLoaded {
+            let home = BotHome(workspace: owner.workspace), taskID = record.rootTaskID
+            do {
+                let history = try await archive.storage.perform(home.subagentURL(id: id, taskID: taskID).path, label: "resume") {
+                    try home.loadSubagentHistory(id: id, taskID: taskID)
+                }
+                if !live.isLoaded { live.load(history) }
+            } catch { return "Couldn't read its transcript: \(error.localizedDescription)" }
+        }
+        // Each wait above could have seen it cleared, resumed, or its caller's turn end.
+        guard let current = run(id), current.isResumable, !finalizing.contains(id), runners[id] == nil, preparations[id] == nil else {
+            return "It changed while it was being resumed."
+        }
+        if let caller, contexts[caller.id] == nil { return "The asking turn has ended." }
+        let delta = SubagentResume.delta(for: current, workspace: workspace,
+                                         interruptedChildren: children(of: id).filter(\.isResumable),
+                                         session: current.resumableSessionID != nil)
+        var resumed = current
+        resumed.phase = .preparing
+        resumed.startedAt = nil
+        resumed.finishedAt = nil
+        resumed.errorMessage = nil
+        resumed.handoffOutput = nil
+        if let caller {
+            resumed.callerInvocationID = caller.id
+            resumed.callerHostID = caller.hostID
+        }
+        let by = caller.map { caller in caller.parent.flatMap { run($0)?.targetBotName } ?? model.bot(caller.target.botID)?.name ?? "its caller" } ?? "the owner"
+        let messages = live.messages + [ChatMessage(role: .note, text: "Resumed by \(by)."), ChatMessage(role: .user, text: delta)]
+        do { try await archive.save(snapshot(resumed, messages: messages)) }
+        catch { return "Couldn't save it: \(error.localizedDescription)" }
+        guard run(id)?.isResumable == true, runners[id] == nil, preparations[id] == nil else { return "It changed while it was being resumed." }
+        if let caller, contexts[caller.id] == nil { return "The asking turn has ended." }
+        live.messages = messages
+        replace(resumed)
+        resumeProblems[id] = nil
+        deliveries[id] = caller?.transport
+        if let caller, ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID) != caller.target {
+            attached[caller.id, default: []].insert(id)
+        }
+        live.state = RunState(preparing: true)
+        preparations[id] = Task { [weak self] in await self?.launch(id, targetBot: targetBot, resume: delta) }
+        return nil
+    }
+
+    /// Every run beneath this one.
+    fileprivate func descendants(of id: UUID) -> [SubagentRun] {
+        var found: [SubagentRun] = [], next = [id], seen: Set<UUID> = [id]
+        while let current = next.popLast(), found.count < 256 {
+            for child in children(of: current) where seen.insert(child.id).inserted {
+                found.append(child)
+                next.append(child.id)
+            }
+        }
+        return found
+    }
+
+    fileprivate func context(_ caller: Caller) -> SubagentCallerContext {
+        SubagentCallerContext(invocationID: caller.id, botID: caller.target.botID, taskID: caller.target.taskID,
+                              parentSubagentID: caller.parent, depth: caller.depth, workingDirectory: caller.directory, hostID: caller.hostID)
+    }
+
+    /// Takes a `botchu-subagent resume <id>` request: from the turn that may (`SubagentResume`), it
+    /// relaunches the run, whose handoff then comes to that turn; the answer says whether it did.
+    /// It's taken at once and answered once the run's checks are done, so the mailbox goes on meanwhile.
+    fileprivate func receiveResume(_ data: Data, id: UUID, filename: String, from caller: Caller) async {
+        let named = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["runID"] as? String
+        let runID = named.flatMap(UUID.init(uuidString:)) ?? id
+        let request: SubagentResumeRequest
+        do {
+            request = try SubagentResumeRequest.parse(data)
+            guard request.id == id else { throw InboxRequest.Problem("the request's ID doesn't match its file") }
+            try request.validate(context(caller), now: caller.transport.machine.isRemote ? nil : Date())
+            guard contexts[caller.id] != nil else { throw InboxRequest.Problem("the asking turn has ended") }
+        } catch {
+            await answer(SubagentResumeAnswer(id: id, runID: runID, refused: (error as? InboxRequest.Problem)?.message ?? error.localizedDescription), to: caller)
+            try? await caller.transport.acknowledge(filename: filename)
+            return
+        }
+        try? await caller.transport.acknowledge(filename: filename)
+        Task { [weak self] in
+            guard let self else { return }
+            let problem: String?
+            if let record = self.run(runID), let refused = SubagentResume.problem(collecting: record, by: self.context(caller)) ?? SubagentResume.problem(resuming: record) {
+                problem = refused
+            } else if self.run(runID) == nil {
+                problem = "No sub-agent run \(runID.uuidString.lowercased()) that this turn can resume or collect."
+            } else {
+                problem = await self.resume(runID, by: caller)
+            }
+            await self.answer(problem.map { SubagentResumeAnswer(id: id, runID: runID, refused: $0) }
+                              ?? SubagentResumeAnswer(id: id, runID: runID, resumed: true), to: caller)
+        }
+    }
+
+    fileprivate func answer(_ answer: SubagentResumeAnswer, to caller: Caller) async {
+        do { try await caller.transport.writeResult(id: answer.id, data: SubagentIPC.encode(answer)) }
+        catch { if isWatching(caller.id) { report("Couldn't answer a resume request: \(error.localizedDescription)") } }
+    }
+
+    /// Takes the runs a later turn's `botchu-subagent wait` names that its mailbox knows nothing of:
+    /// each one this turn may collect (`SubagentResume`) sends its handoff here, now if it has ended,
+    /// else when it does; any other gets a failure saying so, in this mailbox alone.
+    fileprivate func receiveAttach(_ data: Data, id: UUID, filename: String, from caller: Caller) async {
+        if let request = try? SubagentAttachRequest.parse(data), request.id == id,
+           (try? request.validate(context(caller), now: caller.transport.machine.isRemote ? nil : Date())) != nil,
+           contexts[caller.id] != nil {
+            for runID in request.runIDs { await attach(runID, to: caller) }
+        }
+        try? await caller.transport.acknowledge(filename: filename)
+    }
+
+    private func attach(_ runID: UUID, to caller: Caller) async {
+        func fail(_ message: String) async {
+            let failed = SubagentResult(id: runID, targetBotName: "Sub-agent", phase: .failed, errorMessage: message)
+            try? await caller.transport.writeResult(id: runID, data: SubagentIPC.encode(failed))
+        }
+        guard let record = run(runID), SubagentResume.problem(collecting: record, by: context(caller)) == nil else {
+            await fail("No sub-agent run \(runID.uuidString.lowercased()) that this turn can resume or collect.")
+            return
+        }
+        if record.callerInvocationID == caller.id { return }
+        guard record.phase.isActive || finalizing.contains(runID) else {
+            try? await caller.transport.writeResult(id: runID, data: SubagentIPC.encode(record.result))
+            return
+        }
+        if let waiting = record.callerInvocationID, contexts[waiting] != nil {
+            await fail("\(runID.uuidString.lowercased()) is under way, and the turn that started it waits for it.")
+            return
+        }
+        modify(runID) {
+            $0.callerInvocationID = caller.id
+            $0.callerHostID = caller.hostID
+        }
+        deliveries[runID] = caller.transport
+        if ChatTarget(botID: record.rootBotID, taskID: record.rootTaskID) != caller.target { attached[caller.id, default: []].insert(runID) }
     }
 }
 

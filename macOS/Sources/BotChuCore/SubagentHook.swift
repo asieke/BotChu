@@ -55,16 +55,51 @@ def read_json(path):
     with path.open(encoding="utf-8") as handle:
         return json.load(handle)
 
-def live():
+# A heartbeat older than this is BotChu gone, however busy the Mac is.
+GONE_SECONDS = 1800
+BUSY = 75
+
+class Busy(Exception):
+    pass
+
+def load_average():
     try:
-        stamp = read_json(ROOT / "heartbeat.json")["updatedAt"]
-        date = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-        age = time.time() - date.timestamp()
-        limit = seconds("BOTCHU_HEARTBEAT_TIMEOUT_SECONDS", 30, 300)
-        if age < -60 or age > limit:
-            fail("BotChu is no longer responding. Open BotChu and delegate again from an active turn.")
-    except (OSError, ValueError, KeyError, TypeError):
+        return float(os.environ.get("BOTCHU_LOAD_AVERAGE") or os.getloadavg()[0])
+    except (OSError, ValueError, AttributeError):
+        return 0.0
+
+def heartbeat():
+    """BotChu's last heartbeat for this turn: how many seconds ago, and the load per CPU it
+    wrote with it (the Mac's, also when this mailbox is on an SSH host)."""
+    try:
+        beat = read_json(ROOT / "heartbeat.json")
+        if beat.get("closed") is True:
+            fail("This turn's BotChu mailbox is closed: its turn has ended. Delegate again from an active turn.")
+        date = datetime.datetime.fromisoformat(beat["updatedAt"].replace("Z", "+00:00"))
+        load = max(0.0, float(beat.get("load") or 0)) / max(1, int(beat.get("cpus") or 1))
+        return time.time() - date.timestamp(), load
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         fail("BotChu is unavailable. Open BotChu and delegate again from an active turn.")
+
+def heartbeat_limit(app_load):
+    # A loaded Mac writes the heartbeat late: the limit grows with the load per CPU, here or BotChu's.
+    base = seconds("BOTCHU_HEARTBEAT_TIMEOUT_SECONDS", 30, 300)
+    here = load_average() / max(1, os.cpu_count() or 1)
+    return min(GONE_SECONDS, base * max(1.0, here, app_load))
+
+def live():
+    age, load = heartbeat()
+    if age < -60 or age > heartbeat_limit(load):
+        fail("BotChu is no longer responding. Open BotChu and delegate again from an active turn.")
+
+def going(request_id):
+    """Whether BotChu last said the run is under way, or hasn't taken its request yet."""
+    if (ROOT / "requests" / (request_id + ".json")).exists():
+        return True
+    try:
+        return read_json(ROOT / "status" / (request_id + ".status.json")).get("phase") in ("queued", "preparing", "running")
+    except (OSError, ValueError):
+        return False
 
 def canonical(value):
     try:
@@ -99,12 +134,7 @@ def submit(args):
         fail("The delegated brief must contain 1–100000 characters.")
     if args.title and len(args.title) > 240:
         fail("The sub-agent title must be at most 240 characters.")
-    try:
-        depth = int(os.environ.get("BOTCHU_CALLER_DEPTH", "0"))
-    except ValueError:
-        fail("BOTCHU_CALLER_DEPTH must be an integer.")
-    if not 0 <= depth < 3:
-        fail("Maximum sub-agent depth (3) reached.")
+    depth = caller_depth()
     request_id = str(uuid.uuid4())
     request = {
         "id": request_id,
@@ -123,13 +153,110 @@ def submit(args):
     atomic_json(ROOT / "requests" / (request_id + ".json"), request)
     return request_id
 
-def wait_for(ids):
+def responding(pending, stale_since, again=None):
+    """When BotChu's heartbeat went stale while the runs still go (nil while it's fresh). Stale
+    for another heartbeat timeout on a busy Mac is a Busy exit, not a failure: they go on."""
+    age, load = heartbeat()
+    if -60 <= age <= heartbeat_limit(load):
+        return None
+    if age > GONE_SECONDS or not all(going(request_id) for request_id in pending):
+        fail("BotChu is no longer responding. Open BotChu and delegate again from an active turn.")
+    now = time.monotonic()
+    if stale_since is not None and now - stale_since >= seconds("BOTCHU_HEARTBEAT_TIMEOUT_SECONDS", 30, 300):
+        raise Busy("BotChu is busy (load average " + str(round(load_average())) + ") and " + ", ".join(pending)
+                   + " still going. Run " + (again or "botchu-subagent wait " + " ".join(pending)) + " again.")
+    return stale_since if stale_since is not None else now
+
+def caller_depth():
+    try:
+        depth = int(os.environ.get("BOTCHU_CALLER_DEPTH", "0"))
+    except ValueError:
+        fail("BOTCHU_CALLER_DEPTH must be an integer.")
+    if not 0 <= depth < 3:
+        fail("Maximum sub-agent depth (3) reached.")
+    return depth
+
+def resume(args):
+    """Asks BotChu to resume an interrupted run (#368), or to send this turn the handoff of one under
+    way or ended, then waits for it as call does."""
+    run_id = canonical(args.id)
+    live()
+    depth = caller_depth()
+    # An earlier result of this run in this turn's mailbox isn't the resumed run's.
+    try:
+        (ROOT / "results" / (run_id + ".result.json")).unlink()
+    except OSError:
+        pass
+    request_id = str(uuid.uuid4())
+    atomic_json(ROOT / "requests" / (request_id + ".json"), {
+        "kind": "resume",
+        "id": request_id,
+        "runID": run_id,
+        "invocationID": caller_uuid("BOTCHU_INVOCATION_ID", True),
+        "callerBotID": caller_uuid("BOTCHU_CALLER_BOT_ID", True),
+        "callerTaskID": caller_uuid("BOTCHU_CALLER_TASK_ID"),
+        "parentSubagentID": caller_uuid("BOTCHU_CALLER_SUBAGENT_ID"),
+        "depth": depth,
+        "createdAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
+    path = ROOT / "results" / (request_id + ".result.json")
+    started = time.monotonic()
+    timeout = seconds("BOTCHU_WAIT_TIMEOUT_SECONDS", 120, 86400)
+    stale_since = None
+    while not path.exists():
+        if time.monotonic() - started > timeout:
+            fail("BotChu hasn't answered yet; run botchu-subagent resume " + run_id + " again.")
+        stale_since = responding([request_id], stale_since, "botchu-subagent resume " + run_id)
+        time.sleep(0.25)
+    answer = read_json(path)
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    if answer.get("kind") != "resume" or canonical(answer.get("id")) != request_id or canonical(answer.get("runID")) != run_id:
+        fail("Mismatched resume answer: " + request_id)
+    if not answer.get("accepted"):
+        fail("Not resumed: " + str(answer.get("errorMessage") or "BotChu couldn't resume it."))
+    print(("Resumed " if answer.get("resumed") else "Waiting for ") + run_id, file=sys.stderr, flush=True)
+    if args.no_wait:
+        print(run_id, flush=True)
+        return 0
+    return wait_for([run_id], attaching=False)
+
+def attach(pending):
+    """Asks BotChu for the runs this turn's mailbox knows nothing of, runs of an earlier turn of this
+    conversation's (#368), whose handoffs then come here. Not while BotChu doesn't answer."""
+    unknown = [request_id for request_id in pending
+               if not any((ROOT / folder / (request_id + suffix)).exists()
+                          for folder, suffix in (("results", ".result.json"), ("status", ".status.json"), ("requests", ".json")))]
+    if not unknown:
+        return
+    age, load = heartbeat()
+    if not -60 <= age <= heartbeat_limit(load):
+        return
+    request_id = str(uuid.uuid4())
+    atomic_json(ROOT / "requests" / (request_id + ".json"), {
+        "kind": "attach",
+        "id": request_id,
+        "runIDs": unknown,
+        "invocationID": caller_uuid("BOTCHU_INVOCATION_ID", True),
+        "callerBotID": caller_uuid("BOTCHU_CALLER_BOT_ID", True),
+        "callerTaskID": caller_uuid("BOTCHU_CALLER_TASK_ID"),
+        "parentSubagentID": caller_uuid("BOTCHU_CALLER_SUBAGENT_ID"),
+        "depth": caller_depth(),
+        "createdAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
+
+def wait_for(ids, attaching=True):
     pending = list(dict.fromkeys(canonical(value) for value in ids))
     started = time.monotonic()
     timeout = seconds("BOTCHU_WAIT_TIMEOUT_SECONDS", 7200, 86400)
     last_status = {}
     last_notice = started
+    stale_since = None
     failed = False
+    if attaching:
+        attach(pending)
     while pending:
         for request_id in list(pending):
             result_path = ROOT / "results" / (request_id + ".result.json")
@@ -146,9 +273,12 @@ def wait_for(ids):
                 output = result.get("handoffOutput", "")
                 if output:
                     print(output)
+                interrupted = result.get("interrupted") is True
                 if result.get("errorMessage"):
-                    print("Error: " + str(result["errorMessage"]))
-                print("Status: " + phase, flush=True)
+                    print(("Interrupted: " if interrupted and phase == "stopped" else "Error: ") + str(result["errorMessage"]))
+                print("Status: " + ("interrupted" if interrupted and phase == "stopped" else phase), flush=True)
+                if interrupted:
+                    print("Resume it with: botchu-subagent resume " + request_id, flush=True)
                 failed = failed or phase != "completed"
                 pending.remove(request_id)
                 continue
@@ -161,7 +291,7 @@ def wait_for(ids):
                     last_status[request_id] = message
         if not pending:
             break
-        live()
+        stale_since = responding(pending, stale_since)
         elapsed = time.monotonic() - started
         if elapsed > timeout:
             fail("Timed out waiting for " + ", ".join(pending) + ". Check the Sub-agents inspector in BotChu.")
@@ -703,13 +833,20 @@ def main():
         child.add_argument("--title")
         child.add_argument("--workspace", choices=("shared", "bot_home"), default="shared")
         child.add_argument("--brief", required=True)
-    waiter = commands.add_parser("wait")
+    waiter = commands.add_parser("wait", help="Wait for runs and print their handoffs, also runs an earlier turn of "
+        "this conversation's started")
     waiter.add_argument("ids", nargs="+")
+    resumer = commands.add_parser("resume", help="Relaunch an interrupted run of this conversation's with its brief, "
+        "session and workspace, and wait for its handoff as call does")
+    resumer.add_argument("id")
+    resumer.add_argument("--no-wait", action="store_true", help="Print its ID for a later botchu-subagent wait instead")
     args = parser.parse_args()
     if args.command == "list":
         return roster()
     if args.command == "wait":
         return wait_for(args.ids)
+    if args.command == "resume":
+        return resume(args)
     request_id = submit(args)
     if args.command == "spawn":
         print(request_id, flush=True)
@@ -719,6 +856,9 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
+    except Busy as busy:
+        print(os.path.basename(sys.argv[0]) + ": " + str(busy), file=sys.stderr, flush=True)
+        sys.exit(BUSY)
     except (RuntimeError, OSError, ValueError, KeyError, TypeError) as error:
         print(os.path.basename(sys.argv[0]) + ": " + str(error), file=sys.stderr, flush=True)
         sys.exit(1)

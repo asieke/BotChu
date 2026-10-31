@@ -253,6 +253,45 @@ extension RenderingTests {
         #expect(control.onMain.isEmpty)
     }
 
+    /// #357: what is typed and not sent is back in its own message box after quitting and
+    /// launching again, with its references; a sent or cleared draft isn't, and a deleted bot's
+    /// drafts go with it.
+    @Test func draftsComeBackAfterARelaunchInTheirOwnBoxOnly() async throws {
+        let control = StorageControl(delay: 0.05)
+        let fixture = try PersistenceFixture(control: control)
+        defer { fixture.cleanUp() }
+        let app = fixture.app
+        // Launched, with the shown conversation read, before anything is typed.
+        await app.storage.settle()
+        let reference = MessageReference(kind: .project, target: "fixture/repo0", label: "#fixture/repo0", location: 6)
+        app.drafts[fixture.task] = "Check #fixture/repo0 next"
+        app.draftReferences[fixture.task] = [reference]
+        app.drafts[fixture.homeTarget] = "Home's own"
+        // As sending and clearing the box leave it.
+        app.drafts[fixture.other] = "Sent before quitting"
+        app.drafts[fixture.other] = nil
+        app.drafts[fixture.third] = "Cleared"
+        app.drafts[fixture.third] = ""
+        app.stopAll()
+        let drafts = DraftStore(root: fixture.store.root)
+        #expect(Set((try? FileManager.default.contentsOfDirectory(atPath: drafts.folder(bot: fixture.bot.id).path)) ?? [])
+                == [drafts.fileURL(.init(bot: fixture.bot.id)).lastPathComponent,
+                    drafts.fileURL(.init(bot: fixture.bot.id, task: fixture.taskID)).lastPathComponent], "Quitting wrote what waited")
+
+        let relaunched = AppModel(store: fixture.store, settings: fixture.settings, storage: app.storage)
+        defer { relaunched.stopAll() }
+        #expect(relaunched.drafts[fixture.task] == "Check #fixture/repo0 next")
+        #expect(relaunched.draftReferences[fixture.task] == [reference])
+        #expect(relaunched.drafts[fixture.homeTarget] == "Home's own")
+        for target in [fixture.other, fixture.third, fixture.fourth] { #expect(relaunched.drafts[target] == nil) }
+
+        await relaunched.storage.settle()
+        relaunched.delete(fixture.bot.id)
+        await relaunched.storage.settle()
+        #expect(!FileManager.default.fileExists(atPath: drafts.folder(bot: fixture.bot.id).path))
+        #expect(control.onMain.isEmpty, "\(control.onMain)")
+    }
+
     static func ms(since start: UInt64) -> Double { Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000 }
 
     static func summary(_ values: [Double]) -> String {
