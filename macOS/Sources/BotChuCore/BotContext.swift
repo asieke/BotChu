@@ -96,8 +96,9 @@ public enum BotContext {
             - `branch` (optional): the branch to work on.
             - `agent` (optional): another bot, by name, slug or ID, to ask instead of you (as `botchu-task create` \
             does, which also tells you how it went).
-            - `machine` (optional): \(names). Areas are on this Mac; a repository on another computer (this field, or \
-            where your owner chose for it) gets a task of its own there instead, in a worktree, named by `title`.
+            - `machine` (optional): the computer to work on: \(names). Areas are on this Mac; a repository on another \
+            computer (this field, or where your owner chose for it) gets a task of its own there instead, in a \
+            worktree, named by `title`.
 
             BotChu takes the file within seconds and posts the request as a turn in the repository's area: yours, \
             attached to you first when no bot has it, or the area of the bot that has it. The repository is cloned \
