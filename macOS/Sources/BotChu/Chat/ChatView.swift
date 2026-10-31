@@ -166,10 +166,6 @@ private struct ChatContent: View {
             .environment(transcript)
             // Its replies' links to files open from its folder (#363).
             .environment(\.openFileLink, FileLinkAction(root: FileLink.root(workspace: bot.workspace, task: task), model: model))
-            // Keep room for the model, effort and send controls when the columns are narrowed.
-            .frame(minWidth: 300)
-            // The tab beside the chat says which conversation it is (#128).
-            .navigationTitle(bot.name)
             // Opening the conversation again starts from its newest items.
             .onDisappear { transcript.windowStart = nil }
             // Notes left waiting by an earlier launch.
