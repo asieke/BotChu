@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-31
+- Project Areas as data: `BotTask.area`, one owner per repository, attach/move/hide, and a launch migration of open tasks into areas (#410)
 - Window tests sorted into journeys, Core and 25 kept; `--changed` and `test-select.py` retired; each PR runs `--fast` plus its journeys, the full suite runs after a batch and on deploy (#330) (#379)
 
 ## 2026-10-30
