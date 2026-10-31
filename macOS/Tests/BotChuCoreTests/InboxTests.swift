@@ -578,6 +578,54 @@ private final class InboxFixture {
         #expect(moved.map(\.ids) == [[today.id, earlierToday.id]])
     }
 
+    @Test func equalDeliveryTimesUseTheSameDeterministicIDOrder() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let low = try #require(UUID(uuidString: "00000000-0000-4000-8000-000000000001"))
+        let high = try #require(UUID(uuidString: "00000000-0000-4000-8000-000000000002"))
+        let a = Delivery(id: low, botID: UUID(), title: "Low", sentAt: now)
+        let b = Delivery(id: high, botID: UUID(), title: "High", sentAt: now)
+        let newer = Delivery(botID: UUID(), title: "Newer", sentAt: now.addingTimeInterval(1))
+        let older = Delivery(botID: UUID(), title: "Older", sentAt: now.addingTimeInterval(-1))
+        for input in [[a, newer, b, older], [older, b, newer, a]] {
+            let groups = InboxList.groups(input, state: InboxState(), now: now)
+            #expect(groups.map(\.section) == [.today])
+            #expect(groups.flatMap(\.ids) == [newer.id, high, low, older.id])
+        }
+    }
+
+    @Test func groupedDaysMatchCalendarSectionsAtMidnightAndDSTBoundaries() throws {
+        let formatter = ISO8601DateFormatter()
+        let cases: [(String, String, Double)] = [
+            ("2026-03-08T12:00:00Z", "America/New_York", 23),
+            ("2026-03-09T12:00:00Z", "America/New_York", 24),
+            ("2026-11-01T12:00:00Z", "America/New_York", 25),
+            ("2026-11-02T12:00:00Z", "America/New_York", 24),
+            ("2026-10-25T12:00:00Z", "Asia/Kathmandu", 24)
+        ]
+        for (stamp, zone, hours) in cases {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = try #require(TimeZone(identifier: zone))
+            let now = try #require(formatter.date(from: stamp))
+            let today = try #require(calendar.dateInterval(of: .day, for: now))
+            let previous = try #require(calendar.date(byAdding: .day, value: -1, to: now))
+            let yesterday = try #require(calendar.dateInterval(of: .day, for: previous))
+            #expect(today.duration == hours * 3600)
+            let dates = [today.start.addingTimeInterval(-1), today.start, today.end.addingTimeInterval(-1), today.end,
+                         yesterday.start.addingTimeInterval(-1), yesterday.start, yesterday.end.addingTimeInterval(-1)]
+            let deliveries = dates.enumerated().map { index, date in
+                Delivery(botID: UUID(), title: "Boundary \(index)", sentAt: date)
+            }
+            let groups = InboxList.groups(deliveries, state: InboxState(), now: now, calendar: calendar)
+            for delivery in deliveries {
+                #expect(groups.first { $0.ids.contains(delivery.id) }?.section
+                        == InboxList.section(of: delivery, state: InboxState(), now: now, calendar: calendar))
+            }
+            #expect(Set(groups.first { $0.section == .today }?.ids ?? []) == Set([deliveries[1].id, deliveries[2].id]))
+            #expect(groups.first { $0.ids.contains(deliveries[3].id) }?.section == .day(today.end))
+            #expect(groups.first { $0.ids.contains(deliveries[5].id) }?.section == .yesterday)
+        }
+    }
+
     /// The order ↑ and ↓ (and #219's shortcuts) move through: every group's, Done's while open.
     @Test func theListIsSteppedThroughInTheOrderShown() {
         let a = UUID(), b = UUID(), c = UUID(), d = UUID()

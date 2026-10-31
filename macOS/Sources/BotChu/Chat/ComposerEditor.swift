@@ -71,8 +71,12 @@ struct ComposerEditor: NSViewRepresentable {
         if changedDraft {
             // End the old input context while its delegate still owns the old draft binding.
             // A late IME commit must never be written into the newly selected delivery.
-            editor.inputContext?.discardMarkedText()
-            editor.unmarkText()
+            // An unfocused editor with no composition has no input session to end. Merely
+            // asking for its context activates the input method and can wait on IMK XPC.
+            if editor.hasMarkedText() || editor.window?.firstResponder === editor {
+                editor.inputContext?.discardMarkedText()
+                editor.unmarkText()
+            }
             if editor.window?.firstResponder === editor { editor.window?.makeFirstResponder(nil) }
         }
         context.coordinator.parent = self
@@ -89,7 +93,7 @@ struct ComposerEditor: NSViewRepresentable {
         }
         if changedDraft || (editor.string != text && !editor.hasMarkedText()) {
             let selection = changedDraft ? NSRange(location: 0, length: 0) : editor.selectedRange()
-            editor.string = text
+            if editor.string != text { editor.string = text }
             editor.setSelectedRange(NSRange(location: min(selection.location, (text as NSString).length), length: 0))
             if mentions != nil { editor.setMentions(references.wrappedValue) }
         } else if mentions != nil, !editor.hasMarkedText(), editor.mentionReferences != MessageReference.standing(references.wrappedValue, in: text) {

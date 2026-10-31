@@ -163,10 +163,10 @@ extension RenderingTests {
         window.sendEvent(e)
         // Filed, the next chosen and read, all before SwiftUI updates the Inbox: one change each.
         #expect(app.inbox.isDone(first.id) && app.inbox.selected == second.id && !app.inbox.isUnread(second.id))
-        #expect(app.inbox.statusDerivations == derivations + 2)
+        #expect(app.inbox.statusDerivations == derivations + 1)
         try await Task.sleep(for: .milliseconds(200))
         // Drawn, nothing more changes: what `onChange` reads again is read already.
-        #expect(app.inbox.statusDerivations == derivations + 2)
+        #expect(app.inbox.statusDerivations == derivations + 1)
         #expect(app.inbox.selected == second.id && app.inbox.isReading(second.id) && app.inbox.unfinishedCount == 2)
         #expect(window.contentView.flatMap { editor(in: $0) } === reply, "Changing delivery retains the native editor")
         #expect(reply.string == "Second draft" && reply.undoManager?.canUndo == false)
@@ -195,6 +195,31 @@ extension RenderingTests {
         window.makeFirstResponder(reply)
         reply.insertText("Third draft", replacementRange: NSRange(location: 0, length: 0))
         #expect(app.inbox.drafts[third.id] == "Third draft" && app.inbox.drafts[second.id] == composed)
+
+        // Equal text still starts a different draft: retain the TextKit contents, but reset its
+        // selection and undo history even when the unfocused editor needs no input-method work.
+        app.inbox.drafts[second.id] = "Third draft"
+        reply.setSelectedRange(NSRange(location: 3, length: 2))
+        window.makeFirstResponder(previousResponder)
+        app.inbox.selected = second.id
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(window.contentView.flatMap { editor(in: $0) } === reply && reply.string == "Third draft")
+        #expect(reply.selectedRange() == NSRange(location: 0, length: 0) && reply.undoManager?.canUndo == false)
+        #expect(app.inbox.drafts[third.id] == "Third draft")
+
+        // A stale Done action can still read its intended successor. Missing deliveries and an
+        // entirely unchanged action must neither fabricate entries nor derive/persist status.
+        app.inbox.markRead(third.id, false)
+        let beforeReadOnly = app.inbox.statusDerivations
+        app.inbox.setDone(first.id, true, reading: third.id)
+        #expect(!app.inbox.isUnread(third.id) && app.inbox.statusDerivations == beforeReadOnly + 1)
+        app.inbox.setDone(first.id, true, reading: third.id)
+        app.inbox.setDone(first.id, true, reading: UUID())
+        #expect(app.inbox.statusDerivations == beforeReadOnly + 1)
+        app.inbox.markRead(third.id, false)
+        let beforeMissing = app.inbox.statusDerivations
+        app.inbox.setDone(UUID(), true, reading: third.id)
+        #expect(!app.inbox.isUnread(third.id) && app.inbox.statusDerivations == beforeMissing + 1)
 
     }
 }
