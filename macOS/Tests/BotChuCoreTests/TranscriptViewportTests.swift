@@ -273,7 +273,7 @@ private struct Layout {
 
     /// A single group of 5,000 calls, in Raw and opened again and again in Detailed: it is laid
     /// out a screenful at a time, as an outer row alone isn't.
-    @Test func aGroupOfFiveThousandCallsIsLaidOutAScreenAtATime() {
+    @Test func aGroupOfFiveThousandCallsIsLaidOutAScreenAtATime() throws {
         let messages = [ChatMessage(role: .user, text: "Trace it")] + (0..<5_000).map { call($0) }
             + [ChatMessage(role: .assistant, text: "Done.")]
         var layout = Layout(items(messages))
@@ -300,7 +300,7 @@ private struct Layout {
             for _ in 0..<10 {
                 layout.scroll(by: 1_500)
                 let rows = layout.viewport.plan.rows
-                let first = try! #require(rows.first), last = try! #require(rows.last)
+                let first = try #require(rows.first), last = try #require(rows.last)
                 #expect(first.top <= max(0, layout.top) + 0.5 || layout.viewport.plan.above < 0.5)
                 #expect(last.top + last.height >= min(layout.top + layout.height, layout.viewport.plan.total) - 0.5)
             }
