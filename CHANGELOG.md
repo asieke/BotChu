@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-30
+- Inbox Done reads the next delivery in the same change and draws the Inbox once; rows redraw only for their own delivery (#356) (#380)
 - Sub-agent Transcript follows its last 12 items and skips Sail progress rows (#361) (#377)
 - Latency report after each journeys run; every deploy sends it to the Inbox (#362) (#370)
 - Antigravity tool and run errors carry agy's message, and non-zero shell exits are recorded as failed (#367) (#374)
