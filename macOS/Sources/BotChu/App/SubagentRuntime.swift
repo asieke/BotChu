@@ -842,6 +842,7 @@ final class SubagentRuntime {
             }
             record.phase = .running
             record.startedAt = Date()
+            recordGitFacts(&record, messages: live(id).messages)
             usageCaptures[id]?.capture.started(at: record.startedAt!)
             try await archive.save(snapshot(record, messages: live(id).messages))
             // Stopped while its start was being saved: its end is saved instead.
@@ -1079,6 +1080,7 @@ final class SubagentRuntime {
         var messages = live.messages
         SubagentTerminalOutcome.apply(to: &record, messages: &messages, toolCalls: live.counts.tools,
                                       cause: stopCauses.removeValue(forKey: id), workspace: workspace)
+        recordGitFacts(&record, messages: messages)
         live.update { ThreadAssembler.closeRunningTools(&$0) }
         live.messages = messages
         live.state = nil
@@ -1176,6 +1178,12 @@ final class SubagentRuntime {
         guard var record = run(id) else { return }
         edit(&record)
         replace(record)
+    }
+
+    /// The worktree, branch and pull request its own transcript shows (#401), saved with each phase
+    /// change. A run on this Mac has its `~` paths expanded.
+    private func recordGitFacts(_ record: inout SubagentRun, messages: [ChatMessage]) {
+        record.recordGitFacts(from: messages, home: record.hostID == nil ? NSHomeDirectory() : nil)
     }
 
     /// The run as it stands, with the folder of the bot that owns its records.
@@ -1419,6 +1427,7 @@ extension SubagentRuntime {
                 }
                 let by = caller.map { caller in caller.parent.flatMap { self.run($0)?.targetBotName } ?? model.bot(caller.target.botID)?.name ?? "its caller" } ?? "the owner"
                 let messages = self.live(id).messages + [ChatMessage(role: .note, text: "Resumed by \(by)."), ChatMessage(role: .user, text: delta)]
+                self.recordGitFacts(&resumed, messages: messages)
                 return (snapshot: try self.snapshot(resumed, messages: messages), delta: delta)
             }, save: { try await self.archive.save($0.snapshot) }, replace: { prepared in
                 let live = self.live(id)
