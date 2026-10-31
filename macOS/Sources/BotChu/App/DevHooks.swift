@@ -763,7 +763,8 @@ enum DevHooks {
     /// The run loop modes it observes: the common ones, and the one AppKit runs the main thread in
     /// while it animates a window's move, a sheet sliding in or out, committing each of its frames
     /// there and returning only when the move ends. Without that one, the mark of a sheet that
-    /// showed would be written as its opening animation ended, not at its first frame (#353).
+    /// showed would be written as its opening animation ended, not at its first frame (#353). The
+    /// mode's name is AppKit's own, seen on macOS 27: under another name, marks are written late again.
     private static let modes = [CFRunLoopMode.commonModes, CFRunLoopMode("_NSMoveTimerRunLoopMode" as CFString)]
     private static let file: FileHandle? = {
         guard let path = ProcessInfo.processInfo.environment[FrameMarks.environmentKey], !path.isEmpty else { return nil }
