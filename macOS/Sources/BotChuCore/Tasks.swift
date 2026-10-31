@@ -32,7 +32,7 @@ public struct BotTask: Identifiable, Codable, Hashable, Sendable, RunSettings {
         }
     }
 
-    /// Who started the task: the owner (New Task), the bot itself, from its Home conversation, or
+    /// Who started the task: the owner (Projects), the bot itself, from its Home conversation, or
     /// another conversation that handed it to the bot (`botchu-task create`, or a dispatch request
     /// naming the bot), which `requestedBy` records.
     public enum Origin: String, Codable, Sendable {

@@ -10,18 +10,6 @@ struct EditorRequest: Identifiable {
     var isNew: Bool
 }
 
-/// The New Task sheet, open for a bot.
-struct TaskSheetRequest: Identifiable {
-    let id = UUID()
-    var botID: UUID
-    var repo: String?
-    /// An open issue or pull request there to choose, and what to do with a pull request.
-    var work: BotTask.Work?
-    var purpose: NewTaskSheet.Purpose = .work
-    /// What to tell the bot, written already (a task over many issues or pull requests).
-    var brief = ""
-}
-
 /// The repository the Projects sidebar shows, the tab it shows, and the issue or pull request
 /// opened there.
 struct ProjectSelection: Equatable {
@@ -189,7 +177,6 @@ final class AppModel {
     var renamingText = ""
     var titleNotice: TaskTitleNotice?
     var editor: EditorRequest?
-    var taskSheet: TaskSheetRequest?
     /// The repository selected in Projects, shown in its sidebar; nil hides the sidebar.
     var projectSelection: ProjectSelection?
     /// The profile selected in Providers, by account id, shown in its sidebar; nil hides the sidebar.
@@ -868,11 +855,6 @@ final class AppModel {
     }
 
     // MARK: Tasks
-
-    func newTask(for botID: UUID, repo: String? = nil, work: BotTask.Work? = nil, purpose: NewTaskSheet.Purpose = .work, brief: String = "") {
-        guard let bot = bot(botID), bot.canOwnTasks else { return }
-        taskSheet = TaskSheetRequest(botID: botID, repo: repo, work: work, purpose: work?.isPullRequest == true ? purpose : .work, brief: brief)
-    }
 
     /// Records a task, opens its tab (when `show`), says so in its bot's Home, then makes its
     /// worktree and sends its first message, with `images` (already in the bot's folder) and the

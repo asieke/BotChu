@@ -52,7 +52,7 @@ extension AppModel {
 
     /// Whether New Issue can open: not over another sheet, and with a bot to write it.
     var canStartNewIssue: Bool {
-        editor == nil && taskSheet == nil && documentEditor == nil && issueReport == nil && newIssue == nil && !openingReport
+        editor == nil && documentEditor == nil && issueReport == nil && newIssue == nil && !openingReport
             && jobs.editor == nil && jobs.history == nil && IssueDraft.defaultBot(in: bots) != nil
     }
 

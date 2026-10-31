@@ -52,7 +52,6 @@ private struct SidebarList: View, Equatable {
                             .contextMenu {
                                 Button("Edit…") { model.edit(bot.id) }
                                 if !bot.isRemoteQueue {
-                                Button("New Task…") { model.newTask(for: bot.id) }
                                 Button("New Session") { model.newSession(.home(bot.id)) }
                                     .disabled(model.isRunning(.home(bot.id)))
                                 Button("Show Workspace in Finder") { model.revealWorkspace(bot.id) }

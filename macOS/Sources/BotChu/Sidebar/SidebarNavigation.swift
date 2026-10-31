@@ -63,7 +63,7 @@ extension AppModel {
         return .home(account: bot.isRemoteQueue ? "Remote queue · \(remoteQueue.presence)" : bot.account.name, state: tabState(of: target))
     }
 
-    /// The bot's open tasks as its Tasks column lists them, for `botchu-task list --mine` (#262).
+    /// The bot's open areas and tasks, the rows of its Project Areas column, for `botchu-task list --mine` (#262).
     func taskList(of botID: UUID, at now: Date = Date()) -> [TaskListEntry] {
         openTasks(of: botID).compactMap { task in
             conversationTab(of: .task(task.id, of: botID)).map { TaskListEntry(task: task, tab: $0, at: now) }

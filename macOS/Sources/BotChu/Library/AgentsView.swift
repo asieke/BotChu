@@ -387,7 +387,6 @@ struct AgentMenuItems: View {
         Button("Edit…") { model.edit(bot.id) }
         if bot.canOwnTasks {
             Divider()
-            Button("New Task…") { model.newTask(for: bot.id) }
             Button("New Job…") { model.jobs.newJob(for: bot.id) }
             Button("Show Jobs") { model.showJobs(for: bot.id) }
         }

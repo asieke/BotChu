@@ -202,7 +202,7 @@ public struct ConversationTab: Equatable, Sendable {
         if let info = task.area {
             area = info.kind
             name = info.name
-            subject = info.kind == .repo ? task.repo : Self.abbreviated(task.checkout)
+            subject = info.kind == .repo ? task.repo : AreaHeading.abbreviated(task.checkout)
             self.about = [subject, machine ?? "This Mac"]
             return
         }
@@ -244,12 +244,6 @@ public struct ConversationTab: Equatable, Sendable {
         return task.title.hasPrefix(prefix) ? String(task.title.dropFirst(prefix.count)) : task.title
     }
 
-    /// A folder as the owner reads it: `~/…` inside their home folder.
-    static func abbreviated(_ path: String, home: String = NSHomeDirectory()) -> String {
-        guard !home.isEmpty, path == home || path.hasPrefix(home + "/") else { return path }
-        return "~" + path.dropFirst(home.count)
-    }
-
     /// "#113", after the repository's name on the first line.
     public var numberText: String? { number.map { "#\($0)" } }
 
@@ -271,15 +265,6 @@ public struct ConversationTab: Equatable, Sendable {
     public func spoken(at now: Date) -> String {
         let name = (isReview ? "Review of " : isJob ? "Run of job " : "") + title + (machine.map { " on \($0)" } ?? "")
         return [name, summary, subject, isHome ? state.text : status, state.spokenTime(at: now)].compactMap { $0 }.joined(separator: ", ")
-    }
-
-    /// A rail tile's tooltip: the first line (and its host), a task's label, then its status, time
-    /// and shortcut; Home's what it is doing while it works.
-    public func railHelp(at now: Date, shortcut: String?) -> String {
-        let first = title + (machine.map { " · \($0)" } ?? "")
-        let about = isHome ? [] : [label]
-        let last = [status, state.time(at: now), shortcut].compactMap { $0 }.joined(separator: " · ")
-        return ([first] + about + [last]).joined(separator: "\n")
     }
 
     /// The tooltip: what a task is about, then `owner/name · Issue #105 · This Mac · ⌘2`; Home's
@@ -331,19 +316,6 @@ public struct BotRowSummary: Equatable, Sendable {
             let n = shown.filter { $0 == kind }.count
             return n == 0 ? nil : "\(n) \(kind.name(count: n))"
         }.joined(separator: ", ")
-    }
-
-    /// Several bots' rows as one collapsed heading shows them, such as Specialists' in the sidebar
-    /// (#250): their dots together, most urgent first and in the rows' order among equals, at most
-    /// `dotLimit`, then +N for the rest; spoken as each bot's own dots, by name.
-    public init(merging rows: [(name: String, summary: BotRowSummary)]) {
-        let busy = rows.flatMap(\.summary.dots).enumerated()
-            .sorted { ($0.element.urgency, -$0.offset) > ($1.element.urgency, -$1.offset) }
-            .map(\.element)
-        dots = Array(busy.prefix(Self.dotLimit))
-        more = max(0, busy.count - Self.dotLimit) + rows.map(\.summary.more).reduce(0, +)
-        subtitle = ""
-        spokenDots = rows.filter { !$0.summary.dots.isEmpty }.map { "\($0.name): \($0.summary.spokenDots)" }.joined(separator: "; ")
     }
 }
 
@@ -418,12 +390,11 @@ public struct ProjectAreasLayout: Equatable, Sendable {
     }
 }
 
-/// Where the conversation column goes (#128): 240 points beside the chat, which the owner can
-/// narrow to 200 or widen to 320, or a 56-point rail of tiles by the owner's choice.
+/// Where the Project Areas column goes (#128, #402): 240 points beside the chat, which the owner
+/// can narrow to 200 or widen to 320.
 public enum ConversationColumnLayout {
     public static let width: Double = 240
     public static let widths: ClosedRange<Double> = 200...320
-    public static let railWidth: Double = 56
 
     /// A width the owner dragged the column's edge to, within `widths`.
     public static func clamped(_ width: Double) -> Double {

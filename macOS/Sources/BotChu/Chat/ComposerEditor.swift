@@ -6,7 +6,7 @@ import BotChuCore
 /// It takes pasted and dropped images (`pasteImages`). With `send`, Return sends and Shift-Return
 /// starts a new line, as in the composer; without it, Return starts a new line, as in a sheet. With
 /// `mentions`, `@` and `#` complete agents and projects (`MentionCompleter`), whose chosen labels it
-/// keeps linked in `references`; the report and New Task sheets share it without them.
+/// keeps linked in `references`.
 struct ComposerEditor: NSViewRepresentable {
     @Binding var text: String
     var focused: Binding<Bool>

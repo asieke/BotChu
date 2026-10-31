@@ -16,6 +16,7 @@ struct Fixture {
     static let groupCalls = 5_000
     /// Each bot's conversations beside Home: its 2 areas, then its 2 tasks.
     static let tasksPerBot = 4
+    static let areasPerBot = 2
     static let deliveries = 200
 
     let data: URL
@@ -32,6 +33,9 @@ struct Fixture {
         guard let index = bots.firstIndex(where: { $0.id == bot.id }) else { return [] }
         return (0..<Self.tasksPerBot).map { Self.id(100 + index * Self.tasksPerBot + $0) }
     }
+
+    /// A bot's 2 Project Areas, its repository's then its folder's.
+    func areas(of bot: Bot) -> [UUID] { Array(tasks(of: bot).prefix(Self.areasPerBot)) }
 
     func delivery(_ n: Int) -> UUID { Self.id(10_000 + n) }
 
@@ -108,9 +112,9 @@ struct Fixture {
         return fixture
     }
 
-    /// The project New Task starts tasks in (journey 9): a local repository without an origin, in
-    /// the repositories folder BotChu uses with `BOTCHU_DATA_DIR`, so a task's worktree is made here
-    /// and nothing reaches GitHub.
+    /// The fixture's project, which Projects lists: a local repository without an origin, in the
+    /// repositories folder BotChu uses with `BOTCHU_DATA_DIR`, so a worktree is made here and
+    /// nothing reaches GitHub.
     static let taskRepo = "journeys/repo-0"
 
     static func makeRepository(at folder: URL) throws {

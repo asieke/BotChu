@@ -317,19 +317,10 @@ struct ChatComposer: View {
 /// show are read by their own buttons: the toolbar's were made again at every UserDefaults write,
 /// whatever its key, while it read them itself (#348).
 struct ChatToolbar: ViewModifier {
-    @Environment(AppModel.self) private var model
-
     func body(content: Content) -> some View {
         content.toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 ChatDensityMenu()
-                // Once the bot has a task, New Task is the + in the tasks' column (#128).
-                if let id = model.visibleBotID, model.bot(id)?.canOwnTasks == true, model.openTasks(of: id).isEmpty {
-                    Button { model.newTask(for: id) } label: {
-                        Label("New Task", systemImage: "plus.rectangle.on.rectangle")
-                    }
-                    .help("Start a task for this bot in a repository (⌘T)")
-                }
                 StatusToolbarButton()
             }
         }

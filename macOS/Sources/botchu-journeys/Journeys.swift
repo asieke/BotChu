@@ -9,12 +9,12 @@ struct Journeys {
         (1, ["launch"]),
         (2, ["sidebar", "inspector"]),
         (3, ["switch-bot", "switch", "bots"]),
-        (4, ["switch-task", "tasks"]),
+        (4, ["switch-area", "areas", "switch-task"]),
         (5, ["typing", "type"]),
         (6, ["send", "stream", "chat"]),
         (7, ["scroll", "history"]),
         (8, ["expand", "group"]),
-        (9, ["new-task", "attach-area"]),
+        (9, ["attach-area", "new-task"]),
         (10, ["resize"]),
         (11, ["inbox", "settings"]),
         (12, ["subagent", "sub-agent"]),
@@ -25,7 +25,7 @@ struct Journeys {
     final class Left {
         var draft: (bot: Bot, text: String)?
         var sent: (bot: Bot, text: String)?
-        var task: (bot: Bot, id: UUID)?
+        var area: (bot: Bot, id: UUID)?
         /// How many of the Inbox's deliveries journey 11 marked Done.
         var deliveriesDone = 0
         /// The conversations sent messages, whose latest isn't the fixture's any more.

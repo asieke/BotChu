@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-31
+- Tasks column retired: no New Task sheet, ⌘T, toolbar or menu item; minimum width the same with or without areas; journeys 4, 9, 10, 13 describe areas (#407) (#418)
 - README, PROJECT.md, `docs/subagents.md`, `docs/telegram.md` and `docs/testing.md` describe Project Areas instead of task tabs (#408) (#417)
 - One-line live sub-agent cards (pill, branch, elapsed; Needs you from the run's deliveries) and the area inspector: Repo, Sub-agents with a live Worktrees list and safe auto-clean, Bot; `TaskInspector` removed (#405) (#416)
 - `@mention` cameo turns in Project Areas: mentioned bots answer in the area's transcript with their own identity, account, memory and session, replies' mentions go two hops at most, rows show the speaking bot (#406) (#414)

@@ -96,8 +96,6 @@ do {
         FrameMarks.environmentKey: marks.path,
         "BOTCHU_PROFILE": "Journey Claude|claude|\(fake.path)",
         "BOTCHU_JOURNEY_FAKE_LOG": work.appendingPathComponent("fake-claude.log").path,
-        // New Task starts in the fixture's own project.
-        "BOTCHU_TASK_REPO": Fixture.taskRepo,
     ], marksURL: marks)
 } catch {
     fail("\(error)")
@@ -205,8 +203,8 @@ if app.isRunning, let window = try? app.window(), let button = window.first(iden
     }
 }
 let later: [(Int, () -> [JourneyResult])] = [
-    (2, journeys.sidebarAndInspector), (3, journeys.switchBots), (4, journeys.switchTasks), (5, journeys.typingWhileStreaming),
-    (6, journeys.sendAndStream), (7, journeys.scrollHistory), (8, journeys.expandGroup), (9, journeys.newTask), (10, journeys.resize),
+    (2, journeys.sidebarAndInspector), (3, journeys.switchBots), (4, journeys.switchAreas), (5, journeys.typingWhileStreaming),
+    (6, journeys.sendAndStream), (7, journeys.scrollHistory), (8, journeys.expandGroup), (9, journeys.attachArea), (10, journeys.resize),
     (11, journeys.inboxAndSettings), (12, journeys.typingWhileSubagentStreams), (13, journeys.relaunch),
 ]
 func notRun(_ number: Int) {

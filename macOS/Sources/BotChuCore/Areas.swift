@@ -196,7 +196,7 @@ public struct AreaHeading: Hashable, Sendable {
     }
 
     /// `path` with the home folder written `~`.
-    public static func abbreviated(_ path: String, home: String) -> String {
+    public static func abbreviated(_ path: String, home: String = NSHomeDirectory()) -> String {
         let home = home.hasSuffix("/") ? String(home.dropLast()) : home
         guard !home.isEmpty else { return path }
         if path == home { return "~" }

@@ -134,16 +134,25 @@ extension AppModel {
     /// Projects' Start Task, Fix With, Continue, Review and Fix All / Review All (#399 decision 9):
     /// what is asked (if anything) goes into the repository's area as the owner's message, from the
     /// bot chosen as `postToArea` places it, and the area opens. A repository kept on another
-    /// computer opens New Task there instead, as before areas.
+    /// computer, which has no area (#399 decision 2), starts a task there instead, as
+    /// `botchu-task create` does for it.
     func startInArea(repo: String, work: BotTask.Work? = nil, review: BotTask.Review? = nil, brief: String = "", with botID: UUID) {
         guard let asked = bot(botID), asked.canOwnTasks else { return }
         let location = location(of: repo)
+        let wanted = TaskRequest(repo: repo, issue: work?.isPullRequest == false ? work?.number : nil,
+                                 pullRequest: work?.isPullRequest == true ? work?.number : nil, task: brief,
+                                 machine: settings.host(location.hostID)?.nickname, review: review)
         guard location.hostID == nil else {
-            newTask(for: botID, repo: repo, work: work, purpose: review == .comment ? .comment : review == .review ? .review : .work, brief: brief)
+            Task {
+                do {
+                    let task = try await plannedTask(wanted, for: asked, checkouts: [], origin: .owner)
+                    startTask(task, for: botID, show: true)
+                } catch {
+                    note((error as? TaskRequest.Problem)?.message ?? error.localizedDescription, in: .home(botID))
+                }
+            }
             return
         }
-        let wanted = TaskRequest(repo: repo, issue: work?.isPullRequest == false ? work?.number : nil,
-                                 pullRequest: work?.isPullRequest == true ? work?.number : nil, task: brief, review: review)
         let checkout = (location.path as NSString).expandingTildeInPath
         Task {
             do {
