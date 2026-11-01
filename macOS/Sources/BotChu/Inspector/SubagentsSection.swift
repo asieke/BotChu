@@ -839,7 +839,9 @@ private struct SubagentCard: View {
                         Text(run.targetBotName).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.secondaryText)
                             .lineLimit(1)
                         HStack(spacing: 5) {
-                            SubagentStateSymbol(kind: state.kind).frame(width: 16, height: 16)
+                            // The pet shows it working. A spinner here as well slowed typing in the
+                            // message box eightfold while the details were open (journey 12).
+                            if state.kind != .running { SubagentStateSymbol(kind: state.kind).frame(width: 16, height: 16) }
                             Text(state.word).foregroundStyle(tint).lineLimit(1)
                         }
                         SubagentTime(state: state).foregroundStyle(tint)
@@ -868,15 +870,16 @@ private struct SubagentLiveAction: View {
     let run: SubagentRun
 
     var body: some View {
-        if let action = SubagentRowState.liveAction(model.delegation.threads[run.id] ?? [], root: run.worktree ?? run.workingDirectory) {
-            Text(action)
-                .font(.system(size: 12))
-                .foregroundStyle(Palette.secondaryText)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityAddTraits(.updatesFrequently)
-        }
+        let action = SubagentRowState.liveAction(model.delegation.threads[run.id] ?? [], root: run.worktree ?? run.workingDirectory)
+        // One line in a fixed frame: a new action never resizes the card and the details below it.
+        Text(action ?? "")
+            .font(.system(size: 12))
+            .foregroundStyle(Palette.secondaryText)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: .infinity, minHeight: 16, maxHeight: 16, alignment: .leading)
+            .help(action ?? "")
+            .accessibilityHidden(action == nil)
     }
 }
 
