@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 import BotChuCore
 
-/// Only the conversation/inspector pair has a native split. The window's original navigation
-/// sidebar, galleries, toolbar and sheet presentation remain in the same SwiftUI scene (#354).
+/// The conversation/inspector pair as a native split (#354), inside the window's native
+/// sidebar/detail split (#437). Toolbar and sheet presentation remain in the SwiftUI scene.
 struct NativeConversationColumns: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -142,7 +142,7 @@ private struct ConversationNativeSplit: NSViewControllerRepresentable {
     /// The composer can require more than the chat's floor (provider/effort/Fast controls).
     /// Use the hosting view's published minimum, not its current stretched frame or ideal width.
     func minimumWidth(conversationMinimum: Double, showsInspector: Bool) -> Double {
-        let content = max(conversationMinimum, Double(conversation.viewController.view.fittingSize.width))
+        let content = max(conversationMinimum, (conversation.viewController as? NativeColumnSizing)?.minimumWidth ?? 0)
         return content + (showsInspector ? Double(inspector.minimumThickness + splitView.dividerThickness) : 0)
     }
 
@@ -191,16 +191,30 @@ private struct ConversationNativeSplit: NSViewControllerRepresentable {
 
 /// The native inspector adds a container around its child. Pin the hosting view explicitly so its
 /// content follows that container instead of retaining the hosting view's initial fitting size.
-@MainActor private final class NativeColumnHost<Content: View>: NSViewController {
+/// `bridgesScene` hands its title and toolbar items to the window's toolbar (the window's detail).
+@MainActor final class NativeColumnHost<Content: View>: NSViewController, NativeColumnSizing {
     private let host: NSHostingController<Content>
+    private weak var minimumWidthConstraint: NSLayoutConstraint?
 
-    init(rootView: Content, sizingOptions: NSHostingSizingOptions = []) {
+    init(rootView: Content, sizingOptions: NSHostingSizingOptions = [], bridgesScene: Bool = false) {
         host = NSHostingController(rootView: rootView)
         host.sizingOptions = sizingOptions
+        if bridgesScene { host.sceneBridgingOptions = [.toolbars, .title] }
         super.init(nibName: nil, bundle: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("Use init(rootView:)") }
+
+    /// With `.minSize`, the hosting view keeps a minimum-width constraint current as its content
+    /// changes; reading it is free. `fittingSize` solved the column's whole layout again, and its
+    /// SwiftUI sizing, at every frame of a resize or of the sidebar's slide (#437).
+    var minimumWidth: Double {
+        let content = host.view
+        if minimumWidthConstraint == nil {
+            minimumWidthConstraint = content.constraints.first { $0.identifier == "NSHostingView.minWidth" && $0.firstItem === content }
+        }
+        return Double(minimumWidthConstraint?.constant ?? content.fittingSize.width)
+    }
 
     override func loadView() {
         let container = NSView()
@@ -217,6 +231,11 @@ private struct ConversationNativeSplit: NSViewControllerRepresentable {
             content.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
     }
+}
+
+/// A column that publishes the narrowest width its content allows.
+@MainActor protocol NativeColumnSizing: AnyObject {
+    var minimumWidth: Double { get }
 }
 
 private final class DividerTrackingSplitView: NSSplitView {

@@ -5,15 +5,18 @@ import BotChuCore
 /// middle, and the shown conversation's status on the right.
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hooksStarted = false
+    @State private var sidebar = WindowSidebar()
 
     var body: some View {
         @Bindable var model = model
-        NavigationSplitView {
-            SidebarView()
-                .navigationSplitViewColumnWidth(min: 210, ideal: 240, max: 320)
-        } detail: {
-            DetailColumn()
+        // A native split (#437). Its hosts keep their own safe areas, so the toolbar's inset applies
+        // once, in each column, and the sidebar runs under the title bar as it did.
+        NativeWindowColumns(model: model, sidebar: sidebar, reduceMotion: reduceMotion)
+        .ignoresSafeArea(.container, edges: .top)
+        .toolbar {
+            ToolbarItem(placement: .navigation) { SidebarToggle(sidebar: sidebar) }
         }
         // The columns publish their minimum widths, including the composer's current controls.
         // A fixed window minimum would miss changes to the inspector or model options.
@@ -50,7 +53,7 @@ struct ContentView: View {
 }
 
 /// Only the document sheet needs the window's current dimensions. Observing them here keeps a
-/// live resize from invalidating the entire navigation split view at every intermediate size.
+/// live resize from invalidating the window's SwiftUI at every intermediate size.
 private struct DocumentEditorPresentation: View {
     @Environment(AppModel.self) private var model
 
@@ -67,9 +70,10 @@ private struct DocumentEditorPresentation: View {
     }
 }
 
-/// The gallery or conversation shown beside the sidebar: a view of its own, so a switch between
-/// conversations redraws only this column.
-private struct DetailColumn: View {
+/// The gallery or conversation shown beside the sidebar, the native split's detail (#437): a view
+/// of its own, so a switch between conversations redraws only this column. Its host bridges its
+/// title and toolbar items into the window's toolbar.
+struct DetailColumn: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
