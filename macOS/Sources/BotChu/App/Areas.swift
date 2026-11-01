@@ -24,6 +24,25 @@ extension AppModel {
         return owners
     }
 
+    /// Attach Project Area's repositories for the bot, as it opens (#438): each with the bot whose
+    /// area it is, and why it can't be chosen now. One on another computer can't, nor one whose
+    /// area can't move to the bot now.
+    func attachAreaRows(for botID: UUID) -> [AttachAreaRow] {
+        let owners = areaOwners()
+        return projectCatalog.map { entry in
+            let owner = owners[entry.repo.lowercased()]
+            let problem: String?
+            if entry.location.hostID != nil {
+                problem = "\(entry.name) is on \(entry.workplace); a Project Area works on this Mac."
+            } else if let owner, owner != botID, let area = areaOwner(repo: entry.repo) {
+                problem = areaMoveProblem(.task(area.area.id, of: owner), to: botID)
+            } else {
+                problem = nil
+            }
+            return AttachAreaRow(entry: entry, owner: owner, problem: problem)
+        }
+    }
+
     /// The bots an area's menu and a drag can move it to: those who can own one, but its own.
     func areaMoveTargets(of target: ChatTarget) -> [Bot] { bots.filter { $0.canOwnTasks && $0.id != target.botID } }
 

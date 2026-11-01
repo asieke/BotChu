@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-11-01
+- Attach Project Area opens as a native sheet whose form is made ahead while the Mac is idle and that takes the keyboard just after its first frame, from about 47 ms to about 20 ms in journey 9; journey 9 also checks the search takes the keyboard and Cancel and Escape give it back to the message box (#438)
 - `scripts/replica.sh refresh` keeps a replica of the owner's bots and data (accounts on the fake CLI, no tokens, read-only repository stubs), and `scripts/test.sh --journeys-replica`, run by the full suite and so by deploy, runs launch, switching bots, areas and tasks, attach/hide/show, Inbox Done and relaunch on a copy of it, report only until baselined; the journeys' focus check asks the app itself when system-wide accessibility can't answer, and names the app that took focus (#422)
 - ⌘K opens a switcher over the window that searches agents, specialists and projects and opens the one chosen; New Session moves to ⇧⌘K (#428)
 - A turn or sub-agent run that hits a usage limit (`You've hit your 5-hour limit · resets 12:10am`) shows "Paused until 12:10am" instead of failing; a minute after the reset BotChu resumes the paused runs in their worktrees and sessions and sends the conversation one heartbeat naming them, also after a relaunch; any other failed turn is retried once, 2 minutes after (#442)

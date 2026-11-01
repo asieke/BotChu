@@ -143,7 +143,8 @@ struct ProjectAreasColumn: View {
     @State private var hovered: ChatTarget?
     @State private var dragStart: CGFloat?
     @State private var showsHidden = false
-    @State private var attaching = false
+    /// Attach Project Area's sheet in this window (#438).
+    @State private var attach = AttachAreaPresenter()
 
     /// How far a row is from the column's edges, on both sides.
     static let rowInset: CGFloat = 8
@@ -183,9 +184,7 @@ struct ProjectAreasColumn: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Project Areas of \(model.bot(botID)?.name ?? "the bot")")
         .accessibilityIdentifier("conversation-column")
-        .sheet(isPresented: $attaching) {
-            AttachAreaSheet(botID: botID).environment(model)
-        }
+        .background { AttachAreaAnchor(presenter: attach, botID: botID) }
     }
 
     private var heading: some View {
@@ -196,7 +195,7 @@ struct ProjectAreasColumn: View {
             Spacer(minLength: 0)
             // A specialist, or the remote queue, has no areas: only its Home.
             if model.bot(botID)?.canOwnTasks == true {
-                ColumnButton(symbol: "plus", help: "Attach Project Area") { attaching = true }
+                ColumnButton(symbol: "plus", help: "Attach Project Area") { attach.present(botID: botID) }
                     .accessibilityIdentifier("conversation-new-task")
             }
         }
