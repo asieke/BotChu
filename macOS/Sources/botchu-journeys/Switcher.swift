@@ -9,7 +9,7 @@ extension Journeys {
 
     /// Opens the switcher with ⌘K, timed until it shows; types another bot's name a key at a time,
     /// each timed until its results show; presses Return, timed until that bot's chat shows;
-    /// `repeats` times. The first time also checks that a second ⌘K leaves one switcher, that Esc
+    /// `repeats` times; then selects the first bot again. The first time also checks that a second ⌘K leaves one switcher, that Esc
     /// closes it, and that Down highlights the next result.
     func switcher() -> [JourneyResult] {
         var opens: [Double] = [], keys: [Double] = [], navigations: [Double] = []
@@ -34,19 +34,13 @@ extension Journeys {
                 let start = AppUnderTest.now
                 app.post(key: Key.enter)
                 navigations.append(Self.ms(start, try app.mark(FrameMarks.chat(target.id), after: start).nanoseconds))
-                print("DIAG nav \(navigations.last!) busy \(app.marks(from: start).compactMap { FrameMarks.busyMilliseconds($0.name) }) marks \(app.marks(from: start).map { "\($0.name)@\(Self.ms(start, $0.nanoseconds))" }.prefix(8))")
-                do {
-                    let s2 = AppUnderTest.now
-                    app.post(key: 34, command: true, shift: true)
-                    let m = try app.mark(FrameMarks.page("inbox"), after: s2)
-                    print("DIAG key inbox \(Self.ms(s2, m.nanoseconds)) busy \(app.marks(from: s2, to: m.nanoseconds).compactMap { FrameMarks.busyMilliseconds($0.name) })")
-                    app.settle()
-                    _ = try select(target)
-                }
                 app.settle()
                 guard try app.window().first(identifier: "switcher-field") == nil else { throw HarnessFailure("Return left the switcher open") }
                 try checkShown(target)
             }
+            // Back on the first bot, where switching bots left it, so a retry of journey 3 starts
+            // from the same conversation.
+            _ = try select(fixture.longBot)
             try app.requireForeground()
         } catch {
             problem = "\(error)"
@@ -54,6 +48,7 @@ extension Journeys {
                 app.post(key: Key.escape)
                 app.settle()
             }
+            _ = try? select(fixture.longBot)
         }
         return [result(3, "switcher opens", .instant, opens, problem: problem),
                 result(3, "switcher results per key", .instant, keys, problem: problem),
@@ -65,7 +60,6 @@ extension Journeys {
         let start = AppUnderTest.now
         app.post(key: Key.k, command: true)
         let shown = try app.mark(FrameMarks.switcher, after: start)
-        print("DIAG open \(Self.ms(start, shown.nanoseconds)) busy \(app.marks(from: start, to: shown.nanoseconds).compactMap { FrameMarks.busyMilliseconds($0.name) })")
         app.settle(quiet: 0.1, limit: 2)
         guard try switcherField().text.isEmpty else { throw HarnessFailure("The switcher opened with a previous search") }
         return Self.ms(start, shown.nanoseconds)

@@ -30,29 +30,30 @@ struct AgentsView: View {
             } else {
                 // Tables of rows rather than SwiftUI's Table, which scrolls by itself: these share
                 // one scroll and their columns' widths.
-                ScrollViewReader { proxy in ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 24) {
-                        ForEach(groups) { group in
-                            AgentTable(bots: group.botIDs.compactMap(model.bot), columns: columns, counts: true,
-                                       newSection: { naming.ask(.new(botID: $0)) }, delete: { pendingDelete = $0 }) {
-                                AgentSectionHeading(group: group) { naming.ask(.rename($0)) }
-                            }
-                        }
-                        // Specialists last, with New Specialist, also before there are any.
-                        if !specialists.isEmpty || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            VStack(alignment: .leading, spacing: 0) {
-                                if !groups.isEmpty { Divider().padding(.bottom, 24) }
-                                AgentTable(bots: specialists, columns: columns, counts: false,
-                                           newSection: { _ in }, delete: { pendingDelete = $0 }) {
-                                    SpecialistsHeading(count: specialists.count)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 24) {
+                            ForEach(groups) { group in
+                                AgentTable(bots: group.botIDs.compactMap(model.bot), columns: columns, counts: true,
+                                           newSection: { naming.ask(.new(botID: $0)) }, delete: { pendingDelete = $0 }) {
+                                    AgentSectionHeading(group: group) { naming.ask(.rename($0)) }
                                 }
                             }
-                        }
-                    }.padding(.horizontal, 24).padding(.bottom, 24)
-                }
-                // The specialist ⌘K's switcher chose (#428).
-                .onAppear { if let id = model.highlightedAgent { proxy.scrollTo(id, anchor: .center) } }
-                .onChange(of: model.highlightedAgent) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
+                            // Specialists last, with New Specialist, also before there are any.
+                            if !specialists.isEmpty || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    if !groups.isEmpty { Divider().padding(.bottom, 24) }
+                                    AgentTable(bots: specialists, columns: columns, counts: false,
+                                               newSection: { _ in }, delete: { pendingDelete = $0 }) {
+                                        SpecialistsHeading(count: specialists.count)
+                                    }
+                                }
+                            }
+                        }.padding(.horizontal, 24).padding(.bottom, 24)
+                    }
+                    // The specialist ⌘K's switcher chose (#428).
+                    .onAppear { if let id = model.highlightedAgent { proxy.scrollTo(id, anchor: .center) } }
+                    .onChange(of: model.highlightedAgent) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
                 }
             }
         }
