@@ -1,13 +1,13 @@
 import AppKit
 import BotChuCore
 
-/// Journey 3's ⌘K switcher (#428), driven from the keyboard as the owner drives it.
+/// Journey 3's ⌘K switcher (#428), opened, moved through and closed with the keys the owner presses.
 extension Journeys {
     private enum Key {
         static let k: CGKeyCode = 40, down: CGKeyCode = 125, up: CGKeyCode = 126, enter: CGKeyCode = 36, escape: CGKeyCode = 53
     }
 
-    /// Opens the switcher with ⌘K, timed until it shows; types another bot's name a key at a time,
+    /// Opens the switcher with ⌘K, timed until it shows; types another bot's name a character at a time,
     /// each timed until its results show; presses Return, timed until that bot's chat shows;
     /// `repeats` times; then selects the first bot again. The first time also checks that a second ⌘K leaves one switcher, that Esc
     /// closes it, and that Down highlights the next result.
@@ -19,14 +19,16 @@ extension Journeys {
                 let target = fixture.bots[7 - index % 6]
                 opens.append(try openSwitcher())
                 if index == 0 { try checkSwitcherKeys() }
+                // Typed as the other journeys type (`AXElement.type`): timing the app, not the
+                // input method's round trip that a posted key event takes first.
                 let typed = target.name.lowercased()
+                let field = try switcherField()
                 for character in typed {
                     let start = AppUnderTest.now
-                    app.post(key: 0, text: String(character))
+                    try field.type(String(character))
                     keys.append(Self.ms(start, try app.mark(FrameMarks.switcherResults, after: start).nanoseconds))
                 }
                 app.settle(quiet: 0.1, limit: 2)
-                let field = try switcherField()
                 guard field.text == typed else { throw HarnessFailure("The switcher's field says \"\(field.text)\" after typing \"\(typed)\"") }
                 guard try app.window().first(identifier: "switcher-result")?.label == "\(target.name), Agent" else {
                     throw HarnessFailure("The switcher's first result for \"\(typed)\" isn't the agent \(target.name)")
@@ -97,15 +99,11 @@ extension Journeys {
 
 extension AppUnderTest {
     /// Posts a key press to BotChu as the keyboard does: menus' shortcuts first, then the focused
-    /// view. `text` stands for what the key types.
-    func post(key: CGKeyCode, command: Bool = false, shift: Bool = false, text: String? = nil) {
+    /// view.
+    func post(key: CGKeyCode, command: Bool = false, shift: Bool = false) {
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: down) else { continue }
             event.flags = command ? (shift ? [.maskCommand, .maskShift] : .maskCommand) : []
-            if let text {
-                let units = Array(text.utf16)
-                event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-            }
             event.postToPid(pid)
         }
     }

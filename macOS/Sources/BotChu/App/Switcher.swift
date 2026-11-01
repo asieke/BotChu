@@ -46,13 +46,44 @@ struct SwitcherLayer: View {
 
     var body: some View {
         if model.switcherShown {
-            SwitcherPalette(index: model.switcherIndex)
+            SwitcherHost(palette: SwitcherPalette(model: model, index: model.switcherIndex))
+        }
+    }
+}
+
+/// The palette in a hosting view of its own: typing in it lays out only the palette, not the
+/// window's SwiftUI and every focusable view in it (a key took about 16 ms in the window's).
+/// Closing it gives the focus back to the view that had it, when that view is still shown.
+private struct SwitcherHost: NSViewRepresentable {
+    let palette: SwitcherPalette
+
+    final class Coordinator {
+        weak var previous: NSResponder?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSHostingView<SwitcherPalette> {
+        context.coordinator.previous = NSApp.keyWindow?.firstResponder
+        let view = NSHostingView(rootView: palette)
+        view.sizingOptions = []
+        return view
+    }
+
+    func updateNSView(_ view: NSHostingView<SwitcherPalette>, context: Context) {}
+
+    static func dismantleNSView(_ view: NSHostingView<SwitcherPalette>, coordinator: Coordinator) {
+        guard let window = view.window else { return }
+        if let previous = coordinator.previous as? NSView, previous.window === window, !previous.isDescendant(of: view) {
+            window.makeFirstResponder(previous)
+        } else if (window.firstResponder as? NSView)?.isDescendant(of: view) == true {
+            window.makeFirstResponder(nil)
         }
     }
 }
 
 private struct SwitcherPalette: View {
-    @Environment(AppModel.self) private var model
+    let model: AppModel
     let index: SwitcherIndex
     @State private var query = ""
     @State private var highlight = 0
