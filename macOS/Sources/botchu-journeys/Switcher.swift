@@ -26,7 +26,10 @@ extension Journeys {
                 for character in typed {
                     let start = AppUnderTest.now
                     try field.type(String(character))
-                    keys.append(Self.ms(start, try app.mark(FrameMarks.switcherResults, after: start).nanoseconds))
+                    guard let shown = try? app.mark(FrameMarks.switcherResults, after: start) else {
+                        throw HarnessFailure("The switcher's results didn't change after typing \"\(character)\": its field says \"\(field.text)\"")
+                    }
+                    keys.append(Self.ms(start, shown.nanoseconds))
                 }
                 app.settle(quiet: 0.1, limit: 2)
                 guard field.text == typed else { throw HarnessFailure("The switcher's field says \"\(field.text)\" after typing \"\(typed)\"") }

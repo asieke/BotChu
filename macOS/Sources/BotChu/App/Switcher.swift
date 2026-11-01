@@ -137,6 +137,8 @@ private struct SwitcherPalette: View {
             TextField("Search agents and projects", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 19))
+                // Names, not prose: no word completed or corrected while it is typed.
+                .autocorrectionDisabled()
                 .focused($focused)
                 .onSubmit { if results.indices.contains(highlight) { model.open(results[highlight]) } }
                 .onKeyPress(.downArrow) { highlight = SwitcherHighlight.moved(highlight, by: 1, count: results.count); return .handled }
