@@ -222,6 +222,9 @@ extension SubagentRun {
     /// A run that can be relaunched with its brief, session and workspace (#368): one that stopped,
     /// or that failed after it started.
     public var isResumable: Bool { phase == .stopped || phase == .failed && interruption != nil }
+
+    /// When the usage limit a failed run paused on resets (#442); nil for any other run.
+    public var pausedUntil: Date? { phase == .failed ? interruption?.resetsAt : nil }
 }
 
 /// Whether a CLI of a run, or anything it started, still runs (#368): a process whose environment

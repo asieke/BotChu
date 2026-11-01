@@ -276,7 +276,7 @@ private struct GeneralSettings: View {
         @Bindable var settings = model.settings
         Section {
             Toggle("Check on bots that stop mid-work", isOn: $settings.heartbeat)
-                .help("When a turn ends saying its work is still going and nothing is running, BotChu sends a heartbeat asking the bot to check on it: up to \(Heartbeat.maxPulses) in a row, 2, 10 and 30 minutes after.")
+                .help("When a turn ends saying its work is still going and nothing is running, BotChu sends a heartbeat asking the bot to check on it: up to \(Heartbeat.maxPulses) in a row, 2, 10 and 30 minutes after. Work that hits a usage limit pauses and carries on a minute after it resets; any other failed turn is retried once, 2 minutes after.")
         }
         StorageSettings()
         Section("Shared by every bot") {

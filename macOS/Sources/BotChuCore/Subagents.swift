@@ -158,24 +158,27 @@ public struct SubagentOverview: Equatable, Sendable {
         var underWay: Set<UUID> = []
         var finishedRoots: Set<UUID> = []
         for head in heads {
-            var active = false
+            var active = false, paused = false
             var seen: Set<UUID> = []
+            // A run paused on a usage limit stays in view, but isn't counted as failed (#442).
+            func failed(_ run: SubagentRun) -> Int { run.phase == .failed && run.pausedUntil == nil ? 1 : 0 }
             // Depth-first, returning how many runs beneath failed; bounded and guarded, so a
             // malformed saved tree can't loop.
             func walk(_ run: SubagentRun, depth: Int) -> Int {
                 guard depth <= SubagentLimits.maxDepth + 1, seen.insert(run.id).inserted else { return 0 }
                 roots[run.id] = head.id
                 active = active || run.phase.isActive
+                paused = paused || run.pausedUntil != nil
                 var below = 0
                 for child in byParent[run.id] ?? [] where !seen.contains(child.id) {
                     parents[child.id] = run.id
-                    below += walk(child, depth: depth + 1) + (child.phase == .failed ? 1 : 0)
+                    below += walk(child, depth: depth + 1) + failed(child)
                 }
                 if below > 0 { failures[run.id] = below }
                 return below
             }
-            let failed = walk(head, depth: 0) + (head.phase == .failed ? 1 : 0)
-            if active { underWay.insert(head.id) } else if failed == 0 { finishedRoots.insert(head.id) }
+            let failedRuns = walk(head, depth: 0) + failed(head)
+            if active { underWay.insert(head.id) } else if failedRuns == 0, !paused { finishedRoots.insert(head.id) }
         }
 
         func key(_ run: SubagentRun) -> GroupKey {
@@ -263,6 +266,8 @@ public struct SubagentOverview: Equatable, Sendable {
 public struct SubagentRowState: Equatable, Sendable {
     public enum Kind: String, Equatable, Sendable {
         case queued, preparing, running, stopping, done, noHandoff, failed, stopped, interrupted
+        /// Failed on a usage limit, until it resets (#442).
+        case paused
     }
 
     public var kind: Kind
@@ -278,7 +283,7 @@ public struct SubagentRowState: Equatable, Sendable {
 
     /// `activity` is the running turn's (`RunState`), nil before it streams; `stopping`, that Stop
     /// was asked for and the process hasn't exited yet.
-    public init(_ run: SubagentRun, activity: BotActivity? = nil, stopping: Bool = false) {
+    public init(_ run: SubagentRun, activity: BotActivity? = nil, stopping: Bool = false, now: Date = Date()) {
         since = run.startedAt ?? run.createdAt
         ended = run.phase.isActive ? nil : (run.finishedAt ?? run.startedAt ?? run.createdAt)
         switch run.phase {
@@ -288,7 +293,7 @@ public struct SubagentRowState: Equatable, Sendable {
         case .completed:
             let empty = (run.handoffOutput ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             (kind, word) = empty ? (.noHandoff, "No handoff") : (.done, "Done")
-        case .failed: (kind, word) = (.failed, "Failed")
+        case .failed: (kind, word) = run.pausedUntil.map { (.paused, UsageLimit.pausedText(until: $0, now: now)) } ?? (.failed, "Failed")
         case .stopped: (kind, word) = run.isInterrupted ? (.interrupted, "Interrupted") : (.stopped, "Stopped")
         }
         if stopping, run.phase.isActive { (kind, word) = (.stopping, "Stopping…") }
@@ -297,7 +302,7 @@ public struct SubagentRowState: Equatable, Sendable {
         case .preparing, .stopping: activity ?? .idle
         case .done: .done
         case .failed: .failed
-        case .queued, .noHandoff, .stopped, .interrupted: .idle
+        case .queued, .noHandoff, .stopped, .interrupted, .paused: .idle
         }
     }
 
