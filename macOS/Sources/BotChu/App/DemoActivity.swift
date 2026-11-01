@@ -99,11 +99,15 @@ enum DemoActivity {
             if phase != .running { run.finishedAt = started.addingTimeInterval(phase == .failed ? 41 : 272) }
             if phase == .completed { run.handoffOutput = "The chat stays responsive: 17 calm cards, no tool rows in the parent." }
             if phase == .failed { run.errorMessage = "Codex Dev exited with status 1 without replying." }
+            // Where they work (#431): a branch on each row, a pull request on the finished one's.
+            if phase != .failed { run.branch = phase == .running ? "fix/412-ui-latency" : "test/417-fan-out" }
+            if phase == .completed { (run.pullRequest, run.pullRequestState) = (418, .open) }
             runs.append(run)
             var childThread = [ChatMessage(role: .user, text: run.brief)]
             for index in 0..<23 {
                 childThread.append(ChatMessage(role: .tool, toolID: "c\(index)", toolName: index % 5 == 0 ? "Bash" : "Read",
-                                               toolInput: index % 5 == 0 ? "rg -n onChange" : "\(sources)/BotChu/Chat/ChatView.swift", toolState: .done))
+                                               toolInput: index % 5 == 0 ? "rg -n onChange" : "\(sources)/BotChu/Chat/ChatView.swift",
+                                               toolState: phase == .running && index == 22 ? .running : .done))
             }
             model.delegation.threads[id] = childThread
             if phase == .running { model.delegation.states[id] = RunState(hasOutput: true, activity: .researching) }

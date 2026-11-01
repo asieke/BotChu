@@ -67,9 +67,7 @@ private struct ConversationInspectorAreas: View {
                 AreaRepoTab(target: target)
             case .subagents:
                 InspectorScroller(id: target) {
-                    SubagentsInspectorContent(target: target, footer: model.worktreeCheckout(of: target).map {
-                        AnyView(WorktreesSection(target: target, checkout: $0).environment(model))
-                    })
+                    SubagentsInspectorContent(target: target, checkout: model.worktreeCheckout(of: target))
                 }
             case .bot:
                 ConversationBotPanel(target: target)

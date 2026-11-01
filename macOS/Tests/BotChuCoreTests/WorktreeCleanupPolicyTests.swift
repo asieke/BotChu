@@ -76,6 +76,42 @@ import Testing
         #expect(WorktreeCleanupPolicy.owner(of: path, among: [done, elsewhere]) == nil)
     }
 
+    /// #431: a run's row says where it works, paired with its worktree's row; the Worktrees list
+    /// keeps only the worktrees no running run works in.
+    @Test func eachRunIsPairedWithItsWorktreeAndOnlyUnownedOnesAreListed() {
+        let bot = Bot(name: "10x Engineer Bot", emoji: "🛠", workspace: "/tmp/bot")
+        func run(_ worktree: String?, _ phase: SubagentPhase, branch: String? = nil) -> SubagentRun {
+            var run = SubagentRun(rootBotID: UUID(), depth: 1, targetBot: bot, title: "Fix", brief: "", workingDirectory: "/repo", phase: phase)
+            run.worktree = worktree
+            run.branch = branch
+            return run
+        }
+        let main = WorktreeRow(entry: WorktreeEntry(path: "/repo", branch: "main", isMain: true), isDirty: false)
+        let owned = WorktreeRow(entry: WorktreeEntry(path: "/private/tmp/repo/.claude/worktrees/feat-430-card", branch: "feat/430-card"), isDirty: true)
+        let leftover = WorktreeRow(entry: WorktreeEntry(path: "/tmp/repo/.claude/worktrees/fix-9-old", branch: "fix/9-old"), isDirty: false)
+        let gone = WorktreeRow(entry: WorktreeEntry(path: "/tmp/repo/.claude/worktrees/chore-gone", isPrunable: true))
+        let rows = [main, owned, leftover, gone]
+        let running = run("/tmp/repo/.claude/worktrees/feat-430-card/", .running)
+        let finished = run(leftover.entry.path, .completed, branch: "fix/9-old")
+
+        // The row gives the branch the run didn't name and its changes; the branch's pull request wins.
+        let open = BranchPullRequest(number: 432, state: .open)
+        #expect(SubagentWorkplace.of(running, rows: rows, pullRequests: ["feat/430-card": open])
+            == SubagentWorkplace(name: "feat/430-card", isDirty: true, pullRequest: 432, pullRequestState: .open))
+        var named = finished
+        named.pullRequest = 12
+        #expect(SubagentWorkplace.of(named, rows: rows) == SubagentWorkplace(name: "fix/9-old", pullRequest: 12))
+        // Unread rows: the run's own word, then its worktree's folder; nothing without either.
+        #expect(SubagentWorkplace.of(running) == SubagentWorkplace(name: "feat-430-card"))
+        #expect(SubagentWorkplace.of(run(nil, .running, branch: "docs/x")) == SubagentWorkplace(name: "docs/x"))
+        #expect(SubagentWorkplace.of(run(nil, .running)) == nil)
+
+        // The running run's worktree and the main checkout aren't listed; a finished run's leftover is.
+        #expect(WorktreeCleanupPolicy.unowned(rows, among: [running, finished]).map(\.id) == [leftover.id, gone.id])
+        #expect(WorktreeCleanupPolicy.unowned(rows, among: []).map(\.id) == [owned.id, leftover.id, gone.id])
+        #expect(WorktreeCleanupPolicy.unowned([main], among: []).isEmpty)
+    }
+
     // MARK: Reading them
 
     @Test func theStatusScriptsOutputGivesEachWorktreeWithItsChanges() {

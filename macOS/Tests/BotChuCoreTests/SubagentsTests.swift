@@ -306,6 +306,26 @@ private final class SubagentFixture {
         #expect(words == ["Queued", "Preparing", "Running a tool…", "Done", "Failed", "Stopped"])
     }
 
+    /// #430: the details' card shows the run's bot acting out what the run does, as the status
+    /// sidebar would, and its last tool call while it runs.
+    @Test func theCardsPetAndLiveActionFollowTheRun() {
+        let batch = Batch()
+        let running = batch.run("R", .running, minute: 0)
+        #expect(SubagentRowState(running, activity: .coding).activity == .coding)
+        #expect(SubagentRowState(running).activity == .thinking)
+        #expect(SubagentRowState(batch.run("Q", .queued, minute: 0)).activity == .idle)
+        #expect(SubagentRowState(batch.run("D", .completed, minute: 0)).activity == .done)
+        #expect(SubagentRowState(batch.run("E", .completed, minute: 0, handoff: " ")).activity == .idle)
+        #expect(SubagentRowState(batch.run("F", .failed, minute: 0)).activity == .failed)
+        #expect(SubagentRowState(batch.run("S", .stopped, minute: 0)).activity == .idle)
+
+        let read = ChatMessage(role: .tool, toolName: "Read", toolInput: "/repo/macOS/Sources/ChatView.swift", toolState: .running)
+        let test = ChatMessage(role: .tool, toolName: "Bash", toolInput: "swift test --filter PetTests", toolState: .done)
+        #expect(SubagentRowState.liveAction([ChatMessage(role: .assistant, text: "Looking."), read], root: "/repo") == "Reading ChatView.swift")
+        #expect(SubagentRowState.liveAction([read, test, ChatMessage(role: .assistant, text: "Ran it.")]) == "Ran swift test --filter PetTests")
+        #expect(SubagentRowState.liveAction([ChatMessage(role: .assistant, text: "Hi")]) == nil)
+    }
+
     @Test func navigationComesBackToWhereTheListWas() {
         let parent = UUID(), child = UUID(), other = UUID(), task = UUID()
         var navigation = SubagentNavigation()
