@@ -39,6 +39,9 @@ private struct BotChuCommands: Commands {
         CommandGroup(after: .sidebar) {
             Button("Show Inbox") { model.destination = .inbox }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
+            // ⌘K's switcher (#428), once: a second ⌘K leaves the one shown.
+            Button("Go to Agent or Project…") { model.switcherShown = true }
+                .keyboardShortcut("k")
             StatusMenuButton()
             ChatDensityMenuPicker()
         }
@@ -55,7 +58,7 @@ private struct BotChuCommands: Commands {
                 .keyboardShortcut("e")
                 .disabled(model.visibleBotID == nil)
             Button("New Session") { if let id = model.visibleBotID { model.newSession(model.tab(of: id)) } }
-                .keyboardShortcut("k")
+                .keyboardShortcut("k", modifiers: [.command, .shift])
                 .disabled(remote || (tab.map { model.isRunning($0) } ?? true))
             Button("Stop") { if let id = model.visibleBotID { model.stop(model.tab(of: id)) } }
                 .keyboardShortcut(".")

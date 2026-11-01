@@ -19,6 +19,7 @@ struct ContentView: View {
         // A fixed window minimum would miss changes to the inspector or model options.
         .frame(minHeight: 520)
         .background { DocumentEditorPresentation() }
+        .overlay { SwitcherLayer() }
         .sheet(item: $model.editor) { request in
             BotEditor(request: request)
                 .environment(model)

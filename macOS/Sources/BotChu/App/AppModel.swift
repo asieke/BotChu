@@ -116,8 +116,15 @@ final class AppModel {
     /// Nil shows the remembered conversation; galleries never discard that conversation.
     var destination: LibraryDestination? {
         // A folder chosen for Providers' Connectors lasts while Providers shows.
-        didSet { if destination != .providers { providerConnectorWorkspace = nil } }
+        didSet {
+            if destination != .providers { providerConnectorWorkspace = nil }
+            if destination != .agents, highlightedAgent != nil { highlightedAgent = nil }
+        }
     }
+    /// Whether ⌘K's switcher shows over the window (#428).
+    var switcherShown = false
+    /// The specialist the switcher opened Agents on, shown selected there while Agents shows.
+    var highlightedAgent: UUID?
     var visibleBotID: UUID? { destination == nil ? selection : nil }
     var selection: UUID? {
         didSet {

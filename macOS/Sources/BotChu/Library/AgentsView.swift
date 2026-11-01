@@ -30,7 +30,7 @@ struct AgentsView: View {
             } else {
                 // Tables of rows rather than SwiftUI's Table, which scrolls by itself: these share
                 // one scroll and their columns' widths.
-                ScrollView {
+                ScrollViewReader { proxy in ScrollView {
                     LazyVStack(alignment: .leading, spacing: 24) {
                         ForEach(groups) { group in
                             AgentTable(bots: group.botIDs.compactMap(model.bot), columns: columns, counts: true,
@@ -49,6 +49,10 @@ struct AgentsView: View {
                             }
                         }
                     }.padding(.horizontal, 24).padding(.bottom, 24)
+                }
+                // The specialist ⌘K's switcher chose (#428).
+                .onAppear { if let id = model.highlightedAgent { proxy.scrollTo(id, anchor: .center) } }
+                .onChange(of: model.highlightedAgent) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
                 }
             }
         }
@@ -134,7 +138,8 @@ struct AgentTable<Heading: View>: View {
                         }
                     }
                 }
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.primary.opacity(0.08)))
             }
         }
@@ -304,11 +309,14 @@ struct AgentTableRow: View {
         }
         .padding(.horizontal, AgentColumns.inset)
         .frame(height: AgentColumns.pet + 12)
+        .background(model.highlightedAgent == bot.id ? Color.accentColor.opacity(0.15) : .clear)
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .onTapGesture(count: 2) { model.show(model.tab(of: bot.id)) }
         .contextMenu { AgentMenuItems(bot: bot, newSection: newSection, delete: delete) }
         .accessibilityIdentifier("agents-row-\(bot.id)")
+        .accessibilityAddTraits(model.highlightedAgent == bot.id ? .isSelected : [])
+        .id(bot.id)
     }
 
     /// Its account, chosen in place: a plain name until its row is hovered. A change resets the

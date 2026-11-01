@@ -2,6 +2,9 @@
 
 What changed, newest first, one line per merged pull request.
 
+## 2026-11-01
+- ⌘K opens a switcher over the window that searches agents, specialists and projects and opens the one chosen; New Session moves to ⇧⌘K (#428)
+
 ## 2026-10-31
 - Sub-agent details open with a card: the bot's animated pet acting out the run, its state, elapsed time, live action, branch and PR pill; each run's row shows its branch, changes dot and PR, and Worktrees lists only worktrees no running run owns, hidden when there are none (#430, #431)
 - A mentioned bot's turn in a Project Area runs beside the area's own bot as a run with its card, its reply landing as that bot; the area's bot keeps answering, and Stop stops only its own turn (#424)

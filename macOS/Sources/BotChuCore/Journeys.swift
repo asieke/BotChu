@@ -46,6 +46,10 @@ public enum FrameMarks {
     /// Attach Project Area started to show: the first frame of its opening animation.
     public static let attachArea = "attach-area"
 
+    /// ⌘K's switcher (#428) showed, and its results showed for what was typed.
+    public static let switcher = "switcher"
+    public static let switcherResults = "switcher.results"
+
     /// A page of the window (`inbox`, `settings`) showed.
     public static func page(_ name: String) -> String { "page \(name)" }
 

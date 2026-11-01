@@ -19,6 +19,7 @@ A docs-only pull request runs nothing else.
 |---|---|
 | Launch, data loading, migration | `launch` (1), `relaunch` (13) |
 | Sidebar, toolbar, status sidebar | `sidebar` (2), `switch-bot` (3) |
+| The ⌘K switcher | `switch-bot` (3) |
 | Project Areas column, attaching an area, legacy tasks | `switch-area` (4), `attach-area` (9) |
 | Composer, typing | `typing` (5), `subagent` (12) |
 | Sending, streaming, the turn loop | `send` (6), `typing` (5) |

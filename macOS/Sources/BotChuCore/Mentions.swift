@@ -223,6 +223,12 @@ public struct MentionDirectory: Sendable {
     /// alone, where the space goes on into the rest of a name (`qa d` for QA Duck): after a whole word
     /// (`qa `) nothing else matches, so the list closes rather than take Return from prose.
     public func agents(matching query: String) -> [BotRosterEntry] {
+        rankedAgents(matching: query).map(\.key.agent)
+    }
+
+    /// The agents matching `query`, best first, each with how well it matches (0, exact, to 5, in its
+    /// title) and its place in the order given: what the switcher (#428) ranks agents and projects by together.
+    func rankedAgents(matching query: String) -> [Ranked<AgentKey>] {
         let q = Self.fold(query), qc = Self.compact(q), spaced = q.contains(" ")
         return Self.ranked(agentKeys) { key -> Int? in
             if q.isEmpty { return 0 }
@@ -234,11 +240,17 @@ public struct MentionDirectory: Sendable {
             if key.title.hasPrefix(q) || key.titleWords.contains(where: { $0.hasPrefix(q) }) { return 4 }
             if key.title.contains(q) { return 5 }
             return nil
-        } favored: { _ in 0 }.map(\.agent)
+        } favored: { _ in 0 }
     }
 
     /// The projects matching `query` by name or `owner/name`, best first.
     public func projects(matching query: String) -> [ProjectCatalogEntry] {
+        rankedProjects(matching: query).map(\.key.project)
+    }
+
+    /// The projects matching `query`, best first, each with how well it matches (0, exact, to 3,
+    /// anywhere) and its place in the order given.
+    func rankedProjects(matching query: String) -> [Ranked<ProjectKey>] {
         let q = Self.fold(query), qc = Self.compact(q)
         return Self.ranked(projectKeys) { key -> Int? in
             if q.isEmpty { return 0 }
@@ -247,7 +259,7 @@ public struct MentionDirectory: Sendable {
             if key.words.contains(where: { $0.hasPrefix(q) }) { return 2 }
             if key.repo.contains(q) || key.name.contains(q) { return 3 }
             return nil
-        } favored: { $0.favored }.map(\.project)
+        } favored: { $0.favored }
     }
 
     /// What tells an agent apart in the list: what it runs on (#324), else its title, and the start of
@@ -262,10 +274,16 @@ public struct MentionDirectory: Sendable {
         return shown(agent).isEmpty ? id : "\(shown(agent)) · \(id)"
     }
 
-    static func ranked<Key>(_ keys: [Key], tier: (Key) -> Int?, favored: (Key) -> Int) -> [Key] {
+    struct Ranked<Key> {
+        let key: Key
+        let tier: Int
+        let offset: Int
+    }
+
+    static func ranked<Key>(_ keys: [Key], tier: (Key) -> Int?, favored: (Key) -> Int) -> [Ranked<Key>] {
         keys.enumerated().compactMap { offset, key in tier(key).map { (tier: $0, favored: favored(key), offset: offset, key: key) } }
             .sorted { ($0.tier, $0.favored, $0.offset) < ($1.tier, $1.favored, $1.offset) }
-            .map(\.key)
+            .map { Ranked(key: $0.key, tier: $0.tier, offset: $0.offset) }
     }
 
     static func fold(_ text: String) -> String {
