@@ -59,3 +59,7 @@ Run policy and where a new test goes: [docs/testing.md](docs/testing.md).
   ```sh
   scripts/update-model-prices.py --date YYYY-MM-DD
   ```
+- Record a release in View ▸ Open Testing Dashboard (`testing/releases.json` in BotChu's data folder): deploy runs it after installing, with the version in `macOS/VERSION`, which a release bumps:
+  ```sh
+  scripts/release-record.py [--version X.Y.Z] [--commit <sha>] [--since <commit>] [--results <journeys json>]
+  ```

@@ -4,6 +4,7 @@ What changed, newest first, one line per merged pull request.
 
 ## 2026-11-01
 - In a Project Area, only the `@` mentions a message starts with summon those bots; a mention later in it is a reference the area's own bot answers (#435)
+- View ▸ Open Testing Dashboard: each release newest first with its full-suite timing, journey medians against their budgets and its CHANGELOG lines, from `testing/releases.json`, which deploy appends to with `scripts/release-record.py`; the app's version comes from `macOS/VERSION` (1.1.0), and 1.0.0 = d88b4bf is the recorded baseline (#434)
 
 ## 2026-10-31
 - Sub-agent details open with a card: the bot's animated pet acting out the run, its state, elapsed time, live action, branch and PR pill; each run's row shows its branch, changes dot and PR, and Worktrees lists only worktrees no running run owns, hidden when there are none (#430, #431)
