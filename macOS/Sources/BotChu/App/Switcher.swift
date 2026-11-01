@@ -87,7 +87,6 @@ private struct SwitcherPalette: View {
     let index: SwitcherIndex
     @State private var query = ""
     @State private var highlight = 0
-    @FocusState private var focused: Bool
 
     private static let rowHeight: CGFloat = 40
     private static let listHeight: CGFloat = 360
@@ -116,15 +115,7 @@ private struct SwitcherPalette: View {
         }
         // Esc closes it wherever the focus is.
         .background { Button("") { model.switcherShown = false }.keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true) }
-        .onAppear {
-            focused = true
-            FrameTimings.mark(FrameMarks.switcher)
-        }
-        // The field takes the focus once it is in the window: on appearing, it may not be yet.
-        .task {
-            await Task.yield()
-            focused = true
-        }
+        .onAppear { FrameTimings.mark(FrameMarks.switcher) }
         .onChange(of: query) {
             highlight = 0
             FrameTimings.mark(FrameMarks.switcherResults)
@@ -134,18 +125,13 @@ private struct SwitcherPalette: View {
     private func field(_ results: [SwitcherItem]) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").font(.system(size: 17, weight: .medium)).foregroundStyle(.secondary)
-            TextField("Search agents and projects", text: $query)
-                .textFieldStyle(.plain)
-                .font(.system(size: 19))
-                // Names, not prose: no word completed or corrected while it is typed.
-                .autocorrectionDisabled()
-                .focused($focused)
-                .onSubmit { if results.indices.contains(highlight) { model.open(results[highlight]) } }
-                .onKeyPress(.downArrow) { highlight = SwitcherHighlight.moved(highlight, by: 1, count: results.count); return .handled }
-                .onKeyPress(.upArrow) { highlight = SwitcherHighlight.moved(highlight, by: -1, count: results.count); return .handled }
-                .onKeyPress(.escape) { model.switcherShown = false; return .handled }
-                .onExitCommand { model.switcherShown = false }
-                .accessibilityIdentifier("switcher-field")
+            SwitcherField(text: $query) { command in
+                switch command {
+                case .move(let offset): highlight = SwitcherHighlight.moved(highlight, by: offset, count: results.count)
+                case .submit: if results.indices.contains(highlight) { model.open(results[highlight]) }
+                case .cancel: model.switcherShown = false
+                }
+            }
         }
         .padding(.horizontal, 16)
         .frame(height: 52)
@@ -208,5 +194,83 @@ private struct SwitcherPalette: View {
     private static func symbol(_ item: SwitcherItem) -> String {
         if case .area = item.place { return "folder" }
         return "book.closed"
+    }
+}
+
+/// The switcher's search field: AppKit's, so it takes the focus as it joins the window (no SwiftUI
+/// focus pass over the window's views) and its field editor completes no words while it edits
+/// (inline predictions would offer a dictionary word as if it were a result). Up, Down, Return
+/// and Esc go to `command`.
+private struct SwitcherField: NSViewRepresentable {
+    enum Command { case move(Int), submit, cancel }
+
+    @Binding var text: String
+    let command: (Command) -> Void
+
+    func makeNSView(context: Context) -> SwitcherTextField {
+        let field = SwitcherTextField()
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 19)
+        field.placeholderString = "Search agents and projects"
+        field.usesSingleLineMode = true
+        field.cell?.isScrollable = true
+        field.isAutomaticTextCompletionEnabled = false
+        field.delegate = context.coordinator
+        field.setAccessibilityIdentifier("switcher-field")
+        // As wide as the row leaves it, whatever it says.
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return field
+    }
+
+    func updateNSView(_ field: SwitcherTextField, context: Context) {
+        context.coordinator.parent = self
+        if field.stringValue != text { field.stringValue = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: SwitcherField
+
+        init(_ parent: SwitcherField) { self.parent = parent }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.moveUp(_:)): parent.command(.move(-1))
+            case #selector(NSResponder.moveDown(_:)): parent.command(.move(1))
+            case #selector(NSResponder.insertNewline(_:)): parent.command(.submit)
+            case #selector(NSResponder.cancelOperation(_:)): parent.command(.cancel)
+            default: return false
+            }
+            return true
+        }
+    }
+}
+
+final class SwitcherTextField: NSTextField {
+    /// The window's field editor's own setting, given back when this field stops editing.
+    private var editorPrediction: NSTextInputTraitType?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window, window.makeFirstResponder(self), let editor = currentEditor() as? NSTextView else { return }
+        editorPrediction = editor.inlinePredictionType
+        editor.inlinePredictionType = .no
+    }
+
+    override func textDidEndEditing(_ notification: Notification) {
+        if let editor = notification.object as? NSTextView, let editorPrediction {
+            editor.inlinePredictionType = editorPrediction
+            self.editorPrediction = nil
+        }
+        super.textDidEndEditing(notification)
     }
 }

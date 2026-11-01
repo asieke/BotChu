@@ -1,13 +1,13 @@
 import AppKit
 import BotChuCore
 
-/// Journey 3's ⌘K switcher (#428), opened, moved through and closed with the keys the owner presses.
+/// Journey 3's ⌘K switcher (#428), driven from the keyboard as the owner drives it.
 extension Journeys {
     private enum Key {
         static let k: CGKeyCode = 40, down: CGKeyCode = 125, up: CGKeyCode = 126, enter: CGKeyCode = 36, escape: CGKeyCode = 53
     }
 
-    /// Opens the switcher with ⌘K, timed until it shows; types another bot's name a character at a time,
+    /// Opens the switcher with ⌘K, timed until it shows; types another bot's name a key at a time,
     /// each timed until its results show; presses Return, timed until that bot's chat shows;
     /// `repeats` times; then selects the first bot again. The first time also checks that a second ⌘K leaves one switcher, that Esc
     /// closes it, and that Down highlights the next result.
@@ -19,13 +19,11 @@ extension Journeys {
                 let target = fixture.bots[7 - index % 6]
                 opens.append(try openSwitcher())
                 if index == 0 { try checkSwitcherKeys() }
-                // Typed as the other journeys type (`AXElement.type`): timing the app, not the
-                // input method's round trip that a posted key event takes first.
                 let typed = target.name.lowercased()
                 let field = try switcherField()
                 for character in typed {
                     let start = AppUnderTest.now
-                    try field.type(String(character))
+                    app.post(key: 0, text: String(character))
                     guard let shown = try? app.mark(FrameMarks.switcherResults, after: start) else {
                         throw HarnessFailure("The switcher's results didn't change after typing \"\(character)\": its field says \"\(field.text)\"")
                     }
@@ -56,7 +54,9 @@ extension Journeys {
             _ = try? select(fixture.longBot)
         }
         return [result(3, "switcher opens", .instant, opens, problem: problem),
-                result(3, "switcher results per key", .instant, keys, problem: problem),
+                // Posted keys pass through the input method before the app sees them (about 10 ms
+                // here), which the composer's echo journeys, typing through accessibility, leave out.
+                result(3, "switcher results per key", .within(33), keys, problem: problem),
                 result(3, "switcher opens a bot", .within(50), navigations, problem: problem)]
     }
 
@@ -102,11 +102,15 @@ extension Journeys {
 
 extension AppUnderTest {
     /// Posts a key press to BotChu as the keyboard does: menus' shortcuts first, then the focused
-    /// view.
-    func post(key: CGKeyCode, command: Bool = false, shift: Bool = false) {
+    /// view. `text` stands for what the key types.
+    func post(key: CGKeyCode, command: Bool = false, shift: Bool = false, text: String? = nil) {
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: down) else { continue }
             event.flags = command ? (shift ? [.maskCommand, .maskShift] : .maskCommand) : []
+            if let text {
+                let units = Array(text.utf16)
+                event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+            }
             event.postToPid(pid)
         }
     }
