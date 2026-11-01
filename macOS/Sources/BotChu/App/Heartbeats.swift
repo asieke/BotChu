@@ -95,6 +95,12 @@ extension AppModel {
         scheduleLimitWake()
     }
 
+    /// A run paused on a usage limit, also one BotChu resumed before that hit it again.
+    func runPaused(_ id: UUID) {
+        limitTried.remove(id)
+        scheduleLimitWake()
+    }
+
     private func saveLimitPauses() {
         let book = limitPauses, url = store.root.appendingPathComponent(Self.limitPausesFile)
         Self.limitPauseWrites.async { try? book.save(url) }
@@ -107,7 +113,7 @@ extension AppModel {
         guard settings.heartbeat, let next = LimitResume.nextWake(book: limitPauses, runs: delegation?.all ?? [], tried: limitTried) else { return }
         let token = UUID()
         limitWakeToken = token
-        let delay = max(1, next.timeIntervalSinceNow)
+        let delay = max(5, next.timeIntervalSinceNow)
         DispatchQueue.main.asyncAfter(wallDeadline: .now() + delay) { [weak self] in
             guard let self, self.limitWakeToken == token else { return }
             self.carryOnAfterLimits()

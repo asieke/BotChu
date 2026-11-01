@@ -1202,7 +1202,7 @@ final class SubagentRuntime {
             self.restored.remove(id)
             self.replace(record)
             self.queueDelivery(record)
-            if record.pausedUntil != nil { self.model?.scheduleLimitWake() }
+            if record.pausedUntil != nil { self.model?.runPaused(record.id) }
             // The attempt joins the next run review of the bot it ran as; the handoff doesn't wait for one.
             if reviewed { self.model?.evaluateSubagentRun(record) }
             for (parent, outcome) in self.pendingFinishes where !self.children(of: parent).contains(where: { $0.phase.isActive }) {
