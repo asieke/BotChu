@@ -4,7 +4,7 @@ import Foundation
 /// what it points at, by a stable identity (an agent's bot ID, a project's `owner/name`), and where its
 /// label stands in the message's text. Outside a Project Area a mention starts nothing by itself: it
 /// tells the bot which agent or repository the owner means (`ReferenceContext`). In an area, an agent
-/// mentioned takes its own turn there (`CameoRouting`).
+/// the message starts with takes its own turn there (`CameoRouting`).
 public struct MessageReference: Codable, Hashable, Sendable {
     public enum Kind: String, Codable, Sendable {
         case agent, project
