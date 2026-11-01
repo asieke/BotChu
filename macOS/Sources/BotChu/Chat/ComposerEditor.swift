@@ -304,6 +304,15 @@ final class ComposerTextView: NSTextView {
         super.insertText(string, replacementRange: replacementRange)
     }
 
+    /// Text that Voice Control or another assistive app writes where the caret is is typed too, so
+    /// it opens `@` completion as typing does (the journeys write their messages this way).
+    override func setAccessibilitySelectedText(_ accessibilitySelectedText: String?) {
+        if typingAttributes[.botchuMention] != nil { typingAttributes[.botchuMention] = nil }
+        isTyping = true
+        defer { isTyping = false }
+        super.setAccessibilitySelectedText(accessibilitySelectedText)
+    }
+
     /// Copying keeps the plain text, readable anywhere, and adds the mentions in it for another message box.
     override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
         let wrote = super.writeSelection(to: pboard, types: types)

@@ -65,22 +65,37 @@ extension Journeys {
     /// starting and ending while the cameo's goes on (#424). Then the cameo's turn ends.
     private func cameoBesideTheAreasBot(in area: (bot: Bot, id: UUID)) throws {
         guard let other = fixture.bots.first(where: { $0.id != area.bot.id && $0.id != fixture.longBot.id }) else { return }
-        try show(area.bot)
-        if let tab = try app.window().first(identifier: "conversation-tab-\(area.id.uuidString)") {
-            _ = try press(tab, until: FrameMarks.chat(area.id))
-            app.settle()
-        }
+        // The area: still shown after Attach Project Area, or pressed in its bot's column.
+        let identifier = "conversation-tab-\(area.id.uuidString)"
+        if try app.window().first(identifier: identifier) == nil { _ = try? select(area.bot) }
+        guard let tab = try app.window().first(identifier: identifier) else { throw HarnessFailure("\(area.bot.name)'s column has no row for its area") }
+        _ = try press(tab)
+        app.settle()
         try awaitIdle(timeout: 60)
         let began = AppUnderTest.now
         var box = try composer()
         try box.set(kAXValueAttribute, to: "" as CFString)
         try box.type("@" + other.name.prefix(4))
         // The list's row for it, beside the list's "Agents" heading.
-        let row = try waitFor("@ completion's row for \(other.name)") {
-            try app.window().first { $0.role == kAXStaticTextRole as String && $0.text == "Agents" }?.parent?.children
-                .first { $0.label == other.name || $0.label.hasPrefix(other.name + ", ") }
+        func heading(_ element: AXElement) -> Bool {
+            (element.text == "Agents" || element.label == "Agents") && element.identifier != "sidebar-agents"
         }
-        try row.press()
+        let row: AXElement
+        do {
+            row = try waitFor("@ completion's row for \(other.name)") {
+                try app.window().first(where: heading)?.parent?.children
+                    .first { $0.label == other.name || $0.label.hasPrefix(other.name + ", ") }
+            }
+        } catch {
+            var lines: [String] = []
+            let window = try app.window()
+            print("journeys: the message box says \"\(try composer().text)\"; Agents heading: \(window.first(where: heading).map { "\($0)" } ?? "none")")
+            if let list = window.first(where: heading)?.parent { list.dump(maxDepth: 3, into: &lines) }
+            print(lines.prefix(40).joined(separator: "\n"))
+            throw error
+        }
+        // Choosing it closes the list, which accessibility can report as a failed press.
+        try? row.press()
         _ = try waitFor("\(other.name) chosen in the message box") { try composer().text.contains(other.name) ? try composer() : nil }
         box = try composer()
         try box.moveCaretToEnd()
