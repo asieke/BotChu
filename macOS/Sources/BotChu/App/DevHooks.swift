@@ -9,7 +9,7 @@ import BotChuCore
 ///   their own `defaults` domain (`local.BotChu.dev`), so a throwaway run never changes the real ones.
 /// - `BOTCHU_SNAPSHOT`: write a PNG of each window into this folder every second, and of the sidebar's
 ///   rows (`sidebar.png`), which the window's picture leaves out.
-/// - `BOTCHU_OPEN`: open `editor` (a new bot), `memory`, `soul`, or `settings` at launch;
+/// - `BOTCHU_OPEN`: open `editor` (a new bot), `memory`, `soul`, `settings` or ⌘K's `switcher` at launch;
 ///   `BOTCHU_SETTINGS=<page>` (`general`, `accounts`, `github`, `hosts`, `run-reviews`, `pets`,
 ///   `openrouter`, `telegram`, `remote-queue`) opens Settings on that page, else on the one shown last.
 /// - `BOTCHU_APPEARANCE`: use `light` or `dark` for an isolated visual review.
@@ -406,6 +406,7 @@ enum DevHooks {
         case "memory": if let id = model.selection { model.editDocument(.memory, for: id) }
         case "soul": if let id = model.selection { model.editDocument(.soul, for: id) }
         case "settings": model.openSettings(env["BOTCHU_SETTINGS"].flatMap(SettingsPage.init(rawValue:)))
+        case "switcher": model.switcherShown = true
         default: break
         }
         if dataDir != nil, let name = env["BOTCHU_SECTION"], let id = model.selection {
