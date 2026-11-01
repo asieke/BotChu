@@ -45,6 +45,8 @@ private func shown(_ items: ChunkedArray<ActivityItem>) -> [String] {
                 + "states \(group.calls.map { $0.toolState?.rawValue ?? "-" }) entries \(entries) files \(group.files) "
                 + "counts \(group.counts) location \(group.location) failures \(group.failures) failed \(group.failureCount) "
                 + "finished \(group.finished.timeIntervalSinceReferenceDate) summary \(group.summary)"
+        case .work(let work):
+            return "work \(work.id)"
         }
     }
 }
@@ -147,6 +149,7 @@ private struct Seeded: RandomNumberGenerator {
             case .message: "message"
             case .tool(let tool): tool.activity.intent.rawValue
             case .exploration: "explored"
+            case .work: "work"
             }
         }
         #expect(kinds == ["message", "explored", "edit", "command"])

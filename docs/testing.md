@@ -23,6 +23,7 @@ A docs-only pull request runs nothing else.
 | Composer, typing | `typing` (5), `subagent` (12) |
 | Sending, streaming, the turn loop | `send` (6), `typing` (5) |
 | Chat history, scrolling, tool-call groups | `scroll` (7), `expand` (8) |
+| An area's work rows | `relaunch` (13) |
 | Window and column layout | `resize` (10) |
 | Inbox, Settings | `inbox` (11) |
 | Sub-agents | `subagent` (12) |

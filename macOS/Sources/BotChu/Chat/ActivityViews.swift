@@ -378,6 +378,111 @@ struct ExplorationEntryRow: View {
     }
 }
 
+// MARK: Work
+
+/// A Project Area turn's work before its reply, as one row (#425): how long it worked and what it
+/// touched, opening to every message, call and group it holds, in order. While the turn runs, it
+/// shows what the bot is doing now and the time so far.
+struct TurnWorkRow: View, Equatable {
+    @Environment(TranscriptModel.self) private var transcript
+    let work: TurnWork
+    let bot: Bot
+    let kind: AgentKind
+    let startsBotTurn: Bool
+    let density: ChatDensity
+    /// The turn is still running and may add to it.
+    let live: Bool
+    let open: Bool
+    /// Runs no call accounts for that began during it.
+    let after: [SubagentRun]
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.work == b.work && a.bot == b.bot && a.kind == b.kind && a.startsBotTurn == b.startsBotTurn && a.density == b.density
+            && a.live == b.live && a.open == b.open && a.after == b.after
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            BotTurnRow(bot: bot, showsAvatar: startsBotTurn) {
+                TurnWorkHeader(work: work, live: live, open: open)
+            }
+            if open {
+                ForEach(Array(work.items.enumerated()), id: \.element.id) { index, item in
+                    member(item, live: live && index == work.items.count - 1)
+                }
+            }
+            ForEach(after) { run in
+                BotTurnRow(bot: bot, showsAvatar: false) { SubagentChatCard(run: run) }
+            }
+        }
+    }
+
+    /// An item it holds, as the chat shows it on its own; an opened group as its rows, one card.
+    @ViewBuilder private func member(_ item: ActivityItem, live: Bool) -> some View {
+        switch item {
+        case .exploration(let group) where !live && density != .raw && transcript.isOpen(group.id, default: false):
+            BotTurnRow(bot: bot, showsAvatar: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ExplorationHead(group: group, density: density)
+                    ForEach(Array(group.entries.enumerated()), id: \.element.id) { index, entry in
+                        ExplorationEntrySlice(entry: entry, calls: group.calls(of: entry), kind: kind, last: index == group.entries.count - 1)
+                    }
+                    ExplorationFoot(group: group)
+                }
+            }
+        default:
+            ActivityRow(item: item, bot: bot, kind: kind, startsBotTurn: false, density: density, live: live,
+                        open: transcript.isOpen(item.id, default: false), runs: [], after: [])
+        }
+    }
+}
+
+/// A work row's header: `Worked 2 min · 14 files · 3 commands`, or while the turn runs, a spinner,
+/// what it is doing and for how long. A click opens or folds it.
+struct TurnWorkHeader: View {
+    @Environment(TranscriptModel.self) private var transcript
+    let work: TurnWork
+    let live: Bool
+    let open: Bool
+
+    var body: some View {
+        Button { transcript.toggle(work.id, default: false) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+                    .frame(width: 10)
+                if live {
+                    ActivitySpinner(size: 13).foregroundStyle(Palette.violet).frame(width: 16)
+                    Text("Working").fontWeight(.semibold)
+                    Text(work.lastAction).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                } else {
+                    Image(systemName: "hammer").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).frame(width: 16)
+                    Text("Worked " + TurnWork.duration(work.finished.timeIntervalSince(work.started))).fontWeight(.semibold)
+                    if !work.summary.isEmpty {
+                        Text(work.summary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                    }
+                }
+                Spacer(minLength: 8)
+                if live {
+                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                        Text(BotStatus.formatElapsed(from: work.started, to: max(timeline.date, Date()))).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .font(.system(size: 13))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .activityCard()
+        .help(open ? "Fold the work" : "Show every step")
+        .accessibilityLabel(live ? "Working: \(work.lastAction)" : work.headline)
+    }
+}
+
 // MARK: Standalone calls
 
 /// A command that changes something or runs long: what ran, its exit status and time, and the

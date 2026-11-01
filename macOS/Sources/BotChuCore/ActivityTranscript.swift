@@ -446,17 +446,20 @@ public struct ToolCallItem: Equatable, Sendable, Identifiable {
     public var state: ChatMessage.ToolState { message.toolState ?? .done }
 }
 
-/// What the chat shows, in order: messages, standalone tool calls and exploration groups.
+/// What the chat shows, in order: messages, standalone tool calls and exploration groups; in a
+/// Project Area, a turn's work before its reply as one row (`WorkFolding`).
 public enum ActivityItem: Equatable, Sendable, Identifiable {
     case message(ChatMessage)
     case tool(ToolCallItem)
     case exploration(ExplorationGroup)
+    indirect case work(TurnWork)
 
     public var id: UUID {
         switch self {
         case .message(let message): message.id
         case .tool(let tool): tool.id
         case .exploration(let group): group.id
+        case .work(let work): work.id
         }
     }
 
@@ -465,6 +468,7 @@ public enum ActivityItem: Equatable, Sendable, Identifiable {
         case .message(let message): message.date
         case .tool(let tool): tool.message.date
         case .exploration(let group): group.started
+        case .work(let work): work.started
         }
     }
 
@@ -472,7 +476,7 @@ public enum ActivityItem: Equatable, Sendable, Identifiable {
     public var isBotTurn: Bool {
         switch self {
         case .message(let message): message.role == .assistant
-        case .tool, .exploration: true
+        case .tool, .exploration, .work: true
         }
     }
 
@@ -482,6 +486,7 @@ public enum ActivityItem: Equatable, Sendable, Identifiable {
         case .message(let message): message.speakerBotID
         case .tool(let tool): tool.message.speakerBotID
         case .exploration(let group): group.calls.first?.speakerBotID
+        case .work(let work): work.items.first?.speaker
         }
     }
 
@@ -497,6 +502,7 @@ public enum ActivityItem: Equatable, Sendable, Identifiable {
         case .message: true
         case .tool(let tool): tool.state != .running
         case .exploration(let group): !group.running
+        case .work(let work): !work.running
         }
     }
 
@@ -518,6 +524,13 @@ public enum ActivityItem: Equatable, Sendable, Identifiable {
         case .exploration(let group):
             for (offset, call) in group.calls.enumerated() where start + offset >= messages.count || messages[start + offset] != call {
                 return offset
+            }
+            return nil
+        case .work(let work):
+            var offset = 0
+            for item in work.items {
+                if let mismatch = item.firstMismatch(in: messages, at: start + offset) { return offset + mismatch }
+                offset += item.messageCount
             }
             return nil
         }
@@ -802,7 +815,7 @@ public struct ActivityTranscript: Sendable {
             let activity = describe(message, keep: true, &work)
             guard !activity.intent.isExploration else { return false }
             items[item] = .tool(ToolCallItem(message: message, activity: activity))
-        case .exploration:
+        case .exploration, .work:
             return false
         }
         work.processed += 1
@@ -991,8 +1004,11 @@ public struct ActivityTranscript: Sendable {
 
 extension ActivityItem {
     var messageCount: Int {
-        if case .exploration(let group) = self { return group.calls.count }
-        return 1
+        switch self {
+        case .exploration(let group): group.calls.count
+        case .work(let work): work.items.reduce(0) { $0 + $1.messageCount }
+        case .message, .tool: 1
+        }
     }
 }
 

@@ -343,6 +343,7 @@ private func describe(_ message: ChatMessage, root: String? = "/work/BotChu") ->
             case .message(let message): message.role.rawValue
             case .tool(let tool): tool.activity.intent.rawValue
             case .exploration(let group): "explored \(group.calls.count)"
+            case .work: "work"
             }
         }
         #expect(kinds == ["user", "assistant", "explored 3", "command", "explored 1", "edit", "explored 1", "assistant",

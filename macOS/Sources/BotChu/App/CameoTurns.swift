@@ -7,10 +7,6 @@ import BotChuCore
 /// (`SubagentRuntime.startCameo`), on that bot's settings and session slot, whose reply goes into
 /// the conversation as that bot's once it ends. Home is unchanged.
 extension AppModel {
-    /// The bot taking a cameo turn in the conversation's own turn now: none since #424, where cameo
-    /// turns run beside it, each with a card of its own.
-    func cameoSpeaker(of target: ChatTarget) -> Bot? { nil }
-
     /// The bots that can take a turn in an area: those running a local CLI.
     var areaTurnBots: Set<UUID> { Set(bots.filter { !$0.isRemoteQueue }.map(\.id)) }
 
