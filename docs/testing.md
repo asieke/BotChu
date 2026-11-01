@@ -12,6 +12,7 @@ keep working? It trades coverage for speed and signal on purpose (#323).
 | … that changes views, `AppModel`, streaming or persistence | also `scripts/test.sh --journeys <names>` for the journeys below that the change reaches, with the latency report it ends with in `## Testing` | a few seconds to 2.5 minutes |
 | After the last pull request of a batch merges | the full `scripts/test.sh` once on `origin/main`; a regression is fixed in a follow-up pull request and the suite runs again until it passes | under 5 minutes on a warm build tree |
 | Deploy (`scripts/deploy.sh`) | the full suite, unless that tree already passed it | |
+| Launch, migration, the areas column or the Inbox, on the real shape of the data | also `scripts/test.sh --journeys-replica`: journeys 1, 3, 4, 9, 11 and 13 on a temporary copy of the replica `scripts/replica.sh refresh` keeps; the full suite runs it, `--fast` doesn't | a few minutes |
 
 A docs-only pull request runs nothing else.
 
@@ -39,6 +40,7 @@ A docs-only pull request runs nothing else.
 | The Release Core subset (`projectLoading`, `RunEvaluationTests`, Core `SensitiveInputTests`): Swift 6.4's task-group optimizer bug (#93208) and the secure input check that failed only optimized (#314) | ≤ 15 s |
 | The kept `BotChuRenderingTests`, and their secure input tests again optimized, one gated run | ≤ 30 s |
 | The 13 journeys on the release app, one gated run, then the latency report | ≤ 150 s |
+| The replica journeys (`replica:` steps), one gated run, then their own latency report; without a replica they print "no replica" and pass | report only |
 
 A full pass is recorded for its Git tree (`.git/test-passes`), shared across worktrees and reused by
 deploy. Deploy's latency report (`scripts/deploy-report.sh`) uses the journeys the full suite ran on
@@ -59,6 +61,22 @@ perf issue is filed, until a fix and a new baseline bring it back. To rebaseline
 `BOTCHU_JOURNEYS_RECORD=1 scripts/test.sh --journeys <names>` on a quiet Mac (1-minute load under
 10) and commit the new `baseline.json` in a pull request that says why the times moved. Never
 overwrite another journey's numbers.
+
+## The replica
+
+`scripts/replica.sh refresh` copies BotChu's own data, never a CLI's login or a Keychain item, into
+`~/Library/Application Support/BotChu Replica` (#422): the index, the Inbox state and each bot's
+`.botchu/`, with every account on the journeys' fake CLI, token and key fields dropped, jobs
+disabled and repository paths pointing at empty read-only folders. It runs with writes to the live
+folders denied. Refresh it only when asked, so runs stay comparable; `status` gives its date and
+totals. The harness copies it into its own temporary folder, refuses a copy that names a folder in
+the home folder, puts stand-ins that fail for every agent CLI, `gh` and `ssh` first on the app's
+login PATH, watches for any real one starting under the app, and deletes the copy at the end. In
+the copy only, the 12 newest deliveries are open again when nearly all are Done, for journey 11. Its
+output and reports give totals only, never a bot's name or a message. Its steps are report only
+until three runs give them a baseline (`BOTCHU_JOURNEYS_RECORD=1 scripts/test.sh
+--journeys-replica`); a refresh that changes the totals records it again, in a pull request that
+says so.
 
 ## Where a new test goes
 
