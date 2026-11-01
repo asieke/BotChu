@@ -24,7 +24,7 @@ extension AppModel {
     }
 
     /// The browser that opens web links, rather than whatever app opens `.html` files here (an editor, say).
-    private static func openInBrowser(_ page: URL) {
+    static func openInBrowser(_ page: URL) {
         let workspace = NSWorkspace.shared
         if let link = URL(string: "http://localhost"), let browser = workspace.urlForApplication(toOpen: link) {
             workspace.open([page], withApplicationAt: browser, configuration: NSWorkspace.OpenConfiguration())

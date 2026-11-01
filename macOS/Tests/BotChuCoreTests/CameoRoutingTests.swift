@@ -19,21 +19,52 @@ import Testing
         return .agent(BotRosterEntry(bot: bot), at: location)
     }
 
-    @Test func theBotsChosenWithAtAnswerInMentionOrderAndTheOwnerOnlyWhenChosenOrNoneIs() {
-        let eligible: Set<UUID> = [fox.id, tenX.id, duck.id]
-        let text = "@10x Engineer Bot solve #86"
+    let analyst = Bot(name: "Data Analyst", emoji: "📊", accountID: "claude-work", model: "opus", workspace: "/Users/a/BOTS/analyst")
+    let pixel = Bot(name: "Pixel Designer", emoji: "🎨", accountID: "claude-personal", model: "opus", workspace: "/Users/a/BOTS/pixel")
+    let research = Bot(name: "Research Assistant", emoji: "🔎", accountID: "codex-work", model: "gpt-6-luna",
+                       workspace: "/Users/a/BOTS/research")
+
+    func answerers(_ text: String, mentioning bots: [Bot], owner: Bot? = nil) -> [UUID] {
+        let eligible = Set([fox, tenX, duck, analyst, pixel, research].map(\.id))
+        return CameoRouting.answerers(of: bots.map { reference($0, in: text) }, in: text, owner: (owner ?? fox).id, eligible: eligible)
+    }
+
+    @Test func theBotsTheMessageStartsByAddressingAnswerInOrderAndTheOwnerOnlyWhenAddressedOrNoneIs() {
         // Fox's area: 10x answers, Fox doesn't.
-        #expect(CameoRouting.answerers(of: [reference(tenX, in: text)], owner: fox.id, eligible: eligible) == [tenX.id])
-        let both = "@QA Duck then @10x Engineer Bot, and @QA Duck again"
-        #expect(CameoRouting.answerers(of: [reference(tenX, in: both), reference(duck, in: both)], owner: fox.id, eligible: eligible)
-                == [duck.id, tenX.id])
-        let withOwner = "@10x Engineer Bot and @Product Fox"
-        #expect(CameoRouting.answerers(of: [reference(fox, in: withOwner), reference(tenX, in: withOwner)], owner: fox.id,
-                                       eligible: eligible) == [tenX.id, fox.id])
-        #expect(CameoRouting.answerers(of: [], owner: fox.id, eligible: eligible) == [fox.id])
-        // Only bots that can take a turn (a remote queue bot, a deleted one, a project) choose anyone.
-        let project = MessageReference(kind: .project, target: "asieke/BotChu", label: "#asieke/BotChu")
-        #expect(CameoRouting.answerers(of: [reference(qa, in: "@QA"), project], owner: fox.id, eligible: eligible) == [fox.id])
+        #expect(answerers("@10x Engineer Bot solve #86", mentioning: [tenX]) == [tenX.id])
+        #expect(answerers("@Data Analyst what do you think?", mentioning: [analyst]) == [analyst.id])
+        // Several at the start, with spaces or commas between, answer in the order they stand, each once.
+        #expect(answerers("@Pixel Designer @Research Assistant, compare these", mentioning: [research, pixel])
+                == [pixel.id, research.id])
+        #expect(answerers("@QA Duck, @10x Engineer Bot,\n@QA Duck again", mentioning: [tenX, duck]) == [duck.id, tenX.id])
+        #expect(answerers("@10x Engineer Bot and @Product Fox", mentioning: [fox, tenX]) == [tenX.id])
+        #expect(answerers("@10x Engineer Bot @Product Fox", mentioning: [fox, tenX]) == [tenX.id, fox.id])
+        // The area's own bot addressed in its own area answers, as anyone's would.
+        #expect(answerers("@Product Fox triage this", mentioning: [fox]) == [fox.id])
+        #expect(CameoRouting.answerers(of: [], in: "Hi", owner: fox.id, eligible: [tenX.id]) == [fox.id])
+    }
+
+    @Test func aMentionLaterInTheMessageIsAReferenceTheAreasOwnBotAnswers() {
+        #expect(answerers("Please delegate @10x Engineer Bot to solve 422", mentioning: [tenX]) == [fox.id])
+        let many = "Coordinate: @10x Engineer Bot builds it, @QA Duck verifies, @Pixel Designer mocks it up"
+        #expect(answerers(many, mentioning: [tenX, duck, pixel]) == [fox.id])
+        // Only the leading run counts: a mention after other words starts nothing.
+        #expect(answerers("@Data Analyst, then ask @QA Duck", mentioning: [analyst, duck]) == [analyst.id])
+        // A project or other text before the mention ends the run.
+        let text = "#asieke/BotChu @QA Duck look"
+        let project = MessageReference(kind: .project, target: "asieke/BotChu", label: "#asieke/BotChu", location: 0)
+        #expect(CameoRouting.answerers(of: [project, reference(duck, in: text)], in: text, owner: fox.id, eligible: [duck.id]) == [fox.id])
+        // A reference that doesn't stand where it says addresses no one.
+        let moved = MessageReference.agent(BotRosterEntry(bot: duck), at: 3)
+        #expect(CameoRouting.answerers(of: [moved], in: "@QA Duck hi", owner: fox.id, eligible: [duck.id]) == [fox.id])
+    }
+
+    @Test func onlyBotsThatCanTakeATurnAreChosen() {
+        // A remote queue bot, a deleted one: the area's own bot answers.
+        #expect(CameoRouting.answerers(of: [reference(qa, in: "@QA")], in: "@QA", owner: fox.id, eligible: [tenX.id]) == [fox.id])
+        let text = "@QA @10x Engineer Bot go"
+        #expect(CameoRouting.answerers(of: [reference(qa, in: text), reference(tenX, in: text)], in: text, owner: fox.id,
+                                       eligible: [tenX.id]) == [tenX.id])
     }
 
     @Test func aReplyGivesEachBotItMentionsOneTurnOneHopOnUntilHopTwo() {
@@ -240,6 +271,7 @@ import Testing
         // The area's own bot hears that others take turns too.
         let own = BotContext.taskPreamble(bot: fox, task: area, memory: "", sharedMemory: "", history: [])
         #expect(own.contains("`@<bot name>` in your reply gives that bot a turn here after yours"))
+        #expect(own.contains("Your owner's message is answered by the bots it starts with `@` mentions of, or else by the area's own bot"))
         #expect(CameoRouting.prompt(mentionedBy: "QA Duck").hasPrefix("QA Duck mentioned you in this conversation"))
         #expect(CameoRouting.prompt(mentionedBy: nil).hasPrefix("Your owner mentioned you"))
     }

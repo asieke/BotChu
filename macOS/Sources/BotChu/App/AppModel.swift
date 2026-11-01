@@ -273,6 +273,11 @@ final class AppModel {
     @ObservationIgnored private var usageCaptures: [ChatTarget: (capture: UsageLedger.Capture, home: BotHome)] = [:]
     /// The heartbeat each conversation waits to send (`Heartbeats.swift`), dropped by any message to it.
     @ObservationIgnored var pendingHeartbeats: [ChatTarget: PendingHeartbeat] = [:]
+    /// The conversations whose turn paused on a usage limit (#442), saved in `limit-pauses.json`.
+    @ObservationIgnored var limitPauses = LimitPauseBook()
+    /// The paused runs BotChu has tried to resume since launch, so one that can't is tried once.
+    @ObservationIgnored var limitTried: Set<UUID> = []
+    @ObservationIgnored var limitWakeToken: UUID?
     /// What each running CLI that takes input mid-turn has been given and has taken back.
     @ObservationIgnored private var inputs: [ChatTarget: (kind: AgentKind, ledger: InputLedger)] = [:]
     /// BotChu is quitting: the turns it stops weren't stopped by the owner, so queues stay unpaused.
@@ -367,6 +372,7 @@ final class AppModel {
                                          file: self.store.root.appendingPathComponent("usage.json"))
         self.openRouterKey = openRouterKey
         connectorBoard = ConnectorBoard(file: self.store.root.appendingPathComponent("connectors.json"))
+        limitPauses = LimitPauseBook.load(self.store.root.appendingPathComponent(Self.limitPausesFile))
         tools = ToolsBoard(folder: self.store.root)
         self.store.migrateIfNeeded()
         do {
@@ -1520,8 +1526,10 @@ final class AppModel {
               heartbeat: Int? = nil, answeredBy speaker: UUID? = nil, accepted: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
         guard !storageMovePending else { accepted?(false); return false }
         let (text, references) = MessageReference.trimming(text, references: references)
-        // Anything sent to the conversation answers the heartbeat it waited to send.
+        // Anything sent to the conversation answers the heartbeat it waited to send, and ends a
+        // pause on a usage limit: its own turn pauses again if the limit still holds.
         pendingHeartbeats[target] = nil
+        if heartbeat == nil { endLimitPause(target) }
         if bot(target.botID)?.isRemoteQueue == true {
             guard visible, target.taskID == nil, !text.isEmpty || !files.isEmpty, images.isEmpty,
                   files.count <= FileAttachment.maximumCount else { return false }
@@ -2175,7 +2183,9 @@ final class AppModel {
                                 }
                                 self.scheduleHeartbeat(after: Heartbeat.Turn(reply: turn.last(where: { $0.role == .assistant })?.text, pulse: pulse,
                                                                              stopped: stopped, failed: failure != nil,
-                                                                             endedBackgroundTasks: run.endedBackgroundTasks), in: target)
+                                                                             limitResetsAt: failure.flatMap { UsageLimit.resetDate(in: $0) },
+                                                                             endedBackgroundTasks: run.endedBackgroundTasks),
+                                                       in: target, error: failure)
                                 // Home's turns and tasks' join the work their bot's next run review covers.
                                 self.reviewTurn(target, thread: (turnPrompt.map { [$0] } ?? []) + turn, turnStart: turnPrompt == nil ? 0 : 1, accountID: account.id)
                                 // In an area, the bots the reply mentions take their turns next (#406).

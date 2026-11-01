@@ -392,8 +392,9 @@ public enum BotContext {
     }
 
     /// What every bot taking turns in an area hears about the others (#399 decision 8).
-    static let areaMentionRule = "Other bots may take turns in this conversation too, each shown by name. `@<bot name>` in "
-        + "your reply gives that bot a turn here after yours, so mention a bot that way only when you want it to take one."
+    static let areaMentionRule = "Other bots may take turns in this conversation too, each shown by name. Your owner's message "
+        + "is answered by the bots it starts with `@` mentions of, or else by the area's own bot, and a bot it mentions later is "
+        + "only named, for whoever answers to act on. `@<bot name>` in your reply gives that bot a turn here after yours, so mention a bot that way only when you want it to take one."
 
     /// How a bot works in an area so the conversation reads as a chat (#425): BotChu folds a turn's
     /// tool calls into one row, so announcing them adds a line for nothing, and a sub-agent run shows
