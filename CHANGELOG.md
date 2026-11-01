@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-11-01
+- Activity spinners in sub-agent rows and chat cards animate in an AppKit layer at a fixed size instead of SwiftUI's repeating symbol effect, so they no longer slow typing and switching while sub-agents run; same look, tint and Reduce Motion (#436)
 - Attach Project Area opens as a native sheet whose form is made ahead while the Mac is idle and that takes the keyboard just after its first frame, from about 47 ms to about 20 ms in journey 9; journey 9 also checks the search takes the keyboard and Cancel and Escape give it back to the message box (#438)
 - `scripts/replica.sh refresh` keeps a replica of the owner's bots and data (accounts on the fake CLI, no tokens, read-only repository stubs), and `scripts/test.sh --journeys-replica`, run by the full suite and so by deploy, runs launch, switching bots, areas and tasks, attach/hide/show, Inbox Done and relaunch on a copy of it, report only until baselined; the journeys' focus check asks the app itself when system-wide accessibility can't answer, and names the app that took focus (#422)
 - ⌘K opens a switcher over the window that searches agents, specialists and projects and opens the one chosen; New Session moves to ⇧⌘K (#428)

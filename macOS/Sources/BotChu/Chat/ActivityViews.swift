@@ -28,16 +28,77 @@ enum ActivityStyle {
 
 /// Work in progress, drawn as an animated symbol: cheaper than a progress indicator when many
 /// cards run at once (seventeen sub-agents), and still under Reduce Motion.
-struct ActivitySpinner: View {
+///
+/// The symbol animates in an AppKit image view's layer, at a fixed size: SwiftUI's own repeating
+/// symbol effect updated the view graph every frame, and a spinner beside a sub-agent made typing
+/// in the message box up to eight times slower (#436). `tint` stands in for `foregroundStyle`,
+/// which an AppKit view can't read; nil is the label color.
+struct ActivitySpinner: NSViewRepresentable {
     var size: CGFloat = 12
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var tint: Color?
 
-    var body: some View {
-        Image(systemName: "rays")
-            .font(.system(size: size, weight: .semibold))
-            .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating, isActive: !reduceMotion)
-            .accessibilityLabel("Working")
+    func makeNSView(context: Context) -> ActivitySpinnerView { ActivitySpinnerView() }
+
+    func updateNSView(_ view: ActivitySpinnerView, context: Context) {
+        view.configure(size: size, tint: tint.map { NSColor($0) } ?? .labelColor,
+                       animates: !context.environment.accessibilityReduceMotion)
     }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: ActivitySpinnerView, context: Context) -> CGSize? {
+        nsView.intrinsicContentSize
+    }
+}
+
+/// The spinner's symbol, which ignores clicks so that a button around it still gets them.
+final class ActivitySpinnerView: NSImageView {
+    private var size: CGFloat = 0
+    private(set) var spinning = false
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        imageScaling = .scaleNone
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentHuggingPriority(.required, for: .vertical)
+        setAccessibilityLabel("Working")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(size: CGFloat, tint: NSColor, animates: Bool) {
+        if size != self.size {
+            self.size = size
+            image = NSImage(systemSymbolName: "rays", accessibilityDescription: "Working")?
+                .withSymbolConfiguration(.init(pointSize: size, weight: .semibold))
+            invalidateIntrinsicContentSize()
+        }
+        if contentTintColor != tint { contentTintColor = tint }
+        if animates != spinning {
+            spinning = animates
+            applyEffect()
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // An effect added before the view is in a window doesn't run.
+        applyEffect()
+    }
+
+    private func applyEffect() {
+        removeAllSymbolEffects(options: .default, animated: false)
+        if spinning, window != nil {
+            addSymbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating, animated: true)
+        }
+    }
+
+    override var intrinsicContentSize: NSSize { image?.size ?? NSSize(width: size, height: size) }
+
+    /// The symbol's baseline insets would make SwiftUI place it taller than its own `Image`.
+    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// The quiet capsule button of a card ("Open").
@@ -167,7 +228,7 @@ struct ExplorationHeader: View {
         } label: {
             HStack(spacing: 8) {
                 if live {
-                    ActivitySpinner(size: 13).foregroundStyle(Palette.violet).frame(width: 16)
+                    ActivitySpinner(size: 13, tint: Palette.violet).frame(width: 16)
                 } else {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
@@ -454,7 +515,7 @@ struct TurnWorkHeader: View {
                     .rotationEffect(.degrees(open ? 90 : 0))
                     .frame(width: 10)
                 if live {
-                    ActivitySpinner(size: 13).foregroundStyle(Palette.violet).frame(width: 16)
+                    ActivitySpinner(size: 13, tint: Palette.violet).frame(width: 16)
                     Text("Working").fontWeight(.semibold)
                     Text(work.lastAction).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                 } else {
@@ -553,7 +614,7 @@ struct CallStatus: View {
         HStack(spacing: 6) {
             switch state {
             case .running:
-                ActivitySpinner()
+                ActivitySpinner(tint: Color(nsColor: .secondaryLabelColor))
                 TimelineView(.periodic(from: .now, by: 1)) { timeline in
                     Text(BotStatus.formatElapsed(from: message.date, to: timeline.date)).monospacedDigit()
                 }
@@ -743,7 +804,7 @@ struct NativeSubagentCard: View, Equatable {
                     }
                     Text(subagent.task).font(.system(size: 13)).lineLimit(2)
                     HStack(spacing: 6) {
-                        if state == .running { ActivitySpinner() }
+                        if state == .running { ActivitySpinner(tint: Color(nsColor: .secondaryLabelColor)) }
                         CallStatusText(message: item.message, state: state)
                     }
                     .font(.system(size: 12)).foregroundStyle(state == .failed ? AnyShapeStyle(ActivityStyle.failure) : AnyShapeStyle(.secondary))
