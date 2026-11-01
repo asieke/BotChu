@@ -101,7 +101,7 @@ struct NativeWindowColumns: NSViewControllerRepresentable {
 
     /// The sidebar's narrowest width while it shows, beside the detail's published minimum.
     func minimumWidth() -> Double {
-        let detail = Double(detailItem.viewController.view.fittingSize.width)
+        let detail = (detailItem.viewController as? NativeColumnSizing)?.minimumWidth ?? 0
         guard !sidebarItem.isCollapsed else { return detail }
         return detail + Double(sidebarItem.minimumThickness + splitView.dividerThickness)
     }
