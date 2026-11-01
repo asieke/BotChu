@@ -59,6 +59,70 @@ import Testing
                 == [AreaTurn(botID: fox.id, hop: 1, mentionedBy: tenX.id)])
     }
 
+    @Test func theOwnersBotAnswersInItsTurnAndEveryOtherAnswererStartsACameoAtOnce() {
+        let message = UUID()
+        // A plain message: Fox's own turn, no cameo.
+        let plain = CameoRouting.turns(answering: message, by: [fox.id], owner: fox.id)
+        #expect(plain.owner && plain.cameos.isEmpty)
+        // Two bots mentioned: both cameos start now, at hop 0, for that message; Fox's turn stays free.
+        let two = CameoRouting.turns(answering: message, by: [duck.id, tenX.id], owner: fox.id)
+        #expect(!two.owner)
+        #expect(two.cameos == [AreaTurn(botID: duck.id, hop: 0, messageID: message), AreaTurn(botID: tenX.id, hop: 0, messageID: message)])
+        // Fox and 10x: Fox answers in its turn while 10x's cameo runs beside it.
+        let mixed = CameoRouting.turns(answering: message, by: [tenX.id, fox.id], owner: fox.id)
+        #expect(mixed.owner && mixed.cameos.map(\.botID) == [tenX.id])
+    }
+
+    @Test func cameoTurnsRunAtOnceEachBotOneAtATimeAndAStoppedOneCallsOffItsWaitingTurns() {
+        var room = AreaRoom()
+        let (duckRun, tenXRun) = (UUID(), UUID())
+        // Two bots start at once.
+        let duckStarts = room.admit(AreaTurn(botID: duck.id, hop: 0), run: duckRun)
+        let tenXStarts = room.admit(AreaTurn(botID: tenX.id, hop: 0), run: tenXRun)
+        #expect(duckStarts && tenXStarts)
+        #expect(room.running == [duck.id: duckRun, tenX.id: tenXRun] && room.busy == [duck.id, tenX.id])
+        // A second turn for QA Duck waits for its running one: it has one session slot here.
+        let again = AreaTurn(botID: duck.id, hop: 1, mentionedBy: tenX.id)
+        let againStarts = room.admit(again, run: UUID())
+        #expect(!againStarts && room.waiting == [again])
+        // 10x ending changes nothing for QA Duck; a run the room didn't start (the owner's Resume) changes nothing.
+        let afterTenX = room.end(run: tenXRun, of: tenX.id, continues: true)
+        let afterResumed = room.end(run: UUID(), of: duck.id, continues: true)
+        #expect(afterTenX == nil && afterResumed == nil && room.running[duck.id] == duckRun)
+        // QA Duck's turn ends: its waiting turn comes next, and starts once admitted.
+        let afterDuck = room.end(run: duckRun, of: duck.id, continues: true)
+        #expect(afterDuck == again)
+        let next = UUID()
+        let nextStarts = room.admit(again, run: next)
+        #expect(nextStarts && room.waiting.isEmpty)
+        // Stopped, it calls off its bot's turns still waiting.
+        let waits = !room.admit(AreaTurn(botID: duck.id, hop: 0), run: UUID())
+        let afterStop = room.end(run: next, of: duck.id, continues: false)
+        #expect(waits && afterStop == nil && room.isEmpty)
+    }
+
+    @Test @MainActor func aCameoTurnAndWhatItDelegatedAreLeftByTheAreasStopAndDontKeepItsTurnWaiting() {
+        let hostChild = SubagentRun(rootBotID: fox.id, depth: 1, targetBot: tenX, title: "Fox's child", brief: "Work",
+                                    workingDirectory: "/w", phase: .running)
+        var cameo = SubagentRun(rootBotID: fox.id, depth: 1, targetBot: duck, title: "@QA Duck", brief: "Verify",
+                                workingDirectory: "/w", phase: .running)
+        cameo.cameo = AreaTurn(botID: duck.id, hop: 0, messageID: UUID())
+        let cameoChild = SubagentRun(rootBotID: fox.id, parentSubagentID: cameo.id, depth: 2, targetBot: tenX, title: "Duck's child",
+                                     brief: "Work", workingDirectory: "/w", phase: .running)
+        let nested = SubagentRun(rootBotID: fox.id, parentSubagentID: cameoChild.id, depth: 3, targetBot: qa, title: "Nested",
+                                 brief: "Work", workingDirectory: "/w", phase: .running)
+        let runs = [hostChild, cameo, cameoChild, nested]
+        #expect(CameoRouting.cameoTrees(in: runs) == [cameo.id, cameoChild.id, nested.id])
+        #expect(CameoRouting.cameoTrees(in: [hostChild]).isEmpty)
+        var stopped: [UUID] = []
+        SubagentStopTree.stopRoot(runs) { id, _ in stopped.append(id) }
+        #expect(stopped == [hostChild.id])
+        // Saved and read again, a run keeps its turn; records saved before have none.
+        let decoded = try? JSONDecoder().decode(SubagentRun.self, from: JSONEncoder().encode(cameo))
+        #expect(decoded?.cameo == cameo.cameo)
+        #expect((try? JSONDecoder().decode(SubagentRun.self, from: JSONEncoder().encode(hostChild)))?.cameo == nil)
+    }
+
     @Test func mentionsInARepliesTextMatchTheLongestNameAtAWordsEndOutsideCode() {
         let found = { (text: String) in self.directory.agentsMentioned(in: text).map(\.name) }
         #expect(found("@QA Duck, look") == ["QA Duck"])

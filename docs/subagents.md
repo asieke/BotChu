@@ -13,15 +13,19 @@ A remote queue bot, which runs on its own computer, is neither: a turn messages 
 ([Remote queue: messages from other bots](remote-queue.md#messages-from-other-bots)). The roster
 marks remote bots (`"remote": true`); `botchu-subagent list` leaves them out.
 
-In a Project Area (not Home), an `@bot` mention is a turn (#406): the bots the owner's message
-chooses from `@` completion answer it in that order, in the area's transcript, each with its own
-identity, account, memory and CLI session (its session slot is kept on the area, `cameos`), in
-the area's checkout, which it leaves as it is; the area's bot answers only when chosen or when no
-bot is. A bot's reply that mentions `@<name or slug>` gives each bot it mentions one turn after it,
-one hop on (the owner's message is hop 0), up to hop 2, and none to a bot already running or
-waiting there. Turns stay one at a time; Stop or a failure calls off those waiting. A cameo
-turn's rows show its bot's avatar and name, its `<remember>` notes go to its own memory, and its
-Inbox deliveries credit it.
+In a Project Area (not Home), an `@bot` mention is a turn (#406, #424): the bots the owner's
+message chooses from `@` completion answer it at once, each with its own identity, account,
+memory and CLI session (its session slot is kept on the area, `cameos`), in the area's checkout,
+which it leaves as it is; the area's bot answers only when chosen or when no bot is. Another bot's
+cameo turn runs beside the area's own bot's as a run of the area's conversation, with a card in
+its chat and its Sub-agents tab, so the area's bot goes on answering the owner meanwhile; when it
+ends, its reply goes into the transcript as that bot's. Each bot runs one turn at a time in an
+area, so a second turn for it waits for the first. A bot's reply that mentions `@<name or slug>`
+gives each bot it mentions one turn, one hop on (the owner's message is hop 0), up to hop 2, and
+none to a bot already running or waiting there (the area's bot's turn waits for its running one).
+Stop in the area stops its own bot's turn; a cameo's card has its own Stop, which also calls off
+that bot's turns waiting. A cameo's reply shows its bot's avatar and name, its `<remember>` notes
+go to its own memory, and its Inbox deliveries credit it.
 
 BotChu supplies both commands to every Home, task and delegated turn. They work through shell
 tools on all five CLI families. Python 3 is required on the execution machine.

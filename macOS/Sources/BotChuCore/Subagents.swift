@@ -65,6 +65,9 @@ public struct SubagentRun: Identifiable, Codable, Equatable, Sendable, RunSettin
     public var branch: String?
     public var pullRequest: Int?
     public var pullRequestState: PullRequestState?
+    /// The area turn it is, for a bot's cameo turn in a Project Area (#424), whose reply goes into
+    /// the area's conversation as that bot's; nil for a delegated run, and in records saved before.
+    public var cameo: AreaTurn?
 
     /// A stopped run BotChu recorded an interruption for: its row says Interrupted.
     public var isInterrupted: Bool { phase == .stopped && interruption != nil }

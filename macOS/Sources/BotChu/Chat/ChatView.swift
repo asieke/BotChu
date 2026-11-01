@@ -110,7 +110,8 @@ private struct ChatContent: View {
                                 .onAppear { if let id = target.taskID { FrameTimings.mark(FrameMarks.chat(id)) } }
                         }
                         Color.clear.frame(height: plan.below)
-                        let turnBot = model.cameoSpeaker(of: target) ?? bot
+                        // The conversation's own bot: cameo turns run beside it, on cards of their own (#424).
+                        let turnBot = bot
                         if model.runStates[target]?.preparing == true {
                             PreparingRow(bot: turnBot, place: task.flatMap { $0.isRemote ? model.machineName($0.hostID, fallback: $0.hostName) : nil })
                                 .padding(.bottom, 12)

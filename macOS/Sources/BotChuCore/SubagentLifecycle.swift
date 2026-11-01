@@ -14,8 +14,11 @@ import Foundation
         stopRun(id)
     }
 
+    /// Stop in a conversation: its runs, but not another bot's cameo turns there and the runs
+    /// beneath them, which have Stop of their own (#424).
     public static func stopRoot(_ runs: [SubagentRun], stop: (UUID, SubagentInterruption.Cause) -> Void) {
-        for run in runs where run.phase.isActive { stop(run.id, run.parentSubagentID == nil ? .owner : .parentStopped) }
+        let cameos = CameoRouting.cameoTrees(in: runs)
+        for run in runs where run.phase.isActive && !cameos.contains(run.id) { stop(run.id, run.parentSubagentID == nil ? .owner : .parentStopped) }
     }
 }
 

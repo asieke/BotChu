@@ -142,7 +142,7 @@ final class AppModel {
     /// How many notes each bot asked to remember that BotChu couldn't save yet (`MemoryWriter`).
     var unsavedMemory: [UUID: Int] = [:]
     /// What became of the notes each conversation asked to remember, for its next turn.
-    @ObservationIgnored private var memoryReports: [ChatTarget: [String]] = [:]
+    @ObservationIgnored var memoryReports: [ChatTarget: [String]] = [:]
     /// Daily reviews of each bot's work (`Evaluations.swift`), the records the status sidebar
     /// shows, by id, and the work waiting for each bot's next review.
     @ObservationIgnored var evaluator: RunEvaluator!
@@ -279,12 +279,16 @@ final class AppModel {
     @ObservationIgnored private var messageStartWatchers: [ChatTarget: [(id: UUID, report: (String?) -> Void)]] = [:]
     /// Messages being posted into areas (`postToArea`), so the same request asked twice at once posts once.
     @ObservationIgnored var postingMessages: Set<UUID> = []
-    /// In each Project Area, the bots' turns waiting to start after the running one, in order (#406).
+    /// In each Project Area, its own bot's turns that a reply's mention gave it, waiting for the
+    /// conversation's turn, in order (#406).
     @ObservationIgnored var areaTurns: [ChatTarget: [AreaTurn]] = [:]
-    /// In each Project Area, whose turn is starting or running (`CameoTurns.swift`).
+    /// In each Project Area, the turn of its own bot starting or running (`CameoTurns.swift`).
     @ObservationIgnored var areaSpeakers: [ChatTarget: AreaSpeaker] = [:]
-    /// The bot of each area's cameo turn starting or running, which the chat shows working.
-    var cameoTurns: [ChatTarget: UUID] = [:]
+    /// In each Project Area, other bots' cameo turns running beside its own bot's, and waiting (#424).
+    @ObservationIgnored var areaRooms: [ChatTarget: AreaRoom] = [:]
+    /// The context revision each cameo bot's session in an area was last told, by
+    /// `cameoMemoryKey`, so a resumed one hears it again only when it changed.
+    @ObservationIgnored var cameoContexts: [ChatTarget: UUID] = [:]
     /// Bots whose dispatch requests are being started.
     @ObservationIgnored private var dispatching: Set<UUID> = []
     /// Worktrees being made, by task: one at a time, so a message sent meanwhile waits for it.
@@ -492,7 +496,7 @@ final class AppModel {
     func thread(_ target: ChatTarget) -> [ChatMessage] { conversation(target).messages }
     /// Whether the conversation is the one in the window now.
     func isShown(_ target: ChatTarget) -> Bool { visibleBotID == target.botID && tab(of: target.botID) == target }
-    func isRunning(_ target: ChatTarget) -> Bool { (target.taskID == nil && remoteQueue?.isWorking(target.botID) == true) || runStates[target] != nil || (delegation?.activeCount(target) ?? 0) > 0 }
+    func isRunning(_ target: ChatTarget) -> Bool { (target.taskID == nil && remoteQueue?.isWorking(target.botID) == true) || runStates[target] != nil || (delegation?.activeCount(target, cameos: false) ?? 0) > 0 }
     /// Whether any of the bot's conversations has a turn under way. Reading its Home's and its
     /// tasks' turns by name observes them, also a task's that is made later.
     func isBusy(_ botID: UUID) -> Bool {
@@ -1198,6 +1202,8 @@ final class AppModel {
         if let i = thread.firstIndex(where: { $0.id == id }) {
             let after = thread[(i + 1)...]
             if runs[target] != nil || after.contains(where: { $0.role == .assistant || $0.role == .tool }) { return report(nil) }
+            // Another bot's cameo turn took it (#424).
+            if delegation.records[target]?.contains(where: { $0.cameo?.messageID == id }) == true { return report(nil) }
             if waiting[target] == nil, makings[target] == nil, let error = after.last(where: { $0.role == .error }) {
                 return report(error.text)
             }
@@ -1208,7 +1214,7 @@ final class AppModel {
         messageStartWatchers[target, default: []].append((id, report))
     }
 
-    private func reportTaskStart(_ target: ChatTarget, failure: String?) {
+    func reportTaskStart(_ target: ChatTarget, failure: String?) {
         guard target.taskID != nil else { return }
         if var waiting = messageStartWatchers[target] {
             let delivered = Set(thread(target).map(\.id))
@@ -1641,8 +1647,7 @@ final class AppModel {
     /// Whether follow-ups reach this conversation's CLI during a turn, once its current step ends,
     /// rather than once the turn ends: Claude Code, on This Mac.
     func takesFollowUpsMidTurn(_ target: ChatTarget) -> Bool {
-        // Another bot's cameo turn in an area takes none: the message waits for a turn of its own.
-        guard cameoTurns[target] == nil, let current = runSettings(of: target) else { return false }
+        guard let current = runSettings(of: target) else { return false }
         return CommandBuilder.takesInputMidTurn(current.account.kind) && task(target)?.isRemote != true
     }
 
@@ -1711,12 +1716,12 @@ final class AppModel {
         inputs[target] = input
     }
 
-    /// Whether the turn running in `target` takes `message` as a follow-up: in an area, only the
-    /// area's own bot's turn does, and only a message it answers (`answerers`); anything else waits
-    /// for its own turn.
+    /// Whether the turn running in `target` takes `message` as a follow-up: in an area, only a
+    /// message the area's own bot alone answers (`answerers`); one another bot answers waits for its
+    /// own turn.
     private func takesAsFollowUp(_ message: ChatMessage, in target: ChatTarget) -> Bool {
-        guard let speaker = areaSpeakers[target] else { return true }
-        return speaker.turn.botID == target.botID && answerers(of: message, in: target) == [target.botID]
+        guard areaSpeakers[target] != nil else { return true }
+        return answerers(of: message, in: target) == [target.botID]
     }
 
     /// Withdraws automatic delivery, remembered across relaunches: after Stop or a real failure,
@@ -1733,29 +1738,30 @@ final class AppModel {
         guard !storageMovePending else { return false }
         guard bot(target.botID)?.isRemoteQueue != true else { return false }
         guard !isRunning(target), conversation(target).isLoaded, let bot = bot(target.botID), runSettings(of: target) != nil else { return false }
-        // In an area, the bots the message chose answer it in turn, the first now (#406).
-        var speaker: UUID?
+        // In an area, the bots the message chose answer it at once (#406, #424): the area's own bot
+        // in this turn, when it's one of them, and each other bot in a cameo turn beside it.
+        var answers = true
+        var cameos: [AreaTurn] = []
         if let message, task(target)?.isArea == true {
-            let answerers = answerers(of: message, in: target)
-            beginAreaTurn(AreaTurn(botID: answerers[0], hop: 0), message: message.id, in: target)
-            areaTurns[target] = answerers.dropFirst().map { AreaTurn(botID: $0, hop: 0, messageID: message.id) } + (areaTurns[target] ?? [])
-            if answerers[0] != target.botID { speaker = answerers[0] }
+            let turns = CameoRouting.turns(answering: message.id, by: answerers(of: message, in: target), owner: target.botID)
+            answers = turns.owner
+            cameos = turns.cameos
+            if answers { beginAreaTurn(AreaTurn(botID: target.botID, hop: 0), message: message.id, in: target) }
         } else if areaSpeakers[target] != nil {
             endAreaTurn(target, reply: [], continues: false)
         }
-        guard let current = turnSettings(of: target) else { return false }
+        guard let current = runSettings(of: target) else { return false }
         let history = thread(target)
         // Every conversation hears what became of the notes it asked to remember (and Home what its
-        // tasks did since the owner's last message there, as its turn launches); a cameo bot, of its own.
-        let memoryKey = speaker.map { Self.cameoMemoryKey($0, in: target) } ?? target
-        let updates = BotContext.memoryUpdates(memoryReports.removeValue(forKey: memoryKey) ?? [])
+        // tasks did since the owner's last message there, as its turn launches).
+        let updates = answers ? BotContext.memoryUpdates(memoryReports.removeValue(forKey: target) ?? []) : nil
         // What the message's mentions point at goes with it, in a new session or a resumed one.
-        let text = message.map { deliveredText(of: $0, for: target, recipient: speaker) } ?? text
+        let text = message.map { deliveredText(of: $0, for: target) } ?? text
 
         var added: [ChatMessage] = []
         var replacedNote: ChatMessage?
         if let message {
-            if speaker == nil, startsNewSession(target) {
+            if answers, startsNewSession(target) {
                 // Name the account on the note New Session left, or add one (an account switch).
                 if let last = history.last, last.role == .note, last.text.hasPrefix("New session") {
                     replacedNote = last
@@ -1797,31 +1803,28 @@ final class AppModel {
                 self.reportTaskStart(target, failure: "Couldn't save its first message. It is still queued.")
                 return
             }
+            self.startCameoTurns(cameos, in: target)
+            // Only other bots answer it: the conversation is free for the owner's next message.
+            guard answers else {
+                self.sendNextQueued(to: target)
+                return
+            }
             self.startSavedTurn(text, for: target, history: history, updates: updates, images: message?.images ?? [])
         }
         return true
     }
 
-    /// Starts the next bot's turn waiting in an area (`areaTurns`), which no new message starts:
-    /// one the owner's message chose after the first, or one a reply mentioned. Returns whether one
-    /// started (or is being started).
+    /// Starts the area's own bot's next turn waiting in an area (`areaTurns`), which a reply's
+    /// mention gave it and no new message starts. Returns whether one started (or is being started).
     private func startWaitingAreaTurn(_ target: ChatTarget) -> Bool {
         guard !storageMovePending, var waiting = areaTurns[target], !waiting.isEmpty else { return false }
         guard task(target)?.isArea == true, !isRunning(target), conversation(target).isLoaded else { return false }
         let turn = waiting.removeFirst()
         areaTurns[target] = waiting.isEmpty ? nil : waiting
-        // A bot deleted meanwhile has no turn.
-        guard bot(turn.botID) != nil else { return startWaitingAreaTurn(target) }
         beginAreaTurn(turn, message: nil, in: target)
         let history = thread(target)
-        var text = CameoRouting.prompt(mentionedBy: turn.mentionedBy.flatMap { bot($0)?.name })
-        // The owner's message that chose it: what its mentions point at goes with it.
-        if let id = turn.messageID, let message = history.last(where: { $0.id == id }),
-           let section = referenceContext(message.mentions, for: turn.botID, inArea: true) {
-            text = BotContext.prompt(for: text, preamble: nil, updates: section)
-        }
-        let memoryKey = turn.botID == target.botID ? target : Self.cameoMemoryKey(turn.botID, in: target)
-        let updates = BotContext.memoryUpdates(memoryReports.removeValue(forKey: memoryKey) ?? [])
+        let text = CameoRouting.prompt(mentionedBy: turn.mentionedBy.flatMap { bot($0)?.name })
+        let updates = BotContext.memoryUpdates(memoryReports.removeValue(forKey: target) ?? [])
         startSavedTurn(text, for: target, history: history, updates: updates, images: [])
         return true
     }
@@ -1896,18 +1899,14 @@ final class AppModel {
     }
 
     private func launchTurn(_ text: String, for target: ChatTarget, history: [ChatMessage], updates: String?, imageURLs: [URL] = []) {
-        guard let bot = bot(target.botID), let current = turnSettings(of: target) else { return }
+        guard let bot = bot(target.botID), let current = runSettings(of: target) else { return }
         let task = task(target)
         let id = bot.id
-        // In an area, whose turn it is (#406): a cameo bot runs on its own settings, identity and
-        // memory, with the area's session slot for it.
+        // In an area, the turn of its own bot (#406); other bots' cameo turns run beside it (#424).
         let areaSpeaker = task?.isArea == true ? areaSpeakers[target] : nil
-        let cameo = cameoSettings(of: target)
-        let speakerBot = cameo ?? bot
         let account = current.account
         let resume = current.resumableSessionID
         let requestedModel = current.effectiveModel(openRouterDefault: settings.openRouterModel, sailDefault: settings.sailModel)
-        // Usage stays the conversation's, as Analytics reads its turns; the account is the cameo's own.
         let usageHome = BotHome(workspace: bot.persistencePath)
         let usageCapture = UsageLedger.Capture(.init(startedAt: Date(), kind: task == nil ? .home : .task,
             botID: id, taskID: target.taskID, messageID: thread(target).last(where: { $0.role == .user })?.id,
@@ -1957,14 +1956,13 @@ final class AppModel {
             }
             guard waiting[target] == ticket else { return }
             do {
-                let context = try await delegation.prepareCaller(target: target, directory: directory, machine: machine, hostID: task?.hostID,
-                                                                 speaker: cameo?.id)
+                let context = try await delegation.prepareCaller(target: target, directory: directory, machine: machine, hostID: task?.hostID)
                 guard waiting[target] == ticket else { delegation.endCaller(context.id); return }
                 let needsDelegationContext = resume.map { !(delegationSessions[target] ?? []).contains($0) } ?? true
                 let delegationInstructions = needsDelegationContext ? BotContext.subagentsSection(availableBots: delegation.roster) : nil
                 let prepared: PreparedSession
                 do {
-                    prepared = try await prepareSessionForLaunch(of: speakerBot.id, kind: account.kind, remote: machine.isRemote,
+                    prepared = try await prepareSessionForLaunch(of: id, kind: account.kind, remote: machine.isRemote,
                                                                   current: { self.waiting[target] == ticket })
                 } catch { delegation.endCaller(context.id); throw error }
                 guard waiting[target] == ticket else { delegation.endCaller(context.id); return }
@@ -1973,15 +1971,8 @@ final class AppModel {
                 let refreshContext = resume.map { contextSessions[target]?[$0] != snapshot.revision } ?? true
                 var preamble: String?
                 var updates = updates
-                let voices = turnVoices(for: speakerBot.id, in: target)
-                if let task, let cameo {
-                    if refreshContext {
-                        preamble = BotContext.cameoPreamble(bot: self.bot(cameo.id) ?? cameo, owner: self.bot(id) ?? bot, area: task,
-                            memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, history: resume == nil ? history : [],
-                            voices: voices, soul: snapshot.soul, instructions: snapshot.instructions, team: snapshot.team,
-                            skills: snapshot.skills)
-                    }
-                } else if let task {
+                let voices = turnVoices(for: id, in: target)
+                if let task {
                     if refreshContext {
                         preamble = BotContext.taskPreamble(bot: self.bot(id) ?? bot, task: task,
                             memory: snapshot.memory, sharedMemory: snapshot.sharedMemory, history: resume == nil ? history : [],
@@ -2000,7 +1991,7 @@ final class AppModel {
                 }
                 // A resumed session in an area hears what other bots said there since its last turn.
                 if let areaSpeaker, resume != nil, let voices,
-                   let since = CameoRouting.since(lastTurnOf: speakerBot.id, owner: id, in: history, excluding: areaSpeaker.message,
+                   let since = CameoRouting.since(lastTurnOf: id, owner: id, in: history, excluding: areaSpeaker.message,
                                                   names: voices.names) {
                     updates = [since, updates].compactMap { $0 }.joined(separator: "\n\n")
                 }
@@ -2069,7 +2060,7 @@ final class AppModel {
                 let turnStart = conversation(target).historyStart + thread(target).count
                 let turnPrompt = thread(target).last(where: { $0.role == .user })
                 var lastCheckpoint = Date()
-                var stream = TurnStream(account: account, invocation: invocation, usage: usageCapture, speaker: cameo?.id)
+                var stream = TurnStream(account: account, invocation: invocation, usage: usageCapture)
                 let accountID = account.id
 
                 // The CLI's lines are parsed off the main thread; their events arrive here in
@@ -2090,14 +2081,14 @@ final class AppModel {
                         self?.runStates[target]?.settle()
                     }
                     for session in batch.sessions {
-                        self.recordSession(session, accountID: accountID, scope: current.executionScope, for: target, cameo: cameo?.id)
+                        self.recordSession(session, accountID: accountID, scope: current.executionScope, for: target)
                         self.delegationSessions[target, default: []].insert(session)
                         self.toolSessions[target, default: [:]][session] = toolText
                         self.contextSessions[target, default: [:]][session] = snapshot.revision
                     }
-                    if let reported = batch.reportedModel { self.recordReportedModel(reported, requested: current.model, accountID: accountID, scope: current.executionScope, for: target, cameo: cameo?.id) }
+                    if let reported = batch.reportedModel { self.recordReportedModel(reported, requested: current.model, accountID: accountID, scope: current.executionScope, for: target) }
                     if let connectors = batch.connectors {
-                        let settings = cameo == nil ? self.runSettings(of: target) : self.turnSettings(of: target)
+                        let settings = self.runSettings(of: target)
                         self.connectorBoard.record(connectors, scope: connectorScope, sessionID: batch.sessions.last ?? settings?.resumableSessionID, for: target)
                     }
                     if !batch.followUps.isEmpty || (conversation.messages.count > PagedTranscript.residentLimit && Date().timeIntervalSince(lastCheckpoint) >= 1) {
@@ -2138,7 +2129,8 @@ final class AppModel {
                                                      lingered: run.lingered, host: machine.isRemote ? place : nil) {
                             messages.append(note)
                         }
-                        if pulse != nil, !stopped, let i = messages.indices.last(where: { messages[$0].role == .assistant }), i >= localTurnStart,
+                        if pulse != nil, !stopped,
+                           let i = messages.indices.last(where: { messages[$0].role == .assistant && messages[$0].speakerBotID == nil }), i >= localTurnStart,
                            Heartbeat.isAck(messages[i].text) {
                             messages.remove(at: i)
                             messages.append(ChatMessage(role: .note, text: Heartbeat.acknowledged))
@@ -2146,20 +2138,24 @@ final class AppModel {
                         }
                     }
                     let messages = self.thread(target)
-                    let failure = stream.outcome.failure(stopped: stopped, exitError: messages.last(where: { !$0.role.isNote }).flatMap { $0.role == .error ? $0.text : nil })
+                    // Another bot's cameo reply that came in meanwhile isn't this turn's (#424).
+                    let failure = stream.outcome.failure(stopped: stopped, exitError: messages.last(where: { !$0.role.isNote && $0.speakerBotID == nil })
+                        .flatMap { $0.role == .error ? $0.text : nil })
                     let fallback = Array(messages.suffix(from: min(localTurnStart, messages.count)))
                     self.inbox.turnEnded(target)
                     // The turn's end is saved off the main thread, then what it asked to remember;
                     // until both are done the conversation stays busy, so nothing else starts in it.
                     self.saveThread(target) { [weak self] saved in
                         guard let self else { return }
-                        self.readTurn(target, from: turnStart, fallback: fallback) { [weak self] turn in
+                        self.readTurn(target, from: turnStart, fallback: fallback) { [weak self] whole in
                             guard let self else { return }
+                            // Cameo replies that came in during the turn are their bots' (#424).
+                            let turn = whole.filter { $0.role == .user || $0.speakerBotID == nil }
                             self.log(TurnLog.ended(
                                 at: Date(), startedAt: startedAt, status: status, stopped: stopped,
                                 toolCalls: turn.filter { $0.role == .tool }.count,
                                 error: turn.last(where: { $0.role == .error })?.text, stderr: stderr, what: what), in: home)
-                            self.saveMemory(from: turn, for: target, cameo: cameo.flatMap { self.bot($0.id) }) { [weak self] in
+                            self.saveMemory(from: turn, for: target) { [weak self] in
                                 guard let self, self.runSettings(of: target) != nil else { return }
                                 self.runStates[target] = nil
                                 if !stopped, failure == nil { self.react(.done, for: target, seconds: 3) }
@@ -2168,21 +2164,13 @@ final class AppModel {
                                 // heartbeat acknowledgement changes nothing worth asking about (#320).
                                 if !acknowledged { self.refreshContext(target, turnEnded: true) }
                                 if target.taskID != nil {
-                                    self.finishTaskTurn(target, messages: turn, stopped: stopped, failure: failure, reported: !acknowledged && cameo == nil)
+                                    self.finishTaskTurn(target, messages: turn, stopped: stopped, failure: failure, reported: !acknowledged)
                                 }
-                                // BotChu's heartbeat goes on the area's own bot's turns, not a cameo's.
-                                if cameo == nil {
-                                    self.scheduleHeartbeat(after: Heartbeat.Turn(reply: turn.last(where: { $0.role == .assistant })?.text, pulse: pulse,
-                                                                                 stopped: stopped, failed: failure != nil,
-                                                                                 endedBackgroundTasks: run.endedBackgroundTasks), in: target)
-                                } else {
-                                    self.pendingHeartbeats[target] = nil
-                                }
-                                // Home's turns and tasks' join the work their bot's next run review covers (not
-                                // another bot's cameo turn).
-                                if cameo == nil {
-                                    self.reviewTurn(target, thread: (turnPrompt.map { [$0] } ?? []) + turn, turnStart: turnPrompt == nil ? 0 : 1, accountID: account.id)
-                                }
+                                self.scheduleHeartbeat(after: Heartbeat.Turn(reply: turn.last(where: { $0.role == .assistant })?.text, pulse: pulse,
+                                                                             stopped: stopped, failed: failure != nil,
+                                                                             endedBackgroundTasks: run.endedBackgroundTasks), in: target)
+                                // Home's turns and tasks' join the work their bot's next run review covers.
+                                self.reviewTurn(target, thread: (turnPrompt.map { [$0] } ?? []) + turn, turnStart: turnPrompt == nil ? 0 : 1, accountID: account.id)
                                 // In an area, the bots the reply mentions take their turns next (#406).
                                 if areaSpeaker != nil {
                                     self.endAreaTurn(target, reply: turn, continues: !stopped && failure == nil && saved && !self.terminating)
@@ -2279,12 +2267,11 @@ final class AppModel {
     /// After a turn of Home or a task, on this Mac or a host (or on Retry): saves what its replies
     /// asked to remember, and any notes still waiting, off the main thread, says how it went in the
     /// conversation, and then calls `done`.
-    private func saveMemory(from turn: [ChatMessage], for target: ChatTarget, retrying: Bool = false, cameo: Bot? = nil,
+    private func saveMemory(from turn: [ChatMessage], for target: ChatTarget, retrying: Bool = false,
                             done: (@MainActor @Sendable () -> Void)? = nil) {
-        // A cameo turn's notes go to its own bot's memory (#406).
-        guard let bot = cameo ?? bot(target.botID) else { done?(); return }
-        let reportTo = cameo.map { Self.cameoMemoryKey($0.id, in: target) } ?? target
-        saveMemory(from: turn, of: bot, reportTo: reportTo, retrying: retrying) { [weak self] lines in
+        // A cameo turn's notes go to its own bot's memory, from its run (#406, #424).
+        guard let bot = bot(target.botID) else { done?(); return }
+        saveMemory(from: turn, of: bot, reportTo: target, retrying: retrying) { [weak self] lines in
             if let self, !lines.isEmpty, self.bot(target.botID) != nil {
                 for line in lines { self.append(line, to: target) }
                 self.saveThread(target)
