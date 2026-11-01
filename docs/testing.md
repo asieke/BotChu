@@ -70,7 +70,8 @@ disabled and repository paths pointing at empty read-only folders. It runs with 
 folders denied. Refresh it only when asked, so runs stay comparable; `status` gives its date and
 totals. The harness copies it into its own temporary folder, refuses a copy that names a folder in
 the home folder, puts stand-ins that fail for every agent CLI, `gh` and `ssh` first on the app's
-login PATH, watches for any real one starting under the app, and deletes the copy at the end. Its
+login PATH, watches for any real one starting under the app, and deletes the copy at the end. In
+the copy only, the 12 newest deliveries are open again when nearly all are Done, for journey 11. Its
 output and reports give totals only, never a bot's name or a message. Its steps are report only
 until three runs give them a baseline (`BOTCHU_JOURNEYS_RECORD=1 scripts/test.sh
 --journeys-replica`); a refresh that changes the totals records it again, in a pull request that
