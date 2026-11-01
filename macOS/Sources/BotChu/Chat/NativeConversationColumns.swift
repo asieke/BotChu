@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 import BotChuCore
 
-/// Only the conversation/inspector pair has a native split. The window's original navigation
-/// sidebar, galleries, toolbar and sheet presentation remain in the same SwiftUI scene (#354).
+/// The conversation/inspector pair as a native split (#354), inside the window's native
+/// sidebar/detail split (#437). Toolbar and sheet presentation remain in the SwiftUI scene.
 struct NativeConversationColumns: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -191,12 +191,14 @@ private struct ConversationNativeSplit: NSViewControllerRepresentable {
 
 /// The native inspector adds a container around its child. Pin the hosting view explicitly so its
 /// content follows that container instead of retaining the hosting view's initial fitting size.
-@MainActor private final class NativeColumnHost<Content: View>: NSViewController {
+/// `bridgesScene` hands its title and toolbar items to the window's toolbar (the window's detail).
+@MainActor final class NativeColumnHost<Content: View>: NSViewController {
     private let host: NSHostingController<Content>
 
-    init(rootView: Content, sizingOptions: NSHostingSizingOptions = []) {
+    init(rootView: Content, sizingOptions: NSHostingSizingOptions = [], bridgesScene: Bool = false) {
         host = NSHostingController(rootView: rootView)
         host.sizingOptions = sizingOptions
+        if bridgesScene { host.sceneBridgingOptions = [.toolbars, .title] }
         super.init(nibName: nil, bundle: nil)
     }
 
