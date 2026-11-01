@@ -342,7 +342,7 @@ public enum BotContext {
         }
         var brief: String
         if let area = task.area {
-            brief = "This is your Project Area “\(area.name)”, your own lasting conversation with your owner about it; the message below is theirs. \(areaMentionRule)"
+            brief = "This is your Project Area “\(area.name)”, your own lasting conversation with your owner about it; the message below is theirs. \(areaMentionRule) \(areaWorkRule)"
         } else if let work = task.work, let review = task.review {
             brief = review == .comment
                 ? "Your task is to review and comment on \(work.reference) (\(work.url.absoluteString)) in \(task.repo). \(Self.reviewSteps) Then post your review there, as one review, without asking again: `gh api repos/\(task.repo)/pulls/\(work.number)/reviews --method POST` with the commit you reviewed, `\"event\": \"COMMENT\"`, the verdict and findings in its body, and each finding as an inline comment on its line where GitHub takes one; give the review's URL."
@@ -395,6 +395,12 @@ public enum BotContext {
     static let areaMentionRule = "Other bots may take turns in this conversation too, each shown by name. `@<bot name>` in "
         + "your reply gives that bot a turn here after yours, so mention a bot that way only when you want it to take one."
 
+    /// How a bot works in an area so the conversation reads as a chat (#425): BotChu folds a turn's
+    /// tool calls into one row, so announcing them adds a line for nothing, and a sub-agent run shows
+    /// as a card where its whole transcript would otherwise be.
+    static let areaWorkRule = "Don't announce a tool call before making it: the conversation shows your tool calls. Hand "
+        + "anything longer than a quick answer to a `botchu-subagent` run, so the area shows its card rather than the whole transcript."
+
     /// Context put before the first message of a bot's new cameo session in another bot's Project
     /// Area (#399 decision 8): its own identity, instructions and memories, whose area it is and
     /// where, and that it leaves the area's files as they are: a repository's main checkout, or the
@@ -437,7 +443,7 @@ public enum BotContext {
         let botchu = (owner.persistencePath as NSString).appendingPathComponent(BotHome.folderName)
         parts.append("""
             Your owner writes in this conversation, and \(owner.name) answers there; your replies show under your own \
-            name. \(areaMentionRule) The conversation is kept in \
+            name. \(areaMentionRule) \(areaWorkRule) The conversation is kept in \
             \(botchu)/tasks/\(area.id.uuidString.lowercased())/thread.jsonl: read it when you need earlier context, never edit it.
             """)
         parts += continuity(history, voices: voices)

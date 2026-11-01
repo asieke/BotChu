@@ -247,6 +247,24 @@ private func tempDir() -> URL {
             .contains("You start in the main checkout"))
     }
 
+    /// Area turns, theirs and cameos, are told not to narrate their tool calls and to hand long work
+    /// to a sub-agent run; Home, tasks and sub-agents aren't (#425).
+    @Test func onlyAreaTurnsAreToldNotToNarrateAndToDelegateLongWork() {
+        let rule = "Don't announce a tool call before making it"
+        let area = BotTask(repoArea: "asieke/GitChu", checkout: "/w/GitChu", for: fox, at: date)
+        let folder = BotTask(folderArea: "Notes", folder: "/x/notes", for: fox, at: date)
+        #expect(BotContext.taskPreamble(bot: fox, task: area, memory: "", sharedMemory: "", history: []).contains(rule))
+        #expect(BotContext.taskPreamble(bot: fox, task: folder, memory: "", sharedMemory: "", history: []).contains(rule))
+        #expect(BotContext.cameoPreamble(bot: tenX, owner: fox, area: area, memory: "", sharedMemory: "", history: []).contains(rule))
+        #expect(BotContext.areaWorkRule.contains("`botchu-subagent` run"))
+        #expect(!BotContext.taskPreamble(bot: fox, task: openTask("asieke/GitChu", of: fox), memory: "", sharedMemory: "", history: []).contains(rule))
+        #expect(!BotContext.sessionPreamble(bot: fox, memory: "", sharedMemory: "", history: []).contains(rule))
+        let run = SubagentRun(rootBotID: fox.id, rootTaskID: area.id, depth: 1, targetBot: tenX, title: "#48", brief: "Fix #48",
+                              workingDirectory: "/w/GitChu")
+        #expect(!BotContext.subagentPreamble(bot: tenX, run: run, callerDescription: "Product Fox", memory: "", sharedMemory: "",
+                                             areaCheckout: "/w/GitChu").contains(rule))
+    }
+
     /// The lead-bot pill, the composer's placeholder and the window's title of an area (#403).
     @Test func anAreaIsHeadedByItsOwnerItsNameAndItsFolder() {
         let area = BotTask(repoArea: "asieke/protagonist-v2", checkout: "/Users/a/Desktop/WORKSPACE/protagonist-v2", for: fox, at: date)

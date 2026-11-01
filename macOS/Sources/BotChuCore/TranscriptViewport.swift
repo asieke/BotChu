@@ -597,10 +597,11 @@ public struct TranscriptViewport: Sendable {
         hasher.combine(style)
         hasher.combine(startsTurn)
         item.combineRevision(into: &hasher)
-        if case .exploration = item {
-            // A live card's last calls can open too.
+        switch item {
+        case .exploration, .work:
+            // A live card's last calls can open too, and so can those of the work a row holds.
             hasher.combine(expansions)
-        } else {
+        case .message, .tool:
             hasher.combine(expanded.contains(item.id))
         }
         return hasher.finalize()
@@ -689,6 +690,9 @@ public struct TranscriptViewport: Sendable {
                 let call = group.calls[min(part, group.calls.count - 1)]
                 return (Kind.call, avatar + 30 + (expanded.contains(call.id) ? 160 : 0) + gap)
             }
+        case .work:
+            // Folded: one line. Opened, it measures itself once laid out.
+            return (Kind.card, avatar + 37 + gap)
         }
     }
 
@@ -727,6 +731,10 @@ extension ActivityItem {
             hasher.combine(2)
             hasher.combine(group.id)
             hasher.combine(group.revision)
+        case .work(let work):
+            hasher.combine(3)
+            hasher.combine(work.id)
+            hasher.combine(work.revision)
         }
     }
 }
