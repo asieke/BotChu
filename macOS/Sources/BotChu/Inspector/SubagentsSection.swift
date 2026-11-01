@@ -555,7 +555,7 @@ private struct SubagentStateSymbol: View {
 
     var body: some View {
         switch kind {
-        case .running: ActivitySpinner(size: 13).foregroundStyle(Palette.violet)
+        case .running: ActivitySpinner(size: 13, tint: Palette.violet)
         case .stopping: Image(systemName: "rays").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.secondaryText)
         case .failed: Image(systemName: "xmark.circle.fill").font(.system(size: 14)).foregroundStyle(failureRed)
         default: Image(systemName: symbol).font(.system(size: 14)).foregroundStyle(Palette.secondaryText)
@@ -673,7 +673,7 @@ private struct SubagentTaskRow: View {
                 }
                 Spacer(minLength: 4)
                 if runs.contains(where: { $0.phase.isActive }) {
-                    ActivitySpinner(size: 12).foregroundStyle(Palette.violet)
+                    ActivitySpinner(size: 12, tint: Palette.violet)
                 } else if runs.contains(where: { $0.phase == .failed }) {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(failureRed).accessibilityLabel("Failed")
                 }
@@ -1163,7 +1163,7 @@ private struct SubagentTranscriptItem: View {
                         .foregroundStyle(Palette.secondaryText).lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: 4)
                     if state == .running {
-                        ActivitySpinner(size: 10).foregroundStyle(Palette.violet)
+                        ActivitySpinner(size: 10, tint: Palette.violet)
                     } else if state == .failed {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(failureRed)
                     }
