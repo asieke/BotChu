@@ -49,7 +49,7 @@ cat > "$out/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>BotChu</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>0.1</string>
+  <key>CFBundleShortVersionString</key><string>$(tr -d '[:space:]' < "$dir/VERSION")</string>
   <key>CFBundleVersion</key><string>$(git -C "$dir" rev-list --count HEAD 2>/dev/null || echo 1)</string>
   <key>BotChuCommit</key><string>$commit</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>

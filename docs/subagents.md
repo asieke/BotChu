@@ -138,6 +138,15 @@ seconds without one. Its
 overall wait limit is two hours. It does not reconnect a crashed CLI session or automatically
 repeat work after an app restart.
 
+A run that fails because its account hit a usage limit naming its reset (#442,
+`UsageLimit.resetDate`) records the reset in its interruption (`resetsAt`) and shows "Paused until
+12:10am" rather than Failed; its caller's handoff says so. With the heartbeat setting on, a minute
+after the reset BotChu resumes it as the owner's Resume does (brief, session, worktree; handoff kept
+for `botchu-subagent wait`), leaving runs beneath a paused run to that run, then sends its
+conversation one heartbeat naming the runs it resumed. A conversation's own paused turn is kept in
+`limit-pauses.json` in BotChu's data folder; runs' resets are read from their records at launch, so
+both outlive a relaunch.
+
 ## Files and SSH
 
 Records and transcripts stay with the owning conversation:

@@ -45,6 +45,7 @@ private struct BotChuCommands: Commands {
         // A page in the browser on this Mac, made from what BotChu has recorded (#233).
         CommandGroup(after: .toolbar) {
             Button("Open Analytics Dashboard") { model.openAnalyticsDashboard() }
+            Button("Open Testing Dashboard") { model.openTestingDashboard() }
         }
         CommandMenu("Bot") {
             // The shown conversation, the selected bot's Home, area or open task, as the menu was

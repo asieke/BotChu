@@ -11,12 +11,12 @@ extension AppModel {
     var areaTurnBots: Set<UUID> { Set(bots.filter { !$0.isRemoteQueue }.map(\.id)) }
 
     /// Who answers `message` in the area `target`, in order: the bot a request posted there asked
-    /// (`AreaPost`), else the bots chosen in it from `@` completion, else the area's own bot.
+    /// (`AreaPost`), else the bots it starts by addressing with `@` completion, else the area's own bot.
     /// BotChu's heartbeat is the area's own bot's.
     func answerers(of message: ChatMessage, in target: ChatTarget) -> [UUID] {
         guard message.heartbeat == nil else { return [target.botID] }
         if let asked = message.speakerBotID { return areaTurnBots.contains(asked) ? [asked] : [target.botID] }
-        return CameoRouting.answerers(of: message.mentions, owner: target.botID, eligible: areaTurnBots)
+        return CameoRouting.answerers(of: message.mentions, in: message.text, owner: target.botID, eligible: areaTurnBots)
     }
 
     /// The area's own bot's `turn` starts in `target`, with `message` when the owner's message starts it.

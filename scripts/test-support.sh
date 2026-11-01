@@ -26,6 +26,8 @@ test_step() {
   echo "test: $label start; load $(sysctl -n vm.loadavg)"
   if "$@"; then result=0; else result=$?; fi
   echo "test: $label took $((SECONDS - began))s, exit $result; load $(sysctl -n vm.loadavg)"
+  # Deploy keeps the steps' times for the release it records (scripts/release-record.py).
+  [ -z "${BOTCHU_TEST_STEPS:-}" ] || printf '%s\t%s\n' "$label" "$((SECONDS - began))" >> "$BOTCHU_TEST_STEPS"
   return "$result"
 }
 

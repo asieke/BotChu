@@ -25,14 +25,18 @@ public struct SubagentInterruption: Codable, Equatable, Sendable {
     public var lastAction: String?
     /// Nil outside a git checkout, or when it couldn't be read in time.
     public var workspace: SubagentWorkspaceState?
+    /// For a run that failed because its account hit a usage limit, when the limit resets (#442):
+    /// the run is paused until then, and BotChu resumes it a minute after. Nil otherwise.
+    public var resetsAt: Date?
 
     public init(cause: Cause, at: Date = Date(), toolCalls: Int = 0, lastAction: String? = nil,
-                workspace: SubagentWorkspaceState? = nil) {
+                workspace: SubagentWorkspaceState? = nil, resetsAt: Date? = nil) {
         self.cause = cause
         self.at = at
         self.toolCalls = toolCalls
         self.lastAction = lastAction
         self.workspace = workspace
+        self.resetsAt = resetsAt
     }
 
     /// Reads what it can: a cause a later BotChu added reads as `failed`, so the run still decodes.
@@ -43,6 +47,7 @@ public struct SubagentInterruption: Codable, Equatable, Sendable {
         toolCalls = (try? container.decode(Int.self, forKey: .toolCalls)) ?? 0
         lastAction = try? container.decodeIfPresent(String.self, forKey: .lastAction)
         workspace = try? container.decodeIfPresent(SubagentWorkspaceState.self, forKey: .workspace)
+        resetsAt = try? container.decodeIfPresent(Date.self, forKey: .resetsAt)
     }
 
     /// The interruption of a run that ended now, from its transcript (`messages`, the part in memory)
@@ -60,7 +65,13 @@ public struct SubagentInterruption: Codable, Equatable, Sendable {
     /// is why a failed run's CLI ended.
     public func outcome(for run: SubagentRun, failure: String? = nil) -> String {
         // A failure says what went wrong first, as it did.
-        cause == .failed ? Self.failureText(failure) + "\n\n" + facts(for: run) : facts(for: run)
+        guard cause == .failed else { return facts(for: run) }
+        var text = Self.failureText(failure) + "\n\n" + facts(for: run)
+        if let resetsAt {
+            text += " Paused until " + UsageLimit.timeText(resetsAt, now: at) + ", when its account's usage limit resets: BotChu "
+                + "resumes it then and sends a heartbeat to the conversation that started it, so don't resume or delegate it again."
+        }
+        return text
     }
 
     /// What ended it (but a failure's own words), how far it got, its last action and its workspace.

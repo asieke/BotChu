@@ -30,15 +30,21 @@ unset DEPLOY_UPDATED; export DEPLOY_FROM   # the commit that was here before thi
 trap 'rc=$?; echo "$(date -u +%FT%TZ) $(git rev-parse HEAD) $([ $rc -eq 0 ] && echo ok || echo failed)" >>"$(git rev-parse --git-path deploys)"' EXIT
 # Restarting BotChu stops every turn under way: deploy only when the owner asks and no turns run.
 source scripts/test-passes.sh
+steps=$(mktemp)   # the full suite's step times, for the release record
 if [ "$test_mode" = --skip-tests ]; then
   echo "deploy: skipping the full suite (--skip-tests)"
 elif [ "$test_mode" != --tests ] && test_tree_passed; then
   echo "deploy: skipping the full suite: it already passed for tree $(git rev-parse 'HEAD^{tree}')"
 else
   echo "deploy: running full tests ($test_mode)"
-  scripts/test.sh
+  suite_began=$SECONDS
+  BOTCHU_TEST_STEPS=$steps scripts/test.sh
+  printf 'total\t%s\n' "$((SECONDS - suite_began))" >> "$steps"
 fi
 # The latency report reaches the Inbox before the install restarts BotChu; it never stops a deploy. It
 # reports the journeys the full suite ran on this commit, running them itself when none did.
 scripts/deploy-report.sh || echo "deploy: no latency report (exit $?)"
 macOS/install.sh
+# The Testing dashboard's entry for this release (View ▸ Open Testing Dashboard); it never fails a deploy.
+scripts/release-record.py --suite "$steps" || echo "deploy: no release record (exit $?)"
+rm -f "$steps"

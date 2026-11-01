@@ -24,14 +24,20 @@ import Foundation
 
 /// Terminal transcript and record must describe the same interruption, including its workspace.
 public enum SubagentTerminalOutcome {
+    /// `pausesOnLimit`: a run that failed on a usage limit naming its reset is paused until then
+    /// (`SubagentInterruption.resetsAt`, #442) rather than failed for good.
     public static func apply(to record: inout SubagentRun, messages: inout [ChatMessage], toolCalls: Int,
-                             cause: SubagentInterruption.Cause?, workspace: SubagentWorkspaceState?) {
+                             cause: SubagentInterruption.Cause?, workspace: SubagentWorkspaceState?,
+                             pausesOnLimit: Bool = false, now: Date = Date()) {
         ThreadAssembler.closeRunningTools(&messages)
         if record.phase == .completed { record.interruption = nil }
         if record.phase == .stopped || record.phase == .failed && record.startedAt != nil
             && !(record.errorMessage?.hasPrefix("Couldn't save the sub-agent transcript") ?? false) {
-            let interruption = SubagentInterruption.of(messages, toolCalls: toolCalls,
-                cause: record.phase == .failed ? .failed : cause ?? .owner, root: record.workingDirectory, workspace: workspace)
+            var interruption = SubagentInterruption.of(messages, toolCalls: toolCalls,
+                cause: record.phase == .failed ? .failed : cause ?? .owner, root: record.workingDirectory, workspace: workspace, at: now)
+            if pausesOnLimit, record.phase == .failed {
+                interruption.resetsAt = UsageLimit.resetDate(in: record.errorMessage ?? "", now: now)
+            }
             record.interruption = interruption
             record.errorMessage = interruption.outcome(for: record, failure: record.errorMessage)
         }
