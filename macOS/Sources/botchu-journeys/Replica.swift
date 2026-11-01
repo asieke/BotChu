@@ -114,8 +114,11 @@ struct Replica {
     }
 
     /// `text` with every bot's name replaced, so a failure says which step, never whose.
+    /// An element's title, description and value too (`AXElement.description`): an area's or a
+    /// task's title, or a message, would otherwise reach the log.
     func redact(_ text: String) -> String {
-        bots.map(\.name).filter { !$0.isEmpty }.sorted { $0.count > $1.count }.reduce(text) { $0.replacingOccurrences(of: $1, with: "a bot") }
+        let quoted = text.replacingOccurrences(of: #"(title|desc|value)="[^"]*""#, with: "$1=\"…\"", options: .regularExpression)
+        return bots.map(\.name).filter { !$0.isEmpty }.sorted { $0.count > $1.count }.reduce(quoted) { $0.replacingOccurrences(of: $1, with: "a bot") }
     }
 
     /// Stand-ins the app finds first on its login shell's PATH (`ZDOTDIR`), for every agent CLI,

@@ -27,6 +27,52 @@ extension Journeys {
         throw HarnessFailure("No chat showed within 60 s of the launch")
     }
 
+    /// The first conversation mark after `start`: a replica bot opens on its last area or task.
+    func anyChat(after start: UInt64, timeout: TimeInterval = 10) throws -> UInt64 {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let chat = app.marks(from: start).first(where: { $0.name.hasPrefix("chat ") }) { return chat.nanoseconds }
+            usleep(5_000)
+        }
+        throw HarnessFailure("No conversation showed within \(Int(timeout)) s of selecting an agent")
+    }
+
+    /// Selects the bot's row, timed until a conversation shows: its last one, an area's or a
+    /// task's as often as its Home. Then, untimed, its Home, which the steps after expect.
+    @discardableResult
+    func selectHome(_ bot: Bot) throws -> Double {
+        guard let cell = try app.window().first(identifier: "sidebar-bot-\(bot.id.uuidString)") else {
+            throw HarnessFailure("The sidebar shows no row for an agent")
+        }
+        let start = AppUnderTest.now
+        try (cell.ancestor(role: kAXRowRole as String) ?? cell).set(kAXSelectedAttribute, to: kCFBooleanTrue)
+        let shown = try anyChat(after: start)
+        app.settle()
+        try showHome(bot)
+        return Self.ms(start, shown)
+    }
+
+    /// The bot's Home, untimed: its row when another page or bot shows, then its Home tab.
+    func showHome(_ bot: Bot) throws {
+        func agentRow() throws -> AXElement? {
+            try app.window().first(identifier: "sidebar-bot-\(bot.id.uuidString)").map { $0.ancestor(role: kAXRowRole as String) ?? $0 }
+        }
+        if let row = try agentRow(), row.value(kAXSelectedAttribute) as? Bool != true {
+            try row.set(kAXSelectedAttribute, to: kCFBooleanTrue)
+            _ = try waitFor("An agent's conversation") {
+                try agentRow()?.value(kAXSelectedAttribute) as? Bool == true ? app.window().first(identifier: "message-input") : nil
+            }
+            app.settle()
+        }
+        if try app.window().title != bot.name {
+            guard let home = try app.window().first(identifier: "conversation-tab-home") else { throw HarnessFailure("An agent's column has no Home row") }
+            let start = try press(home)
+            _ = try app.mark(FrameMarks.chat(bot.id), after: start)
+            app.settle()
+        }
+        guard try app.window().title == bot.name else { throw HarnessFailure("An agent's Home didn't show") }
+    }
+
     /// Every agent of the replica has its row in the sidebar.
     func checkAgentsShown(_ replica: Replica) throws {
         let window = try app.window()
@@ -63,7 +109,7 @@ extension Journeys {
         var samples: [Double] = []
         var problem: String?
         do {
-            for bot in replica.principal + [replica.principal[0]] { samples.append(try select(bot)) }
+            for bot in replica.principal + [replica.principal[0]] { samples.append(try selectHome(bot)) }
             try app.requireForeground()
         } catch {
             problem = "\(error)"
@@ -93,7 +139,7 @@ extension Journeys {
         var rows = 0
         do {
             for bot in replica.principal {
-                try show(bot)
+                try showHome(bot)
                 try checkColumn(of: bot, replica)
                 let layout = ProjectAreasLayout(tasks: replica.tasks(of: bot))
                 rows += layout.rows.count
@@ -120,7 +166,7 @@ extension Journeys {
         var sheet: [Double] = [], shown: [Double] = []
         var problem: String?
         do {
-            try show(bot)
+            try showHome(bot)
             guard let plus = try app.window().first(identifier: "conversation-new-task") else { throw HarnessFailure("The Project Areas column has no + button") }
             var start = try press(plus)
             sheet.append(Self.ms(start, try app.mark(FrameMarks.attachArea, after: start).nanoseconds))
@@ -209,7 +255,7 @@ extension Journeys {
                 app.settle()
             }
             replica.left.done = Array(order.prefix(repeats))
-            _ = try select(replica.principal[0])
+            try showHome(replica.principal[0])
             try app.requireForeground()
         } catch {
             problem = "\(error)"
@@ -233,7 +279,7 @@ extension Journeys {
             try app.requireForeground()
             try checkAgentsShown(replica)
             for bot in replica.principal {
-                try show(bot)
+                try showHome(bot)
                 try checkColumn(of: bot, replica)
             }
             if let area = left.area, !replica.tasks(of: area.bot).contains(where: { $0.id == area.id && $0.isArea && !$0.isArchived }) {
