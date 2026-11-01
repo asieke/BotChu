@@ -67,12 +67,16 @@ extension Journeys {
 
     /// Opens Attach Project Area from `+` in the Project Areas column (#402), timed until the sheet
     /// shows; names a new folder area and presses Attach, timed until its row shows; `repeats` times.
+    /// The first time also checks that the search takes the keyboard, and that Cancel and Escape
+    /// discard what was typed and give the keyboard back to the message box (#438).
     func attachArea() -> [JourneyResult] {
         let bot = fixture.bots[7]
         var sheets: [Double] = [], tabs: [Double] = []
         var problem: String?
         do {
             try show(bot)
+            try composer().set(kAXFocusedAttribute, to: kCFBooleanTrue)
+            app.settle()
             var known = Set(fixture.tasks(of: bot))
             for index in 0..<repeats {
                 guard let plus = try app.window().first(identifier: "conversation-new-task") else { throw HarnessFailure("The Project Areas column has no + button") }
@@ -85,19 +89,29 @@ extension Journeys {
                     throw HarnessFailure("Attach Project Area kept a previous name or opened for the wrong bot")
                 }
                 if index == 0 {
-                    // Cancel discards what was typed. This is outside the opening measurement above.
-                    try enter("Discard this name", into: name)
-                    guard let cancel = try button("Cancel") else { throw HarnessFailure("Attach Project Area has no Cancel") }
-                    try cancel.press()
-                    app.settle()
-                    guard try app.window().first(identifier: "area-name") == nil,
-                          let reopen = try app.window().first(identifier: "conversation-new-task") else {
-                        throw HarnessFailure("Cancel did not dismiss Attach Project Area")
-                    }
-                    _ = try press(reopen, until: FrameMarks.attachArea)
-                    name = try waitFor("Attach Project Area's fresh name") { try app.window().first(identifier: "area-name") }
-                    guard name.text.isEmpty, name.label.contains(bot.name) else {
-                        throw HarnessFailure("Reopening Attach Project Area kept the cancelled name or another bot")
+                    // Outside the opening measurement above: the search has the keyboard; Cancel,
+                    // then Escape, discard what was typed and give the keyboard back to the chat.
+                    _ = try waitFor("The search with the keyboard", timeout: 2) { focused("area-search") }
+                    for dismissal in ["Cancel", "Escape"] {
+                        try enter("Discard this name", into: name)
+                        if dismissal == "Cancel" {
+                            guard let cancel = try button("Cancel") else { throw HarnessFailure("Attach Project Area has no Cancel") }
+                            try cancel.press()
+                        } else {
+                            app.post(key: 53)
+                        }
+                        app.settle()
+                        guard try app.window().first(identifier: "area-name") == nil,
+                              let reopen = try app.window().first(identifier: "conversation-new-task") else {
+                            throw HarnessFailure("\(dismissal) did not dismiss Attach Project Area")
+                        }
+                        _ = try waitFor("The message box with the keyboard after \(dismissal)", timeout: 2) { focused("message-input") }
+                        _ = try press(reopen, until: FrameMarks.attachArea)
+                        name = try waitFor("Attach Project Area's fresh name") { try app.window().first(identifier: "area-name") }
+                        guard name.text.isEmpty, name.label.contains(bot.name) else {
+                            throw HarnessFailure("Reopening Attach Project Area after \(dismissal) kept the discarded name or another bot")
+                        }
+                        _ = try waitFor("The search with the keyboard on reopening", timeout: 2) { focused("area-search") }
                     }
                 }
                 try enter("Journey area \(index + 1)", into: name)
@@ -135,6 +149,11 @@ extension Journeys {
         }
         return [result(9, "Attach Project Area opens", .instant, sheets, problem: problem),
                 result(9, "area shows after Attach", .quick, tabs, problem: problem)]
+    }
+
+    /// The element with the keyboard focus, when it has this identifier.
+    private func focused(_ identifier: String) -> AXElement? {
+        app.ax.element(kAXFocusedUIElementAttribute).flatMap { $0.identifier == identifier ? $0 : nil }
     }
 
     /// Types into a text field as the owner would, so SwiftUI hears it: setting its value alone
