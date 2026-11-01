@@ -568,6 +568,7 @@ private struct SubagentStateSymbol: View {
         case .preparing: "circle.dashed"
         case .stopped: "stop.circle"
         case .interrupted: "pause.circle"
+        case .paused: "hourglass"
         default: "checkmark.circle"
         }
     }

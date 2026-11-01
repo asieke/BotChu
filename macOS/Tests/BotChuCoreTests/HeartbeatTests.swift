@@ -52,7 +52,7 @@ import Testing
         #expect(Heartbeat.next(after: .init(reply: "Merged.")) == .none)
         #expect(Heartbeat.next(after: .init(reply: nil)) == .none)
         #expect(Heartbeat.next(after: .init(reply: promise, stopped: true)) == .none)
-        #expect(Heartbeat.next(after: .init(reply: promise, failed: true)) == .none)
+        #expect(Heartbeat.next(after: .init(reply: promise, pulse: 1, failed: true)) == .none)
         #expect(Heartbeat.next(after: .init(reply: "HEARTBEAT_OK", pulse: 1, endedBackgroundTasks: true)) == .none)
     }
 

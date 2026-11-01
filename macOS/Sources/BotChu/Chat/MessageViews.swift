@@ -22,7 +22,7 @@ struct MessageRow: View, Equatable {
         switch message.role {
         case .user where message.heartbeat != nil:
             // BotChu's words, not the owner's: a line like its notes, with the full message on hover.
-            Label(Heartbeat.label(number: message.heartbeat!), systemImage: "heart.text.square")
+            Label(Heartbeat.label(number: message.heartbeat!, text: message.text), systemImage: "heart.text.square")
                 .labelStyle(TightLabel())
                 .font(.caption)
                 .foregroundStyle(.secondary)

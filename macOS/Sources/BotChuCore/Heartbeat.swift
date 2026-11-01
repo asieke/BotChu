@@ -9,12 +9,20 @@ import Foundation
 /// while its background tasks still ran. Then, `delays` after it, a heartbeat message goes to the
 /// conversation, at most `maxPulses` in a row; a reply of just `ack` (as OpenClaw's HEARTBEAT_OK)
 /// ends them quietly, and any other message starts over.
+///
+/// A failed turn (#442) whose account hit a usage limit pauses until the limit resets, then hears
+/// one heartbeat a minute after (`resumeDate`), with the sub-agent runs that paused on it resumed;
+/// any other failed turn is retried once, `retryDelay` after it, as a heartbeat.
 public enum Heartbeat {
     /// What a bot replies to a heartbeat when nothing is left to do.
     public static let ack = "HEARTBEAT_OK"
     /// How long after a stalled turn each heartbeat in a row goes out; tests shorten them.
     nonisolated(unsafe) public static var delays: [TimeInterval] = [2 * 60, 10 * 60, 30 * 60]
     public static var maxPulses: Int { delays.count }
+    /// How long after a failed turn its one retry goes out; tests shorten it.
+    nonisolated(unsafe) public static var retryDelay: TimeInterval = 2 * 60
+    /// How long after a usage limit resets the paused work carries on.
+    public static let afterReset: TimeInterval = 60
 
     /// Why a turn looks stalled.
     public enum Stall: Equatable, Sendable {
@@ -22,6 +30,10 @@ public enum Heartbeat {
         case promised
         /// BotChu ended its CLI while background tasks it waited for still ran.
         case backgroundEnded
+        /// Its turn failed: the one retry (#442).
+        case failed
+        /// Its turn, or runs it started, paused on a usage limit that has reset now (#442).
+        case limitReset
     }
 
     /// The facts of a turn that has ended.
@@ -32,30 +44,43 @@ public enum Heartbeat {
         public var pulse: Int?
         public var stopped: Bool
         public var failed: Bool
+        /// When the usage limit its account hit resets, for a turn that failed on one (`UsageLimit`).
+        public var limitResetsAt: Date?
         /// Whether BotChu ended its CLI while background tasks still ran (`AgentRun.endedBackgroundTasks`).
         public var endedBackgroundTasks: Bool
 
-        public init(reply: String?, pulse: Int? = nil, stopped: Bool = false, failed: Bool = false, endedBackgroundTasks: Bool = false) {
+        public init(reply: String?, pulse: Int? = nil, stopped: Bool = false, failed: Bool = false, limitResetsAt: Date? = nil,
+                    endedBackgroundTasks: Bool = false) {
             self.reply = reply
             self.pulse = pulse
             self.stopped = stopped
-            self.failed = failed
+            self.failed = failed || limitResetsAt != nil
+            self.limitResetsAt = limitResetsAt
             self.endedBackgroundTasks = endedBackgroundTasks
         }
     }
 
     /// What follows a turn.
     public enum Next: Equatable, Sendable {
-        /// Nothing: it didn't stall, or was stopped, failed or acknowledged.
+        /// Nothing: it didn't stall, or was stopped, acknowledged, or failed again after its retry.
         case none
         /// Heartbeat `number` goes out `after` seconds from now.
         case pulse(number: Int, after: TimeInterval, stall: Stall)
         /// It still stalled after the last heartbeat: BotChu stops checking in.
         case gaveUp
+        /// Its account hit a usage limit: the conversation is paused until the limit resets
+        /// (`until`), and carries on with a `.limitReset` heartbeat at `resume`.
+        case paused(until: Date, resume: Date)
     }
 
-    public static func next(after turn: Turn) -> Next {
-        guard !turn.stopped, !turn.failed, !isAck(turn.reply ?? "") else { return .none }
+    public static func next(after turn: Turn, now: Date = Date()) -> Next {
+        guard !turn.stopped else { return .none }
+        if turn.failed {
+            if let reset = turn.limitResetsAt { return .paused(until: reset, resume: resumeDate(after: reset, now: now)) }
+            // A turn that answered a heartbeat (its retry among them) isn't retried.
+            return turn.pulse == nil ? .pulse(number: 1, after: retryDelay, stall: .failed) : .none
+        }
+        guard !isAck(turn.reply ?? "") else { return .none }
         let stall: Stall
         if turn.endedBackgroundTasks {
             stall = .backgroundEnded
@@ -103,13 +128,30 @@ public enum Heartbeat {
     /// Sentences about what the owner does, which are no promise of the bot's.
     private static let ownerSide = ["let me know", "if you", "once you", "when you", "do you want", "would you like"]
 
-    /// The heartbeat message: what the bot reads.
-    public static func prompt(_ stall: Stall, number: Int) -> String {
+    /// When work paused on a limit that resets at `reset` carries on: a minute after, and never
+    /// sooner than a minute from now. A reset that just passed (`UsageLimit.grace`) waits five
+    /// minutes, so a CLI still refusing for a moment doesn't make it go round every minute.
+    public static func resumeDate(after reset: Date, now: Date = Date()) -> Date {
+        let due = reset.addingTimeInterval(afterReset)
+        return due > now ? due : now.addingTimeInterval(reset < now.addingTimeInterval(-afterReset) ? 5 * 60 : afterReset)
+    }
+
+    /// The heartbeat message: what the bot reads. `error` is the failure a retry follows.
+    public static func prompt(_ stall: Stall, number: Int, error: String? = nil) -> String {
+        if stall == .failed {
+            let line = (error ?? "").split(whereSeparator: \.isNewline).first.map { String($0.prefix(300)) } ?? ""
+            return """
+                \(retryPrefix) your last turn failed\(line.isEmpty ? "" : " (“\(line)”)"), and BotChu retries it once. Check \
+                what it already did (processes, files, git, pull requests, tasks) and carry the work on to the end within \
+                this turn, without redoing what is done. If nothing is left to do, or it waits for the owner, reply with just \(ack).
+                """
+        }
         let why = switch stall {
         case .promised:
             "your last turn ended saying work was still going, but nothing is running in this conversation now: no turn, no sub-agents, and nothing you started in the background (that ended with your turn)."
         case .backgroundEnded:
             "BotChu ended your CLI after waiting for its background tasks for too long, so they stopped before they finished."
+        case .failed, .limitReset: ""
         }
         return """
             BotChu heartbeat (\(number) of \(maxPulses)): \(why) Check the real state of that work (processes, files, \
@@ -119,9 +161,32 @@ public enum Heartbeat {
             """
     }
 
-    /// The line the conversation shows for heartbeat `number`.
-    public static func label(number: Int) -> String {
-        "Heartbeat \(number) of \(maxPulses): checking on unfinished work"
+    /// The heartbeat that carries on work paused on a usage limit once it has reset: the turn that
+    /// paused (`turnPaused`), and the runs BotChu resumed (`resumed`), whose handoffs it collects.
+    public static func limitPrompt(turnPaused: Bool, resumed: [SubagentRun]) -> String {
+        var lines = ["\(limitPrefix) the usage limit that paused "
+                     + (turnPaused ? "your last turn" : "sub-agent runs you started") + " has reset."]
+        if !resumed.isEmpty {
+            lines.append("BotChu resumed these runs that paused on it, each in its own workspace and session; collect each "
+                         + "handoff with `botchu-subagent wait <id>`:")
+            lines += resumed.prefix(20).map {
+                "- \($0.id.uuidString.lowercased()) “\(SubagentInterruption.bounded($0.title, 100))” (\(SubagentInterruption.bounded($0.targetBotName, 60)))"
+            }
+        }
+        lines.append("Check the real state of the work (processes, files, git, pull requests, tasks) and carry it on to the end "
+                     + "within this turn, without redoing what is done. If nothing is left to do, or it waits for the owner, "
+                     + "reply with just \(ack).")
+        return lines.joined(separator: "\n")
+    }
+
+    static let retryPrefix = "BotChu heartbeat (retry):"
+    static let limitPrefix = "BotChu heartbeat (usage limit reset):"
+
+    /// The line the conversation shows for heartbeat `number`, whose message is `text`.
+    public static func label(number: Int, text: String = "") -> String {
+        if text.hasPrefix(retryPrefix) { return "Heartbeat: retrying the failed turn" }
+        if text.hasPrefix(limitPrefix) { return "Heartbeat: carrying on after the usage limit reset" }
+        return "Heartbeat \(number) of \(maxPulses): checking on unfinished work"
     }
 
     /// BotChu's note when a heartbeat is acknowledged, and when it stops checking in.

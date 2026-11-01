@@ -1149,8 +1149,11 @@ final class SubagentRuntime {
         let live = live(id)
         record.handoffOutput = (live.messages.last(where: { $0.role == .assistant })?.text ?? live.lastReply).map(MemoryNotes.handoffText)
         var messages = live.messages
+        // A run whose account hit a usage limit pauses until it resets (#442), but a cameo turn,
+        // whose reply belongs to its area's conversation, fails as it did.
         SubagentTerminalOutcome.apply(to: &record, messages: &messages, toolCalls: live.counts.tools,
-                                      cause: stopCauses.removeValue(forKey: id), workspace: workspace)
+                                      cause: stopCauses.removeValue(forKey: id), workspace: workspace,
+                                      pausesOnLimit: model?.settings.heartbeat == true && record.cameo == nil)
         recordGitFacts(&record, messages: messages)
         live.update { ThreadAssembler.closeRunningTools(&$0) }
         live.messages = messages
@@ -1199,6 +1202,7 @@ final class SubagentRuntime {
             self.restored.remove(id)
             self.replace(record)
             self.queueDelivery(record)
+            if record.pausedUntil != nil { self.model?.scheduleLimitWake() }
             // The attempt joins the next run review of the bot it ran as; the handoff doesn't wait for one.
             if reviewed { self.model?.evaluateSubagentRun(record) }
             for (parent, outcome) in self.pendingFinishes where !self.children(of: parent).contains(where: { $0.phase.isActive }) {
@@ -1341,6 +1345,8 @@ final class SubagentRuntime {
             stopCauses[record.id] = .restart
             finish(record.id, phase: .stopped, error: "BotChu restarted before this sub-agent finished.")
         }
+        // Runs paused on a usage limit carry on when it resets, also across a relaunch (#442).
+        model.scheduleLimitWake()
     }
 
     /// A finished run's transcript, read when something shows it, off the main thread, after the
@@ -1454,7 +1460,7 @@ extension SubagentRuntime {
     /// and its workspace, once no CLI of it or of the runs it started still runs; `caller` is the turn
     /// that asked, which then gets its handoff (nil for the owner's Resume). The one way a run that
     /// ended becomes active again. Returns why not.
-    @discardableResult fileprivate func resume(_ id: UUID, by caller: Caller? = nil) async -> String? {
+    @discardableResult fileprivate func resume(_ id: UUID, by caller: Caller? = nil, note: String? = nil) async -> String? {
         guard let model, let record = run(id) else { return "That sub-agent run is gone." }
         if let problem = SubagentResume.problem(resuming: record) { return problem }
         guard !resuming.contains(id), !finalizing.contains(id), !exiting.contains(id), runners[id] == nil, preparations[id] == nil else {
@@ -1503,7 +1509,7 @@ extension SubagentRuntime {
                     resumed.callerHostID = caller.hostID
                 }
                 let by = caller.map { caller in caller.parent.flatMap { self.run($0)?.targetBotName } ?? model.bot(caller.target.botID)?.name ?? "its caller" } ?? "the owner"
-                let messages = self.live(id).messages + [ChatMessage(role: .note, text: "Resumed by \(by)."), ChatMessage(role: .user, text: delta)]
+                let messages = self.live(id).messages + [ChatMessage(role: .note, text: note ?? "Resumed by \(by)."), ChatMessage(role: .user, text: delta)]
                 self.recordGitFacts(&resumed, messages: messages)
                 return (snapshot: try self.snapshot(resumed, messages: messages), delta: delta)
             }, save: { try await self.archive.save($0.snapshot) }, replace: { prepared in
@@ -1519,6 +1525,24 @@ extension SubagentRuntime {
                 self.preparations[id] = Task { [weak self] in await self?.launch(id, targetBot: targetBot, resume: prepared.delta) }
             })
     }
+
+    /// Resumes runs that paused on a usage limit once it has reset (#442), as the owner's Resume
+    /// does: their handoffs wait for a turn to collect them. Returns those that relaunched; why
+    /// another didn't shows beside its Resume.
+    func resumePaused(_ ids: [UUID]) async -> [SubagentRun] {
+        var resumed: [SubagentRun] = []
+        for id in ids {
+            guard run(id)?.pausedUntil != nil else { continue }
+            if let problem = await resume(id, note: "Resumed by BotChu after the usage limit reset.") {
+                resumeProblems[id] = problem
+            } else if let record = run(id) {
+                resumed.append(record)
+            }
+        }
+        return resumed
+    }
+
+    func descendantIDs(of id: UUID) -> [UUID] { descendants(of: id).map(\.id) }
 
     /// Every run beneath this one.
     fileprivate func descendants(of id: UUID) -> [SubagentRun] {
