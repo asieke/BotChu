@@ -6,6 +6,8 @@ import BotChuCore
 //   botchu-journeys --app <BotChu.app> [--journeys <names or numbers>] [--baseline <file>]
 //                   [--record <file>] [--results <file> [--branch <name>]] [--repeats <n>] [--stall <ms>] [--keep]
 //   botchu-journeys dump --app <BotChu.app> [--bot <n>]   the app's accessibility tree on the fixture
+//   botchu-journeys --app <BotChu.app> --replica <folder> …   the replica journeys on a copy of the
+//                   owner's data that `scripts/replica.sh refresh` keeps (Replica, ReplicaJourneys)
 //   botchu-journeys fake-claude <arguments…>    the fixture's Claude Code CLI (FakeClaude)
 
 let usage = """
@@ -24,7 +26,7 @@ var keep = false
 while let flag = arguments.first {
     arguments.removeFirst()
     if flag == "--keep" { keep = true; continue }
-    guard ["--app", "--journeys", "--baseline", "--record", "--results", "--branch", "--repeats", "--stall", "--bot"].contains(flag), let value = arguments.first else {
+    guard ["--app", "--journeys", "--baseline", "--record", "--results", "--branch", "--repeats", "--stall", "--bot", "--replica"].contains(flag), let value = arguments.first else {
         FileHandle.standardError.write(Data((usage + "\n").utf8))
         exit(2)
     }
@@ -75,6 +77,8 @@ print("journeys: start; load \(loadBefore.map { String($0) }.joined(separator: "
 
 let app: AppUnderTest
 let fixture: Fixture
+var replica: Replica?
+var blockedLog: URL?
 do {
     try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
     // The fake CLI runs from a copy in the work folder: the app's copy may not read the build's
@@ -85,8 +89,19 @@ do {
     let fake = work.appendingPathComponent("fake-claude")
     try FakeClaude.writeWrapper(at: fake, harness: harness.path, log: work.appendingPathComponent("fake-claude.log"))
     let began = Date()
-    fixture = try Fixture.make(in: work.appendingPathComponent("data"), fakeCLI: fake.path)
-    print(String(format: "journeys: fixture made in %.1f s", Date().timeIntervalSince(began)))
+    var environment: [String: String] = [:]
+    if let folder = options["--replica"] {
+        let copy = try Replica.copy(from: URL(fileURLWithPath: folder, isDirectory: true), into: work.appendingPathComponent("data"))
+        let standIns = try Replica.writeStandIns(in: work)
+        environment = ["ZDOTDIR": standIns.zdotdir.path, "BOTCHU_SSH": "/usr/bin/false", "BOTCHU_REPORT_GH": "/usr/bin/false"]
+        blockedLog = standIns.log
+        replica = copy
+        fixture = copy.fixture
+        print(String(format: "journeys: replica copied in %.1f s: %@", Date().timeIntervalSince(began), copy.totals))
+    } else {
+        fixture = try Fixture.make(in: work.appendingPathComponent("data"), fakeCLI: fake.path)
+        print(String(format: "journeys: fixture made in %.1f s", Date().timeIntervalSince(began)))
+    }
     let bundle = try AppUnderTest.prepare(from: source, into: work)
     AppUnderTest.forgetDefaults()
     let marks = work.appendingPathComponent("marks.txt")
@@ -96,7 +111,7 @@ do {
         FrameMarks.environmentKey: marks.path,
         "BOTCHU_PROFILE": "Journey Claude|claude|\(fake.path)",
         "BOTCHU_JOURNEY_FAKE_LOG": work.appendingPathComponent("fake-claude.log").path,
-    ], marksURL: marks)
+    ].merging(environment) { $1 }, marksURL: marks)
 } catch {
     fail("\(error)")
 }
@@ -106,7 +121,7 @@ func finish(_ code: Int32) -> Never {
     app.quit()
     if restoreFocus { previousFrontmost?.activate(options: []) }
     AppUnderTest.forgetDefaults()
-    if !keep { try? FileManager.default.removeItem(at: work) }
+    if !keep { try? Replica.remove(work) }
     exit(code)
 }
 
@@ -172,6 +187,63 @@ func record(_ number: Int, _ journey: @escaping () -> [JourneyResult]) {
         print("journeys: journey \(number) failed (\(Journeys.failures(measured))); measuring it again after the others")
         failedFirst.append((number, journey, measured))
     }
+}
+if let replica {
+    let watch = ProcessWatch { app.running?.processIdentifier }
+    let steps: [(Int, () -> [JourneyResult])] = [
+        (1, { journeys.replicaLaunch(replica) }), (3, { journeys.replicaSwitchBots(replica) }), (4, { journeys.replicaAreas(replica) }),
+        (9, { journeys.replicaAttachArea(replica) }), (11, { journeys.replicaInbox(replica) }), (13, { journeys.replicaRelaunch(replica) }),
+    ]
+    func notRunOnReplica(_ number: Int) {
+        let result = journeys.notRun(number, because: "BotChu isn't running")
+        print("journey \(result.report)")
+        results.append(result)
+    }
+    if !selection.numbers.contains(1) {
+        do {
+            _ = try journeys.launched(after: try app.launch())
+            app.settle(quiet: 0.5, limit: 10)
+        } catch {
+            print("journeys: \(replica.redact("\(error)"))")
+            results = steps.map(\.0).filter(selection.numbers.contains).map { journeys.notRun($0, because: "BotChu didn't launch") }
+            saveResults(loadAfter: load())
+            finish(1)
+        }
+    }
+    for (number, journey) in steps where selection.numbers.contains(number) {
+        if number == 1 || app.isRunning { record(number, journey) } else { notRunOnReplica(number) }
+    }
+    for (number, journey, first) in failedFirst {
+        if !app.isRunning, number != 1 { notRunOnReplica(number); continue }
+        let again = journeys.again(number, journey, after: first).map { result in
+            var result = result
+            result.retried = result.retried.map(replica.redact)
+            return result
+        }
+        again.forEach(journeys.report)
+        results += again
+    }
+    let realPrograms = watch.stop()
+    print("journeys: replica: agent CLIs, gh or ssh started under BotChu: " + (realPrograms.isEmpty ? "none" : realPrograms.sorted { $0.key < $1.key }.map { "\($0.key) ×\($0.value)" }.joined(separator: ", ")))
+    if !realPrograms.isEmpty {
+        results.append(journeys.replicaResult(1, "no real CLI starts", [], problem: "BotChu started \(realPrograms.values.reduce(0, +)) agent CLI, gh or ssh processes", replica: replica))
+    }
+    if let blockedLog {
+        let calls = Replica.blockedCalls(blockedLog)
+        print("journeys: replica: blocked programs the app tried: " + (calls.isEmpty ? "none" : calls.sorted { $0.key < $1.key }.map { "\($0.key) ×\($0.value)" }.joined(separator: ", ")))
+    }
+    let failed = results.filter { !$0.passed }
+    print("journeys: replica: \(results.count - failed.count) of \(results.count) steps passed in \(Int(Date().timeIntervalSince(started))) s")
+    for result in failed { print("journeys: FAILED \(result.report)") }
+    if let path = options["--record"], let existing = baseline ?? Optional(JourneyBaseline(recordedAt: started, commit: builtCommit(), machine: machine(),
+                                                                                        loadBefore: loadBefore, loadAfter: load(), medians: [:])) {
+        // Only the replica's steps change: the fixture's numbers stay as their own run recorded them.
+        var merged = existing
+        for result in results { merged.medians[result.key] = result.median.map { ($0 * 10).rounded() / 10 } }
+        do { try save(merged.encoded(), to: path); print("journeys: recorded the replica's steps in \(path)") } catch { print("journeys: couldn't record the baseline: \(error)") }
+    }
+    saveResults(loadAfter: load())
+    finish(failed.isEmpty ? 0 : 1)
 }
 if selection.numbers.contains(1) {
     record(1) { journeys.launch() }

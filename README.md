@@ -22,6 +22,10 @@ Run policy and where a new test goes: [docs/testing.md](docs/testing.md).
   ```sh
   scripts/test.sh
   ```
+- The replica journeys alone, on a temporary copy of the replica below (the full suite runs them too):
+  ```sh
+  scripts/test.sh --journeys-replica
+  ```
 - One suite while editing (`BotChuRenderingTests` only inside the shared `/tmp/botchu-coord/gate.sh` gate):
   ```sh
   swift test --package-path macOS --filter <Suite>
@@ -55,6 +59,10 @@ Run policy and where a new test goes: [docs/testing.md](docs/testing.md).
   ```
 
 ## Operate
+- Refresh the replica of BotChu's data the replica journeys run on, only when asked (`status` for its date and totals):
+  ```sh
+  scripts/replica.sh refresh|status
+  ```
 - Refresh the offline token market pricing snapshot (`macOS/Sources/BotChuCore/ModelPrices.generated.swift`):
   ```sh
   scripts/update-model-prices.py --date YYYY-MM-DD

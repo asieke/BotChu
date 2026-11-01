@@ -2,6 +2,9 @@
 
 What changed, newest first, one line per merged pull request.
 
+## 2026-11-01
+- `scripts/replica.sh refresh` keeps a replica of the owner's bots and data (accounts on the fake CLI, no tokens, read-only repository stubs), and `scripts/test.sh --journeys-replica`, run by the full suite and so by deploy, runs launch, switching bots, areas and tasks, attach/hide/show, Inbox Done and relaunch on a copy of it, report only until baselined (#422)
+
 ## 2026-10-31
 - Sub-agent details open with a card: the bot's animated pet acting out the run, its state, elapsed time, live action, branch and PR pill; each run's row shows its branch, changes dot and PR, and Worktrees lists only worktrees no running run owns, hidden when there are none (#430, #431)
 - A mentioned bot's turn in a Project Area runs beside the area's own bot as a run with its card, its reply landing as that bot; the area's bot keeps answering, and Stop stops only its own turn (#424)
