@@ -244,7 +244,17 @@ final class AppUnderTest {
     /// A covered, inactive app can be demoted even with App Nap disabled (#388). Measure the
     /// foreground interaction the journey describes, and check that it still has focus at the end.
     func requireForeground() throws {
-        guard let focused = AXElement.systemWide.element(kAXFocusedApplicationAttribute), focused.pid == pid else {
+        if let focused = AXElement.systemWide.element(kAXFocusedApplicationAttribute) {
+            guard focused.pid == pid else {
+                // Which app took it (a bundle id, never a bot or a message), so a run says why.
+                let holder = NSRunningApplication(processIdentifier: focused.pid)?.bundleIdentifier ?? "another app"
+                throw HarnessFailure("BotChu lost keyboard focus to \(holder); foreground journeys cannot measure a background app")
+            }
+            return
+        }
+        // The system-wide element can stop answering for every app at once (AX error -25204, for
+        // minutes at a time); then the app itself says whether it is frontmost with a focused window.
+        guard ax.value(kAXFrontmostAttribute) as? Bool == true, ax.element(kAXFocusedWindowAttribute) != nil else {
             throw HarnessFailure("BotChu lost keyboard focus; foreground journeys cannot measure a background app")
         }
     }

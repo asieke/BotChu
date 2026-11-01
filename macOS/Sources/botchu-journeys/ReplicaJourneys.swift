@@ -161,7 +161,9 @@ extension Journeys {
         let identifier = "conversation-tab-\(id.uuidString)"
         func row() throws -> AXElement? { try app.window().first(identifier: identifier) }
         guard let tab = try row() else { throw HarnessFailure("The new area's row isn't in the column") }
-        try tab.perform(kAXShowMenuAction)
+        // Opening a context menu starts its tracking loop, so accessibility often reports the
+        // action failed (-25204) when the menu is in fact open: look for its item either way.
+        try? tab.perform(kAXShowMenuAction)
         guard let pid = app.running?.processIdentifier else { throw HarnessFailure("BotChu isn't running") }
         let hide = try waitFor("The area's Hide") {
             AXElement.application(pid).first(limit: 5_000) { $0.role == kAXMenuItemRole as String && $0.title == "Hide" }

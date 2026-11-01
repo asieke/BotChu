@@ -44,7 +44,7 @@ test_step toolchain xcodebuild -version
 # outside, one gated run, so no window test runs beside it; then the latency report of its results.
 test_journeys() {
   journeys_build() { swift build -c release --package-path macOS --scratch-path macOS/.build/app --product botchu-journeys 2>&1 | { grep -vE '^\[[0-9]+ ?/ ?[0-9]+\]' || true; }; }
-  test_step 'journeys build' journeys_build || return
+  test_step "${journeys_step:-journeys} build" journeys_build || return
   harness="$(swift build -c release --package-path macOS --scratch-path macOS/.build/app --show-bin-path)/botchu-journeys"
   commit=$(/usr/libexec/PlistBuddy -c 'Print :BotChuCommit' "$out/BotChu.app/Contents/Info.plist" 2>/dev/null || true)
   local runs=${journeys_runs:-${BOTCHU_JOURNEYS_RUNS:-$HOME/Library/Caches/botchu-journeys/runs}}
@@ -68,7 +68,7 @@ test_journeys() {
     return "$result"
   }
   local result
-  if test_step 'gated journeys' run_journeys; then result=0; else result=$?; fi
+  if test_step "gated ${journeys_step:-journeys}" run_journeys; then result=0; else result=$?; fi
   [ "$result" != 0 ] || echo "test: ok (journeys)"
   if [ -f "$results" ]; then
     BOTCHU_JOURNEYS_RUNS=$runs scripts/journeys-report.py --results "$results" --write "${results%.json}.md"
@@ -88,7 +88,8 @@ test_replica_journeys() {
     return 0
   fi
   scripts/replica.sh status
-  local journeys_runs=${BOTCHU_JOURNEYS_REPLICA_RUNS:-$HOME/Library/Caches/botchu-journeys/replica-runs} journeys=
+  # Their own step labels, so deploy's release record (BOTCHU_TEST_STEPS) keeps both runs apart.
+  local journeys_runs=${BOTCHU_JOURNEYS_REPLICA_RUNS:-$HOME/Library/Caches/botchu-journeys/replica-runs} journeys= journeys_step='replica journeys'
   local journeys_extra=(--replica "$replica")
   test_journeys
 }

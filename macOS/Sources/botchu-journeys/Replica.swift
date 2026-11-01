@@ -65,7 +65,21 @@ struct Replica {
         let copy = Replica(data: data, bots: bots, principal: bots.filter(\.canOwnTasks))
         guard !copy.principal.isEmpty else { throw HarnessFailure("The replica has no agents, only specialists") }
         try copy.markProjectsSynced()
+        try copy.reopenDeliveries(Self.reopened)
         return copy
+    }
+
+    /// Journey 11 marks up to `repeats` (6) Done, and again when its first try fails.
+    static let reopened = 12
+
+    /// When the owner has already marked nearly everything Done, the copy's newest `count` real
+    /// deliveries are open again, so journey 11 always has some to mark Done. Only the copy changes.
+    func reopenDeliveries(_ count: Int) throws {
+        var state = inbox()
+        let newest = deliveries().sorted { ($0.updatedAt, $0.id.uuidString) > ($1.updatedAt, $1.id.uuidString) }
+        guard newest.filter({ !state[$0.id].done }).count < count else { return }
+        for delivery in newest.prefix(count) { state.entries[delivery.id] = InboxState.Entry(read: true) }
+        try state.save(to: data)
     }
 
     /// Whether a JSON value holds a string that is a path in `home`.
