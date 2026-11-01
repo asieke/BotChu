@@ -10,13 +10,13 @@ struct SubagentsInspectorContent: View {
     var includeBotTasksOverview = false
     /// Where the tab is, for tests to drive; else its own.
     var state: SubagentTabState?
-    /// Shown under the list, not a run's details: an area's Worktrees (#405).
-    var footer: AnyView?
+    /// The checkout whose worktrees its rows and Worktrees read (#405, #431): an area's or a task's.
+    var checkout: String?
 
     var body: some View {
         // One per conversation: Home's inspector stays as the bot changes, and where one bot's tab
         // was shouldn't carry over to the next.
-        SubagentsTab(target: target, includesTasks: includeBotTasksOverview, state: state, footer: footer).id(target)
+        SubagentsTab(target: target, includesTasks: includeBotTasksOverview, state: state, checkout: checkout).id(target)
     }
 }
 
@@ -47,6 +47,8 @@ final class SubagentTabState {
     @ObservationIgnored var scroll: ScrollViewProxy?
     @ObservationIgnored var area: InspectorScrollArea?
     @ObservationIgnored var reduceMotion = false
+    /// The conversation's checkout's worktrees, when it has one: where each run works (#431).
+    @ObservationIgnored var worktrees: WorktreeMonitor?
     @ObservationIgnored private var highlightToken = 0
 
     init(target: ChatTarget) { self.target = target }
@@ -74,6 +76,11 @@ final class SubagentTabState {
     }
 
     func isStopping(_ run: SubagentRun) -> Bool { run.phase.isActive && stopping.contains(run.id) }
+
+    /// Where a run works, with its worktree's changes and pull request as last read.
+    func workplace(of run: SubagentRun) -> SubagentWorkplace? {
+        SubagentWorkplace.of(run, rows: worktrees?.rows ?? [], pullRequests: worktrees?.pullRequests ?? [:])
+    }
 
     func stop(_ id: UUID) {
         stopping.insert(id)
@@ -175,16 +182,16 @@ private struct SubagentsTab: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let target: ChatTarget
     let includesTasks: Bool
-    let footer: AnyView?
     @State private var tab: SubagentTabState
     @State private var owner = UUID()
     @FocusState private var focus: SubagentAnchor?
 
-    init(target: ChatTarget, includesTasks: Bool, state: SubagentTabState?, footer: AnyView? = nil) {
+    init(target: ChatTarget, includesTasks: Bool, state: SubagentTabState?, checkout: String? = nil) {
         self.target = target
         self.includesTasks = includesTasks
-        self.footer = footer
-        _tab = State(initialValue: state ?? SubagentTabState(target: target))
+        let tab = state ?? SubagentTabState(target: target)
+        if let checkout, tab.worktrees?.checkout != checkout { tab.worktrees = WorktreeMonitor.of(checkout) }
+        _tab = State(initialValue: tab)
     }
 
     var body: some View {
@@ -192,7 +199,7 @@ private struct SubagentsTab: View {
             switch tab.navigation.top {
             case nil:
                 SubagentList(scope: target, includesTasks: includesTasks, tab: tab, focus: $focus)
-                footer
+                if let monitor = tab.worktrees { WorktreesSection(target: target, monitor: monitor) }
             case .task(let id):
                 SubagentList(scope: .task(id, of: target.botID), includesTasks: false, tab: tab, focus: $focus)
             case .run(let id):
@@ -203,6 +210,8 @@ private struct SubagentsTab: View {
             }
         }
         .frame(minWidth: 0, idealWidth: 240, maxWidth: .infinity, alignment: .leading)
+        // Read whatever shows, list or details, so rows say where runs work while Worktrees is hidden.
+        .background { if let monitor = tab.worktrees { WorktreeRefresh(target: target, monitor: monitor) } }
         .accessibilityIdentifier("subagents-inspector")
         .onExitCommand { tab.back() }
         .onAppear {
@@ -380,6 +389,7 @@ private struct SubagentRow: View {
     var body: some View {
         let _ = SubagentDiagnostics.didEvaluateRow?(run.id)
         let state = SubagentRowState(run, activity: model.delegation.states[run.id]?.activity, stopping: tab.isStopping(run))
+        let place = tab.workplace(of: run)
         HStack(alignment: .top, spacing: 0) {
             Button { open.toggle() } label: {
                 Image(systemName: "chevron.right")
@@ -404,6 +414,7 @@ private struct SubagentRow: View {
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                     SubagentMetaLine(run: run, state: state, failedBelow: open ? 0 : failedBelow, width: textWidth)
+                    if let place { SubagentWorkplaceLine(place: place, run: run).padding(.top, 1) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
@@ -445,7 +456,8 @@ private struct SubagentRow: View {
         .help("\(run.title)\n\(run.targetBotName) · \(state.word)")
         .contextMenu { SubagentMenu(run: run, tab: tab, open: action) }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(run.title), \(run.targetBotName), \(state.word)" + (failedBelow > 0 && !open ? ", \(failedBelow) failed" : ""))
+        .accessibilityLabel("\(run.title), \(run.targetBotName), \(state.word)" + (failedBelow > 0 && !open ? ", \(failedBelow) failed" : "")
+                            + (place.map { ", \(SubagentWorkplaceLine.spoken($0))" } ?? ""))
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { action() }
         .accessibilityIdentifier("subagent-\(run.id.uuidString)")
@@ -762,7 +774,9 @@ private struct SubagentDetailContent: View {
         let children = model.delegation.children(of: run.id)
         // The transcript is read by what shows it, so a run streaming redraws those alone.
         VStack(alignment: .leading, spacing: 18) {
-            head(state)
+            SubagentCard(run: run, state: state, caller: run.parentSubagentID.flatMap { model.delegation.run($0) }
+                            .flatMap { tab.navigation.path.dropLast().last == .run($0.id) ? nil : $0 },
+                         place: tab.workplace(of: run), focus: focus)
                 .id(SubagentAnchor.block("top"))
                 .modifier(Placed(anchor: .block("top"), tab: tab))
             if !run.phase.isActive {
@@ -791,34 +805,127 @@ private struct SubagentDetailContent: View {
         // The result appears above what the reader was reading without moving it.
         .onChange(of: run.phase) { tab.keepPlace() }
     }
+}
 
-    private func head(_ state: SubagentRowState) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Its caller, when Back doesn't lead there already.
-            if let parent = run.parentSubagentID.flatMap({ model.delegation.run($0) }),
-               tab.navigation.path.dropLast().last != .run(parent.id) {
-                Text(parent.title).font(.system(size: 11.5)).foregroundStyle(Palette.secondaryText).lineLimit(1)
+/// The details' head (#430): the run's bot acting out what it does, its title, its state and time,
+/// what it is doing now, and where it works. Where Escape is heard once the details show.
+private struct SubagentCard: View {
+    @Environment(AppModel.self) private var model
+    let run: SubagentRun
+    let state: SubagentRowState
+    /// The run that delegated it, when Back doesn't lead there already.
+    let caller: SubagentRun?
+    let place: SubagentWorkplace?
+    var focus: FocusState<SubagentAnchor?>.Binding
+
+    static let face: CGFloat = 96
+
+    var body: some View {
+        let tint = state.kind == .failed ? failureRed : Palette.secondaryText
+        InspectorCard(padded: true) {
+            VStack(alignment: .leading, spacing: 10) {
+                if let caller {
+                    Text(caller.title).font(.system(size: 11.5)).foregroundStyle(Palette.secondaryText).lineLimit(1)
+                }
+                HStack(alignment: .center, spacing: 12) {
+                    BotFace(bot: model.bot(run.targetBotID) ?? Bot(id: run.targetBotID, name: run.targetBotName, emoji: run.targetBotEmoji,
+                                                                  workspace: run.targetBotWorkspace, appearance: run.targetBotAppearance),
+                            activity: state.activity, animates: true)
+                        .frame(width: Self.face, height: Self.face)
+                        .background(Palette.violet.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(run.targetBotName).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.secondaryText)
+                            .lineLimit(1)
+                        HStack(spacing: 5) {
+                            SubagentStateSymbol(kind: state.kind).frame(width: 16, height: 16)
+                            Text(state.word).foregroundStyle(tint).lineLimit(1)
+                        }
+                        SubagentTime(state: state).foregroundStyle(tint)
+                    }
+                    .font(.system(size: 12))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.updatesFrequently)
+                    Spacer(minLength: 0)
+                }
+                Text(run.title).font(.system(size: 15, weight: .semibold)).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                if run.phase == .running { SubagentLiveAction(run: run) }
+                if let place { SubagentWorkplaceLine(place: place, run: run, opens: true) }
             }
-            Text(run.title).font(.system(size: 15, weight: .semibold)).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
-                SubagentAvatar(run: run, size: 18)
-                Text(run.targetBotName).font(.system(size: 12)).foregroundStyle(Palette.secondaryText).lineLimit(1)
-            }
-            HStack(spacing: 6) {
-                SubagentStateSymbol(kind: state.kind).frame(width: 16, height: 16)
-                Text(state.word).foregroundStyle(state.kind == .failed ? failureRed : Palette.secondaryText)
-                Spacer(minLength: 6)
-                SubagentTime(state: state).foregroundStyle(state.kind == .failed ? failureRed : Palette.secondaryText)
-            }
-            .font(.system(size: 12))
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.updatesFrequently)
         }
-        // Where Escape is heard once the details show.
         .focusable()
         .focused(focus, equals: .block("top"))
         .focusEffectDisabled()
+    }
+}
+
+/// What a running run is doing now, from its transcript, read here alone so it streams without
+/// redrawing the rest of the details.
+private struct SubagentLiveAction: View {
+    @Environment(AppModel.self) private var model
+    let run: SubagentRun
+
+    var body: some View {
+        if let action = SubagentRowState.liveAction(model.delegation.threads[run.id] ?? [], root: run.worktree ?? run.workingDirectory) {
+            Text(action)
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.secondaryText)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.updatesFrequently)
+        }
+    }
+}
+
+/// Where a run works: its branch or worktree's folder, a dot when it has changes, and its pull
+/// request. In the details, the pull request opens on GitHub.
+private struct SubagentWorkplaceLine: View {
+    @Environment(AppModel.self) private var model
+    let place: SubagentWorkplace
+    let run: SubagentRun
+    var opens = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "arrow.triangle.branch").font(.system(size: 10, weight: .medium))
+            Text(place.name).lineLimit(1).truncationMode(.middle)
+            if place.isDirty {
+                Circle().fill(Palette.warning).frame(width: 6, height: 6).accessibilityLabel("Changed")
+            }
+            Spacer(minLength: 4)
+            if let number = place.pullRequest {
+                let pill = PullRequestPill(number: number, state: place.pullRequestState)
+                if opens {
+                    Button { open(number) } label: { pill }
+                        .buttonStyle(.plain)
+                        .help("Open pull request #\(number)")
+                        .accessibilityIdentifier("subagent-pull-request")
+                } else {
+                    pill
+                }
+            }
+        }
+        .font(.system(size: 11.5))
+        .foregroundStyle(Palette.secondaryText)
+        .help(run.worktree ?? place.name)
+    }
+
+    static func spoken(_ place: SubagentWorkplace) -> String {
+        [place.name, place.isDirty ? "changed" : nil, place.pullRequest.map { "pull request \($0)" }].compactMap { $0 }.joined(separator: ", ")
+    }
+
+    private func open(_ number: Int) {
+        let conversation = run.rootTaskID.map { ChatTarget.task($0, of: run.rootBotID) } ?? .home(run.rootBotID)
+        if let repo = model.task(conversation)?.repo, !repo.isEmpty, let url = URL(string: "https://github.com/\(repo)/pull/\(number)") {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        // Elsewhere, its own folder's GitHub repository knows it.
+        let folder = run.worktree ?? run.workingDirectory
+        Task { _ = await Machine.thisMac.run(["gh", "pr", "view", "\(number)", "--web"], in: folder) }
     }
 }
 

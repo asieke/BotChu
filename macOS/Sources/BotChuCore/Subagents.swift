@@ -272,6 +272,9 @@ public struct SubagentRowState: Equatable, Sendable {
     public var since: Date
     /// When it ended; nil while it ticks.
     public var ended: Date?
+    /// What its bot's pet acts out, as the status sidebar shows a turn: the running turn's activity,
+    /// a moment of Done once it hands off, Failed, else idle.
+    public var activity: BotActivity
 
     /// `activity` is the running turn's (`RunState`), nil before it streams; `stopping`, that Stop
     /// was asked for and the process hasn't exited yet.
@@ -289,6 +292,21 @@ public struct SubagentRowState: Equatable, Sendable {
         case .stopped: (kind, word) = run.isInterrupted ? (.interrupted, "Interrupted") : (.stopped, "Stopped")
         }
         if stopping, run.phase.isActive { (kind, word) = (.stopping, "Stopping…") }
+        self.activity = switch kind {
+        case .running: activity ?? .thinking
+        case .preparing, .stopping: activity ?? .idle
+        case .done: .done
+        case .failed: .failed
+        case .queued, .noHandoff, .stopped, .interrupted: .idle
+        }
+    }
+
+    /// What a running run is doing now, from its transcript: its last tool call (`Reading Foo.swift`,
+    /// `Running swift test`), nil before its first. `root` shortens the paths under its folder.
+    public static func liveAction(_ messages: [ChatMessage], root: String? = nil) -> String? {
+        guard let tool = messages.last(where: { $0.role == .tool }) else { return nil }
+        let text = TurnWork.describe(ToolActivity.describe(tool, root: root), running: tool.toolState == .running)
+        return text.isEmpty ? nil : text
     }
 
     public var isLive: Bool { ended == nil }

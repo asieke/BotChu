@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-10-31
+- Sub-agent details open with a card: the bot's animated pet acting out the run, its state, elapsed time, live action, branch and PR pill; each run's row shows its branch, changes dot and PR, and Worktrees lists only worktrees no running run owns, hidden when there are none (#430, #431)
 - A mentioned bot's turn in a Project Area runs beside the area's own bot as a run with its card, its reply landing as that bot; the area's bot keeps answering, and Stop stops only its own turn (#424)
 - Area Repo tab: the Overview/Issues/PRs picker sits under the tab bar and its content fills the rest, instead of splitting the height in thirds (#423) (#426)
 - Project Areas fold each turn's interim messages and tool calls into one "Worked 2 min · 14 files · 3 commands" row before its reply, live while the turn runs; area bots are told not to narrate tool calls and to delegate long work; journey 13 checks one work row (#425) (#427)

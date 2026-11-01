@@ -140,4 +140,43 @@ public enum WorktreeCleanupPolicy {
         runs.filter { $0.phase.isActive && $0.worktree.map { samePath($0, path, home: home) } == true }
             .max { ($0.startedAt ?? $0.createdAt) < ($1.startedAt ?? $1.createdAt) }
     }
+
+    /// The worktrees no running run works in, to list on their own: every one but the main checkout.
+    public static func unowned(_ rows: [WorktreeRow], among runs: [SubagentRun], home: String = NSHomeDirectory()) -> [WorktreeRow] {
+        rows.filter { !$0.entry.isMain && owner(of: $0.entry.path, among: runs, home: home) == nil }
+    }
+}
+
+/// Where a run works, as its row in the Sub-agents tab says it (#431): its branch (or its worktree's
+/// folder), whether that worktree has changes, and the pull request on the branch.
+public struct SubagentWorkplace: Equatable, Sendable {
+    public var name: String
+    public var isDirty: Bool
+    public var pullRequest: Int?
+    /// Nil for a pull request it only linked to.
+    public var pullRequestState: PullRequestState?
+
+    public init(name: String, isDirty: Bool = false, pullRequest: Int? = nil, pullRequestState: PullRequestState? = nil) {
+        self.name = name
+        self.isDirty = isDirty
+        self.pullRequest = pullRequest
+        self.pullRequestState = pullRequestState
+    }
+
+    /// From what the run's transcript showed, and the checkout's worktrees as last read: its worktree's
+    /// row gives the changes (and the branch when the run didn't say), the newest pull request read on
+    /// the branch wins over the one the run named. Nil when it shows neither a branch nor a worktree.
+    public static func of(_ run: SubagentRun, rows: [WorktreeRow] = [], pullRequests: [String: BranchPullRequest] = [:],
+                          home: String = NSHomeDirectory()) -> SubagentWorkplace? {
+        let row = run.worktree.flatMap { path in rows.first { WorktreeCleanupPolicy.samePath($0.entry.path, path, home: home) } }
+        let branch = run.branch ?? row?.entry.branch
+        guard let name = branch ?? run.worktree.map({ ($0 as NSString).lastPathComponent }), !name.isEmpty else { return nil }
+        var place = SubagentWorkplace(name: name, isDirty: row?.isDirty == true, pullRequest: run.pullRequest,
+                                      pullRequestState: run.pullRequestState)
+        if let read = branch.flatMap({ pullRequests[$0] }) {
+            place.pullRequest = read.number
+            place.pullRequestState = read.state
+        }
+        return place
+    }
 }
