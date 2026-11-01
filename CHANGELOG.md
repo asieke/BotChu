@@ -3,6 +3,7 @@
 What changed, newest first, one line per merged pull request.
 
 ## 2026-11-01
+- In a Project Area, only the `@` mentions a message starts with summon those bots; a mention later in it is a reference the area's own bot answers (#435)
 - A turn or sub-agent run that hits a usage limit (`You've hit your 5-hour limit · resets 12:10am`) shows "Paused until 12:10am" instead of failing; a minute after the reset BotChu resumes the paused runs in their worktrees and sessions and sends the conversation one heartbeat naming them, also after a relaunch; any other failed turn is retried once, 2 minutes after (#442)
 - View ▸ Open Testing Dashboard: each release newest first with its full-suite timing, journey medians against their budgets and its CHANGELOG lines, from `testing/releases.json`, which deploy appends to with `scripts/release-record.py`; the app's version comes from `macOS/VERSION` (1.1.0), and 1.0.0 = d88b4bf is the recorded baseline (#434)
 

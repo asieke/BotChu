@@ -112,20 +112,38 @@ public struct AreaRoom: Equatable, Sendable {
 }
 
 /// Who takes a turn in a Project Area's conversation (#399 decision 8). The owner's message is
-/// answered by the bots chosen in it from `@` completion, in the order they stand, or by the area's
-/// own bot when it chose none. A bot's reply that mentions `@<name or slug>` gives each bot it
+/// answered by the bots it addresses, those chosen from `@` completion at its start, in the order
+/// they stand (#435), or by the area's own bot when it addresses none: a mention later in the
+/// message is a reference the area's own bot reads. A bot's reply that mentions `@<name or slug>` gives each bot it
 /// mentions one turn, in the order first mentioned, one hop past the reply's: none past
 /// `maxHop`, none for a bot already running or waiting in the conversation. Home is unchanged.
 public enum CameoRouting {
     public static let maxHop = 2
 
-    /// The bots that answer the owner's message in `owner`'s area, in order: those referenced in it
-    /// that can take a turn (`eligible`, and the owner), each once; `[owner]` when none is.
-    public static func answerers(of references: [MessageReference], owner: UUID, eligible: Set<UUID>) -> [UUID] {
+    /// The bots that answer the owner's message `text` in `owner`'s area, in order: those it starts
+    /// by addressing (`addressed`) that can take a turn (`eligible`, and the owner), each once;
+    /// `[owner]` when none is.
+    public static func answerers(of references: [MessageReference], in text: String, owner: UUID, eligible: Set<UUID>) -> [UUID] {
         var seen = Set<UUID>()
-        let chosen = references.sorted { $0.location < $1.location }.compactMap(\.botID)
+        let chosen = addressed(by: references, in: text).compactMap(\.botID)
             .filter { ($0 == owner || eligible.contains($0)) && seen.insert($0).inserted }
         return chosen.isEmpty ? [owner] : chosen
+    }
+
+    /// The agents `text` starts by addressing (#435): the run of its agent references that each
+    /// stand at its start or after the one before, with only white space or commas between.
+    public static func addressed(by references: [MessageReference], in text: String) -> [MessageReference] {
+        let string = text as NSString
+        let separators = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ","))
+        var end = 0
+        var run: [MessageReference] = []
+        for reference in MessageReference.standing(references, in: text) {
+            let gap = string.substring(with: NSRange(location: end, length: reference.location - end))
+            guard reference.kind == .agent, gap.unicodeScalars.allSatisfy(separators.contains) else { break }
+            run.append(reference)
+            end = NSMaxRange(reference.range)
+        }
+        return run
     }
 
     /// The turns `reply`, `speaker`'s at `hop`, starts: one for each bot it mentions (among
@@ -140,7 +158,7 @@ public enum CameoRouting {
             .map { AreaTurn(botID: $0.id, hop: hop + 1, mentionedBy: speaker) }
     }
 
-    /// The turns `answerers` (`answerers(of:owner:eligible:)`) take of the owner's message
+    /// The turns `answerers` (`answerers(of:in:owner:eligible:)`) take of the owner's message
     /// `messageID` (#424): whether the area's own bot answers it, in the conversation's turn, and the
     /// cameo turns of the others, which all start at once beside it.
     public static func turns(answering messageID: UUID, by answerers: [UUID], owner: UUID) -> (owner: Bool, cameos: [AreaTurn]) {
