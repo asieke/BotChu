@@ -329,7 +329,7 @@ struct Journeys {
             problem = "\(error)"
         }
         return [result(3, "switch bot", .within(50), others, problem: problem),
-                result(3, "switch to 5,000 messages", .within(50), long, problem: problem)]
+                result(3, "switch to 5,000 messages", .within(50), long, problem: problem)] + switcher()
     }
 
     /// Selects `bot`'s row in the sidebar; the time until its chat shows a row.
